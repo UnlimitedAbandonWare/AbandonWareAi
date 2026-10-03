@@ -38,3 +38,5 @@ description: Design or implement a Next.js App Router frontend/BFF for the Dynam
 - RAG diagnostics: backend `/api/rag/**`, `/api/diagnostics/**`, debug event endpoints if enabled.
 - Mode flags such as Brave/RuleBreak must be explicit headers or request fields and must be audited by the backend.
 
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

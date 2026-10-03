@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "awx.work_journal.v1",
+  "taskId": "incident-goal-alpha-bbbbbbbb",
+  "agent": "agent-beta",
+  "purpose": "DEMO1-INCIDENT-CONTRACT-EXAMPLE-20261002: anonymized twin; opened 4 minutes after the peer on the same goal, noticed the duplicate, continued anyway, then user-stopped and handed off",
+  "plannedScope": [
+    "main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java",
+    "main/java/com/example/lms/config/LocalLlmProcessManager.java",
+    "main/java/com/example/lms/llm/OllamaNativeChatModel.java",
+    "main/java/com/example/lms/llm/TimedChatModelCaller.java",
+    "main/java/com/example/lms/service/ChatWorkflow.java",
+    "main/java/com/example/lms/web/PageController.java",
+    "src/test/java",
+    "docs/PROJECT_STATUS.md"
+  ],
+  "status": "closed",
+  "result": "partial",
+  "startedAtUtc": "2026-10-02T04:32:12+00:00",
+  "updatedAtUtc": "2026-10-02T04:48:29+00:00",
+  "endedAtUtc": "2026-10-02T04:48:29+00:00",
+  "events": [
+    {
+      "at": "2026-10-02T04:33:54+00:00",
+      "kind": "info",
+      "text": "Existing same-goal journal treated as foreign; own new journal opened anyway - the miss this kit now detects as DUPLICATE_GOAL_LIVE",
+      "refs": []
+    },
+    {
+      "at": "2026-10-02T04:48:29+00:00",
+      "kind": "handoff",
+      "text": "User requested stop. Source lane handed to authorized chat <chat-uuid-prefix>. Guarded edit released own source lease.",
+      "refs": []
+    }
+  ],
+  "_fixtureNote": "Anonymized structure copy of codex-chat-timeout-failover-v2-d542bf32 for parallel-lanes tests."
+}

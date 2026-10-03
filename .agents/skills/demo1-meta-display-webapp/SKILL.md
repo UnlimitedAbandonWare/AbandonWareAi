@@ -40,3 +40,5 @@ description: Use when starting or coordinating a Meta Ray-Ban Display RAG webapp
 분리된 역할은 기존 단일 스킬의 구현·재개·실행 검증 책임을 나눈 것이다. 공통 계약·선택기·검증 도구를 복제하지 않았다. 복구는 이번 역할 파일과 라우팅·task binding 변경에 한정하고 기존 소스·실행 근거를 보존한다. 진입점/역할 문서가 바뀌면 selector의 taskBinding이 달라져 기존 기록의 재확인을 요구한다.
 
 반증 사례: 단순 다음 단계 조회에서 client를 수정하거나, client 구현마다 세 역할에 같은 fixture를 반복시키거나, 600×600 preview만으로 E4 완료를 주장하면 역할 선택을 수정한다.
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

@@ -1,0 +1,115 @@
+[ANTI-STOP] 읽기 = intake. WP1부터 바로 실행한다. 멈춤 없이 끝까지 달린다.
+
+# [DEVIN 지시서] 5대 에이전트(Devin·Codex·AGY·Grok·GrokBot) 탐침 기반 스킬·스크립트·디버깅 타점 정돈 — 2026-10-03 12:25 KST
+파일 ID: PASTE_DEVIN_SKILL_AUDIT_FIX_20261003
+@demo1-vibe-skill-router
+금지: 제품 소스(main/java/**, app/**) 수정 0 · git commit/push/add -A 0 · 비밀값 출력 0 · remote 추가 금지 · PROTO_OPEN 변경 금지
+
+## 0) 한 줄 목표
+Devin·Codex·AGY·Grok·GrokBot 실측 탐침에서 확인된 5대 병목(워치독 파이썬 크래시, 스킬 린트 7개 경고, 하모니 회귀 실패, 콘솔 cp949 인코딩 크래시, 스텁 방치/토큰 절삭)을 소스 무변경 원칙 하에 완전 해소하고 회귀를 검증한다. Project Root는 C:\AbandonWare\demo-1\demo-1\src.
+
+## 1) 사실 (읽기 전용 확인, 2026-10-03 12:20~12:25 KST)
+- [Devin/Grok] `scripts/agent_session_watch.py scan --agent all` 실행 시 line 591에서 `AttributeError: 'str' object has no attribute 'get'` 예외 발생으로 즉각 크래시 (scan_generic non-dict 방어 누락).
+- [공통 린트] `node tools/agents/skill-lint.mjs` 검사 시 160개 스킬 중 7개에서 경고(Frontmatter 누락 1건, unquoted colon 1건, 이름 불일치 5건) 검출.
+- [공통 테스트] `scripts/test_skill_harmony_contract.py` 실행 시 S2(`test_s2_git_free_review_other_workflows_kept`)에서 AGENTS.md 바이트 예산 분리 반영 누락으로 FAILED (1 fail, 7 pass).
+- [AGY/콘솔] `scripts/demo1_vibe_skill_router.py --help` 실행 시 한국어 윈도우 콘솔(cp949)에서 `\u2014` 문자로 인한 `UnicodeEncodeError` 크래시 발생.
+- [Codex/품질] 최근 3일간 출력 절삭 695회(870만 토큰 낭비), 리스 표류 321회, MCP 타임아웃 17회 확인. 스킬 인덱스 미등록 70개 및 스텁 4종 46점 방치.
+
+기준 해시:
+- scripts/agent_session_watch.py | 36566B | 64DC9E06EF08 | 수정
+- scripts/demo1_vibe_skill_router.py | 13992B | F2FD4A57ECA9 | 수정
+- scripts/test_skill_harmony_contract.py | 10924B | 0C9CCB0A371A | 수정
+- .agents/skills/demo1-codex-selfask-triad | 3536B | 61F1D092208D | 수정
+- .agents/skills/demo1-copy-residue-cleanup | 4477B | 06E6D2112514 | 수정
+- .agents/skills/run-pipeline | 1383B | 76C4755E641F | 수정
+- .agents/skills/verify-boot | 812B | 2763730D81A7 | 수정
+- .agents/skills/archive-restore | 1641B | E593E04B4385 | 수정
+- .agents/skills/archive-search | 978B | BA0C405F4223 | 수정
+- .agents/skills/build-error-miner | 1581B | BBC46B788E51 | 수정
+- .agents/skills-intent-index.yaml | 40391B | DD35BD16975C | 수정
+
+입력 판정: 워치독 전체 스캔 WRONG(line 591 에러) · 스킬 규격 100% 정상 WRONG(7 warn) · 하모니 회귀 WRONG(S2 FAILED) · 라우터 cp949 호환 WRONG(UnicodeEncodeError) · Codex 토큰 효율 STALE(870만 토큰 절삭 낭비)
+
+## 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- scripts/ 파이썬 수정 시 lease 확인: python -B scripts/agent_scope_lease.py check --path scripts/agent_session_watch.py.
+- Markdown 및 YAML은 lease 없이 journal+checkpoint만 수행 (demo1-work-ledger §2).
+- 작업 시작 전 journal 열기 / 완료 후 닫기.
+
+## WP1 [Devin] `scripts/agent_session_watch.py` Grok/Devin 세션 파싱 방어 및 전체 스캔 정상화
+- 증거: `scripts/agent_session_watch.py:591`
+- RED: `python -B scripts/agent_session_watch.py scan --agent all --since-hours 24; "exit=$LASTEXITCODE"` (AttributeError 크래시)
+- 최소 수정: `scan_generic()`의 줄 파싱 루프에서 `if not isinstance(rec, dict): continue` 방어 코드 삽입.
+- GREEN: `python -B scripts/agent_session_watch.py scan --agent all --since-hours 24; "exit=$LASTEXITCODE"` -> 정상 종료 (exit 0/3/4)
+- 완료 조건: 전체 4개 에이전트 세션 스토어가 예외 없이 정상 스캔되고 요약 출력됨.
+
+## WP2 [Devin] `node tools/agents/skill-lint.mjs` 검출 7개 스킬 규격 결함 일괄 수정
+- 증거: `tools/agents/skill-lint.mjs` 7 warn
+- RED: `node tools/agents/skill-lint.mjs; "exit=$LASTEXITCODE"` (153 ok / 7 warn)
+- 최소 수정:
+  1) `.agents/skills/demo1-copy-residue-cleanup/SKILL.md`: YAML frontmatter(`--- name / description ---`) 추가.
+  2) `.agents/skills/demo1-codex-selfask-triad/SKILL.md`: description의 unquoted colon(`(UAW self-ask):`)을 `>-` 블록 스칼라로 변경.
+  3) `.agents/skills/run-pipeline/SKILL.md`: `name: run-pipeline`으로 수정.
+  4) `.agents/skills/verify-boot/SKILL.md`: `name: verify-boot`로 수정.
+  5) `.agents/skills/archive-restore/SKILL.md`: `name: archive-restore`로 수정.
+  6) `.agents/skills/archive-search/SKILL.md`: `name: archive-search`로 수정.
+  7) `.agents/skills/build-error-miner/SKILL.md`: `name: build-error-miner`로 수정.
+- GREEN: `node tools/agents/skill-lint.mjs; "exit=$LASTEXITCODE"` -> `skills: 160 ok / 0 warn (total 160)` exit 0.
+- 완료 조건: 경고 건수 0, 160개 스킬 전체 PASS.
+
+## WP3 [Devin] `scripts/test_skill_harmony_contract.py` S2 회귀 및 `scripts/demo1_vibe_skill_router.py` cp949 인코딩 수정
+- 증거: `scripts/test_skill_harmony_contract.py:116`, `scripts/demo1_vibe_skill_router.py:2617`
+- RED:
+  1) `python -B scripts/test_skill_harmony_contract.py; "exit=$LASTEXITCODE"` (FAIL: test_s2)
+  2) `python -B scripts/demo1_vibe_skill_router.py --help; "exit=$LASTEXITCODE"` (UnicodeEncodeError)
+- 최소 수정:
+  1) `scripts/test_skill_harmony_contract.py`: S2 테스트가 `AGENTS_MD` 뿐 아니라 분리된 SSOT 파일 `docs/agents-rules/DEMO1-GIT-LOCAL-FIRST.md`도 확인하도록 수정.
+  2) `scripts/demo1_vibe_skill_router.py`: main 진입부에 `if hasattr(sys.stdout, 'reconfigure'): sys.stdout.reconfigure(encoding='utf-8', errors='replace')` 추가.
+- GREEN:
+  1) `python -B scripts/test_skill_harmony_contract.py; "exit=$LASTEXITCODE"` -> `testCount=8 skip=0 fail=0` exit 0.
+  2) `python -B scripts/demo1_vibe_skill_router.py --help; "exit=$LASTEXITCODE"` -> exit 0.
+- 완료 조건: 하모니 테스트 8개 전건 GREEN 및 윈도우 콘솔 도움말 정상 출력.
+
+## WP4 [Devin] 스킬 인덱스 보강, 4개 스텁 규격화 및 Codex 토큰 절삭/MCP 가드 문서 수립
+- 증거: `docs/agent-tooling/skill-quality-report.md` (unindexed 62개, 스텁 4종), `scripts/codex_session_friction.py` (870만 토큰 절삭)
+- RED: `python -B scripts/demo1_skill_quality_audit.py; "exit=$LASTEXITCODE"` (avg_score 89.6, unindexed 62개)
+- 최소 수정:
+  1) `.agents/skills-intent-index.yaml`: `main-chat-surface`, `test-model-policy`, `dev-reload`, `mcp-control-tower`, `meta-rayban-display`, `demo1-debug-studio` 등 핵심 스킬 등록.
+  2) 4개 스텁 스킬(`start-rag-reload`, `source-inspection`, `safe-source-edit`, `spring-build-test`): Steps 및 Verify 명령어 보강.
+  3) `docs/codex/codex-mcp-safeguards.md`: 대용량 출력 명령 버퍼 제한(`Select-Object -First 50` / `scripts/out_peek.py`), 소스 리스 사전 획득 의무, 외장 MCP fallback 매핑 가이드 작성.
+- GREEN:
+  1) `python -B scripts/demo1_skill_quality_audit.py; "exit=$LASTEXITCODE"` -> avg_score 90 이상, unindexed 감소 exit 0.
+  2) `python -B scripts/agents_md_budget.py check; "exit=$LASTEXITCODE"` -> `check ok: AGENTS.md within budgets` exit 0.
+- 완료 조건: 스킬 인덱스 확장, 스텁 보강, MCP 가드 문서 작성 및 예산 검증 PASS.
+
+## HOLD
+- 제품 소스(Java/Spring) 파일 변경 요청 발생 시 즉시 중단 및 TOSS Codex.
+- 외장 유료 API 키 또는 결제 요청 발생 시 즉시 HOLD.
+
+## ASK_ONCE
+- U-1: 미등록 스킬 인덱스 추가 범위 — (a) 권장: 고빈도 핵심 스킬 10~15개 우선 선별 등록 (b) 전체 일괄 등록.
+- U-2: 최하위 4개 스텁 스킬 처리 — (a) 권장: 실용적 실행 가이드 및 Verify 명령 보강 (b) 상위 스킬 리다이렉트.
+
+## 절대 금지
+- 제품 소스(main/java/**, app/**) 수정 절대 금지.
+- git commit · push · add -A · remote 추가·변경 · PROTO_OPEN 변경 금지.
+- 비밀값(API 키, 토큰, 암호) 출력 금지. 미실행은 NOT_RUN.
+
+## Acceptance
+- A-WP1: WP1 `scripts/agent_session_watch.py scan --agent all` 명령이 AttributeError 없이 정상 완료 (exit 0/3/4).
+- A-WP2: WP2 `node tools/agents/skill-lint.mjs` 검사에서 160개 스킬 전체 0 warn PASS (exit 0).
+- A-WP3: WP3 `scripts/test_skill_harmony_contract.py` 테스트 8/8 green 및 `demo1_vibe_skill_router.py --help` 정상 출력 (exit 0).
+- A-WP4: WP4 `demo1_skill_quality_audit.py` 스킬 점수 향상, `docs/codex/codex-mcp-safeguards.md` 작성 및 `agents_md_budget.py check` 통과 (exit 0).
+- 미실행 항목은 NOT_RUN + 사유로 기록하며, 결코 임의로 PASS로 바꾸지 않는다.
+
+## 보고 형식
+외부 API: 호출 없음 ($0 로컬 전용).
+보고 표:
+| 항목 | 결과 | 증거 경로 |
+|---|---|---|
+| WP1 세션 워치독 전체 스캔 | PASS | scripts/agent_session_watch.py |
+| WP2 스킬 린터 7개 경고 해소 | PASS | tools/agents/skill-lint.mjs (0 warn) |
+| WP3 하모니 테스트 & 인코딩 | PASS | scripts/test_skill_harmony_contract.py (8/8 green) |
+| WP4 스킬 인덱스 & MCP 가드 | PASS | docs/codex/codex-mcp-safeguards.md |
+
+[ANTI-STOP] 완료 = Acceptance PASS. 모든 검증 명령이 exit 0일 때 완료를 선언한다.

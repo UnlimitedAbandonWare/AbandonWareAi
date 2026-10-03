@@ -17,6 +17,11 @@ public final class ChatCancellationCommandHandler {
             BooleanSupplier authorized,
             ChatRunRegistry runRegistry,
             Runnable stoppedMarker) {
+        return cancel(sessionId, runToken, authorized, runRegistry, stoppedMarker, () -> false);
+    }
+
+    public Result cancel(Long sessionId, String runToken, BooleanSupplier authorized,
+            ChatRunRegistry runRegistry, Runnable stoppedMarker, BooleanSupplier cancelDerivedExact) {
         if (sessionId == null) {
             return Result.notCancelled("session_id_required");
         }
@@ -35,7 +40,9 @@ public final class ChatCancellationCommandHandler {
         try {
             boolean cancelled = runRegistry != null
                     && runRegistry.cancelExact(sessionId, runToken, stoppedMarker);
-            return cancelled
+            // Durable owner/session/run lookup also works after the origin run's registry TTL or a restart.
+            boolean derivedCancelled = cancelDerivedExact.getAsBoolean();
+            return cancelled || derivedCancelled
                     ? new Result(true, "cancelled")
                     : Result.notCancelled("run_not_found_or_not_cancellable");
         } catch (Exception cancellationFailure) {

@@ -43,13 +43,33 @@ final class ChatSessionMetaMerger {
             }
         }
 
+        // Sampling is conversation state too. Omission restores; explicit zero wins.
+        inheritNumber(meta, "temperature", uiReq.getTemperature(), uiReq::setTemperature);
+        inheritNumber(meta, "topP", uiReq.getTopP(), uiReq::setTopP);
+        inheritNumber(meta, "frequencyPenalty", uiReq.getFrequencyPenalty(), uiReq::setFrequencyPenalty);
+        inheritNumber(meta, "presencePenalty", uiReq.getPresencePenalty(), uiReq::setPresencePenalty);
+        if (uiReq.getMaxTokens() != null) meta.put("maxTokens", uiReq.getMaxTokens());
+        else if (meta.get("maxTokens") instanceof Number value && value.intValue() > 0
+                && value.doubleValue() == value.intValue()) uiReq.setMaxTokens(value.intValue());
+        if (uiReq.getRagAnswerPolicy() != null) meta.put("ragAnswerPolicy", uiReq.getRagAnswerPolicy());
+        else if (meta.get("ragAnswerPolicy") instanceof String value
+                && java.util.Set.of("adaptive", "evidence_only").contains(value)) uiReq.setRagAnswerPolicy(value);
+
+        if (uiReq.getModelSelectionMode() != null) meta.put("modelSelectionMode", uiReq.getModelSelectionMode());
+        else if (uiReq.getStrictModelSelection() != null) meta.put("modelSelectionMode", uiReq.isStrictModelSelection() ? "strict" : "preferred");
+        else if (uiReq.getModel() == null && meta.get("modelSelectionMode") instanceof String value
+                && java.util.Set.of("preferred", "strict", "auto").contains(value)) {
+            uiReq.setModelSelectionMode(value);
+            uiReq.setStrictModelSelection("strict".equals(value));
+        }
+
         if (uiReq.getModel() != null && !uiReq.getModel().isBlank()) {
             meta.put("model", uiReq.getModel());
         } else if (meta.containsKey("model")) {
             uiReq.setModel(String.valueOf(meta.get("model")));
         }
 
-        if (uiReq.getSearchMode() != null) {
+        if (uiReq.isSearchModeExplicit()) {
             meta.put("searchMode", uiReq.getSearchMode().name());
         } else if (meta.containsKey("searchMode")) {
             try {
@@ -105,6 +125,13 @@ final class ChatSessionMetaMerger {
             }
         }
 
+        // Omission inherits the session choice; explicit values keep MemoryMode's own fallback semantics.
+        if (uiReq.getMemoryMode() != null) {
+            meta.put("memoryMode", uiReq.getMemoryMode());
+        } else if (meta.get("memoryMode") instanceof String memoryMode) {
+            uiReq.setMemoryMode(memoryMode);
+        }
+
         if (uiReq.getProfile() != null && !uiReq.getProfile().isBlank()) {
             meta.put("profile", uiReq.getProfile());
         } else if (meta.containsKey("profile")) {
@@ -126,6 +153,13 @@ final class ChatSessionMetaMerger {
         // Session settings document version; unknown legacy keys are preserved above.
         meta.put("schemaVersion", 1);
         return meta;
+    }
+
+    private static void inheritNumber(Map<String, Object> meta, String key, Double request,
+            java.util.function.Consumer<Double> restore) {
+        if (request != null) meta.put(key, request);
+        else if (meta.get(key) instanceof Number number && Double.isFinite(number.doubleValue()))
+            restore.accept(number.doubleValue());
     }
 
     private static void traceSuppressedMergeSkipped(Logger log, String stage, ChatSession session, Exception error) {

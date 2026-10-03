@@ -480,8 +480,9 @@ public class DebugCopilotService {
             TraceStore.put("dbg.copilot.ok", ok);
 
             // Always provide correlation hints (best-effort)
-            if (traceId != null) TraceStore.put("dbg.copilot.traceId", SafeRedactor.hashValue(traceId));
+            if (traceId != null) TraceStore.put("dbg.copilot.traceId", SafeRedactor.hashValueOrPreserve(traceId));
             if (sid != null) TraceStore.put("dbg.copilot.sid", SafeRedactor.hashValue(sid));
+            TraceStore.put("dbg.copilot.commandAdvice", List.of(correlatedEventAdvice(traceId)));
 
             if (ok) {
                 TraceStore.put("dbg.copilot.summary",
@@ -522,8 +523,8 @@ public class DebugCopilotService {
             // Flatten commands
             List<String> cmds = new ArrayList<>();
             if (traceId != null || sid != null) {
-                cmds.add("export TRACE_ID_HASH=" + (traceId == null ? "" : SafeRedactor.hashValue(traceId)));
-                cmds.add("export SID_HASH=" + (sid == null ? "" : SafeRedactor.hashValue(sid)));
+                if (traceId != null) cmds.add("traceIdHash=" + SafeRedactor.hashValueOrPreserve(traceId));
+                if (sid != null) cmds.add("sessionIdHash=" + SafeRedactor.hashValue(sid));
             }
             for (Cause c : ranked) {
                 for (String cmd : c.commands) {
@@ -936,19 +937,35 @@ public class DebugCopilotService {
     }
 
     private static String cmdGrepTrace(String traceId, String keyPrefix) {
-        String tid = (traceId == null) ? "$TRACE_ID_HASH" : SafeRedactor.hashValue(traceId);
-        String kp = (keyPrefix == null) ? "" : keyPrefix;
-        // Keep commands generic: users may store logs elsewhere.
-        if (kp.isBlank()) {
-            return "rg \"" + escapeShell(tid) + "\" ./logs -n | tail -n 200";
-        }
-        return "rg \"" + escapeShell(tid) + "\" ./logs -n | rg \"" + escapeShell(kp) + "\" | tail -n 200";
+        String prefix = SafeRedactor.traceLabelOrFallback(keyPrefix, "");
+        if (traceId == null || traceId.isBlank()) return "Unavailable: trace_id_missing"
+                + (prefix.isBlank() ? "" : "; inspect redacted event prefix=" + prefix);
+        return "Use debug.trace.lookup mode=correlated traceIdHash=" + SafeRedactor.hashValueOrPreserve(traceId)
+                + (prefix.isBlank() ? "" : "; inspect redacted event prefix=" + prefix);
     }
 
-    private static String escapeShell(String s) {
-        if (s == null) return "";
-        // very small escape so commands remain copy-pastable
-        return s.replace("\"", "\\\"");
+    private static Map<String, Object> correlatedEventAdvice(String traceId) {
+        Map<String, Object> advice = new LinkedHashMap<>();
+        advice.put("commandId", "lookup_correlated_events");
+        advice.put("providerSurface", "java_agent_tool");
+        advice.put("toolId", "debug.trace.lookup");
+        advice.put("cwdKind", "none");
+        advice.put("shell", "none");
+        advice.put("prerequisites", List.of("verified_trace_hash", "internal_read_authorization"));
+        advice.put("evidenceRefs", List.of("dbg.copilot.traceId"));
+        advice.put("expectedArtifact", "redacted_debug_events");
+        advice.put("effects", "read_only");
+        if (traceId == null || traceId.isBlank()) {
+            advice.put("arguments", Map.of());
+            advice.put("sourceStatus", "unavailable");
+            advice.put("reasonCode", "trace_id_missing");
+        } else {
+            advice.put("arguments", Map.of("mode", "correlated", "traceIdHash",
+                    SafeRedactor.hashValueOrPreserve(traceId), "limit", 50));
+            advice.put("sourceStatus", "available");
+            advice.put("reasonCode", "same_request_events");
+        }
+        return advice;
     }
 
     private static boolean truthy(Object v) {

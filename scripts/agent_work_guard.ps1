@@ -1,5 +1,6 @@
 # Pre/PostToolUse wrapper for scripts/agent_work_guard.py.
 # Stdin: hook event JSON. Exit 2 = block, 0 = allow, 1 = fail-open.
+# SSOT: scripts/agent_work_guard.py (hook wrapper only).
 [CmdletBinding()]
 param()
 Set-StrictMode -Version Latest

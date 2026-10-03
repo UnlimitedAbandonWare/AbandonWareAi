@@ -35,6 +35,9 @@ public final class FinalizedMemoryPersistence {
                     throw cancellation(cancellationFactory, "cancelled before terminal side effect");
                 }
             } catch (Throwable failure) {
+                if (failure instanceof Error fatal) {
+                    throw fatal;
+                }
                 CancellationException terminal = terminalCancellation(failure);
                 if (terminal != null) {
                     throw terminal;

@@ -324,5 +324,68 @@ class Advise(unittest.TestCase):
         self.assertEqual("skipped", out["status"])
 
 
+
+
+class DevinStoreFixes(unittest.TestCase):
+    def test_devin_sessions_db_root_or_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            self.assertFalse(w.devin_sessions_db_present(home))
+            self.assertEqual(
+                "sessions_db=%s" % w.devin_sessions_db_present(home),
+                "sessions_db=False")
+            cli = home / "cli"
+            cli.mkdir()
+            (cli / "sessions.db").write_bytes(b"")
+            self.assertTrue(w.devin_sessions_db_present(home))
+            self.assertEqual(
+                "sessions_db=%s" % w.devin_sessions_db_present(home),
+                "sessions_db=True")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "sessions.db").write_bytes(b"")
+            self.assertTrue(w.devin_sessions_db_present(home))
+            self.assertEqual(
+                "sessions_db=%s" % w.devin_sessions_db_present(home),
+                "sessions_db=True")
+
+    def test_iter_devin_includes_cli_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "cli" / "summaries").mkdir(parents=True)
+            (home / "summaries").mkdir()
+            (home / "cli" / "transcripts").mkdir(parents=True)
+            (home / "cli" / "summaries" / "cli-note.md").write_text("a", encoding="utf-8")
+            (home / "summaries" / "root-note.md").write_text("b", encoding="utf-8")
+            (home / "cli" / "transcripts" / "turn.jsonl").write_text("{}", encoding="utf-8")
+            names = {path.name for path in w.iter_generic_files(home, "devin")}
+            self.assertIn("cli-note.md", names)
+            self.assertIn("root-note.md", names)
+            self.assertIn("turn.jsonl", names)
+
+    def test_devin_lock_pileup_thresholds(self):
+        self.assertIsNone(w.devin_lock_pileup_finding(0))
+        self.assertIsNone(w.devin_lock_pileup_finding(20))
+        warn = w.devin_lock_pileup_finding(21)
+        self.assertEqual(warn["pattern"], "P15")
+        self.assertEqual(warn["name"], "devin-lock-pileup")
+        self.assertEqual(warn["severity"], "warn")
+        self.assertEqual(w.devin_lock_pileup_finding(100)["severity"], "warn")
+        auto = w.devin_lock_pileup_finding(101)
+        self.assertEqual(auto["severity"], "auto")
+        self.assertEqual(auto["name"], "devin-lock-pileup")
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            lock_dir = home / "cli" / "session_locks"
+            lock_dir.mkdir(parents=True)
+            for i in range(21):
+                (lock_dir / ("s%d.lock" % i)).write_text("1", encoding="ascii")
+            (lock_dir / "note.txt").write_text("x", encoding="ascii")
+            self.assertEqual(w.count_devin_locks(home), 21)
+            found = w.devin_lock_pileup_finding(w.count_devin_locks(home))
+            self.assertEqual(found["severity"], "warn")
+            self.assertEqual(found["evidence"]["lockFiles"], 21)
+
+
 if __name__ == "__main__":
     unittest.main()

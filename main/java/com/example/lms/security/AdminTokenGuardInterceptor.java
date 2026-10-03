@@ -93,6 +93,8 @@ public class AdminTokenGuardInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest req, HttpServletResponse res, Object handler) throws Exception {
+        // The sole anonymous write exception uses server-issued owner identity in its controller.
+        if ("PATCH".equals(req.getMethod()) && "/api/settings/preferences".equals(safePath(req))) return true;
         if (protoOpen) {
             return true;
         }

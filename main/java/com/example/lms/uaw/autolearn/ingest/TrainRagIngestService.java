@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -92,7 +93,17 @@ public class TrainRagIngestService {
         int skippedBlankLines;
         int skippedInvalidLines;
         int queuedDocs;
+        int originalRecords;
+        int policyExcludedDocs;
+        int checkpointConfirmedPolicyExcludedDocs;
         int failedBatches;
+        int checkpointConfirmedDocs;
+        int sourceRejectedBatches;
+        long checkpointOffset;
+        long readOffset;
+        int incompleteTailRecords;
+        boolean complete = true;
+        String failureStage = "";
         String lastReason = "";
     }
 
@@ -127,23 +138,52 @@ public class TrainRagIngestService {
     }
 
     public int ingestNewSamples(Path jsonlPath, String datasetName, PreemptionToken token) {
+        return ingestNewSamplesDetailed(jsonlPath, datasetName, token).storedDocs();
+    }
+
+    public record IngestOutcome(int storedDocs, int checkpointConfirmedDocs, int unconfirmedDocs,
+            long checkpointOffset, int sourceRejectedBatches, String reasonCode, String failureStage,
+            boolean retryable, boolean complete, int policyExcludedRecordCount, int checkpointConfirmedPolicyExcludedDocs) {
+        public IngestOutcome(int storedDocs, int checkpointConfirmedDocs, int unconfirmedDocs,
+                long checkpointOffset, int sourceRejectedBatches, String reasonCode, String failureStage,
+                boolean retryable, boolean complete) {
+            this(storedDocs, checkpointConfirmedDocs, unconfirmedDocs, checkpointOffset, sourceRejectedBatches,
+                    reasonCode, failureStage, retryable, complete, 0, 0);
+        }
+        public int storedRecordCount() { return storedDocs; }
+        public int checkpointCommittedCount() { return checkpointConfirmedDocs + checkpointConfirmedPolicyExcludedDocs; }
+        public String status() {
+            if (reasonCode != null && reasonCode.startsWith("preempted")) return "CANCELLED";
+            if ("UNKNOWN_COMMIT".equals(reasonCode) || "vector_receipt_missing".equals(reasonCode) || "receipt_pending".equals(reasonCode)) return "UNKNOWN_COMMIT";
+            if ("checkpoint_save_fail".equals(reasonCode)) return "CHECKPOINT_FAILURE";
+            if ("source_rejected".equals(reasonCode) || "vector_projection_none".equals(reasonCode)
+                    || java.util.Set.of("below_min_accepted", "probe_cooldown", "daily_cap").contains(reasonCode == null ? "" : reasonCode)) return "POLICY_EXCLUDED";
+            if (!complete) return storedDocs > 0 ? "PARTIAL" : "STORE_FAILURE";
+            return storedDocs > 0 ? "SUCCESS" : policyExcludedRecordCount > 0 ? "POLICY_EXCLUDED" : "NO_OP";
+        }
+    }
+
+    public IngestOutcome ingestNewSamplesDetailed(Path jsonlPath, String datasetName, PreemptionToken token) {
         IngestCounters counters = new IngestCounters();
         if (jsonlPath == null || !Files.exists(jsonlPath)) {
             String path = jsonlPath == null ? "" : String.valueOf(jsonlPath);
             log.debug("[UAW] train jsonl not found pathHash={} pathLength={}",
                     SafeRedactor.hashValue(path), path.length());
             counters.lastReason = "file_missing";
+            counters.complete = false;
             traceIngestCounters(counters, 0);
-            return 0;
+            return ingestOutcome(counters, 0);
         }
         if (token != null && token.shouldAbort()) {
             counters.lastReason = "preempted_before_start";
+            counters.complete = false;
             traceIngestCounters(counters, 0);
-            return 0;
+            return ingestOutcome(counters, 0);
         }
 
         Path statePath = Path.of(props.getRetrain().getIngestStatePath());
         IngestState state = loadState(statePath, jsonlPath);
+        counters.checkpointOffset = state.offset;
 
         int maxLines = Math.max(1, props.getRetrain().getMaxIngestLinesPerRun());
         int batchSize = Math.min(50, Math.max(5, maxLines / 4));
@@ -161,18 +201,27 @@ public class TrainRagIngestService {
             raf.seek(state.offset);
 
             List<Indexed> batch = new ArrayList<>();
+            boolean failedBatch = false;
 
             int processedLines = 0;
             while (processedLines < maxLines) {
                 if (token != null && token.shouldAbort()) {
+                    counters.complete = false;
+                    counters.lastReason = "preempted";
                     break;
                 }
 
+                counters.failureStage = "jsonl_read";
                 String line = readUtf8Line(raf);
+                counters.failureStage = "";
                 if (line == null) {
+                    if (raf.getFilePointer() < raf.length()) {
+                        counters.incompleteTailRecords++;
+                    }
                     break;
                 }
                 lastProcessedOffset = raf.getFilePointer();
+                counters.readOffset = lastProcessedOffset;
                 processedLines++;
                 counters.readLines++;
 
@@ -193,6 +242,7 @@ public class TrainRagIngestService {
                     continue;
                 }
 
+                counters.originalRecords++;
                 String question = Objects.toString(m.getOrDefault("question", ""), "");
                 String modelUsed = Objects.toString(m.getOrDefault("model", ""), "");
 
@@ -262,7 +312,8 @@ public class TrainRagIngestService {
                 meta.put("vector_projection_mode", projectionMode);
                 if (PROJECTION_NONE.equals(projectionMode)) {
                     counters.lastReason = "vector_projection_none";
-                    saveState(statePath, jsonlPath, lastProcessedOffset);
+                    counters.policyExcludedDocs++;
+                    commitCheckpoint(statePath, jsonlPath, lastProcessedOffset, acceptedDocs, counters);
                     continue;
                 }
                 String content = PROJECTION_RAW_SHADOW_QUARANTINE.equals(projectionMode)
@@ -273,50 +324,94 @@ public class TrainRagIngestService {
 
                 if (batch.size() >= batchSize) {
                     if (token != null && token.shouldAbort()) {
+                        counters.complete = false;
                         counters.lastReason = "preempted_before_flush";
                         break;
                     }
-                    boolean ok = upsertSegments(batch);
-                    if (!ok) {
+                    BatchOutcome outcome = upsertSegments(batch);
+                    acceptedDocs += outcome.storedRecordCount();
+                    counters.policyExcludedDocs += outcome.policyExcludedRecordCount();
+                    if (!outcome.durable()) {
                         counters.failedBatches++;
-                        counters.lastReason = "vector_upsert_fail";
+                        recordBatchFailure(counters, outcome, batch.size());
+                        failedBatch = true;
                         break;
                     }
-                    acceptedDocs += batch.size();
                     batch.clear();
-                    saveState(statePath, jsonlPath, lastProcessedOffset);
+                    commitCheckpoint(statePath, jsonlPath, lastProcessedOffset, acceptedDocs, counters);
                 }
             }
 
-            if (!batch.isEmpty() && (token == null || !token.shouldAbort())) {
-                boolean ok = upsertSegments(batch);
-                if (ok) {
-                    acceptedDocs += batch.size();
-                    saveState(statePath, jsonlPath, lastProcessedOffset);
+            if (!failedBatch && !batch.isEmpty() && (token == null || !token.shouldAbort())) {
+                BatchOutcome outcome = upsertSegments(batch);
+                acceptedDocs += outcome.storedRecordCount();
+                counters.policyExcludedDocs += outcome.policyExcludedRecordCount();
+                if (outcome.durable()) {
+                    commitCheckpoint(statePath, jsonlPath, lastProcessedOffset, acceptedDocs, counters);
                 } else {
                     counters.failedBatches++;
-                    counters.lastReason = "vector_upsert_fail";
+                    recordBatchFailure(counters, outcome, batch.size());
                 }
-            } else if (!batch.isEmpty()) {
+            } else if (!failedBatch && !batch.isEmpty()) {
+                counters.complete = false;
                 counters.lastReason = "preempted_before_final_flush";
+            }
+            if (!failedBatch && batch.isEmpty() && counters.complete
+                    && lastProcessedOffset > counters.checkpointOffset) {
+                commitCheckpoint(statePath, jsonlPath, lastProcessedOffset, acceptedDocs, counters);
             }
         } catch (Exception e) {
             log.warn("[UAW] ingest error. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             counters.failedBatches++;
-            counters.lastReason = "ingest_fail";
-            recordExternalError("ingest_fail");
+            counters.complete = false;
+            counters.lastReason = "checkpoint_save".equals(counters.failureStage)
+                    ? "checkpoint_save_fail" : "jsonl_read".equals(counters.failureStage)
+                    ? "jsonl_read_fail" : "ingest_fail";
+            recordExternalError(counters.lastReason);
         } finally {
             traceIngestCounters(counters, acceptedDocs);
         }
 
-        return acceptedDocs;
+        return ingestOutcome(counters, acceptedDocs);
     }
 
-    private boolean upsertSegments(List<Indexed> batch) {
+    private static IngestOutcome ingestOutcome(IngestCounters counters, int storedDocs) {
+        return new IngestOutcome(storedDocs, counters.checkpointConfirmedDocs,
+                Math.max(0, counters.originalRecords - counters.checkpointConfirmedDocs
+                        - counters.checkpointConfirmedPolicyExcludedDocs), counters.checkpointOffset,
+                counters.sourceRejectedBatches, counters.lastReason, counters.failureStage,
+                !counters.lastReason.equals("source_rejected"), counters.complete,
+                counters.policyExcludedDocs, counters.checkpointConfirmedPolicyExcludedDocs);
+    }
+
+    private record BatchOutcome(boolean durable, String reasonCode, int storedRecordCount, int policyExcludedRecordCount) {
+    }
+
+    private static void recordBatchFailure(IngestCounters counters, BatchOutcome outcome, int size) {
+        counters.complete = false;
+        counters.failureStage = "vector_flush";
+        counters.lastReason = outcome.reasonCode();
+        if ("source_rejected".equals(outcome.reasonCode())) {
+            counters.sourceRejectedBatches++;
+        }
+    }
+
+    private void commitCheckpoint(Path statePath, Path jsonlPath, long offset, int storedDocs,
+            IngestCounters counters) throws IOException {
+        counters.failureStage = "checkpoint_save";
+        saveState(statePath, jsonlPath, offset);
+        counters.checkpointOffset = offset;
+        counters.checkpointConfirmedDocs = storedDocs;
+        counters.checkpointConfirmedPolicyExcludedDocs = counters.policyExcludedDocs;
+        counters.failureStage = "";
+    }
+
+    private BatchOutcome upsertSegments(List<Indexed> batch) {
+        java.util.List<VectorStoreService.VectorRecordReceipt> receipts = new ArrayList<>();
         try {
             if (batch == null || batch.isEmpty()) {
-                return true;
+                return new BatchOutcome(true, "empty", 0, 0);
             }
 
             observeRagControlShadow(batch);
@@ -327,18 +422,38 @@ public class TrainRagIngestService {
                 String sid = (it.sid() == null || it.sid().isBlank())
                         ? vectorSidService.resolveActiveSid(LangChainRAGService.GLOBAL_SID)
                         : it.sid().trim();
-                vectorStoreService.enqueue(it.id(), sid, it.text(), it.meta());
+                var receipt = vectorStoreService.enqueueWithReceipt(it.id(), sid, it.text(), it.meta());
+                if (receipt == null) {
+                    BatchOutcome confirmed = receiptOutcome(receipts, batch.size());
+                    return new BatchOutcome(false, "vector_receipt_missing", confirmed.storedRecordCount(), confirmed.policyExcludedRecordCount());
+                }
+                receipts.add(receipt);
+                if ("source_rejected".equals(receipt.reasonCode()) && receipt.targets().isEmpty()) {
+                    return receiptOutcome(receipts, batch.size());
+                }
             }
             vectorStoreService.flush();
+            BatchOutcome outcome = receiptOutcome(receipts, batch.size());
             log.info("[AWX_MEMORY_INGEST][doc] projectId={} namespace={} count={} action={}",
                     PROJECT_ID, MEMORY_NAMESPACE, batch.size(), vectorProjectionMode().toLowerCase(Locale.ROOT));
-            return true;
+            return outcome;
         } catch (Exception e) {
             log.warn("[UAW] vector upsert failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             recordExternalError("vector_upsert_fail");
-            return false;
+            BatchOutcome confirmed = receiptOutcome(receipts, batch.size());
+            return new BatchOutcome(false, "vector_upsert_fail", confirmed.storedRecordCount(), confirmed.policyExcludedRecordCount());
         }
+    }
+
+    private static BatchOutcome receiptOutcome(java.util.List<VectorStoreService.VectorRecordReceipt> receipts, int expected) {
+        int confirmed = (int) receipts.stream().filter(VectorStoreService.VectorRecordReceipt::durable).count();
+        int excluded = (int) receipts.stream().filter(VectorStoreService.VectorRecordReceipt::policyExcluded).count();
+        int stored = confirmed - excluded;
+        String reason = receipts.stream().filter(r -> !r.durable()).map(VectorStoreService.VectorRecordReceipt::reasonCode)
+                .filter("UNKNOWN_COMMIT"::equals).findFirst().orElseGet(() -> receipts.stream()
+                        .filter(r -> !r.durable()).map(VectorStoreService.VectorRecordReceipt::reasonCode).findFirst().orElse("complete"));
+        return new BatchOutcome(confirmed == expected, reason, stored, excluded);
     }
 
     private void observeRagControlShadow(List<Indexed> batch) {
@@ -879,6 +994,16 @@ public class TrainRagIngestService {
         summary.put("queuedDocs", Math.max(0, c.queuedDocs));
         summary.put("failedBatches", Math.max(0, c.failedBatches));
         summary.put("acceptedDocs", Math.max(0, acceptedDocs));
+        summary.put("checkpointConfirmedDocs", c.checkpointConfirmedDocs);
+        summary.put("unconfirmedDocs", Math.max(0, c.originalRecords - c.checkpointConfirmedDocs - c.checkpointConfirmedPolicyExcludedDocs));
+        summary.put("storedRecordCount", acceptedDocs);
+        summary.put("policyExcludedRecordCount", c.policyExcludedDocs);
+        summary.put("checkpointCommittedCount", c.checkpointConfirmedDocs + c.checkpointConfirmedPolicyExcludedDocs);
+        summary.put("checkpointOffset", c.checkpointOffset);
+        summary.put("readOffset", c.readOffset);
+        summary.put("incompleteTailRecords", c.incompleteTailRecords);
+        summary.put("sourceRejectedBatches", c.sourceRejectedBatches);
+        summary.put("complete", c.complete);
         summary.put("reason", safeReason(c.lastReason));
         TraceStore.put("uaw.retrain.ingest.summary", summary);
     }
@@ -1020,50 +1145,40 @@ public class TrainRagIngestService {
         }
     }
 
-    private void saveState(Path statePath, Path jsonlPath, long offset) {
-        if (statePath == null)
-            return;
+    private void saveState(Path statePath, Path jsonlPath, long offset) throws IOException {
+        Path tmp = null;
         try {
-            Files.createDirectories(statePath.getParent());
+            Path parent = statePath.toAbsolutePath().getParent();
+            Files.createDirectories(parent);
             IngestState s = new IngestState();
             s.offset = Math.max(0L, offset);
             setFileFingerprint(s, jsonlPath);
             s.updatedAt = Instant.now().toString();
 
-            Path tmp = statePath.resolveSibling(statePath.getFileName().toString() + ".tmp");
+            tmp = Files.createTempFile(parent, "uaw-ingest-", ".tmp");
             Files.writeString(tmp, om.writeValueAsString(s), StandardCharsets.UTF_8);
             Files.move(tmp, statePath, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (Exception ignore) {
-            String path = absolutePath(statePath);
-            log.debug("[UAW] ingest state save skipped pathHash={} pathLength={} errorHash={} errorLength={}",
-                    SafeRedactor.hashValue(path), path.length(),
-                    SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
+        } finally {
+            if (tmp != null) {
+                Files.deleteIfExists(tmp);
+            }
         }
     }
 
-    private static String readUtf8Line(RandomAccessFile raf) {
-        try {
-            ByteArrayOutputStream out = new ByteArrayOutputStream(256);
-            int b;
-            boolean gotAny = false;
-            while ((b = raf.read()) != -1) {
-                gotAny = true;
-                if (b == '\n') {
-                    break;
-                }
-                if (b != '\r') {
-                    out.write(b);
-                }
+    private static String readUtf8Line(RandomAccessFile raf) throws IOException {
+        long start = raf.getFilePointer();
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256);
+        int b;
+        while ((b = raf.read()) != -1) {
+            if (b == '\n') {
+                return out.toString(StandardCharsets.UTF_8);
             }
-            if (!gotAny && out.size() == 0) {
-                return null;
+            if (b != '\r') {
+                out.write(b);
             }
-            return out.toString(StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            log.debug("[UAW] utf8 line read skipped errorHash={} errorLength={}",
-                    SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return null;
         }
+        raf.seek(start);
+        return null;
     }
 
     private static void setFileFingerprint(IngestState state, Path file) {

@@ -1,0 +1,217 @@
+{
+  "schemaVersion": "awx.agent-machine-context.v1",
+  "projectRoot": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "projectRootExists": true,
+  "canonicalProjectRoot": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "matchesCanonical": true,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "host": {
+    "computerName": "DESKTOP-M5NOV6K",
+    "user": "nninn",
+    "os": "Windows-10-10.0.19045-SP0"
+  },
+  "section": "all",
+  "paths": {
+    "src": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+      "exists": true
+    },
+    "startRagBat": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\Start-RAG.bat",
+      "exists": true
+    },
+    "gradlew": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+      "exists": true
+    },
+    "buildGradleKts": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\build.gradle.kts",
+      "exists": true
+    },
+    "settingsGradleKts": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\settings.gradle.kts",
+      "exists": true
+    },
+    "varMetaDisplayDb": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\var\\meta-display-db",
+      "exists": true
+    },
+    "agentHandoff": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\data\\agent-handoff",
+      "exists": true
+    },
+    "skillsRoot": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\.agents\\skills",
+      "exists": true
+    },
+    "downloadsHint": "C:\\Users\\nninn\\Downloads"
+  },
+  "env": {
+    "namesPresent": [
+      "AWX_OPTIONAL_HTTPS_ENABLED",
+      "COMPUTERNAME",
+      "GRADLE_USER_HOME",
+      "JAVA_HOME",
+      "OLLAMA_MODELS",
+      "USERPROFILE"
+    ],
+    "secretLikeNamesPresent": [
+      "AI_GATEWAY_API_KEY",
+      "BRAVE_API_KEY",
+      "BRAVE_API_KEY_FREE",
+      "BRAVE_SUBSCRIPTION_TOKEN",
+      "DEEPGRAM_API_KEY",
+      "DEEPGRAM_API_KEY_SECONDARY",
+      "DEVIN_API_KEY",
+      "GEMINI_API_KEY",
+      "GROQ_API_KEY",
+      "NAVER_CLIENT_SECRET",
+      "NAVER_KEYS",
+      "OPENAI_API_KEY",
+      "OPENCODE_API_KEY",
+      "OPENCODE_GO_API_KEY",
+      "PINECONE_API_KEY",
+      "SERPAPI_API_KEY",
+      "SESSIONNAME",
+      "SONIOX_API_KEY",
+      "TAVILY_API_KEY",
+      "UPSTASH_REDIS_REST_TOKEN",
+      "UPSTASH_VECTOR_API_KEY",
+      "ZAI_API_KEY"
+    ],
+    "secretLikeCount": 22,
+    "totalEnvCount": 100,
+    "secretValues": "REDACTED_POLICY"
+  },
+  "tools": {
+    "git": {
+      "path": "F:\\git\\cmd\\git.exe",
+      "version": "git version 2.53.0.windows.1"
+    },
+    "java": {
+      "path": "C:\\jdk\\jdk-17.0.13\\bin\\java.EXE",
+      "version": "java version \"17.0.13\" 2024-10-15 LTS",
+      "JAVA_HOME": "C:\\jdk\\jdk-17.0.13",
+      "is17": true
+    },
+    "python": {
+      "path": "C:\\Users\\nninn\\AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts\\python.exe",
+      "version": "3.11.15",
+      "venv": null
+    },
+    "node": {
+      "path": "C:\\Program Files\\nodejs\\node.EXE",
+      "version": "v24.13.0"
+    },
+    "ollama": {
+      "path": "C:\\Users\\nninn\\AppData\\Local\\Programs\\Ollama\\ollama.EXE",
+      "version": "ollama version is 0.32.13",
+      "ok": true,
+      "OLLAMA_MODELS_present": true
+    },
+    "gradle": {
+      "path": null,
+      "wrapperPreferred": true
+    },
+    "nvidiaSmi": {
+      "path": "C:\\Windows\\system32\\nvidia-smi.EXE",
+      "version": null
+    }
+  },
+  "db": {
+    "laneA_fileH2": {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\var\\meta-display-db\\lmsdb.mv.db",
+      "exists": true,
+      "size": 1130496,
+      "mtimeUtc": 1790600718,
+      "locked": true,
+      "reason": "locked",
+      "status": "locked",
+      "live": {
+        "reachable": true,
+        "httpStatus": 200,
+        "tableCount": 32
+      },
+      "exitCode": 3,
+      "note": "exit 3 / locked = JVM holds lmsdb.mv.db; reads fall back to the live lane; never kill the server"
+    },
+    "laneB_mariadb": {
+      "explicitOnly": true,
+      "probed": false
+    },
+    "cheatSheet": "docs/DB_AGENT_CHEATSHEET.md",
+    "cheatSheetPresent": true
+  },
+  "gpu": {
+    "preferred": "RTX3090",
+    "note": "power issue resolved 2026-09-24 - prefer local GPU; pin by UUID, never CUDA_VISIBLE_DEVICES=0",
+    "nvidiaSmi": "C:\\Windows\\system32\\nvidia-smi.EXE",
+    "gpus": [
+      {
+        "index": "0",
+        "name": "NVIDIA GeForce RTX 3060",
+        "uuid": "GPU-3d34d77c-1173-6bc7-a96d-c2d9b7c4e670",
+        "memoryMiB": "12288"
+      },
+      {
+        "index": "1",
+        "name": "NVIDIA GeForce RTX 3090",
+        "uuid": "GPU-4032bebe-fd12-b9cb-77fa-d4ac53a0e586",
+        "memoryMiB": "24576"
+      }
+    ],
+    "status": "ok"
+  },
+  "git": {
+    "path": "F:\\git\\cmd\\git.exe",
+    "version": "git version 2.53.0.windows.1",
+    "repo": {
+      "gitDirPresent": true,
+      "isWorkTree": true,
+      "branch": "codex/owned-runtime-browser-restart",
+      "head": "2d18b143"
+    }
+  },
+  "gitPolicy": {
+    "preferredGit": "F:\\git\\cmd\\git.exe",
+    "preferredPresent": true,
+    "noPushDefault": true,
+    "conditionalLocalGit": "scripts/conditional_local_git.py",
+    "conditionalLocalGitPresent": true
+  },
+  "skillsIndex": {
+    "skillsRoot": "C:\\AbandonWare\\demo-1\\demo-1\\src\\.agents\\skills",
+    "count": 130,
+    "router": "scripts/demo1_vibe_skill_router.py",
+    "routerPresent": true,
+    "indexPath": ".agents/skills-intent-index.yaml",
+    "indexPresent": true
+  },
+  "journals": {
+    "status": "ok",
+    "activeCount": 16,
+    "activeTaskIds": [
+      "max-push-b-perf-0928-50df21d2",
+      "agent-machine-context-dx-0928-64e6c087",
+      "artifact-refine-0928-4b387b7f",
+      "category-cleanup-0928-4b879da3",
+      "clean-vibe-low-admin-guardrail-0927-a2201adc",
+      "madasin-recovery-resume-803d6da0",
+      "clean-vibe-agent-auth-relax-0927-1ddc2d72",
+      "madasin-recovery-continue-d75f6b20",
+      "clean-primitive-debug-ai-impl-0926-55948969",
+      "chat-release-admin-access-cc876c7f",
+      "fold-meta-snapshot-vision-0a1d87c6",
+      "chat-graphrag-repair-b1658e27",
+      "nova-focus-17795bf7",
+      "devin-directive-loop-skill-9c26ad80",
+      "build-prune-fast-89faf47f",
+      "display-cycle-ssot-leftovers-3952187d"
+    ]
+  },
+  "evidence": {
+    "generatedAt": "2026-09-28T22:05:38+09:00",
+    "command": "scripts/agent_machine_context.py --write-report docs/diagnostics/agent-machine-context-0928/last.json",
+    "reportWrittenTo": "C:\\AbandonWare\\demo-1\\demo-1\\src\\docs\\diagnostics\\agent-machine-context-0928\\last.json"
+  }
+}

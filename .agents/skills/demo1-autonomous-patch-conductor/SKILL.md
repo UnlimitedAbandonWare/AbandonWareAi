@@ -11,7 +11,7 @@ the smallest active file set, verify it, record it, and stop when proof changes.
 
 ## Safety Authority
 
-- Work from `C:\AbandonWare\demo-1\demo-1\src` unless another demo-1 root is
+- Work from `<repo>` unless another demo-1 root is
   verified.
 - Current repository files and command output are authoritative.
 - Patch only active roots unless Gradle proves another root is active.

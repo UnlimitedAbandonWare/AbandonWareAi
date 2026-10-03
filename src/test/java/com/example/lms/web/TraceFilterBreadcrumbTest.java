@@ -7,6 +7,8 @@ import com.example.lms.trace.TraceSnapshotStore;
 import jakarta.servlet.ServletException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.MDC;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
@@ -30,6 +32,8 @@ import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class TraceFilterBreadcrumbTest {
 
@@ -135,6 +139,60 @@ class TraceFilterBreadcrumbTest {
                 "TraceStore.put(\"dbg.search.boost.reason\", SafeRedactor.safeMessage(boostReason, 120));"));
         assertTrue(source.contains(
                 "TraceStore.put(\"dbg.search.boost.reason\", SafeRedactor.traceLabelOrFallback(boostReason, \"unknown\"));"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/assist/display/poll", "/api/chat/ui-heartbeat"})
+    void successfulRoutineObserversDoNotEvictAnswerSnapshots(String path) throws Exception {
+        TraceFilter filter = new TraceFilter();
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ReflectionTestUtils.setField(filter, "traceSnapshotStore", store);
+        for (int i = 0; i < 205; i++) {
+            MockHttpServletRequest request = new MockHttpServletRequest("GET", "/demo" + path);
+            request.setContextPath("/demo");
+            filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+        }
+        verifyNoInteractions(store);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/assist/display/poll", "/api/chat/ui-heartbeat"})
+    void failedRoutineObserversRemainCaptured(String path) throws Exception {
+        TraceFilter filter = new TraceFilter();
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ReflectionTestUtils.setField(filter, "traceSnapshotStore", store);
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(new MockHttpServletRequest("GET", path), response,
+                (req, res) -> response.setStatus(503));
+        verify(store).captureCurrent("http_request", "GET", path, 503, null);
+        IOException failure = new IOException("synthetic failure");
+        assertThrows(IOException.class, () -> filter.doFilter(
+                new MockHttpServletRequest("GET", path), new MockHttpServletResponse(),
+                (req, res) -> { throw failure; }));
+        verify(store).captureCurrent("http_request", "GET", path, 200, failure);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/assist/display/poll", "/api/chat/ui-heartbeat"})
+    void explicitObserverDiagnosticsRemainCaptured(String path) throws Exception {
+        TraceFilter filter = new TraceFilter();
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ReflectionTestUtils.setField(filter, "traceSnapshotStore", store);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", path);
+        request.addHeader("X-Debug", "true");
+        filter.doFilter(request, new MockHttpServletResponse(), (req, res) -> {});
+        verify(store).captureCurrent("http_request", "GET", path, 200, null);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"/api/assist/display/poll", "/api/chat/ui-heartbeat"})
+    void observerTraceMemoryRemainsCaptured(String path) throws Exception {
+        TraceFilter filter = new TraceFilter();
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ReflectionTestUtils.setField(filter, "traceSnapshotStore", store);
+        filter.doFilter(new MockHttpServletRequest("GET", path), new MockHttpServletResponse(),
+                (req, res) -> TraceStore.put("traceMemory.checkpointCount", 1));
+        verify(store).captureCurrent("http_request", "GET", path, 200, null);
     }
 
     @Test

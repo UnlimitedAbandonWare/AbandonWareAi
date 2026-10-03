@@ -52,6 +52,8 @@ public class LlmRouterBandit {
     public interface RouteEligibilityFilter {
         boolean eligible(String key, ModelConfig cfg);
 
+        default int tier(String key, ModelConfig cfg) { return 0; }
+
         static RouteEligibilityFilter always() {
             return (key, cfg) -> true;
         }
@@ -236,6 +238,13 @@ public class LlmRouterBandit {
                 traceSkip("no_eligible_models");
                 return null;
             }
+
+            // Cost is an admission boundary, not a score: preserve health/cooldown
+            // filtering, then run the existing bandit only within the cheapest tier.
+            int lowestTier = candidates.stream()
+                    .mapToInt(c -> eligibilityFilter.tier(c.key, c.cfg)).min().orElse(Integer.MAX_VALUE);
+            candidates.removeIf(c -> eligibilityFilter.tier(c.key, c.cfg) != lowestTier);
+            TraceStore.put("llm.router.eligibleTier", lowestTier);
 
             // 3) Exploration: the first canonical never-tried arm.
             List<Candidate> untried = candidates.stream()

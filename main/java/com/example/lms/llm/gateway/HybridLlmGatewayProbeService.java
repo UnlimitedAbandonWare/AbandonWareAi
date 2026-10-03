@@ -200,6 +200,30 @@ public class HybridLlmGatewayProbeService {
         return Map.copyOf(out);
     }
 
+    /** Empty preload shares the generation dispatch slot but never claims GPU recovery. */
+    public boolean preloadIfIdle(String baseUrl, Runnable load) {
+        if (properties == null || healthTracker == null || load == null) return false;
+        String endpoint = healthTracker.resolveServiceEndpoint(baseUrl);
+        String resource = ModelRuntimeHealthTracker.endpointIdentityHash(endpoint);
+        Thread worker = Thread.currentThread();
+        if (activeLocalDispatches.putIfAbsent(resource, worker) != null) return false;
+        ModelRuntimeHealthTracker.EndpointAccess access = null;
+        try {
+            // Leave HALF_OPEN recovery probes to the existing generation path.
+            if (healthTracker.endpointSnapshot("local", endpoint, System.currentTimeMillis())
+                    .map(snapshot -> snapshot.state() != ModelRuntimeHealthTracker.EndpointState.CLOSED)
+                    .orElse(false)) return false;
+            access = healthTracker.acquireEndpointAccess("local", endpoint,
+                    properties.getLocalDeviceFailover().toEndpointQuarantinePolicy(), System.currentTimeMillis());
+            if (!access.allowed() || access.halfOpenPermit()) return false;
+            load.run();
+            return true;
+        } finally {
+            if (access != null) healthTracker.releaseEndpointAccess(access);
+            activeLocalDispatches.remove(resource, worker);
+        }
+    }
+
     /** One guard at the actual local dispatch boundary, shared by native and compatible adapters. */
     public dev.langchain4j.model.chat.ChatModel guardLocalModel(dev.langchain4j.model.chat.ChatModel model,
             String baseUrl, String modelName) {
@@ -332,6 +356,11 @@ public class HybridLlmGatewayProbeService {
 
     protected Map<String, Object> gpuHardwareSnapshot() {
         return com.example.lms.health.GpuHardwareDiagnostics.snapshot(environment);
+    }
+
+    /** Optional preparation never cold-loads a model; require the existing read-only resident check. */
+    public boolean contextPreparationReady(String endpoint,String modelName) {
+        return gpuRecoveryVerified(endpoint,modelName);
     }
 
     /** Post-generation, read-only corroboration; an HTTP answer or CPU allocation alone never proves recovery. */

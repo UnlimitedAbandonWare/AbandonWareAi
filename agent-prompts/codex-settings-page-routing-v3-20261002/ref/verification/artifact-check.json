@@ -1,0 +1,81 @@
+{
+  "scope": "ARTIFACT_VALIDATION_ONLY",
+  "checks": [
+    {
+      "check": "input_original_hashes_unchanged",
+      "result": "PASS",
+      "detail": "6 inputs"
+    },
+    {
+      "check": "download_copies_match",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "addendum_copy_matches",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "v2_document_unchanged",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "new_anchor_ids_unique",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "archive_listing",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "new_and_reference_anchor_hashes_and_ranges",
+      "result": "PASS",
+      "detail": "44 current anchors; 52 prior reference anchors. Prior claim semantics not all re-reviewed."
+    },
+    {
+      "check": "selected_read_manifest",
+      "result": "PASS",
+      "detail": "35 selected source files; no studio file content read"
+    },
+    {
+      "check": "uaw_crosswalk_refs",
+      "result": "PASS",
+      "detail": "18 intent/implementation mappings"
+    },
+    {
+      "check": "test_spec_ids_refs_and_not_run",
+      "result": "PASS",
+      "detail": "96 specifications; 0 application tests executed"
+    },
+    {
+      "check": "profile_schema_and_safe_examples",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "unknown_values_preserved",
+      "result": "PASS",
+      "detail": ""
+    },
+    {
+      "check": "document_sections_and_placeholders",
+      "result": "PASS",
+      "detail": "5 integrated work packages; balanced code fences; no template placeholders"
+    },
+    {
+      "check": "no_original_source_or_private_runtime_bundle",
+      "result": "PASS",
+      "detail": "document/contract/verification bundle only"
+    }
+  ],
+  "check_groups": 14,
+  "application_tests": "NOT_RUN",
+  "runtime_startup": "NOT_RUN",
+  "external_model_calls": 0,
+  "command": "python verification/verify-artifacts.py --package-root <bundle-directory> --input-dir <original-input-directory>",
+  "exit_code": 0
+}

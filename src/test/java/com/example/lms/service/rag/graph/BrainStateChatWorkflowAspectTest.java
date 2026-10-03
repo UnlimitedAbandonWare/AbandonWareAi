@@ -33,6 +33,29 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class BrainStateChatWorkflowAspectTest {
+    @Test void attachmentCaptureUsesExplicitFinalizedReferencesAndHonorsLateBudgetCancellation() throws Exception{
+        for(boolean cancelled:java.util.List.of(false,true)){
+            TraceStore.clear();TraceStore.put("finalAnswer.memorySaveAllowed",true);
+            var budget=new com.abandonware.ai.addons.budget.TimeBudget(10000);
+            com.abandonware.ai.addons.budget.TimeBudgetContext.set(budget);
+            try{
+                var graph=mock(GraphRagChunkingService.class);var authority=mock(GeneralGraphSourceAuthority.class);
+                when(authority.authorizeAttachmentCollection(any(),any(),anyLong(),org.mockito.ArgumentMatchers.eq(true))).thenReturn(true);
+                AtomicReference<Runnable> queued=new AtomicReference<>();
+                var aspect=new BrainStateChatWorkflowAspect(new BrainStateProperties(),graph,queued::set);
+                org.springframework.test.util.ReflectionTestUtils.setField(aspect,"sourceAuthority",authority);
+                var scope=scope(7);
+                var ref=new KgChunk.SourceRef("attachment:33333333-3333-3333-3333-333333333333",2);
+                var method=BrainStateChatWorkflowAspect.class.getMethod("captureFinalized",GeneralGraphScope.class,Long.class,Long.class,java.util.List.class);
+                method.invoke(aspect,scope,1L,2L,java.util.List.of(ref));
+                verify(graph,never()).ingestAttachmentSource(any(),any());
+                if(cancelled)budget.cancel();
+                queued.get().run();
+                verify(graph,times(cancelled?0:1)).ingestAttachmentSource(scope,ref);
+                if(cancelled)org.mockito.Mockito.verifyNoInteractions(authority);
+            }finally{com.abandonware.ai.addons.budget.TimeBudgetContext.clear();TraceStore.clear();}
+        }
+    }
     private static GeneralGraphScope scope(long id) {
         var session = new com.example.lms.domain.ChatSession("synthetic", "owner", "ANON");
         session.setId(id);

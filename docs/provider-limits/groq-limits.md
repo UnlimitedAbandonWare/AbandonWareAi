@@ -3,7 +3,7 @@
 ```yaml
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-01"
 sourceType: "official_public_documentation"
 accountPlan: "free (user_statement)"
 accountEvidenceCapturedAt: null
@@ -62,6 +62,12 @@ OpenAI API 한도를 적용하지 않는다.
 | whisper-large-v3 | 20 | 2K | 7.2K | 28.8K |
 | whisper-large-v3-turbo | 20 | 2K | 7.2K | 28.8K |
 
+Guard 실효 한도(2026-10-01 확인, `GroqFreeTierGuard.java:67,81`):
+`groq.free-tier.safety-margin` 기본 0.1과 예약 최소 `max(10, audioSeconds)`로 인해
+whisper 계열 실효 상한은 RPD 2,000→**1,800회**, ASD 28,800→**25,920초**다.
+8초 발화 기준 하루 실질 전사량은 RPD에 의해 **1,800회 ≈ 4시간**이다.
+또한 `audioSeconds > 16`은 요청 자체가 `groq_request_dimensions_invalid`로 거부된다.
+
 ### Text-to-speech
 
 | Model | RPM | RPD | TPM | TPD |
@@ -73,6 +79,9 @@ OpenAI API 한도를 적용하지 않는다.
 
 - 공개 표에 있는 모델이 현재 앱 allowlist(`PUBLISHED` in `GroqFreeTierGuard.java`)나
   라우팅 설정에 포함된다는 뜻은 아니다.
+- 2026-10-01 기준 `PUBLISHED`에는 `whisper-large-v3-turbo`, `openai/gpt-oss-20b`,
+  `openai/gpt-oss-120b`만 등록되어 있다. `qwen/qwen3.8-27b` 호출은
+  `groq_model_or_key_unverified`로 거부된다(가드 등록은 Codex 인계 항목).
 - `allam-2-7b`와 같이 이전 `groq-free-limits.md`에 있었으나 현재 공개 요약표에서
   확인되지 않은 모델은 `not_published_here` / `unknown`으로 남긴다.
 

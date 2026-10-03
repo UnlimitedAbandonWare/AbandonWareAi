@@ -646,7 +646,8 @@ class SelfAskWebSearchRetrieverTest {
         assertTrue(skipIdx > 0);
         assertTrue(budgetIdx > skipIdx);
         assertTrue(source.contains("submitSearchAttempt(retryQuery, retryTopK)"));
-        assertTrue(source.contains("long retryWaitMs = zero100LaneTimeboxMs(lane, waitMs);"));
+        assertTrue(source.contains("long retryWaitMs = Math.min(zero100LaneTimeboxMs(lane, waitMs),"));
+        assertTrue(source.contains("if (waitMs <= 0 || Thread.currentThread().isInterrupted()) skipReason = \"deadline_exhausted\";"));
         assertTrue(source.contains("getWithHardTimeout(retryFuture, retryWaitMs, retryQuery)"));
         assertTrue(source.contains("qHash="));
     }
@@ -658,10 +659,11 @@ class SelfAskWebSearchRetrieverTest {
 
         assertTrue(source.contains("java.util.Map<String, LaneBudget> laneBudgets = zero100LaneBudgets(maxApiCallsPerQuery);"));
         assertTrue(source.contains("List<Future<SearchAttempt>> futures = new ArrayList<>();"));
-        assertTrue(source.contains("SearchAttemptMeta attemptMeta = i < futureMeta.size()"));
-        assertTrue(source.contains("? futureMeta.get(i)"));
+        assertTrue(source.contains("SearchAttemptMeta attemptMeta = futureMeta.get(i);"));
+        assertTrue(source.indexOf("final long levelStartedNanos") < source.indexOf("for (String kw : currentKeywords)"));
+        assertTrue(source.indexOf("attempts = collectSearchAttempts") < source.indexOf("BranchQualityProbe.BranchQualityMetrics branchMetric"));
         assertTrue(source.contains("String kw = attemptMeta.query();"));
-        assertTrue(source.contains("submitSearchAttempt(kw, topKForKw)"));
+        assertTrue(source.contains("submitSearchAttempt(kw, topKForKw, ordinal, completions)"));
         assertTrue(source.contains("\"skipped:lane_budget_exhausted\""));
         assertTrue(source.contains("zero100LaneTimeboxMs(laneForKw, reqPerRequestTimeoutMs)"));
         assertTrue(source.contains("TraceStore.append(\"zero100.branch.budgetRollover.events\""));
@@ -1972,6 +1974,202 @@ class SelfAskWebSearchRetrieverTest {
         } finally {
             executor.shutdownNow();
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void completedLaterAttemptIsCollectedWhileSlowHeadIsStillRunning() throws Exception {
+        CountDownLatch headEntered = new CountDownLatch(1);
+        CountDownLatch headRelease = new CountDownLatch(1);
+        CountDownLatch siblingDone = new CountDownLatch(1);
+        WebSearchProvider provider = org.mockito.Mockito.mock(WebSearchProvider.class);
+        org.mockito.Mockito.when(provider.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(provider.getName()).thenReturn("f02-completion-fixture");
+        org.mockito.Mockito.when(provider.search(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation -> {
+            String query = invocation.getArgument(0);
+            if (query.equals("alpha")) {
+                headEntered.countDown();
+                assertTrue(headRelease.await(3, TimeUnit.SECONDS));
+                return List.of("Alpha fixture https://fixture.example/a");
+            }
+            if (query.equals("beta")) {
+                siblingDone.countDown();
+                return List.of("Beta fixture https://fixture.example/b");
+            }
+            return List.of();
+        });
+        ExecutorService search = Executors.newFixedThreadPool(2);
+        ExecutorService caller = Executors.newSingleThreadExecutor();
+        var retriever = newRetriever(provider);
+        configureAsyncTimeoutRetrieval(retriever, search, 2, 2000);
+        Map<String, Object> trace = new java.util.concurrent.ConcurrentHashMap<>();
+        try {
+            Future<List<Content>> result = caller.submit(() -> {
+                TraceStore.installContext(trace);
+                try { return retriever.retrieve(new Query("alpha beta gamma delta epsilon")); }
+                finally { TraceStore.clear(); GuardContextHolder.clear(); }
+            });
+            assertTrue(headEntered.await(1, TimeUnit.SECONDS));
+            assertTrue(siblingDone.await(1, TimeUnit.SECONDS));
+            long observeUntil = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(400);
+            while (!trace.containsKey("selfask.collection.completedCount") && System.nanoTime() < observeUntil)
+                java.util.concurrent.locks.LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+            assertEquals(1, trace.get("selfask.collection.completedCount"),
+                    "the completed sibling must be harvested without waiting for ordinal zero");
+            assertEquals(1L, headRelease.getCount());
+            headRelease.countDown();
+            List<Content> contents = result.get(2, TimeUnit.SECONDS);
+            assertEquals(2, contents.size());
+            assertTrue(contents.get(0).textSegment().text().contains("Alpha fixture"));
+            assertTrue(contents.get(1).textSegment().text().contains("Beta fixture"));
+        } finally {
+            headRelease.countDown(); caller.shutdownNow(); search.shutdownNow();
+            assertTrue(caller.awaitTermination(3, TimeUnit.SECONDS));
+            assertTrue(search.awaitTermination(3, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
+    void submissionDelayConsumesLevelBudgetBeforeAnotherAttemptCanStart() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        AtomicInteger submissions = new AtomicInteger();
+        WebSearchProvider provider = org.mockito.Mockito.mock(WebSearchProvider.class);
+        org.mockito.Mockito.when(provider.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(provider.search(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            return List.of();
+        });
+        ExecutorService delayed = org.mockito.Mockito.mock(ExecutorService.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            if (submissions.incrementAndGet() == 1) Thread.sleep(1100);
+            ((Runnable) invocation.getArgument(0)).run();
+            return null;
+        }).when(delayed).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
+        var retriever = newRetriever(provider);
+        configureAsyncTimeoutRetrieval(retriever, delayed, 2, 2000);
+        retriever.retrieve(new Query("alpha beta gamma delta epsilon"));
+        assertEquals(1, submissions.get(), "submission time must consume the existing one-second level allowance");
+        assertEquals(2, calls.get(), "one initial query plus one admitted branch; no revived level deadline");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    @SuppressWarnings("unchecked")
+    void completionOrderPreservesOrdinalDedupAttributionAndRank(boolean reverse) throws Exception {
+        String shared = "Shared fixture https://fixture.example/shared";
+        String alpha = "Alpha fixture https://fixture.example/alpha";
+        String beta = "Beta fixture https://fixture.example/beta";
+        WebSearchProvider provider = org.mockito.Mockito.mock(WebSearchProvider.class);
+        org.mockito.Mockito.when(provider.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(provider.getName()).thenReturn("f02-stable-order");
+        org.mockito.Mockito.when(provider.search(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation ->
+                switch ((String) invocation.getArgument(0)) {
+                    case "alpha" -> List.of(shared, alpha);
+                    case "beta" -> List.of(shared, beta);
+                    default -> List.of();
+                });
+        List<Runnable> submitted = new java.util.ArrayList<>();
+        ExecutorService executor = org.mockito.Mockito.mock(ExecutorService.class);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            submitted.add(invocation.getArgument(0));
+            if (submitted.size() == 2) {
+                submitted.get(reverse ? 1 : 0).run();
+                submitted.get(reverse ? 0 : 1).run();
+            }
+            return null;
+        }).when(executor).execute(org.mockito.ArgumentMatchers.any(Runnable.class));
+        var retriever = newRetriever(provider);
+        configureAsyncTimeoutRetrieval(retriever, executor, 2, 2000);
+        var planner = org.mockito.Mockito.mock(SelfAskPlanner.class);
+        org.mockito.Mockito.when(planner.generateThreeLanes(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyMap())).thenReturn(List.of(
+                new SelfAskPlanner.SubQuestion(SelfAskPlanner.SubQuestionType.BQ, "alpha", Map.of()),
+                new SelfAskPlanner.SubQuestion(SelfAskPlanner.SubQuestionType.ER, "beta", Map.of())));
+        ReflectionTestUtils.setField(retriever, "threeWayEnabled", true);
+        ReflectionTestUtils.setField(retriever, "threeWayPlanner", planner);
+        // The existing default active lane is ER; pin BQ for this ordinal-order fixture.
+        TraceStore.put("zero100.activeLane", "BQ");
+        List<Content> result = retriever.retrieve(new Query("alpha beta gamma delta epsilon"));
+        assertEquals(List.of(shared, alpha, beta), result.stream().map(c -> c.textSegment().text()).toList());
+        assertEquals(List.of("BQ", "BQ", "ER"), result.stream()
+                .map(c -> c.textSegment().metadata().toMap().get("retrieval_lane")).toList());
+        assertEquals(List.of(1, 2, 3), result.stream()
+                .map(c -> c.textSegment().metadata().toMap().get("rank")).toList());
+        assertEquals(List.of("https://fixture.example/shared", "https://fixture.example/alpha",
+                "https://fixture.example/beta"), result.stream()
+                .map(c -> c.textSegment().metadata().toMap().get("url")).toList());
+        assertEquals(List.of(com.example.lms.trace.SafeRedactor.hash12("alpha"),
+                        com.example.lms.trace.SafeRedactor.hash12("alpha"),
+                        com.example.lms.trace.SafeRedactor.hash12("beta")),
+                result.stream().map(c -> c.textSegment().metadata().toMap().get("retrieval_query_hash12")).toList());
+        List<Map<String, Object>> attempts = (List<Map<String, Object>>) TraceStore.get("selfask.requery.attempts");
+        assertEquals(List.of(2, 1), attempts.stream().map(row -> row.get("afterFilterCount")).toList(),
+                "the later lane's duplicate remains a post-dedup contribution loss");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void branchRewriteCannotStartRetryAfterOriginalRequestBudgetExpires() throws Exception {
+        List<String> calls = new java.util.concurrent.CopyOnWriteArrayList<>();
+        AtomicInteger callsAtRewrite = new AtomicInteger(-1);
+        WebSearchProvider provider = org.mockito.Mockito.mock(WebSearchProvider.class);
+        org.mockito.Mockito.when(provider.isEnabled()).thenReturn(true);
+        org.mockito.Mockito.when(provider.getName()).thenReturn("f02-retry-budget");
+        org.mockito.Mockito.when(provider.search(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(invocation -> {
+            calls.add(invocation.getArgument(0)); return List.of();
+        });
+        var parent = new com.abandonware.ai.addons.budget.TimeBudget(5000);
+        var planner = org.mockito.Mockito.mock(SelfAskPlanner.class);
+        org.mockito.Mockito.when(planner.generateThreeLanes(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyMap())).thenReturn(List.of(
+                new SelfAskPlanner.SubQuestion(SelfAskPlanner.SubQuestionType.BQ, "branch seed", Map.of())));
+        org.mockito.Mockito.when(planner.regenerateLane(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.eq(SelfAskPlanner.SubQuestionType.BQ),
+                org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyDouble())).thenAnswer(invocation -> {
+            callsAtRewrite.set(calls.size());
+            parent.cancel();
+            return java.util.Optional.of(new SelfAskPlanner.SubQuestion(
+                    SelfAskPlanner.SubQuestionType.BQ, "new retry query", Map.of()));
+        });
+        var probe = org.mockito.Mockito.mock(BranchQualityProbe.class);
+        var metric = new BranchQualityProbe.BranchQualityMetrics(
+                "BQ", "domain_definition", 0, 0, 0, 0, 0, 1, 0, 0, 1, 1, 0.2, 0.7,
+                BranchQualityProbe.BranchAction.REWRITE_RETRY, "contribution_low");
+        org.mockito.Mockito.when(probe.evaluateAttempt(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyInt(),
+                org.mockito.ArgumentMatchers.anyInt(), org.mockito.ArgumentMatchers.anyDouble(),
+                org.mockito.ArgumentMatchers.anyDouble(), org.mockito.ArgumentMatchers.anyBoolean(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(BranchQualityProbe.Thresholds.class))).thenReturn(metric);
+        ExecutorService executor = Executors.newFixedThreadPool(2);
+        var retriever = newRetriever(provider);
+        configureAsyncTimeoutRetrieval(retriever, executor, 8, 2000);
+        ReflectionTestUtils.setField(retriever, "threeWayEnabled", true);
+        ReflectionTestUtils.setField(retriever, "threeWayPlanner", planner);
+        ReflectionTestUtils.setField(retriever, "branchQualityEnabled", true);
+        ReflectionTestUtils.setField(retriever, "branchQualityRetryEnabled", true);
+        ReflectionTestUtils.setField(retriever, "branchQualityRetryMaxPerLane", 1);
+        ReflectionTestUtils.setField(retriever, "branchQualityProbe", probe);
+        com.abandonware.ai.addons.budget.TimeBudgetContext.set(parent);
+        try {
+            retriever.retrieve(new Query("alpha beta gamma delta epsilon"));
+            assertTrue(callsAtRewrite.get() > 0, "rewrite must execute before this expiry scenario is meaningful");
+            assertEquals(callsAtRewrite.get(), calls.size(), "no provider admission after rewrite expires the parent budget");
+            assertFalse(calls.contains("new retry query"));
+            List<Map<String, Object>> attempts = (List<Map<String, Object>>) TraceStore.get("selfask.requery.attempts");
+            assertTrue(attempts.stream().anyMatch(row -> Boolean.TRUE.equals(row.get("retry"))
+                    && "skipped:deadline_exhausted".equals(row.get("failureClass"))));
+        } finally {
+            com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(3, TimeUnit.SECONDS));
         }
     }
 

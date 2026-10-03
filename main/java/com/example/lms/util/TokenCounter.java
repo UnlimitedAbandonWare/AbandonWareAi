@@ -13,8 +13,34 @@ import org.springframework.stereotype.Component;
 public class TokenCounter {
     private static final System.Logger LOG = System.getLogger(TokenCounter.class.getName());
 
-    private final EncodingRegistry registry = Encodings.newDefaultEncodingRegistry();
-    private final Encoding cl100k = registry.getEncoding(EncodingType.CL100K_BASE);
+    private static final EncodingRegistry registry = Encodings.newDefaultEncodingRegistry();
+    private static final Encoding cl100k = registry.getEncoding(EncodingType.CL100K_BASE);
+
+    /**
+     * Counts every text message using CL100K plus estimated framing. This is an
+     * estimate for the selected model, not its tokenizer or provider usage.
+     * Multimodal/tool-call payloads are outside this text-only accounting.
+     */
+    public static long estimateTextChatInput(java.util.List<dev.langchain4j.data.message.ChatMessage> messages) {
+        long total = 16;
+        for (var message : messages) {
+            total += 8;
+            if (message instanceof dev.langchain4j.data.message.SystemMessage system) {
+                total += cl100k.countTokens(system.text());
+            } else if (message instanceof dev.langchain4j.data.message.UserMessage user) {
+                for (var content : user.contents()) {
+                    if (!(content instanceof dev.langchain4j.data.message.TextContent text)) return -1;
+                    total += cl100k.countTokens(text.text());
+                }
+            } else if (message instanceof dev.langchain4j.data.message.AiMessage answer) {
+                if (answer.hasToolExecutionRequests()) return -1;
+                total += cl100k.countTokens(answer.text() == null ? "" : answer.text());
+            } else {
+                return -1;
+            }
+        }
+        return total;
+    }
 
     /**
      * Flag indicating whether a local LLM is active.  When {@code true} token

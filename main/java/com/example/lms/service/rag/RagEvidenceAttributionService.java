@@ -182,7 +182,7 @@ public class RagEvidenceAttributionService {
             int vectorEvidence = 0;
             int localEvidence = 0;
             for (RagEvidenceMetadata item : evidence) {
-                if (item == null || (item.source() == null && item.filePath() == null)) {
+                if (item == null || (item.source() == null && item.filePath() == null && item.attachment() == null)) {
                     throw new IllegalArgumentException("promoted evidence requires a citable locator");
                 }
                 switch (String.valueOf(item.kind())) {
@@ -256,7 +256,8 @@ public class RagEvidenceAttributionService {
         boolean evidencePassed = false;
         boolean citationSoftPassed = false;
         boolean citationMinPassed = false;
-        int citationMin = effectiveMinCitations();
+        int citationMin = effectiveMinCitations(domain);
+        boolean unverifiedCitation = false;
         PromotionReason reason = null;
         List<Candidate> filteredCandidates = List.of();
         try {
@@ -275,6 +276,10 @@ public class RagEvidenceAttributionService {
                     .toList();
             citationSoftPassed = citationGate == null || citationGate.ok(sources, citationMin, 0.0d);
             citationMinPassed = citationGate == null || sources.size() >= citationMin;
+            int strictMin = strictMinCitations();
+            unverifiedCitation = citationMin < strictMin
+                    && sources.size() >= citationMin
+                    && sources.size() < strictMin;
             if (candidates.isEmpty()) {
                 reason = PromotionReason.NO_CITABLE_LOCATOR;
             } else if (!evidencePassed) {
@@ -292,7 +297,7 @@ public class RagEvidenceAttributionService {
             reason = PromotionReason.GATE_EXCEPTION;
             long stageMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
             recordPromotion(question, candidates, List.of(), false, false,
-                    false, citationMin, reason.traceValue(), stageMs);
+                    false, citationMin, reason.traceValue(), stageMs, false);
             return new PromotionResult(
                     PromotionStatus.FAILED,
                     reason,
@@ -319,7 +324,7 @@ public class RagEvidenceAttributionService {
         }
         long stageMs = Math.max(0L, (System.nanoTime() - started) / 1_000_000L);
         recordPromotion(question, candidates, promoted, evidencePassed, citationSoftPassed,
-                citationMinPassed, citationMin, reason.traceValue(), stageMs);
+                citationMinPassed, citationMin, reason.traceValue(), stageMs, unverifiedCitation);
         return new PromotionResult(
                 status,
                 reason,
@@ -452,6 +457,16 @@ public class RagEvidenceAttributionService {
                 continue;
             }
             Map<String, Object> metadata = contentMetadata(doc);
+            if("attachment".equals(metadata.get("source"))){
+                var provenance=RagEvidenceMetadata.AttachmentProvenance.from(metadata);
+                if(provenance!=null){
+                    var item=new RagEvidenceMetadata(prefix+rank,kind,provenance.filename(),null,null,
+                        firstInt(metadata,"lineStart"),firstInt(metadata,"lineEnd"),rank,confidence(metadata),
+                        confidenceSource(metadata),provenance);
+                    out.add(new Candidate(item,text,SafeRedactor.hash12(text)));
+                }
+                continue;
+            }
             String sourceUrl = sanitizePublicUrl(firstNonBlank(value(metadata, "url"), value(metadata, "link"),
                     value(metadata, "source"), value(metadata, "uri"), value(metadata, "document_url")));
             if (sourceUrl == null) {
@@ -505,6 +520,17 @@ public class RagEvidenceAttributionService {
                 log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "document.metadata");
                 metadata = Map.of();
             }
+            if("attachment".equals(metadata.get("source"))){
+                var provenance=RagEvidenceMetadata.AttachmentProvenance.from(metadata);
+                if(provenance!=null){
+                    var item=new RagEvidenceMetadata(prefix+rank,kind,provenance.filename(),null,null,
+                        firstInt(metadata,"lineStart"),firstInt(metadata,"lineEnd"),rank,confidence(metadata),
+                        confidenceSource(metadata),provenance);
+                    out.add(new Candidate(item,text,SafeRedactor.hash12(text)));
+                }
+                // Missing local authority must never fall through to an embedded external URL.
+                continue;
+            }
             String sourceUrl = sanitizePublicUrl(firstNonBlank(value(metadata, "source"), value(metadata, "url"),
                     value(metadata, "link"), value(metadata, "uri"), value(metadata, "document_url")));
             if (sourceUrl == null) {
@@ -539,7 +565,8 @@ public class RagEvidenceAttributionService {
             boolean citationMinPassed,
             int citationMin,
             String reason,
-            long stageMs) {
+            long stageMs,
+            boolean unverifiedCitation) {
         int candidateCount = candidates == null ? 0 : candidates.size();
         int promotedCount = promoted == null ? 0 : promoted.size();
         List<Candidate> citableCandidates = citableCandidates(candidates);
@@ -561,6 +588,9 @@ public class RagEvidenceAttributionService {
         decision.put("citationGateSoftPassed", citationSoftPassed);
         decision.put("citationGateMinPassed", citationMinPassed);
         decision.put("citationMin", citationMin);
+        if (unverifiedCitation) {
+            decision.put("unverifiedCitation", true);
+        }
         decision.put("stageMs", stageMs);
         decision.put("sourceDiversity", diversity);
         if (reason != null && !reason.isBlank()) {
@@ -576,6 +606,9 @@ public class RagEvidenceAttributionService {
             TraceStore.put("rag.evidence.promotion.citationGateSoftPassed", citationSoftPassed);
             TraceStore.put("rag.evidence.promotion.citationGateMinPassed", citationMinPassed);
             TraceStore.put("rag.evidence.promotion.citationMin", citationMin);
+            if (unverifiedCitation) {
+                TraceStore.put("rag.evidence.promotion.unverifiedCitation", true);
+            }
             TraceStore.put("rag.evidence.promotion.stageMs", stageMs);
             TraceStore.put("rag.evidence.promotion.sourceDiversity", diversity);
             if (reason != null && !reason.isBlank()) {
@@ -707,7 +740,27 @@ public class RagEvidenceAttributionService {
         return out;
     }
 
-    private static int effectiveMinCitations() {
+    /**
+     * 다이나믹 최소 인용 수: 저위험 도메인(GAME/SUBCULTURE/GENERAL)이면서 고위험 질의
+     * 플래그가 없으면 부분 근거라도 답변을 잠그지 않도록 바닥을 1로 완화한다.
+     * 고위험 질의나 비저위험 도메인, 명시적 플랜 오버라이드는 기존 엄격 기준을 유지한다.
+     */
+    private static int effectiveMinCitations(QueryDomain domain) {
+        int strict = strictMinCitations();
+        try {
+            GuardContext ctx = GuardContextHolder.getOrDefault();
+            boolean highRisk = ctx != null && ctx.isHighRiskQuery();
+            if (domain != null && domain.isLowRisk() && !highRisk) {
+                return Math.min(strict, 1);
+            }
+        } catch (Throwable ignore) {
+            log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "effectiveMinCitations.lowRisk");
+            RagEvidenceTraceSuppressions.trace("effectiveMinCitations.lowRisk", ignore);
+        }
+        return strict;
+    }
+
+    private static int strictMinCitations() {
         try {
             GuardContext ctx = GuardContextHolder.getOrDefault();
             if (ctx != null && ctx.isCheapSearchMode()) {
@@ -731,6 +784,7 @@ public class RagEvidenceAttributionService {
     }
 
     private static String formatAppendixLine(RagEvidenceMetadata item) {
+        if(item.attachment()!=null)return "["+item.marker()+"] "+item.attachment().label();
         StringBuilder sb = new StringBuilder();
         sb.append('[').append(item.marker()).append("] ");
         String safeFilePath = safeAppendixFilePath(item.filePath());
@@ -821,6 +875,10 @@ public class RagEvidenceAttributionService {
     private static String locatorKey(RagEvidenceMetadata metadata) {
         if (metadata == null) {
             return null;
+        }
+        if(metadata.attachment()!=null){
+            var local=metadata.attachment();
+            return local.sourceId()+"@"+local.revision()+"#"+local.locator();
         }
         String source = firstNonBlank(metadata.source());
         if (source != null) {
@@ -1126,7 +1184,7 @@ public class RagEvidenceAttributionService {
         return limit(SafeRedactor.redact(safe), 1000);
     }
 
-    private static String sanitizePublicUrl(String value) {
+    public static String sanitizePublicUrl(String value) {
         String raw = firstNonBlank(value);
         if (raw == null) {
             return null;

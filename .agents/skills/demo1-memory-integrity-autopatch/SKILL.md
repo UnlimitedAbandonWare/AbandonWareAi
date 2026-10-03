@@ -41,7 +41,7 @@ JSON and `references/source-directive.md` before selecting a patch item.
 
 ## Postprocess the Directive
 
-Run `scripts/tri_query_directive_postprocess.ps1 -Mode Prepare`. Read
+Run `.\.agents\skills\demo1-memory-integrity-autopatch\scripts\tri_query_directive_postprocess.ps1 -Mode Prepare`. Read
 `references/tri-query-postprocess.md`, then evaluate `POSITIVE_QUERY` and
 `NEGATIVE_QUERY` in separate contexts. Evaluate `NEUTRAL_QUERY` only after both
 packets exist. It must compare A-B and B-A order, bind packet hashes, and write

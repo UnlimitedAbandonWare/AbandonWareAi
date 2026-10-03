@@ -110,11 +110,13 @@ class AttachmentServiceSessionOwnershipTest {
         AttachmentDto saved = service.saveAll(List.of(file), ownerA).get(0);
 
         assertFalse(service.attachToSession("session-b", List.of(saved.id()), ownerB));
+        assertEquals("owner_mismatch", TraceStore.get("attachment.bind.reason"));
         assertTrue(service.findBySession("session-b", ownerB).isEmpty());
         assertFalse(service.deleteForSession(saved.id(), "session-b", ownerB));
         verify(storage, never()).delete(any());
 
         assertTrue(service.attachToSession("session-a", List.of(saved.id()), ownerA));
+        assertEquals(Boolean.TRUE, TraceStore.get("attachment.bind.applied"));
         assertEquals(1, service.findBySession("session-a", ownerA).size());
         assertTrue(service.deleteForSession(saved.id(), "session-a", ownerA));
         verify(storage).delete("/uploads/chat/owner-proof.txt");

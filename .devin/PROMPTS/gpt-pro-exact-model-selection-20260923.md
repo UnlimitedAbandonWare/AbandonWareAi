@@ -5,7 +5,7 @@
 
 ## 범위
 
-- Project Root: `C:\AbandonWare\demo-1\demo-1\src` (다른 상위 폴더를 코드 루트로 잡지 말 것)
+- Project Root: `<repo>` (다른 상위 폴더를 코드 루트로 잡지 말 것)
 - 대상 UI: `https://abandonwareai.kro.kr/chat` (로컬 검증: `http://127.0.0.1:18180/chat`)
 - SSOT 핸드오프: `data/agent-handoff/codex-autonomy/chat-repair-dynamic-ui-0868f566/`
   - `pending-exact-model.patch` — 적용 대상 후보 패치

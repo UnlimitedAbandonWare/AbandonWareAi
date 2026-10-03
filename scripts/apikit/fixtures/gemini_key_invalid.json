@@ -1,0 +1,8 @@
+{
+  "provider": "gemini",
+  "expect": "KEY_INVALID_OR_EXPIRED",
+  "expect_code": "API_KEY_INVALID",
+  "http_status": 400,
+  "body": {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID", "domain": "googleapis.com"}]}},
+  "note": "reason field wins over status INVALID_ARGUMENT — else this would look like BAD_REQUEST_SHAPE"
+}

@@ -12,7 +12,7 @@ Run through the launcher:
 ```powershell
 @{
   nodeRole = "desktop"
-  root = "C:\AbandonWare\demo-1\demo-1\src"
+  root = "<repo>"
   audit_log = "logs\awx-mcp-audit.ndjson"
 } | ConvertTo-Json -Depth 20 -Compress |
   powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\awx_mcp_toolbox.ps1 -Tool run_pipeline

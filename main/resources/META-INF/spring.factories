@@ -1,2 +1,4 @@
 org.springframework.boot.env.EnvironmentPostProcessor=\
 com.example.lms.boot.RuntimeConfigGuard
+org.springframework.boot.autoconfigure.EnableAutoConfiguration=\
+com.nova.protocol.config.NovaProtocolConfig

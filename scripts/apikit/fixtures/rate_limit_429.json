@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "expect": "RATE_LIMIT",
+  "expect_code": "rate_limit_exceeded",
+  "http_status": 429,
+  "body": {"error": {"message": "Rate limit reached for requests", "type": "requests", "param": null, "code": "rate_limit_exceeded"}}
+}

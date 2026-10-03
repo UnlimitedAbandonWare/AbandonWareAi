@@ -29,6 +29,8 @@ public class BrainStateChatWorkflowAspect {
     private final BrainStateProperties properties;
     private final GraphRagChunkingService chunkingService;
     private final Executor captureExecutor;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private GeneralGraphSourceAuthority sourceAuthority;
 
     public BrainStateChatWorkflowAspect(BrainStateProperties properties,
                                         GraphRagChunkingService chunkingService,
@@ -55,6 +57,11 @@ public class BrainStateChatWorkflowAspect {
     }
 
     public void captureFinalized(GeneralGraphScope scope, Long userMessageId, Long assistantMessageId) {
+        captureFinalized(scope,userMessageId,assistantMessageId,java.util.List.of());
+    }
+
+    public void captureFinalized(GeneralGraphScope scope,Long userMessageId,Long assistantMessageId,
+                                 java.util.List<KgChunk.SourceRef> consentedAttachments) {
         if ("caller_cancelled".equals(TraceStore.get("retrieval.kg.brainState.capture.skipped"))) return;
         if (!properties.isEnabled()
                 || !properties.getIndexing().isEnabled()
@@ -76,8 +83,28 @@ public class BrainStateChatWorkflowAspect {
             return;
         }
         try {
+            var attachments=java.util.List.copyOf(consentedAttachments).stream().distinct().limit(16).toList();
             captureExecutor.execute(ContextPropagation.wrap(
-                    () -> capture(scope, userMessageId, assistantMessageId)));
+                    () -> {
+                        capture(scope,userMessageId,assistantMessageId);
+                        var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+                        for(var reference:attachments){
+                            if(sourceAuthority==null||budget==null||budget.expired()||Thread.currentThread().isInterrupted()){
+                                TraceStore.put("attachment.graph.capture","budget_or_authority_unavailable");break;
+                            }
+                            try {
+                                String id=GeneralGraphSourceAuthority.sourceAttachmentId(reference.sourceId());
+                                if(id!=null&&sourceAuthority.authorizeAttachmentCollection(scope,id,reference.sourceRevision(),true)){
+                                    var report=chunkingService.ingestAttachmentSource(scope,reference);
+                                    TraceStore.put("attachment.graph.capture",report==null?"failed":report.captureOutcome());
+                                }
+                            } catch (CancellationException cancelled) {
+                                TraceStore.put("attachment.graph.capture","cancelled");break;
+                            } catch (RuntimeException unavailable) {
+                                TraceStore.put("attachment.graph.capture","failed");break;
+                            }
+                        }
+                    }));
         } catch (RejectedExecutionException rejected) {
             recordTerminal("rejected", sessionId);
             log.debug("[AWX][brain-state][capture] rejected failureClass={} sessionHash={}",

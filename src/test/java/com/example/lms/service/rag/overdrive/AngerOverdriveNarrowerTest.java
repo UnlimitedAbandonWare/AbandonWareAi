@@ -46,6 +46,7 @@ class AngerOverdriveNarrowerTest {
         assertEquals(8, TraceStore.get("overdrive.anchor.narrowed.k"));
         assertEquals("reranked", TraceStore.get("overdrive.anchor.narrowedReason"));
         assertEquals("", TraceStore.get("overdrive.anchor.skipReason"));
+        assertEquals("", TraceStore.get("overdrive.anchor.error"));
     }
 
     @Test
@@ -62,6 +63,7 @@ class AngerOverdriveNarrowerTest {
         assertEquals(Boolean.TRUE, TraceStore.get("overdrive.narrow.failSoft"));
         assertEquals("exception_original_returned", TraceStore.get("overdrive.narrow.reason"));
         assertEquals("exception_original_returned", TraceStore.get("overdrive.anchor.error"));
+        assertEquals(0, TraceStore.get("overdrive.anchor.narrowed.k"));
     }
 
     @Test
@@ -74,10 +76,10 @@ class AngerOverdriveNarrowerTest {
         List<Content> out = narrower.narrow("ranking query", docs);
 
         assertSame(docs, out);
-        assertEquals("noop_passthrough", TraceStore.get("overdrive.narrow.reranker.source"));
+        assertEquals("unavailable", TraceStore.get("overdrive.narrow.reranker.source"));
         assertEquals(Boolean.TRUE, TraceStore.get("overdrive.narrow.failSoft"));
         assertEquals("reranker_missing_original_returned", TraceStore.get("overdrive.narrow.reason"));
-        assertEquals(3, TraceStore.get("overdrive.anchor.narrowed.k"));
+        assertEquals(0, TraceStore.get("overdrive.anchor.narrowed.k"));
         assertEquals("reranker_missing_original_returned", TraceStore.get("overdrive.anchor.narrowedReason"));
         assertEquals("reranker_missing_original_returned", TraceStore.get("overdrive.anchor.skipReason"));
     }
@@ -91,11 +93,43 @@ class AngerOverdriveNarrowerTest {
         assertFalse(source.contains("TraceStore.put(\"overdrive.narrow.reason\", SafeRedactor.safeMessage(reason, 120));"));
         assertTrue(source.contains("String safeReason = SafeRedactor.traceLabelOrFallback(reason, \"unknown\");"));
         assertTrue(source.contains("TraceStore.put(\"overdrive.narrow.reason\", safeReason);"));
-        assertTrue(source.contains("TraceStore.put(\"overdrive.anchor.error\", safeReason);"));
+        assertTrue(source.contains("TraceStore.put(\"overdrive.anchor.error\", failSoft ? safeReason : \"\");"));
         assertTrue(source.contains("TraceStore.put(\"overdrive.anchor.narrowedReason\", safeReason);"));
         assertTrue(source.contains("TraceStore.put(\"overdrive.anchor.skipReason\", failSoft ? safeReason : \"\");"));
         assertTrue(source.contains("stage=narrow.trace"));
         assertTrue(source.contains("stage=narrow.hash"));
+    }
+
+    @Test
+    void providerConstructorDeclaresCanonicalQualifier() throws Exception {
+        var parameter = AngerOverdriveNarrower.class
+                .getConstructor(org.springframework.beans.factory.ObjectProvider.class).getParameters()[0];
+        var qualifier = parameter.getAnnotation(org.springframework.beans.factory.annotation.Qualifier.class);
+        org.junit.jupiter.api.Assertions.assertNotNull(qualifier);
+        assertEquals("crossEncoderReranker", qualifier.value());
+    }
+
+    @Test
+    void qualifiedProviderSelectsCanonicalBeanAmongMultipleRerankers() {
+        try (var context = new org.springframework.context.annotation.AnnotationConfigApplicationContext()) {
+            context.registerBean("crossEncoderReranker", CrossEncoderReranker.class,
+                    () -> (query, candidates, topN) -> new ArrayList<>(candidates));
+            context.registerBean("embeddingCrossEncoderReranker", CrossEncoderReranker.class,
+                    () -> (query, candidates, topN) -> { throw new AssertionError("wrong reranker"); });
+            context.register(AngerOverdriveNarrower.class);
+            context.refresh();
+            assertEquals(8, context.getBean(AngerOverdriveNarrower.class).narrow("query", docs(12)).size());
+            assertEquals("cross_encoder", TraceStore.get("overdrive.narrow.reranker.source"));
+        }
+    }
+
+    @Test
+    void successfulRerankWithoutReductionDoesNotClaimNarrowedCandidates() {
+        CrossEncoderReranker reranker = (query, candidates, topN) -> new ArrayList<>(candidates);
+        assertEquals(3, new AngerOverdriveNarrower(reranker).narrow("query", docs(3)).size());
+        assertEquals(Boolean.FALSE, TraceStore.get("overdrive.narrow.failSoft"));
+        assertEquals("", TraceStore.get("overdrive.anchor.error"));
+        assertEquals(0, TraceStore.get("overdrive.anchor.narrowed.k"));
     }
 
     private static List<Content> docs(int n) {

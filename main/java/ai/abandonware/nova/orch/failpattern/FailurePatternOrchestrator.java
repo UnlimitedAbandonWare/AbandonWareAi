@@ -3,6 +3,9 @@ package ai.abandonware.nova.orch.failpattern;
 import ai.abandonware.nova.config.NovaFailurePatternProperties;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugEventLevel;
+import com.example.lms.debug.DebugProbeType;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -48,6 +51,7 @@ public final class FailurePatternOrchestrator {
     private final FailurePatternCooldownRegistry cooldown;
     private final ObjectMapper om;
     private final NovaFailurePatternProperties props;
+    private final DebugEventStore debugEvents;
 
     private volatile long lastReloadMs = 0;
 
@@ -68,12 +72,23 @@ public final class FailurePatternOrchestrator {
                                      FailurePatternCooldownRegistry cooldown,
                                      ObjectMapper om,
                                      NovaFailurePatternProperties props) {
+        this(detector, metrics, jsonlWriter, cooldown, om, props, null);
+    }
+
+    public FailurePatternOrchestrator(FailurePatternDetector detector,
+                                     FailurePatternMetrics metrics,
+                                     FailurePatternJsonlWriter jsonlWriter,
+                                     FailurePatternCooldownRegistry cooldown,
+                                     ObjectMapper om,
+                                     NovaFailurePatternProperties props,
+                                     DebugEventStore debugEvents) {
         this.detector = detector;
         this.metrics = metrics;
         this.jsonlWriter = jsonlWriter;
         this.cooldown = cooldown;
         this.om = om;
         this.props = props;
+        this.debugEvents = debugEvents;
 
         // Seed once (best-effort)
         reloadFromJsonlIfStale(true);
@@ -97,6 +112,7 @@ public final class FailurePatternOrchestrator {
 
         // 2) cooldown decision (for logging + feedback)
         CooldownDecision cd = cooldownDecision(match.kind(), match.source(), tsEpochMillis);
+        publishDiagnostic(match, cd, level);
 
         // 3) JSONL
         if (props.getJsonl().isWriteEnabled()) {
@@ -116,6 +132,27 @@ public final class FailurePatternOrchestrator {
         // 4) feedback: write cooldown
         if (props.getFeedback().isEnabled()) {
             cooldown.recordAt(canonicalSource(match.source()), tsEpochMillis, cd.cooldownMs);
+        }
+    }
+
+    private void publishDiagnostic(FailurePatternMatch match, CooldownDecision cd, String level) {
+        if (debugEvents == null) return;
+        try {
+            String source = canonicalSource(match.source());
+            source = switch (source) {
+                case "web", "rag", "vector", "kg", "qtx", "llm", "disambig" -> source;
+                default -> "unknown";
+            };
+            // The appender's original message/logger never crosses this boundary.
+            debugEvents.emit(DebugProbeType.ORCHESTRATION,
+                    "ERROR".equals(level) ? DebugEventLevel.ERROR : DebugEventLevel.WARN,
+                    "failure-pattern:" + match.kind().name() + ":" + source,
+                    "failure_pattern_detected", "FailurePatternOrchestrator.onLogEvent",
+                    Map.of("kind", match.kind(), "source", source,
+                            "keyHash", SafeRedactor.hashValue(match.key()),
+                            "cooldownMs", cd.cooldownMs, "cooldownPolicy", cd.cooldownPolicy), null);
+        } catch (RuntimeException ignored) {
+            FailurePatternTrace.traceSkipped("failurePattern.debugEventEmit", ignored);
         }
     }
 

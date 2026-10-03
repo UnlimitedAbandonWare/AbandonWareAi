@@ -46,6 +46,171 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class OpenAiResponsesChatModelTest {
 
     @Test
+    void oauthContentTypeSseWithCharsetPreservesStreamingCompletion() throws Exception {
+        assertOAuthContentTypeAnswer("text/event-stream; charset=utf-8", oauthCompletedSse(), "oauth answer");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"application/json", "application/vnd.openai+json"})
+    void oauthContentTypeCompletedJsonUsesResponseMetadata(String contentType) throws Exception {
+        assertOAuthContentTypeAnswer(contentType,
+                "{\"id\":\"resp_fixture\",\"status\":\"completed\",\"model\":\"gpt-5.6-luna\","
+                        + "\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"oauth answer\"}]}],"
+                        + "\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}", "oauth answer");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"text/plain", "", "application/octet-stream"})
+    void oauthContentTypeUnlabelledSseIsSniffed(String contentType) throws Exception {
+        assertOAuthContentTypeAnswer(contentType, oauthCompletedSse(), "oauth answer");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"text/plain", "", "application/octet-stream", "application/json"})
+    void oauthContentTypeJsonOutputTextIsAccepted(String contentType) throws Exception {
+        assertOAuthContentTypeAnswer(contentType,
+                "{\"status\":\"completed\",\"output_text\":\"oauth answer\"}", "oauth answer");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"text/html", "text/plain", "", "application/octet-stream"})
+    void oauthContentTypeUnexpectedBodyFailsWithoutReplay(String contentType) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var server = startOAuthContentTypeServer(contentType, "<html>synthetic-private-body</html>", calls);
+        try {
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> oauthFixtureModel(server).chat(List.of(UserMessage.from("synthetic probe"))));
+            assertEquals("chatgpt_oauth_unexpected_content_type", failure.reasonCode());
+            assertEquals(LlmFailureClass.PROVIDER_ERROR, failure.failureClass());
+            assertEquals(1, calls.get());
+            assertFalse(failure.toString().contains("synthetic-private-body"));
+            assertFalse(failure.toString().contains("synthetic-oauth-bearer"));
+        } finally { server.stop(0); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"failed,responses_failed", "incomplete,output_limit_reached"})
+    void oauthContentTypeJsonFailureRetainsResponseStateReason(String status, String reason) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var server = startOAuthContentTypeServer("application/json",
+                "{\"status\":\"" + status + "\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}", calls);
+        try {
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> oauthFixtureModel(server).chat(List.of(UserMessage.from("synthetic probe"))));
+            assertEquals(reason, failure.reasonCode());
+            assertEquals(1, calls.get());
+        } finally { server.stop(0); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "text/html; boundary=synthetic-private-parameter", "",
+            "application/x-abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"})
+    void oauthContentTypeDiagnosticsAreSanitizedAndBodyFree(String contentType) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var server = startOAuthContentTypeServer(contentType, "synthetic-private-body", calls);
+        Logger logger = (Logger) LoggerFactory.getLogger(OpenAiResponsesChatModel.class);
+        Level previous = logger.getLevel();
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        logger.setLevel(Level.INFO);
+        try {
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> oauthFixtureModel(server).chat(List.of(UserMessage.from("synthetic probe"))));
+            String logs = appender.list.stream().map(ILoggingEvent::getFormattedMessage).collect(Collectors.joining("\n"));
+            String headers = appender.list.stream().map(ILoggingEvent::getFormattedMessage)
+                    .filter(line -> line.contains("phase=http_headers ")).findFirst().orElseThrow();
+            var matcher = java.util.regex.Pattern.compile(" contentType=([a-z0-9.+/-]{1,64})(?: |$)").matcher(headers);
+            assertTrue(matcher.find(), headers);
+            String expected = contentType.isEmpty() ? "absent" : contentType.split(";", 2)[0];
+            assertEquals(expected.substring(0, Math.min(64, expected.length())), matcher.group(1));
+            String retained = logs + failure + failure.getMessage();
+            assertFalse(retained.contains("synthetic-private-body"));
+            assertFalse(retained.contains("synthetic-private-parameter"));
+            assertFalse(retained.contains("synthetic-oauth-bearer"));
+            assertFalse(retained.contains("Authorization"));
+            assertTrue(logs.contains("action=no_replay"));
+            assertEquals(1, calls.get());
+        } finally {
+            logger.detachAppender(appender);
+            logger.setLevel(previous);
+            appender.stop();
+            server.stop(0);
+        }
+    }
+
+    private static String oauthCompletedSse() {
+        return "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"oauth answer\"}\n\n"
+                + "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+    }
+
+    @Test
+    void oauthContentTypeUnsupportedOpenBodyRejectsBeforeEof() throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var release = new CountDownLatch(1);
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            calls.incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            exchange.getResponseHeaders().add("Content-Type", "text/html");
+            exchange.sendResponseHeaders(200, 0);
+            try (OutputStream output = exchange.getResponseBody()) {
+                output.write("<html>synthetic-private-body".getBytes(StandardCharsets.UTF_8));
+                output.flush();
+                try { release.await(5, TimeUnit.SECONDS); }
+                catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+            }
+        });
+        server.start();
+        try {
+            var model = new OpenAiResponsesChatModel("http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "gpt-5.6-luna", 1_000L, () -> "synthetic-oauth-bearer");
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> model.chat(List.of(UserMessage.from("synthetic probe"))));
+            assertEquals("chatgpt_oauth_unexpected_content_type", failure.reasonCode());
+            assertEquals(LlmFailureClass.PROVIDER_ERROR, failure.failureClass());
+            assertEquals(1, calls.get());
+            assertEquals(1, release.getCount(), "failure must not depend on body EOF");
+        } finally { release.countDown(); server.stop(0); }
+    }
+
+    private static OpenAiResponsesChatModel oauthFixtureModel(HttpServer server) {
+        return new OpenAiResponsesChatModel("http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                "gpt-5.6-luna", 5_000L, () -> "synthetic-oauth-bearer");
+    }
+
+    private static void assertOAuthContentTypeAnswer(String contentType, String body, String expected) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var server = startOAuthContentTypeServer(contentType, body, calls);
+        try {
+            var response = oauthFixtureModel(server).chat(List.of(UserMessage.from("synthetic probe")));
+            assertEquals(expected, response.aiMessage().text());
+            if (body.contains("resp_fixture")) {
+                assertEquals("resp_fixture", response.metadata().id());
+                assertEquals("gpt-5.6-luna", response.metadata().modelName());
+                assertEquals(6, response.tokenUsage().totalTokenCount());
+            }
+            assertEquals(1, calls.get());
+        } finally { server.stop(0); }
+    }
+
+    private static HttpServer startOAuthContentTypeServer(String contentType, String responseBody,
+            java.util.concurrent.atomic.AtomicInteger calls) throws IOException {
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            calls.incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            if (!contentType.isEmpty()) exchange.getResponseHeaders().add("Content-Type", contentType);
+            byte[] bytes = responseBody.getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        return server;
+    }
+
+    @Test
     void responseUsagePreservesCacheReadCountAndServedModel() throws Exception {
         var request = new AtomicReference<String>("");
         var server = startResponsesServer("{\"status\":\"completed\",\"model\":\"gpt-5.6-luna\",\"output_text\":\"ok\",\"usage\":{\"input_tokens\":2048,\"output_tokens\":17,\"total_tokens\":2065,\"input_tokens_details\":{\"cached_tokens\":1024}}}", 200, request);
@@ -83,8 +248,10 @@ class OpenAiResponsesChatModelTest {
         assertFalse(text.contains("127.0.0.1"), text);
     }
 
-    @Test
-    void placeholderApiKeyReturnsExpectedFailureBeforeNetworkPath() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullAndEmptySource
+    @org.junit.jupiter.params.provider.ValueSource(strings={" ", "sk-local", "test", "changeme", "${MISSING_KEY}"})
+    void placeholderApiKeyReturnsExpectedFailureBeforeNetworkPath(String key) {
         ModelRuntimeHealthTracker tracker = new ModelRuntimeHealthTracker();
         String timelineId = tracker.beginRequestTimeline("responses-disabled-request", "responses-disabled-session");
         tracker.recordRequestPhase(timelineId, "dispatch", "gpt-5-mini", null, "none");
@@ -92,7 +259,7 @@ class OpenAiResponsesChatModelTest {
         TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, timelineId);
         OpenAiResponsesChatModel model = new OpenAiResponsesChatModel(
                 "http://127.0.0.1:1/v1",
-                "sk-local",
+                key,
                 "gpt-5-mini",
                 1_000L,
                 tracker);

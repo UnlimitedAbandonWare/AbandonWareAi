@@ -77,6 +77,7 @@ public final class OllamaNativeChatModel implements NamedChatModel {
     private final String modelName;
     private final Duration timeout;
     private final Integer maxTokens;
+    private final Integer observedContextCapacity;
     private final Double temperature;
     private final Double topP;
     private final Integer numGpu;
@@ -122,6 +123,13 @@ public final class OllamaNativeChatModel implements NamedChatModel {
             Integer numGpu,
             ModelRuntimeHealthTracker modelRuntimeHealthTracker,
             String requestAttemptRole) {
+        return forRoutedRequest(openAiCompatBaseUrl,modelName,timeout,maxTokens,temperature,topP,numGpu,
+                modelRuntimeHealthTracker,requestAttemptRole,null);
+    }
+
+    public static OllamaNativeChatModel forRoutedRequest(String openAiCompatBaseUrl,String modelName,
+            Duration timeout,Integer maxTokens,Double temperature,Double topP,Integer numGpu,
+            ModelRuntimeHealthTracker modelRuntimeHealthTracker,String requestAttemptRole,Integer observedContextCapacity) {
         return new OllamaNativeChatModel(
                 openAiCompatBaseUrl,
                 modelName,
@@ -134,7 +142,7 @@ public final class OllamaNativeChatModel implements NamedChatModel {
                 false,
                 ModelRuntimeHealthTracker.EndpointQuarantinePolicy.disabled(),
                 () -> false,
-                requestAttemptRole);
+                requestAttemptRole,observedContextCapacity);
     }
 
     public OllamaNativeChatModel(String openAiCompatBaseUrl,
@@ -236,6 +244,14 @@ public final class OllamaNativeChatModel implements NamedChatModel {
                 endpointQuarantinePolicy, hardwareMissingSignal, "primary");
     }
 
+    OllamaNativeChatModel(String baseUrl, String modelName, Duration timeout, Integer maxTokens,
+            Double temperature, Double topP, Integer numGpu, ModelRuntimeHealthTracker health,
+            boolean cpuFallbackRetryAllowed, ModelRuntimeHealthTracker.EndpointQuarantinePolicy policy,
+            Integer observedContextCapacity) {
+        this(baseUrl, modelName, timeout, maxTokens, temperature, topP, numGpu, health,
+                cpuFallbackRetryAllowed, policy, () -> false, "primary", observedContextCapacity);
+    }
+
     private OllamaNativeChatModel(String openAiCompatBaseUrl,
                                   String modelName,
                                   Duration timeout,
@@ -248,11 +264,21 @@ public final class OllamaNativeChatModel implements NamedChatModel {
                                   ModelRuntimeHealthTracker.EndpointQuarantinePolicy endpointQuarantinePolicy,
                                   BooleanSupplier hardwareMissingSignal,
                                   String requestAttemptRole) {
+        this(openAiCompatBaseUrl,modelName,timeout,maxTokens,temperature,topP,numGpu,modelRuntimeHealthTracker,
+                cpuFallbackRetryAllowed,endpointQuarantinePolicy,hardwareMissingSignal,requestAttemptRole,null);
+    }
+
+    private OllamaNativeChatModel(String openAiCompatBaseUrl, String modelName, Duration timeout,
+            Integer maxTokens, Double temperature, Double topP, Integer numGpu,
+            ModelRuntimeHealthTracker modelRuntimeHealthTracker, boolean cpuFallbackRetryAllowed,
+            ModelRuntimeHealthTracker.EndpointQuarantinePolicy endpointQuarantinePolicy,
+            BooleanSupplier hardwareMissingSignal, String requestAttemptRole, Integer observedContextCapacity) {
         this.client = WebClient.builder().build();
         this.chatUrl = nativeChatUrl(openAiCompatBaseUrl);
         this.modelName = modelName == null ? "" : modelName.trim();
         this.timeout = timeout == null ? Duration.ofSeconds(30) : timeout;
         this.maxTokens = maxTokens;
+        this.observedContextCapacity = observedContextCapacity;
         this.temperature = temperature;
         this.topP = topP;
         this.numGpu = numGpu == null || numGpu < 0 ? null : numGpu;
@@ -308,6 +334,16 @@ public final class OllamaNativeChatModel implements NamedChatModel {
                 : request.topP();
         if (effectiveMaxTokens != null && effectiveMaxTokens > 0) {
             options.put("num_predict", effectiveMaxTokens);
+            if (observedContextCapacity != null
+                    && (request == null || request.toolSpecifications() == null || request.toolSpecifications().isEmpty())
+                    && com.example.lms.util.TokenCounter.estimateTextChatInput(messages) >= 0) {
+                long contextBudget = com.example.lms.service.ChatConversationContext.conservativeInput(messages)
+                        + (long) effectiveMaxTokens;
+                if (contextBudget > observedContextCapacity) throw new IllegalArgumentException("focus_model_context_limit");
+                options.put("num_ctx", (int) contextBudget);
+                TraceStore.put("llm.ollamaNative.contextEstimate", "utf8_bytes_plus_framing");
+                TraceStore.put("llm.ollamaNative.contextCapacity", observedContextCapacity);
+            }
         }
         if (effectiveTemperature != null) {
             options.put("temperature", effectiveTemperature);

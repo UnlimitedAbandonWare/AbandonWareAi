@@ -236,6 +236,38 @@ public final class StageBoundaryBreadcrumbs {
     }
 
     private static BoundaryBreadcrumb verification(Map<String, Object> meta, String phase) {
+        Object observations = meta.get(com.example.lms.llm.JudgeCallObservation.TRACE_KEY);
+        if (observations instanceof Map<?, ?> lanes && !lanes.isEmpty()) {
+            java.util.List<Map<?, ?>> receipts = new java.util.ArrayList<>();
+            for (String lane : java.util.List.of("fact_status_classifier", "claim_extraction", "claim_judgment")) {
+                if (lanes.get(lane) instanceof Map<?, ?> receipt) receipts.add(receipt);
+            }
+            if (!receipts.isEmpty()) {
+                boolean invoked = receipts.stream().anyMatch(r -> Boolean.TRUE.equals(r.get("invocationStarted")));
+                boolean judgeKnown = receipts.stream().allMatch(r -> Boolean.TRUE.equals(r.get("outcomeKnown")));
+                String processingReason = safeReason(meta.get("claimVerifier.judge.disabledReason"), null);
+                boolean processingFailed = "temporal_verification_failed".equals(processingReason)
+                        || "judge_processing_failed".equals(processingReason);
+                boolean known = judgeKnown && !processingFailed;
+                String reason = processingFailed ? processingReason : known ? "judge_observed" : receipts.stream()
+                        .filter(r -> !Boolean.TRUE.equals(r.get("outcomeKnown")))
+                        .map(r -> safeReason(r.get("reason"), "judge_outcome_unknown"))
+                        .findFirst().orElse("judge_outcome_unknown");
+                String failureClass = processingFailed ? "catch" : known ? "none" : "fallback";
+                Map<String, Object> data = baseData(phase, "verification", failureClass, reason);
+                data.put("status", known ? "observed" : "fail_soft");
+                data.put("observationSource", "judge_receipt");
+                data.put("judgeCallAttempted", invoked);
+                data.put("judgeInvocationStarted", invoked);
+                if (receipts.stream().allMatch(r -> r.get("httpAttemptCount") instanceof Number)) {
+                    data.put("judgeHttpAttemptCount", receipts.stream().mapToInt(r -> ((Number) r.get("httpAttemptCount")).intValue()).sum());
+                }
+                data.put("judgeOutcomeKnown", judgeKnown);
+                data.put("verificationOutcomeKnown", known);
+                data.put("judgeObservations", java.util.List.copyOf(receipts));
+                return new BoundaryBreadcrumb(phase, "verification", failureClass, reason, data);
+            }
+        }
         String factKey = "factStatusClassifier.judge.disabledReason";
         String claimKey = "claimVerifier.judge.disabledReason";
         boolean factObserved = hasTextValue(meta, factKey);
@@ -261,6 +293,8 @@ public final class StageBoundaryBreadcrumbs {
         Map<String, Object> data = baseData(phase, "verification", failureClass, reasonCode);
         data.put("status", "fail_soft");
         data.put("judgeLane", judgeLane);
+        // Compatibility for historical reason-only snapshots; this is never wire evidence.
+        data.put("observationSource", "legacy_reason_inference");
         data.put("judgeFailSoftLaneCount", (factObserved ? 1 : 0) + (claimObserved ? 1 : 0));
         if (callFailed) {
             data.put("judgeCallAttempted", true);

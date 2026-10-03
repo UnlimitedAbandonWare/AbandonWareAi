@@ -1,0 +1,50 @@
+/* chat-display-bridge — 디스플레이로 보내기 패널 (로컬 디버그 도구) */
+.cdb {
+  margin-top: 8px;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 10px;
+  background: var(--surface-2, #f7f8fa);
+  font-size: 13px;
+}
+.cdb-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+.cdb-summary::-webkit-details-marker { display: none; }
+.cdb-summary::before { content: '▸'; font-size: 11px; opacity: 0.6; }
+.cdb[open] .cdb-summary::before { content: '▾'; }
+.cdb-title { font-weight: 600; }
+.cdb-state {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-subtle, #667085);
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.cdb-body { padding: 0 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+.cdb-note, .cdb-detail { margin: 0; color: var(--text-subtle, #667085); font-size: 12px; }
+.cdb-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.cdb-kinds label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; }
+.cdb-text {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border, #d0d5dd);
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+  background: var(--surface, #fff);
+  color: inherit;
+  box-sizing: border-box;
+}
+.cdb-count { font-size: 11px; color: var(--text-subtle, #667085); margin-right: auto; }
+.cdb-delivery { display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; font-size: 12px; }
+.cdb-status { font-weight: 600; }
+.cdb-check { color: var(--text-subtle, #667085); }
+.cdb-receiver { font-size: 12px; }
+.cdb button { font: inherit; }

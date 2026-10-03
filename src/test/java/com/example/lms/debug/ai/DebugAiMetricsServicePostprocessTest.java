@@ -4,11 +4,13 @@ import com.example.lms.api.DebugAiMetricsController;
 import com.example.lms.debug.DebugEvent;
 import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugEventTracePromotionService;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.search.TraceStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -148,6 +150,39 @@ class DebugAiMetricsServicePostprocessTest {
     }
 
     @Test
+    void mixedWindowSnapshotsDoNotProduceComparableDelta() {
+        StaticDebugEventStore store = new StaticDebugEventStore();
+        long now = System.currentTimeMillis();
+        store.events.add(event(now, DebugProbeType.WEB_SEARCH, DebugEventLevel.WARN,
+                Map.of("failureClass", "timeout")));
+        DebugAiMetricsService service = new DebugAiMetricsService(store);
+        service.snapshot(10, 60_000L);
+        store.events.add(event(now + 1, DebugProbeType.MODEL_GUARD, DebugEventLevel.ERROR,
+                Map.of("failureClass", "llm_upstream_retry_exhausted")));
+        store.events.add(event(now + 2, DebugProbeType.MODEL_GUARD, DebugEventLevel.ERROR,
+                Map.of("failureClass", "llm_upstream_retry_exhausted")));
+        store.events.add(event(now + 3, DebugProbeType.MODEL_GUARD, DebugEventLevel.ERROR,
+                Map.of("failureClass", "llm_upstream_retry_exhausted")));
+
+        Map<String, Object> scorecard = service.snapshot(80, 300_000L).scorecard();
+
+        assertEquals(Boolean.FALSE, scorecard.get("historyComparisonComparable"));
+        assertEquals("sampling_policy_mismatch", scorecard.get("historyComparisonReason"));
+        assertEquals(60_000L, scorecard.get("previousWindowMs"));
+        assertEquals(300_000L, scorecard.get("currentWindowMs"));
+        assertEquals(10, scorecard.get("previousSampleLimit"));
+        assertEquals(80, scorecard.get("currentSampleLimit"));
+        assertEquals(0L, scorecard.get("warnDelta"));
+        assertEquals(0L, scorecard.get("errorDelta"));
+        assertEquals("none", scorecard.get("warnTrend"));
+        assertEquals("none", scorecard.get("errorTrend"));
+        assertEquals(Boolean.FALSE, scorecard.get("anomalyTriggered"));
+        assertEquals(Boolean.FALSE, TraceStore.get("debug.ai.metrics.anomaly.historyComparisonComparable"));
+        assertEquals("sampling_policy_mismatch",
+                TraceStore.get("debug.ai.metrics.anomaly.historyComparisonReason"));
+    }
+
+    @Test
     void scorecardTriggersHistoryBasedAnomalyForLlmErrorSpike() {
         StaticDebugEventStore store = new StaticDebugEventStore();
         long now = System.currentTimeMillis();
@@ -211,6 +246,46 @@ class DebugAiMetricsServicePostprocessTest {
         assertEquals(1L, imageJob.eventCount());
         assertEquals(1L, imageJob.warnCount());
         assertEquals(0L, springContext.eventCount());
+    }
+
+    @Test
+    void promotedVerificationFailSoftUsesVerificationTileWithoutInventingVerificationUsage() {
+        DebugEventStore store = enabledDebugEventStore();
+        DebugEventTracePromotionService promotion = new DebugEventTracePromotionService(store);
+        String rawPayload = "ownerToken=private-verification-payload";
+        promotion.promoteChatTrace("final", Map.of(
+                "mla.breadcrumb.step.verification", Map.of(
+                        "stage", "verification",
+                        "status", "fail_soft",
+                        "failureClass", "catch",
+                        "reasonCode", "judge_call_failed",
+                        "judgeLane", "fact_status_classifier",
+                        "judgeFailSoftLaneCount", 1,
+                        "judgeCallAttempted", true,
+                        "verificationOutcomeKnown", false,
+                        "redacted", true,
+                        "rawPrompt", rawPayload)),
+                "ChatApiController.stream.final");
+        DebugAiMetricsService service = new DebugAiMetricsService(store);
+
+        DebugAiMetricSnapshot snapshot = service.snapshot(10, 60_000);
+        DebugAiRawTile verification = snapshot.tiles().stream()
+                .filter(tile -> "VERIFICATION_BUILD".equals(tile.tileName()))
+                .findFirst()
+                .orElseThrow();
+        DebugAiRawTile springContext = snapshot.tiles().stream()
+                .filter(tile -> "SPRING_CONTEXT".equals(tile.tileName()))
+                .findFirst()
+                .orElseThrow();
+
+        assertEquals(1L, snapshot.layerCounts().get("verification.judge"));
+        assertEquals(1L, verification.eventCount());
+        assertEquals(1L, verification.warnCount());
+        assertEquals("catch", verification.topFailureClass());
+        assertEquals("warn", verification.status());
+        assertEquals(0L, springContext.eventCount());
+        assertEquals(0L, ((Number) snapshot.scorecard().get("verificationUsageCount")).longValue());
+        assertFalse(String.valueOf(snapshot).contains(rawPayload));
     }
 
     @Test
@@ -282,6 +357,155 @@ class DebugAiMetricsServicePostprocessTest {
     }
 
     @Test
+    void traceMemoryCheckpointFromTraceStoreBecomesVirtualDebugSlot() {
+        TraceStore.put("traceMemory.triggered", true);
+        TraceStore.put("traceMemory.trigger.reason", "loader_starvation");
+        TraceStore.put("traceMemory.recovery.action", "FALLBACK");
+        TraceStore.put("traceMemory.recovery.failureClass", "DATA");
+        TraceStore.put("traceMemory.recovery.quarantine", false);
+        TraceStore.put("traceMemory.errorBreak.risk", "WARN");
+        TraceStore.put("traceMemory.fingerprint.current", "hash:safe-trace-memory-fingerprint");
+        TraceStore.put("traceMemory.checkpoint.stage", "first_refinement");
+        TraceStore.put("traceMemory.virtualCheckpoint.latestKey", "second_refinement.post");
+        TraceStore.put("traceMemory.virtualCheckpoint.latestStage", "second_refinement");
+        TraceStore.put("traceMemory.virtualCheckpoint.latestPhase", "post_load");
+        TraceStore.put("traceMemory.delta.changedCount", 2);
+        DebugAiMetricsService service = new DebugAiMetricsService(new StaticDebugEventStore());
+
+        DebugAiMetricSnapshot snapshot = service.snapshot(10, 60_000);
+        Map<String, Object> compact = service.compactSnapshot(10, 60_000);
+
+        assertEquals(1L, snapshot.probeCounts().get("TRACE_MEMORY"));
+        assertEquals(1L, snapshot.layerCounts().get("memory.postprocess"));
+        assertEquals(1L, snapshot.failureClassCounts().get("trace_memory.loader_starvation"));
+        assertTrue(snapshot.planUsage().stream()
+                .anyMatch(row -> "trace.memory.virtual.second_refinement".equals(row.get("planId"))));
+        Map<?, ?> diagnostics = (Map<?, ?>) compact.get("traceMemoryDiagnostics");
+        assertEquals("second_refinement.post", diagnostics.get("virtualCheckpointKey"));
+        assertEquals("second_refinement", diagnostics.get("virtualCheckpointStage"));
+        assertEquals("post_load", diagnostics.get("virtualCheckpointPhase"));
+        assertFalse(String.valueOf(snapshot).contains("private student memory"));
+        assertFalse(String.valueOf(compact).contains("private student memory"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void virtualMatrixScorecardBuildsThreeHundredWeightedChunksWithoutRawDebugValues() {
+        String rawSecret = "ownerToken=private-debug-matrix-secret";
+        StaticDebugEventStore store = new StaticDebugEventStore();
+        long now = System.currentTimeMillis();
+        store.events.add(event(now, DebugProbeType.WEB_SEARCH, DebugEventLevel.WARN,
+                Map.of("failureClass", "timeout", "result", rawSecret)));
+        store.events.add(event(now + 1, DebugProbeType.MODEL_GUARD, DebugEventLevel.ERROR,
+                Map.of("failureClass", "llm_upstream_retry_exhausted", "latencyMs", 1200)));
+        store.events.add(event(now + 2, DebugProbeType.QUERY_TRANSFORMER, DebugEventLevel.INFO,
+                Map.of("stage", "query_rewrite", "subModelCount", 3, "branchAxisCount", 3)));
+        DebugAiMetricsService service = new DebugAiMetricsService(store);
+
+        Map<String, Object> scorecard = service.snapshot(20, 60_000).scorecard();
+
+        assertEquals(300, scorecard.get("virtualMatrixCount"));
+        assertEquals(10, scorecard.get("virtualMatrixChunkSize"));
+        assertEquals(30, scorecard.get("virtualMatrixChunkCount"));
+        assertTrue(((Number) scorecard.get("virtualMatrixWeightedScore")).doubleValue() > 0.0d);
+        assertTrue(List.class.isAssignableFrom(scorecard.get("virtualMatrixChunks").getClass()));
+        List<Map<String, Object>> chunks = (List<Map<String, Object>>) scorecard.get("virtualMatrixChunks");
+        assertEquals(30, chunks.size());
+        assertTrue(chunks.stream().allMatch(row -> row.containsKey("chunkIndex")
+                && row.containsKey("weight")
+                && row.containsKey("riskScore")
+                && row.containsKey("dominantTile")
+                && row.containsKey("decision")));
+        assertFalse(String.valueOf(scorecard).contains(rawSecret));
+        assertEquals(300, TraceStore.get("debug.ai.metrics.virtualMatrix.count"));
+        assertEquals(30, TraceStore.get("debug.ai.metrics.virtualMatrix.chunkCount"));
+        assertTrue(((Number) TraceStore.get("debug.ai.metrics.virtualMatrix.weightedScore")).doubleValue() > 0.0d);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void singleErrorDoesNotAuthorizeMitigationWithoutProbeFacts() {
+        StaticDebugEventStore store = new StaticDebugEventStore();
+        store.events.add(event(
+                System.currentTimeMillis(),
+                DebugProbeType.MODEL_GUARD,
+                DebugEventLevel.ERROR,
+                Map.of("failureClass", "llm_upstream_retry_exhausted")));
+        DebugAiMetricsService service = new DebugAiMetricsService(store);
+
+        Map<String, Object> scorecard = service.snapshot(20, 60_000).scorecard();
+        List<Map<String, Object>> chunks = (List<Map<String, Object>>) scorecard.get("virtualMatrixChunks");
+        long probeRequiredChunkCount = chunks.stream()
+                .filter(row -> "probe_required".equals(row.get("decision")))
+                .count();
+
+        assertEquals("evidence", scorecard.get("virtualMatrixScoreRole"));
+        assertEquals(Boolean.FALSE, scorecard.get("virtualMatrixScoreTrusted"));
+        assertEquals("probe_required", scorecard.get("virtualMatrixDecision"),
+                "weightedScore=" + scorecard.get("virtualMatrixWeightedScore")
+                        + " probeRequiredChunkCount=" + probeRequiredChunkCount);
+        assertEquals(Boolean.FALSE, scorecard.get("virtualMatrixActionAllowed"));
+        assertTrue(chunks.stream().noneMatch(row -> "mitigate_now".equals(row.get("decision"))));
+        assertEquals("evidence", TraceStore.get("debug.ai.metrics.virtualMatrix.scoreRole"));
+        assertEquals(Boolean.FALSE, TraceStore.get("debug.ai.metrics.virtualMatrix.scoreTrusted"));
+        assertEquals(Boolean.FALSE, TraceStore.get("debug.ai.metrics.virtualMatrix.actionAllowed"));
+    }
+
+    @Test
+    void riskRewriteTraceStoreSignalsBecomeQueryTransformerSlotWithoutRawQuery() {
+        String rawQuery = "private query ownerToken=debug-risk-rewrite-secret";
+        TraceStore.put("ml.risk.rewrite.band", "MEDIUM");
+        TraceStore.put("ml.risk.rewrite.score", "0.66");
+        TraceStore.put("ml.risk.rewrite.currentScore", "0.62");
+        TraceStore.put("ml.risk.rewrite.temperature", "0.28");
+        TraceStore.put("ml.risk.rewrite.policy", "risk_weighted");
+        TraceStore.put("ml.risk.rewrite.primaryFactor", "contradiction");
+        TraceStore.put("ml.risk.rewrite.components", Map.of(
+                "providerFailure", 0.05d,
+                "afterFilterStarvation", 0.08d,
+                "contradiction", 0.14d,
+                "latencyPressure", 0.09d));
+        TraceStore.put("selfask.3way.requery.required", true);
+        TraceStore.put("selfask.3way.requery.confirmed", true);
+        TraceStore.put("selfask.3way.weights", Map.of("BQ", 0.45d, "ER", 0.30d, "RC", 0.25d));
+        TraceStore.put("extremeZ.burstExpand.laneProfiles",
+                List.of("conservative", "evidence-first", "contradiction-check"));
+        TraceStore.put("raw.query.fixture", rawQuery);
+        DebugAiMetricsService service = new DebugAiMetricsService(new StaticDebugEventStore());
+
+        DebugAiMetricSnapshot snapshot = service.snapshot(10, 60_000);
+
+        assertEquals(1L, snapshot.probeCounts().get("TRACE_RISK_REWRITE"));
+        assertEquals(1L, snapshot.layerCounts().get("query_transformer.risk_rewrite"));
+        assertEquals(1L, snapshot.failureClassCounts().get("risk_rewrite.contradiction"));
+        assertEquals(3L, snapshot.scorecard().get("queryRewriteSubModelCount"));
+        assertEquals(3L, snapshot.scorecard().get("queryRewriteBranchAxisCount"));
+        assertTrue(snapshot.planUsage().stream()
+                .anyMatch(row -> "selfask.risk_rewrite.risk_weighted".equals(row.get("planId"))));
+        DebugAiRawTile queryTransformer = snapshot.tiles().stream()
+                .filter(tile -> "QUERY_TRANSFORMER".equals(tile.tileName()))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(1L, queryTransformer.eventCount());
+        assertFalse(String.valueOf(snapshot).contains(rawQuery));
+    }
+
+    @Test
+    void riskRewriteUsesLaneVariantProfilesWhenProfileListIsMissing() {
+        TraceStore.put("ml.risk.rewrite.primaryFactor", "contradiction");
+        TraceStore.put("extremeZ.burstExpand.laneVariantProfiles", List.of(
+                Map.of("profile", "conservative", "role", "STRICT", "queryHash12", "a1"),
+                Map.of("profile", "evidence-first", "role", "VERIFY", "queryHash12", "b2"),
+                Map.of("profile", "contradiction-check", "role", "COUNTEREXAMPLE", "queryHash12", "c3")));
+        DebugAiMetricsService service = new DebugAiMetricsService(new StaticDebugEventStore());
+
+        DebugAiMetricSnapshot snapshot = service.snapshot(10, 60_000);
+
+        assertEquals(1L, snapshot.probeCounts().get("TRACE_RISK_REWRITE"));
+        assertEquals(3L, snapshot.scorecard().get("queryRewriteBranchAxisCount"));
+    }
+
+    @Test
     void externalEvidenceEventsUseTheirOwnOpsConsoleTile() {
         StaticDebugEventStore store = new StaticDebugEventStore();
         long now = System.currentTimeMillis();
@@ -339,6 +563,13 @@ class DebugAiMetricsServicePostprocessTest {
         controller.snapshot(5, 300_000);
 
         assertEquals(300_000L, compact.get("windowMs"));
+        assertEquals(300, compact.get("virtualMatrixCount"));
+        assertEquals(30, compact.get("virtualMatrixChunkCount"));
+        assertTrue(((Number) compact.get("virtualMatrixWeightedScore")).doubleValue() >= 0.0d);
+        assertEquals("evidence", compact.get("virtualMatrixScoreRole"));
+        assertEquals(Boolean.FALSE, compact.get("virtualMatrixScoreTrusted"));
+        assertEquals(Boolean.FALSE, compact.get("virtualMatrixActionAllowed"));
+        assertTrue(List.class.isAssignableFrom(compact.get("virtualMatrixHotChunks").getClass()));
         assertFalse(controller.history(5).isEmpty());
     }
 
@@ -389,6 +620,17 @@ class DebugAiMetricsServicePostprocessTest {
                 data,
                 null,
                 null);
+    }
+
+    private static DebugEventStore enabledDebugEventStore() {
+        DebugEventStore store = new DebugEventStore();
+        ReflectionTestUtils.setField(store, "enabled", true);
+        ReflectionTestUtils.setField(store, "maxSize", 20);
+        ReflectionTestUtils.setField(store, "windowMs", 60_000L);
+        ReflectionTestUtils.setField(store, "maxPerWindow", 20L);
+        ReflectionTestUtils.setField(store, "flushIntervalMs", 15_000L);
+        ReflectionTestUtils.setField(store, "ndjsonEnabled", false);
+        return store;
     }
 
     private static final class StaticDebugEventStore extends DebugEventStore {

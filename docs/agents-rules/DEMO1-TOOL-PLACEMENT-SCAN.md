@@ -1,0 +1,7 @@
+<!-- moved-from: AGENTS.md L289-L294 sha256=d5092810bb337f8e4b25957ebc8ea5ff66e14ee41aed5c2e08641bd15587f2ce movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- BEGIN DEMO1-TOOL-PLACEMENT-SCAN -->
+## Tool placement scan (advisory, reuse-only)
+- Per-turn second opinion on **which existing tool to call first**: `python -B scripts/demo1_tool_placement_scan.py scan "<ask>"` reads the ask + journal/lease/dirty state and prints a ranked JSON list of already-existing script/bat/skill calls (`--list-triggers` audits the table; `--skip-state`/`--no-router`/`--no-git` for offline). It calls `demo1_vibe_skill_router.py resolve` as a subprocess — it never replaces the router and never executes what it ranks.
+- Known misroutes it corrects (measured): ForceRestart/restart Meta Display → `$demo1-dev-reload`/`Start-RAG.bat` (not the caption skill); RAG debug trail → `Read-RAG-Debug.bat`→`var/rag-launcher/LATEST.json` (not evidence-debugging); SelfAsk ownership → `SelfAskPlannerOwnershipContractTest`+canonical `SelfAskPlanner.java`; commit-dirty/goal-complete/verify-all-models → `conditional_local_git`/`agent_git_vibe_commit`/`$demo1-goal-complete-stop`/`$demo1-agent-api-spend-guard` (router-null gaps); zombie journal → `work_journal list --active`+`agent_recovery_status` (not safe-cleanup).
+- `misroutes[]` rows mean the resolved router primary is a known-wrong target for that ask — prefer the listed `useInstead` calls. Advisory only: routing grants no write authority; file changes still follow work-ledger + lease gates.
+<!-- END DEMO1-TOOL-PLACEMENT-SCAN -->

@@ -2,7 +2,7 @@
 
 ## Verified In This Checkout
 
-- CWD: `C:\AbandonWare\demo-1\demo-1\src`
+- CWD: `<repo>`
 - Existing repo-local skills: `.agents/skills/context-purity-vector-memory`, `.agents/skills/judge-recovery`
 - Root build files: `settings.gradle`, `settings.gradle.kts`, `build.gradle.kts`, `app/build.gradle.kts`
 - Root `settings.gradle` includes `:app`; `:demo-1` and `:lms-core` are gated by `includeLegacyModules`.
@@ -29,7 +29,7 @@ evidence_needed: orchestration/run_pipeline.sh / verify with Test-Path orchestra
 
 ## Useful Verification Commands
 
-Run from `C:\AbandonWare\demo-1\demo-1\src` unless a command proves another root:
+Run from `<repo>` unless a command proves another root:
 
 ```powershell
 .\gradlew.bat projects --no-daemon

@@ -67,17 +67,82 @@ public final class TimedChatModelCaller {
             String stage,
             String modelId,
             ChatUsageLedger.ModelAttempt usageAttempt) throws Exception {
+        return chat(model, messages, timeout, stage, modelId, usageAttempt, null);
+    }
+
+    public static AiMessage chat(
+            ChatModel model, List<ChatMessage> messages, Duration timeout,
+            String stage, String modelId, ChatUsageLedger.ModelAttempt usageAttempt,
+            java.util.concurrent.CompletableFuture<Boolean> modelWarmup) throws Exception {
+        return callResponse(model, messages, timeout, stage, modelId, usageAttempt, modelWarmup, null).aiMessage();
+    }
+
+    public static ChatResponse chatResponse(ChatModel model, List<ChatMessage> messages, Duration timeout,
+            String stage, String modelId, JudgeCallObservation observation) throws Exception {
+        try {
+            return callResponse(model, messages, timeout, stage, modelId, null, null, observation);
+        } catch (Exception failure) {
+            if (observation != null) observation.failed(failure);
+            throw failure;
+        }
+    }
+
+    private static ChatResponse callResponse(ChatModel model, List<ChatMessage> messages, Duration timeout,
+            String stage, String modelId, ChatUsageLedger.ModelAttempt usageAttempt,
+            java.util.concurrent.CompletableFuture<Boolean> modelWarmup, JudgeCallObservation observation) throws Exception {
         if (model == null) {
+            if (observation != null) observation.skipped("judge_model_unavailable");
             if (usageAttempt != null) {
                 usageAttempt.failedBeforeResponse();
             }
             throw new IllegalStateException("ChatModel is not configured");
         }
-        TraceStore.putInternal("llm.call.responseModel", null);
+        if (observation == null) {
+            TraceStore.putInternal("llm.call.responseModel", null);
+            TraceStore.putInternal("llm.call.observation", null);
+        }
         long timeoutMs = normalizeTimeoutMs(timeout);
-        TimeBudget requestBudget = TimeBudgetContext.get();
+        boolean acceptedRun = com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution();
+        // Preload has no user prompt and has its own bounded lifetime. A caller's
+        // deadline ends only its wait; never cancel the shared Ollama load.
+        if (modelWarmup != null && !modelWarmup.isDone()) {
+            TimeBudget loadBudget = acceptedRun ? null : TimeBudgetContext.get();
+            long loadWaitMs = loadBudget == null ? timeoutMs : loadBudget.remainingMillis();
+            TraceStore.put("llm.model.loading", true);
+            long loadStarted = System.nanoTime();
+            try {
+                if (loadWaitMs <= 0) throw new TimeoutException("load budget exhausted");
+                try (var wait = com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("ollama_native")) {
+                    if (acceptedRun) modelWarmup.get();
+                    else modelWarmup.get(loadWaitMs, TimeUnit.MILLISECONDS);
+                }
+            } catch (TimeoutException exhausted) {
+                if (usageAttempt != null) usageAttempt.timedOut();
+                traceTerminal("model_loading_budget_exhausted", stage, modelId, null);
+                throw new com.example.lms.llm.gateway.LlmGatewayException(
+                        "Selected model is still loading", com.example.lms.llm.gateway.LlmFailureClass.TIMEOUT_SOFT,
+                        "model_loading_budget_exhausted");
+            } catch (ExecutionException unavailable) {
+                // Preload is best effort; the ordinary guarded model call owns failure.
+            } catch (InterruptedException interrupted) {
+                if (usageAttempt != null) usageAttempt.cancelled();
+                traceTerminal("caller_cancelled", stage, modelId, null);
+                Thread.currentThread().interrupt();
+                CancellationException cancelled = new CancellationException("caller_cancelled");
+                cancelled.initCause(interrupted);
+                throw cancelled;
+            } catch (CancellationException cancelled) {
+                if (usageAttempt != null) usageAttempt.cancelled();
+                traceTerminal("caller_cancelled", stage, modelId, null);
+                throw cancelled;
+            } finally {
+                TraceStore.put("llm.model.loadWaitMs", (System.nanoTime() - loadStarted) / 1_000_000L);
+            }
+        }
+        TimeBudget requestBudget = acceptedRun ? null : TimeBudgetContext.get();
         long requestRemainingMs = requestBudget == null ? Long.MAX_VALUE : requestBudget.remainingMillis();
         if (requestRemainingMs <= 0L) {
+            if (observation != null) observation.skipped("request_budget_exhausted");
             if (usageAttempt != null) usageAttempt.timedOut();
             traceTerminal("request_deadline_exhausted", stage, modelId, null);
             throw hardTimeout("LLM request deadline exhausted", null);
@@ -92,7 +157,8 @@ public final class TimedChatModelCaller {
         try {
             delegate = executor.submit(ContextPropagation.wrapCallable(() -> {
                 Thread.interrupted();
-                try {
+                try (var judgeBinding = observation == null ? null : observation.bind()) {
+                    if (observation != null) observation.invocationStarted();
                     return model.chat(messages);
                 } finally {
                     Thread.interrupted();
@@ -100,13 +166,19 @@ public final class TimedChatModelCaller {
                 }
             }));
         } catch (RejectedExecutionException rejected) {
+            if (observation != null) observation.skipped("executor_saturated");
             if (usageAttempt != null) usageAttempt.failedBeforeResponse();
             traceTerminal("executor_saturated", stage, modelId, executor);
             throw new ExecutorSaturatedException("executor_saturated", rejected);
         }
         Future<ChatResponse> future = new CancelShieldFuture<>(delegate, "timed-chat-model-caller");
         try {
-            ChatResponse response = future.get(effectiveWaitMs, TimeUnit.MILLISECONDS);
+            ChatResponse response;
+            try (var wait = acceptedRun
+                    ? com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("llm_wait") : null) {
+                response = acceptedRun ? future.get() : future.get(effectiveWaitMs, TimeUnit.MILLISECONDS);
+            }
+            if (observation != null) observation.responseReceived(response);
             if (usageAttempt != null) {
                 usageAttempt.responseReceived(response == null ? null : response.tokenUsage());
             }
@@ -127,11 +199,11 @@ public final class TimedChatModelCaller {
             String responseModel = response.metadata() == null ? null : response.metadata().modelName();
             // Carry identity only after a successful answer; never reuse an
             // earlier attempt's model or publish arbitrary provider text.
-            if (responseModel != null && responseModel.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) {
+            if (observation == null && responseModel != null && responseModel.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) {
                 TraceStore.putInternal("llm.call.responseModel", responseModel);
             }
             traceTerminal("success", stage, modelId, executor);
-            return ai;
+            return response;
         } catch (TimeoutException timeoutException) {
             if (usageAttempt != null) {
                 usageAttempt.timedOut();
@@ -163,6 +235,13 @@ public final class TimedChatModelCaller {
                             : "LLM call timed out",
                     timeoutException);
         } catch (CancellationException cancellationException) {
+            // Cancellation can win between worker admission and wait-scope
+            // registration. Stop must still reach the real admitted delegate.
+            if (acceptedRun) {
+                boolean cancelAccepted = cancelAndPurge(executor, delegate, true);
+                traceCancellation("caller_cancelled", stage, modelId, cancelAccepted,
+                        future.isCancelled(), observeTaskExit(taskExited), executor);
+            }
             if (usageAttempt != null) {
                 usageAttempt.cancelled();
             }
@@ -172,7 +251,9 @@ public final class TimedChatModelCaller {
             if (usageAttempt != null) {
                 usageAttempt.cancelled();
             }
-            boolean cancelAccepted = cancelAndPurge(executor, future, true);
+            // Only an explicit accepted-run cancellation may interrupt its real
+            // delegate. Wrapper cancellation alone is not worker-exit evidence.
+            boolean cancelAccepted = cancelAndPurge(executor, acceptedRun ? delegate : future, true);
             String workerTerminationEvidence = observeTaskExit(taskExited);
             traceCancellation(
                     "caller_cancelled",

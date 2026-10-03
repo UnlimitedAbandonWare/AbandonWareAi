@@ -29,6 +29,7 @@ class ExactRequestedModelTest {
         assertThat(router(factory).route("qa", "low", "brief", 128, "fixture:chat")).isSameAs(answer);
         verify(factory).lcWithTimeout(eq("fixture:chat"), anyDouble(), isNull(), isNull(), isNull(), eq(128), anyInt(), eq(0));
         verifyNoInteractions(answer);
+        assertThat(RequestedModelSelection.outputLimit("fixture:chat", null)).isEqualTo(128);
         assertThat(TraceStore.getAll()).doesNotContainKey("chat.internal.exactModelSelection");
     }
     @Test void unavailableOrFailedManualModelNeverReturnsBaseModel() {
@@ -48,5 +49,24 @@ class ExactRequestedModelTest {
         assertThat(RequestedModelSelection.matches("other:chat")).isFalse();
         RequestedModelSelection.begin(null);
         assertThat(RequestedModelSelection.matches("fixture:chat")).isFalse();
+    }
+
+    @Test void constructionPreservesExplicitAndClassifiedFailureReasons() {
+        var failures = java.util.Map.of(
+                "backend_unavailable", new RuntimeException(new ModelSelectionException("backend_unavailable")),
+                "backend_timeout", new ModelSelectionException("backend_timeout"),
+                "provider_unauthorized", new com.example.lms.llm.gateway.LlmGatewayException("synthetic auth",
+                        com.example.lms.llm.gateway.LlmFailureClass.AUTH_MISSING),
+                "quota_exceeded", new com.example.lms.llm.gateway.LlmGatewayException("synthetic quota",
+                        com.example.lms.llm.gateway.LlmFailureClass.RATE_LIMIT_COOLDOWN, "insufficient_quota"));
+        failures.forEach((code, failure) -> {
+            var factory = mock(DynamicChatModelFactory.class);
+            when(factory.canServe("fixture:chat")).thenReturn(true);
+            when(factory.lcWithTimeout(anyString(), any(), any(), any(), any(), any(), anyInt(), any())).thenThrow(failure);
+            RequestedModelSelection.begin("fixture:chat");
+            assertThatThrownBy(() -> router(factory).route("qa", "low", "brief", 128, "fixture:chat"))
+                    .isInstanceOf(ModelSelectionException.class).hasMessage(code);
+            assertThat(RequestedModelSelection.outputLimit("fixture:chat", null)).isNull();
+        });
     }
 }

@@ -3,7 +3,7 @@
 ```yaml
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-01"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -44,6 +44,16 @@ sourceUrls:
 
 - `basic` search: **1 credit / request**
 - `advanced` search: **2 credits / request**
+
+Repo 구현체 2원화(2026-10-01 확인):
+
+| 구현체 | search_depth | 요청당 credits |
+|---|---|---|
+| `com.abandonware.ai.agent.integrations.TavilyWebSearchRetriever` (:86) | `"advanced"` 하드코딩 | 2 |
+| `com.example.lms.service.rag.TavilyWebSearchRetriever` | 미전송 → API 기본값 `basic` | 1 |
+
+`configs/api-routing.yaml`의 tavily `seams`가 abandonware 구현체를 가리키므로
+해당 경로는 호출당 2 credits를 소모한다. RAG 경로(basic)와의 선택은 라우팅 정책 사안이다.
 
 ### Tavily Extract
 

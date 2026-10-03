@@ -35,6 +35,7 @@ public class ChatUiViewConfig {
 
     private static final class ChatUiResourceViewResolver implements ViewResolver, Ordered {
         private static final View CHAT_UI = new ClasspathHtmlView("templates/chat-ui.html");
+        private static final View SETTINGS = new ClasspathHtmlView("templates/settings.html");
         private static final View LOGIN = new ClasspathHtmlView("templates/login.html");
         private static final View INDEX = new ClasspathHtmlView("templates/index.html");
         private static final View HARMONY_DASHBOARD = new ClasspathHtmlView("templates/harmony-dashboard.html");
@@ -45,6 +46,7 @@ public class ChatUiViewConfig {
         public View resolveViewName(String viewName, Locale locale) {
             return switch (viewName) {
                 case "chat-ui" -> CHAT_UI;
+                case "settings" -> SETTINGS;
                 case "login" -> LOGIN;
                 case "index" -> INDEX;
                 case "harmony-dashboard" -> HARMONY_DASHBOARD;
@@ -89,7 +91,7 @@ public class ChatUiViewConfig {
                 html = renderChatUiHtml(html, model, request);
             } else if ("templates/login.html".equals(path)) {
                 html = renderLoginHtml(html, model, request);
-            } else if ("templates/debug-events.html".equals(path)) {
+            } else if ("templates/debug-events.html".equals(path) || "templates/settings.html".equals(path)) {
                 html = renderCsrfMeta(html, model, request);
             }
             response.getWriter().write(html);
@@ -112,6 +114,12 @@ public class ChatUiViewConfig {
             document.body().attr("data-chat-surface", surface);
             if (!Boolean.TRUE.equals(model.get("chatDiagnosticsEnabled"))) {
                 document.select("[data-admin-diagnostics]").remove();
+            }
+            if (Boolean.FALSE.equals(model.get("chatTraceDockShell"))) {
+                document.select("[data-trace-dock]").remove();
+            } else {
+                document.select("[data-trace-dock]").attr("data-diagnostics-read",
+                        Boolean.TRUE.equals(model.get("chatDiagnosticsReadAllowed")) ? "true" : "false");
             }
             if ("compact".equals(surface)) document.select(".conversation-sidebar").remove();
             String selected = currentModel(model);

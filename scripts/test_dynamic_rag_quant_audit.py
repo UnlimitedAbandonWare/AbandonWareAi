@@ -4538,7 +4538,7 @@ class DynamicRagQuantAuditTest(unittest.TestCase):
         self.assertIn("val structuralRepairWaveFourJournal =", gradle)
         self.assertIn("val structuralRepairWaveFourFixedInputs = files(", gradle)
         declarations_start = gradle.index("val structuralRepairWaveFourJournal =")
-        declarations_end = gradle.index("val appDupFqcnEvidence", declarations_start)
+        declarations_end = gradle.index('tasks.register<Exec>("dynamicRagQuantAudit")', declarations_start)
         wave_four_declarations = gradle[declarations_start:declarations_end]
         for relative in wave_four_fixed_inputs:
             self.assertEqual(1, wave_four_declarations.count(f'"{relative}"'))
@@ -4581,10 +4581,7 @@ class DynamicRagQuantAuditTest(unittest.TestCase):
             audit_task.index('"harmonyPressureReport"'),
             audit_task.index('"testTreeContaminationReport"'),
         )
-        self.assertLess(
-            audit_task.index('"testTreeContaminationReport"'),
-            audit_task.index('":app:generateDupFqcnExcludes"'),
-        )
+        self.assertNotIn(":app:generateDupFqcnExcludes", audit_task)
         self.assertLess(
             audit_task.index("outputs.file(structuralAuditMetrics)"),
             audit_task.index("outputs.file(structuralAuditBaseline)"),

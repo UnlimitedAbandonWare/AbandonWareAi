@@ -23,15 +23,7 @@ public class SettingsController {
      * SYSTEM_PROMPT 원문, API 키/토큰, 자격증명류 및 알 수 없는 DB 키는
      * GET 응답에도, POST 저장에도 포함하지 않는다.
      */
-    private static final Set<String> PUBLIC_SETTING_KEYS = Set.of(
-            SettingsService.KEY_TEMPERATURE,
-            SettingsService.KEY_TOP_P,
-            SettingsService.KEY_FREQUENCY_PENALTY,
-            SettingsService.KEY_PRESENCE_PENALTY,
-            SettingsService.KEY_OPENAI_MODEL,
-            SettingsService.KEY_FINE_TUNED_MODEL,
-            "chat.defaults.useWebSearch",
-            "chat.ragAnswerPolicy");
+    private static final Set<String> PUBLIC_SETTING_KEYS = SettingsExposurePolicy.publicKeys();
 
     private final SettingsService settingsService;
 
@@ -46,6 +38,7 @@ public class SettingsController {
         Map<String, String> all = settingsService.getAllSettings();
         Map<String, String> settingMap = PUBLIC_SETTING_KEYS.stream()
                 .filter(all::containsKey)
+                .filter(k -> !SettingsExposurePolicy.isCredentialValue(all.get(k)))
                 .collect(Collectors.toMap(k -> k, all::get));
 
         return ResponseEntity.ok(settingMap);
@@ -65,6 +58,10 @@ public class SettingsController {
             return ResponseEntity.badRequest().body(Map.of("message", "settings body is required"));
         }
 
+        if (SettingsExposurePolicy.hasForbiddenWrite(settings)) {
+            return ResponseEntity.badRequest().body(Map.of("code", "SETTINGS_SECRET_VALUE_FORBIDDEN"));
+        }
+
         Set<String> rejected = settings.keySet().stream()
                 .filter(k -> !PUBLIC_SETTING_KEYS.contains(k))
                 .collect(Collectors.toCollection(TreeSet::new));
@@ -74,6 +71,11 @@ public class SettingsController {
                     "rejected", String.join(",", rejected)));
         }
 
+        SettingsService.InvalidNumericSetting invalid = SettingsService.numericValidationError(settings);
+        if (invalid != null) {
+            return ResponseEntity.badRequest().body(Map.of("message", "invalid numeric setting",
+                    "key", invalid.key(), "reason", invalid.reason()));
+        }
         settingsService.saveAllSettings(settings);
 
         return ResponseEntity.ok(

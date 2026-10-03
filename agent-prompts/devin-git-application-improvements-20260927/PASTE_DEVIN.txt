@@ -1,0 +1,144 @@
+# Devin 붙여넣기 — demo-1 Git 애플리케이션 개선 (기존 시임 연장)
+
+작성: 2026-09-27 Asia/Seoul (KST) · Grok Bot (READ-ONLY probe → 지시서만 기록)
+세션 폴더: agent-prompts/devin-git-application-improvements-20260927/
+Downloads 사본: C:\Users\nninn\Downloads\PASTE_DEVIN_git_application_improvements.txt
+
+## 1. Mission (한 줄)
+
+**이미 있는** `conditional_local_git` / `agent_git_vibe_commit` / soft-auto 시임을 연장해, alike-closet 세션에서 드러난 **불투명 실패·자가고아 index.lock·잡경로·모드/TTL 모호성**을 고친다. 병렬 git 스택 발명 금지. push 자동 활성화 금지.
+
+## 2. Project Root (고정)
+
+`C:\AbandonWare\demo-1\demo-1\src`
+
+- Git 바이너리 선호: `F:\git\cmd\git.exe`
+- Sole remote: `AbandonWareAi` (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) ONLY. `AbandonWare3` 폐기 — 건드리지 말 것.
+- 이번 작업 쓰기 범위: `scripts/conditional_local_git.py`, `scripts/agent_git_vibe_commit.py`, `scripts/git_staged_guard.py`(필요 시), 대응 `scripts/test_*.py`, 관련 `.agents/skills/demo1-*git*` / `.grok/rules/demo1-conditional-local-git.md` / AGENTS.md `DEMO1-GIT-*` **문구 정합만**. 제품 Java/프론트 소스 ❌. commit/push는 사용자 명시 요청 전 ❌.
+
+## 3. Self-Ask (5문 — 시작 전 답하고 진행)
+
+1. **에이전트 커밋 단일 진입점은?** → `python -B scripts/agent_git_vibe_commit.py --repo . --path <owned>... --message-file <file>` (JSON `committed=`/`deferred=`). 저수준은 `conditional_local_git.py` (`policy|check|scan|commit|lock`).
+2. **기본 스테이징 모드는?** → 오케스트레이터 기본 = `--preserve-foreign-staged`(외래 staging 바이트 동일 보존). 저수준 `commit`은 플래그 없으면 exact-match(`do_commit`). 둘을 섞어 ad-hoc `git commit` 체인 ❌.
+3. **alike-closet에서 실제로 무엇이 막혔나?** → handoff `devin-safe-git-commit-update-0927-b6f0e3c8`: progress `committed=5 failed=6`; final `selected-staged-scan-failed`×3 + `selected-commit-failed`×3; journal에 **자기 marker lock** (`conditional-local-git:…`) 사용자 승인 move-aside.
+4. **soft-auto가 이미 합의된 것은?** → stale 0-byte lock archive · foreign staging 보존 · selective owned commit · additive gate hardening. Hard: push/add -A/rewrite/wipe/AbandonWare3/secrets.
+5. **무엇을 새로 만들지 않는가?** → 두 번째 VCS·별도 commit CLI·새 remote 정책 엔진·자동 push 스위치. 기존 함수/스킬을 **연장**만.
+
+## 4. Current inventory (이미 동작하는 것)
+
+| 층 | 경로 | 역할 |
+|---|---|---|
+| Policy SSOT | `.grok/rules/demo1-conditional-local-git.md` | 허용/금지·blast-radius·sole remote |
+| Gate | `scripts/conditional_local_git.py` | `policy\|check\|scan\|commit\|lock`; `commit_selected` / `do_commit` / `clear_stale_lock` |
+| Orchestrator | `scripts/agent_git_vibe_commit.py` | one-call: lock soft-clear → owned add/scan/commit |
+| Scan | `scripts/git_staged_guard.py` | staged blob secret/path gate |
+| Doctor (read-only) | `scripts/git_doctor.py` + skill `demo1-git-doctor` | blocker/nextOwner 진단 |
+| Publish review | `scripts/git_publish_review.py` + recipes E | 공개 준비 리뷰만(무 push) |
+| Soft-auto | skill `demo1-vibe-git-auto-continue` + AGENTS soft branch | `AUTO:<reason>` 저널, 카드 없음 |
+| Agent docs | `demo1-conditional-local-git` / `demo1-git-vibe-workflow` / `recipes.md` | 진입·금지·레시피 |
+| Tests | `test_conditional_local_git.py`, `test_agent_git_vibe_commit.py`, `test_git_*` | 회귀 받침 |
+| Caps | `MAX_COMMIT_PATHS=40`, `MAX_COMMIT_DELETIONS=15` | override 플래그 없음(의도) |
+
+현재 브랜치 스냅샷(probe `status -sb` only): `codex/owned-runtime-browser-restart` — dirty 다수(M/D/??). **이 지시서는 그 dirty를 커밋하지 말 것.**
+
+## 5. Gaps / 아쉬운점 (순위 + 증거)
+
+### G1 — 자가고아(self-orphaned) marker `index.lock`이 soft-auto로 안 풀림 (마찰 최대)
+- `commit_selected`가 lock에 `conditional-local-git:<uuid>` marker를 **비어 있지 않은** 바이트로 씀. 실패 후 finally가 못 지우면 잔존.
+- `clear_stale_lock`은 **0-byte만** archive → nonempty marker는 항상 `lock-nonempty` → `deferred=index-lock`.
+- 증거: `data/agent-handoff/codex-autonomy/devin-safe-git-commit-update-0927-b6f0e3c8/journal.json` (user-approved move-aside, marker `conditional-local-git:fdf7370a`, 54B, writers=0); 동 폴더 `index.lock.bak-20260927*`.
+- soft-auto 문서(`demo1-vibe-git-auto-continue`)는 “0-byte + age”만 말함 → **자기 marker 회수 규칙 공백**.
+
+### G2 — `selected-*-failed`가 불투명 (에이전트 UX 공백)
+- `commit_selected`가 `git_staged_guard` stdout JSON/`ok:false` reason을 버리고 `selected-staged-scan-failed`만 반환.
+- 예외도 `selected-commit-failed` + `errorType`만 — 원인 메시지/가드 reason 없음.
+- 증거: 동 handoff `final.json` `failedBatches` 6건 전부 위 두 reason; `progress.json` `failed:6`. 배치 경로에 `__pycache__/*.pyc` 포함돼도 실패 사유가 안 보임.
+
+### G3 — `__pycache__` / `*.pyc` 등이 `path_forbidden` 밖
+- `path_forbidden`은 secrets/env/key/lmsdb/.git 중심. bytecode·캐시 디렉 미차단.
+- 증거: failed batch `scripts` 경로 샘플에 `scripts/__pycache__/*.cpython-311.pyc` 포함 (`final.json`).
+
+### G4 — stale-lock TTL / 스테이징 모드 이중 기본값 (모호성)
+- 오케스트레이터 `--stale-lock-days` 기본 **0.25(6h)** vs `lock --days` 기본 **1.0** — 같은 soft-auto 스킬에 둘 다 적혀 경로에 따라 동작 다름.
+- 저수준 `commit` 무플래그 = exact-match; 오케스트레이터 기본 = preserve-foreign. 저수준만 부르면 foreign-or-mismatched-staging에 자주 막힘.
+
+### G5 — blast-radius=40 경계에서 조기 안내 부족 + doctor 미연결
+- 실패한 main/java·scripts·src/test 배치가 경로 40개 = cap. 불투명 실패로 떨어져 “왜/어떻게 쪼갤지” UX 없음.
+- `git_doctor.py`의 `nextOwner` / foreign split이 vibe deferred 경로에 자동 연결 안 됨(under-used).
+
+## 6. THE ONE / Top work items (가장 얇은 시임) + Acceptance
+
+**우선순위: W1 → W2 → (여유 시) W3.** 병렬 스택 ❌.
+
+### W1 — Self-orphaned marker lock soft-reclaim (extend `clear_stale_lock` + orchestrator)
+- **변경 위치:** `scripts/conditional_local_git.py` (`clear_stale_lock` / lock 평가), `scripts/agent_git_vibe_commit.py` (`assess_lock`), skill `demo1-vibe-git-auto-continue` + `demo1-conditional-local-git` 한두 문장, 테스트 추가.
+- **동작:** lock 내용이 `conditional-local-git:` prefix marker이고, 확인된 `git.exe` writer 없음, shared `index` 해시 불변이면 → **0-byte가 아니어도** backup_dir로 **move aside**(삭제 금지). 외래/비어있지 않은 비-marker lock은 기존대로 `preserved`.
+- **Acceptance:**
+  - [ ] fixture: marker lock + writers=0 + index unchanged → `action: cleared` (또는 동등) + bak 파일 존재 + index.lock 제거.
+  - [ ] fixture: 임의 nonempty lock / writer 있음 / index 변경 → `preserved` + 이유 코드, **삭제안함**.
+  - [ ] `agent_git_vibe_commit --dry-run`이 위 경우 `would-clear`(또는 동등)로 계획에 표시.
+  - [ ] 기존 0-byte stale 규칙 회귀 유지.
+  - [ ] journal 가능 시 `AUTO:self-orphaned-lock-cleared=…` (task-id 있을 때).
+
+### W2 — Opaque failure → 진단 페이로드 (extend `commit_selected` / vibe JSON)
+- **변경 위치:** `commit_selected`의 `selected-staged-scan-failed` / `selected-commit-failed` 반환; 오케스트레이터 `deferred` detail 전달; `test_conditional_local_git.py`.
+- **동작:** 가드 stdout JSON의 `reason`/`findings` 요약(내용·시크릿 값 **절대 미인쇄**), 예외 `errorType`+짧은 safe message, 가능하면 stderr redacted snippet. 상위 reason 코드는 유지(호환).
+- **Acceptance:**
+  - [ ] 가드가 `ok:false`일 때 응답에 `scanReason`(또는 동등) 필드가 생기고, 테스트가 단언.
+  - [ ] RuntimeError/timeout 경로에 `errorType` + safe detail; 시크릿 패턴 문자열이 stdout JSON에 없음.
+  - [ ] 기존 exit code 의미(2/3/4) 유지.
+
+### W3 — `path_forbidden`에 빌드잡 경로 + blast early-signal (작은 연장)
+- **변경:** `path_forbidden`에 `__pycache__/`, `*.pyc`, (선택) `*.class` under `build/` 등 **이미 정책 정신에 맞는** 잡경로 거부; `agent_git_vibe_commit` dry-run/deferred에 `candidatePathCount`/`maxPaths`/`remainingCapacity` 명시(이미 일부 있음 → 문서·early deferred 강화).
+- **Acceptance:**
+  - [ ] `--path scripts/__pycache__/x.pyc` → `forbidden-path` / deferred, 커밋 시도 전 거절.
+  - [ ] paths>40 → `blast-radius-paths`가 opaque selected-*-failed보다 **먼저** 명확히(이미 commit_selected 앞단 있음 — vibe/드라이버가 우회하지 않게 테스트·스킬 한 줄).
+  - [ ] TTL 기본값: orchestrator와 `lock --days`를 **하나의 SSOT 상수**로 맞추거나, 스킬/AGENTS에 “에이전트는 orchestration 기본만 쓴다”고 단정(코드 상수 정렬 권장).
+
+## 7. Hard stops (절대)
+
+- Blind / 자동 **push·fetch·pull·remote 변경** ❌ (사용자 명시 ask 전).
+- `add -A` / `add .` / `commit -a` / `--no-verify` / `--amend` / history rewrite / `reset --hard` / `clean -fdx` ❌.
+- Foreign staging **unstage·덮어쓰기** ❌ — `foreignStagingPreserved` 유지.
+- `.git` / 비소유 `index.lock` **강제 삭제** ❌ — archive/move-aside만, 조건 충족 시.
+- **AbandonWare3** remote 추가·fetch·push·선호 ❌.
+- 시크릿/키/대화원문/DB/모델 커밋·stdout 인쇄 ❌.
+- 제품 GraphRAG/Nova/Meta Display 소스 무단 편집 ❌ (이번 브리프 범위 밖).
+- soft-auto hard list 약화 ❌.
+
+## 8. Verify commands
+
+```powershell
+cd C:\AbandonWare\demo-1\demo-1\src
+F:\git\cmd\git.exe status -sb
+python -B scripts/conditional_local_git.py policy
+python -B scripts/test_conditional_local_git.py
+python -B scripts/test_agent_git_vibe_commit.py
+python -B scripts/test_git_staged_guard.py
+# marker-lock fixture가 테스트에 포함됐는지 확인 후:
+python -B scripts/agent_git_vibe_commit.py --repo . --path scripts/agent_git_vibe_commit.py --message-file <tmp-msg-with-Reason-Verify-Constraint> --dry-run
+python -B scripts/git_doctor.py --root . --json
+```
+
+메시지 파일은 `이유:`/`Reason:` + `검증:`/`Verify:` + `제약:`/`Constraint:` 라벨 필수. dry-run만으로 회귀 확인 가능하면 커밋하지 말 것.
+
+## 9. Start sentence (그대로 시작)
+
+「Project Root `C:\AbandonWare\demo-1\demo-1\src`에서 기존 `conditional_local_git`/`agent_git_vibe_commit` 시임만 연장한다. 먼저 W1 self-orphaned marker lock soft-reclaim과 테스트를 넣고, 이어서 W2 불투명 `selected-*-failed` 진단 페이로드를 붙인다. push/add -A/외래 staging 훼손/AbandonWare3/시크릿 출력은 하지 않는다.」
+
+## 10. Report format
+
+끝나면 아래로만 보고:
+
+```
+DONE | W1=… W2=… W3=…(SKIP/HOLD 명시)
+CHANGED: <paths>
+VERIFY: <명령 + exit>
+LOCK: <marker-reclaim 회귀 결과 한 줄>
+DIAG: <selected-*-failed 페이로드 필드명>
+HARD-STOPS-OK: yes
+HOLD: <막힌 이유 코드 | none>
+SKIP: <하지 않은 항목 + 이유>
+```
+
+상태 키워드: **DONE** / **SKIP** / **HOLD** 중 하나 필수.

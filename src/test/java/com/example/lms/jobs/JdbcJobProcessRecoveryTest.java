@@ -79,7 +79,7 @@ class JdbcJobProcessRecoveryTest {
     public static final class Fixture {
         public static void main(String[] args) throws Exception {
             var ds=new DriverManagerDataSource(args[0],"sa","");var mapper=new ObjectMapper();
-            var store=new JdbcJobService(ds,mapper,Clock.systemUTC());
+            var store=new JdbcJobService(ds, mapper, Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "unregistered", "legacy"), java.util.Set.of("task_ask"));
             store.registerHandler("task_ask",input->{new JdbcTemplate(ds).update("UPDATE fixture_calls SET calls=calls+1");return "persisted-fixture";});
             var server=com.sun.net.httpserver.HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
             server.createContext("/",exchange->{
@@ -90,7 +90,10 @@ class JdbcJobProcessRecoveryTest {
                     else {String id=path.substring("/jobs/".length());body=mapper.writeValueAsString(Map.of("state",store.status(id),"result",store.result(id,"fixture-owner").orElse("")));}
                     byte[] bytes=body.getBytes(StandardCharsets.UTF_8);exchange.sendResponseHeaders(200,bytes.length);exchange.getResponseBody().write(bytes);
                 }catch(Exception failure){exchange.sendResponseHeaders(500,-1);}finally{exchange.close();}
-            });server.start();Files.writeString(Path.of(args[1]),Integer.toString(server.getAddress().getPort()));
+            });server.start();
+            Path ready = Path.of(args[1]), pending = ready.resolveSibling(ready.getFileName() + ".writing");
+            Files.writeString(pending, Integer.toString(server.getAddress().getPort()));
+            Files.move(pending, ready, StandardCopyOption.ATOMIC_MOVE);
             new CountDownLatch(1).await();
         }
     }

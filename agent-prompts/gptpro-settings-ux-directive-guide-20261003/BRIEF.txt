@@ -1,0 +1,76 @@
+[ANTI-STOP] 이 지침을 끝까지 읽고, Part A(UX 분석)와 Part B(Codex 수정지시서)를 둘 다 완성할 때까지 멈추지 마세요. 중간 요약만 내고 끝내면 미완성입니다.
+
+# GPT Pro용 지침 — demo-1 설정 화면 UX 수정지시서 작성법 (2026-10-03)
+
+## 0. 한 줄 목표
+ZIP(demo1_core_20261003-0737_4150b28-dirty)을 분석해, 일반 사용자도 쉽게 쓰고 개발자 모드는 그대로 남는 설정 화면을 설계하고, 그 설계를 Codex가 그대로 실행할 수 있는 "수정지시서"로 바꿔 주세요. 소스를 직접 고치는 건 Codex 몫이고, 당신(GPT Pro)은 분석과 지시서 초안 담당입니다.
+
+## 1. 입력 규칙
+- ZIP은 스냅샷입니다. 라인 번호는 참고만 하고, 위치는 반드시 "파일 + 함수/상수/문자열"로 적으세요. (Grok Bot이 라이브 트리에서 다시 맞춥니다.)
+- 맨 앞에 입력 표를 쓰세요: 파일 | 크기 | 끝까지 읽음 Y/N. 핵심 파일을 다 못 읽었으면 그 파일에 기댄 결론은 [확인 필요]로 둡니다.
+- 모든 주장에 꼬리표를 붙이세요: [확인됨 파일:심볼] / [가정] / [확인 필요]. 사용자 조사 수치·이용률 같은 숫자는 지어내지 마세요.
+
+## 2. 라이브 트리에서 이미 확인된 사실 (Grok Bot, 2026-10-03 08:14 KST, HEAD 4150b282)
+1. 설정 화면은 templates/settings.html 한 장이고 카드 3개입니다.
+   - "이 브라우저 기본값"(#browser-settings): 모델, 모델 사용 방식(preferred/strict/auto), 검색(OFF/AUTO/FORCE_LIGHT/FORCE_DEEP), RAG.
+   - "역할별 모델"(#role-routing): 서버 프로필, 기본 OFF, 미리보기 → 저장(settings-routing.js, revision 충돌 검사 있음).
+   - "실행 설정"(#execution-settings): 읽기 전용(settings-page.js 의 publicKeys: TEMPERATURE, TOP_P, … chat.ragAnswerPolicy).
+2. 브라우저 기본값은 localStorage 키 `awx.settings.v1.preferences` 에 저장됩니다(chat-settings-bridge.js STORAGE_KEY). 기본값은 DEFAULTS = { modelSelectionMode:'preferred', searchMode:'OFF', useRag:false }.
+3. 같은 브리지가 채팅 화면(chat-ui.html 에서도 로드)에도 붙어 있어서, 채팅에서 모델·검색·RAG를 바꾸면 change 이벤트에서 그 값을 같은 localStorage 키에 다시 씁니다(chat-settings-bridge.js, controls change → writeSettings). 즉 "이번 대화에서만 바꾼 값"이 "다음 대화 기본값"이 됩니다. GPT Pro 이전 답변의 판단과 일치합니다.
+4. chat.js 는 별도로 탭 단위 sessionStorage 키 `chat.controlSettings` 에 현재 컨트롤 값을 저장·복원합니다. 저장 층이 두 개라서 "저장값"과 "지금 적용값"이 다를 수 있습니다.
+5. 채팅 상단에는 접히는 관리자 메뉴(details.admin-tools: Brain, Pipeline Status, RAG Ops, Vector, Models)와 Diagnostics 접힘 영역이 있습니다. model-settings.html 은 영어 라벨(Default Model Settings 등)입니다.
+6. 관련 테스트가 이미 있습니다: SessionSettingsPrecedenceTest, ChatRequestSettingsMergerTest, SettingsExposurePolicyTest, SettingsControllerPublicProjectionTest, RoutingSettingsControllerTest 등. 새 테스트를 만들기 전에 이것부터 재사용하세요.
+7. 모델 고르기는 이미 chat-model-picker.js(검색·즐겨찾기 대화상자)가 있습니다. 새 선택기를 만들지 말고 재사용하세요.
+
+## 3. 결과물 구조 (반드시 이 순서)
+### Part A — UX 분석 (사용자가 요청한 6가지)
+1. 주요 사용자 유형과 요구사항(일반 사용자 / 데모·발표자 / 개발자·운영자 정도, 각 3줄 이내)
+2. 현재 설정 경험의 문제점 — 각 항목에 [확인됨]/[가정] 꼬리표
+3. 개선된 화면 구조와 핵심 상호작용
+4. 일반용과 개발자용 설정의 구분 방식
+5. 구체적인 UI·UX 개선안과 이유(개선안마다 "왜"를 한 줄)
+6. 화면 문구와 간단한 와이어프레임(텍스트 박스 그림이면 충분)
+
+### Part B — Codex 수정지시서 (아래 형식 그대로)
+[ANTI-STOP] → 첫 명령 `Set-Location C:\AbandonWare\demo-1\demo-1\src` + 환경 줄(Windows, PowerShell 5.1, `;` 사용) → 0 한 줄 목표 → 1 확인된 사실(파일:심볼, 확인 시각) → 공통 규칙(ledger data\agent-handoff\codex-settings-ux-<8hex>\, 수정 전 lease, 수정 허용 목록·변경 금지 목록) → 작업 단계(WP) → HOLD → ASK_ONCE → 절대 금지 → Acceptance(안 돌린 건 NOT_RUN) → 보고 형식(첫 줄 `외부 API:`) → [ANTI-STOP].
+- WP는 최대 5개, 각 WP는 "실패하는 테스트 먼저(RED) → 수정 → 통과(GREEN)".
+- 완료는 Acceptance 전부 PASS일 때만입니다.
+
+## 4. 설정 화면 설계 원칙
+1. 저장 범위를 3단으로 나누고 모든 컨트롤 옆에 표시: "이번 대화만" / "이 브라우저 기본값" / "서버 설정(관리자)". 채팅에서 바꾼 값은 기본으로 "이번 대화만"이고, 기본값으로 올리려면 사용자가 "앞으로도 사용"을 눌러야 합니다.
+2. 3층 구조: 기본 → 고급(접힘) → 개발자·진단(접힘). 기존 기능은 지우지 말고 위치만 옮기거나 접으세요.
+3. 쉬운 한국어 이름 + 한 줄 설명 + 기본값에 "권장" 표시. FORCE_LIGHT 같은 영문 값은 고급 영역에서만 괄호로 보여 줍니다.
+4. 입력 방식: 선택지 3~4개 이하는 라디오/세그먼트, 켜기·끄기는 스위치, 모델은 기존 picker 재사용.
+5. 오류 예방: 저장값과 지금 적용값이 다르면 배지로 표시, revision 충돌 시 덮어쓰지 말고 "다시 불러오기" 안내, 초기화는 확인 한 번.
+6. 접근성: label 연결, 설명은 aria-describedby, 상태 메시지는 aria-live, 키보드만으로 전부 조작, 색만으로 상태를 구분하지 않기, 포커스 표시 유지.
+7. 개발자 모드 유지: admin-tools 메뉴, model-settings, 역할별 모델(기본 OFF), Diagnostics는 그대로 둡니다. PROTO_OPEN(로그인 없이 열린 개발 모드)은 유지하며, 잠금·권한 강화 제안은 하지 말고 필요하면 HOLD에만 적으세요.
+8. 문구가 깨져 보이면(한글 인코딩) 파일 인코딩 문제일 수 있으니 [확인 필요]로 적고 UTF-8 유지만 요구하세요.
+
+## 5. 수정 허용·금지 기준 (Part B에 그대로 반영)
+- 수정 허용 후보: templates/settings.html, static/js/settings-page.js, static/js/settings-routing.js, static/js/chat-settings-bridge.js, static/css/settings-page.css, 관련 테스트. 실제 목록은 근거와 함께 좁혀서 쓰세요.
+- chat.js 는 수정 금지입니다. 꼭 필요하면 브리지·DOM 이벤트 계약(예: brain-state:session)으로 우회하고, 그래도 안 되면 HOLD_FOR_USER로 표시하세요.
+- 서버 API 계약(/api/settings, /api/settings/routing/*)이나 DB 스키마를 바꿔야 하면 HOLD.
+- 새 프레임워크·라이브러리 추가, Next BFF(src\frontend)로의 재작성은 금지입니다.
+
+## 6. 절대 금지 (지시서에도 그대로 복사)
+push/pull/commit, git add -A, reset/checkout/restore/stash/clean, remote 추가·변경, 전체 테스트 스위트, .env/.secrets/토큰 열람·출력, PROTO_OPEN 해제·admin 강화, 다른 세션 lease·hunk 수정, DB 스키마 변경·데이터 삭제, chat.js 수정, 다른 채팅에 영향 주는 전역 설정 수정, skip-permissions/full-access 모드 권장, 지시서에 실제 키·비밀번호 기재.
+
+## 7. 비용·검증 규칙
+- 모델·API 순서: Codex 크레딧 → 외부 유료 API → 무료 → 로컬 Ollama(마지막).
+- 라이브 API 호출 상한을 지시서에 적으세요(브라우저 자가점검 전체 약 25회). 401/403/429는 재시도하지 말고 원인을 보고 맨 위에 적게 하세요. mock 통과는 라이브 검증이 아닙니다.
+- 검증은 좁은 테스트(관련 테스트 클래스 지정)와 127.0.0.1:18180 의 /settings, /chat 브라우저 확인으로 하고, 공개 주소(abandonwareai.kro.kr)는 마지막 확인용입니다.
+
+## 8. 당신(GPT Pro) 결과물의 합격 기준
+- [ ] Part A 6개 항목 전부 있음
+- [ ] 모든 문제점·사실에 [확인됨]/[가정]/[확인 필요] 꼬리표
+- [ ] 기존 기능 제거 0건(옮김·접음만), 제거가 필요해 보이면 HOLD
+- [ ] "이번 대화만 / 이 브라우저 기본값 / 서버" 범위 구분이 화면 문구에 보임
+- [ ] Part B가 3번 형식 그대로, WP 5개 이하, 각 WP에 RED 테스트 이름
+- [ ] chat.js 수정 없음, 금지 목록 전부 포함
+- [ ] 와이어프레임 또는 화면 문구 예시 포함
+
+## 9. 답변 맨 끝
+- `넣은 것 / 뺀 것(이유) / HOLD` 세 줄
+- Codex에게 그대로 칠 한 문장: 「…」
+
+[ANTI-STOP] Part A와 Part B를 둘 다 끝냈는지, 8번 체크리스트를 전부 채웠는지 확인한 뒤에만 답을 마치세요.

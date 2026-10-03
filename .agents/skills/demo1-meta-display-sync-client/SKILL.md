@@ -1,6 +1,6 @@
 ---
 name: demo1-meta-display-sync-client
-description: Use when implementing or fixing the Meta Ray-Ban Display sync client in demo-1
+description: Use when implementing or fixing the Meta Ray-Ban Display sync client in demo-1 — lens hint sync inside the source-contract boundary, E1/E2 implementation scope.
 ---
 
 # Display sync 클라이언트 구현

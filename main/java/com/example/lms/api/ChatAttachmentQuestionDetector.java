@@ -37,6 +37,7 @@ public final class ChatAttachmentQuestionDetector {
         }
         String s = msg.toLowerCase(Locale.ROOT);
         return ENGLISH_ATTACHMENT_MARKER.matcher(s).find()
+                || Pattern.compile("(?<![" + LEXICAL_CHARACTERS + "])(?:그\\s*보고서|이\\s*보고서|해당\\s*보고서|that\\s+report|this\\s+report)" + SAFE_SUFFIX).matcher(s).find()
                 || KOREAN_ATTACHMENT_MARKER.matcher(s).find()
                 || SUPPORTED_EXTENSION.matcher(s).find();
     }

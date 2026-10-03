@@ -61,7 +61,8 @@ public class ScoringRunner {
         if (parent != null) {
             Files.createDirectories(parent);
         }
-        String rendered = report.render();
+        String rendered = "json".equals(parsed.format())
+                ? report.renderJson(uiAssetIdentity(parsed.root())) : report.render();
         Files.writeString(parsed.output(), rendered);
         System.out.println(rendered);
     }
@@ -797,6 +798,26 @@ public class ScoringRunner {
         return HexFormat.of().formatHex(digest.digest());
     }
 
+    /** Public static web assets have a separate identity; they never affect score/evidence admission. */
+    private static String uiAssetIdentity(Path root) throws IOException {
+        MessageDigest digest = sha256Digest();
+        Path assets = root.resolve("main/resources/static");
+        if (Files.isDirectory(assets, LinkOption.NOFOLLOW_LINKS)) {
+            try (Stream<Path> paths = Files.walk(assets)) {
+                List<Path> files = paths.filter(path -> Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                        .sorted(Comparator.comparing(path -> root.relativize(path).toString().replace('\\', '/')))
+                        .toList();
+                for (Path file : files) {
+                    digest.update(root.relativize(file).toString().replace('\\', '/').getBytes(StandardCharsets.UTF_8));
+                    digest.update((byte) 0);
+                    updateDigest(digest, file);
+                    digest.update((byte) 0);
+                }
+            }
+        }
+        return HexFormat.of().formatHex(digest.digest());
+    }
+
     private static void updateDigest(MessageDigest digest, Path file) throws IOException {
         try (SeekableByteChannel channel = Files.newByteChannel(
                 file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
@@ -886,11 +907,12 @@ public class ScoringRunner {
         return out;
     }
 
-    record Args(Path root, Path output, Path evidence) {
+    record Args(Path root, Path output, Path evidence, String format) {
         static Args parse(String[] args) {
             Path root = Paths.get("").toAbsolutePath().normalize();
             Path output = root.resolve("verification/source-score-report.txt");
             Path evidence = null;
+            String format = "text";
             for (int i = 0; args != null && i < args.length; i++) {
                 if ("--root".equals(args[i]) && i + 1 < args.length) {
                     root = Paths.get(args[++i]).toAbsolutePath().normalize();
@@ -901,9 +923,15 @@ public class ScoringRunner {
                     output = Paths.get(args[++i]).toAbsolutePath().normalize();
                 } else if ("--evidence".equals(args[i]) && i + 1 < args.length) {
                     evidence = Paths.get(args[++i]).toAbsolutePath().normalize();
+                } else if (args[i].startsWith("--format=")) {
+                    format = args[i].substring("--format=".length());
+                } else if ("--format".equals(args[i])) {
+                    if (i + 1 >= args.length) throw new IllegalArgumentException("Missing --format value");
+                    format = args[++i];
                 }
             }
-            return new Args(root, output, evidence);
+            if (!Set.of("text", "json").contains(format)) throw new IllegalArgumentException("Unsupported --format");
+            return new Args(root, output, evidence, format);
         }
     }
 
@@ -1003,6 +1031,19 @@ public class ScoringRunner {
         int total() {
             return Math.max(0,
                     checks.stream().mapToInt(Check::earned).sum() - structuralPenaltyPoints);
+        }
+
+        String renderJson(String uiAssetHash) throws IOException {
+            Map<String, Object> report = new LinkedHashMap<>();
+            report.put("schemaVersion", 1);
+            report.put("sourceIdentityHash", sourceIdentityHash);
+            report.put("uiAssetHash", uiAssetHash);
+            report.put("executionObserved", false);
+            report.put("evidenceProvenance", "local-artifact-consistency");
+            report.put("totalScore", total());
+            report.put("checks", checks);
+            report.put("structuralPenalty", structuralPenaltyPoints);
+            return JSON.writeValueAsString(report);
         }
 
         String render() {

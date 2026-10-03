@@ -15,7 +15,7 @@ Browser, Computer, and Supabase are separate evidence lanes. Use them only when 
 
 | Lane | Default | Required when | Missing proof label |
 | --- | --- | --- | --- |
-| Browser | optional supporting evidence | UI, route, DOM, stream, or visible chat behavior changed | `browser-smoke-missing` |
+| Browser | **active verified lane** (2026-09-30 credit approval) | UI, route, DOM, stream, or visible chat behavior changed | `browser-smoke-missing` |
 | Computer | optional supporting evidence | Windows app/UI automation behavior changed or user explicitly asks | `computer-use-smoke-missing` |
 | Supabase | read-only evidence-needed unless project-scoped auth exists | live DB schema/auth/RLS/storage proof is explicitly required | `supabase-project-ref-missing` or `supabase-auth-missing` |
 | Mac mini/Notebook | optional supporting producer evidence | explicit multi-node/PatchDrop handoff | `producer-proof-missing` |
@@ -38,6 +38,8 @@ Do not create migrations, SQL changes, new Supabase clients, service role usage,
 
 Use Browser or Computer proof only when it can disprove the changed behavior. Prefer DOM selectors/count-only evidence for Browser and visible Windows state for Computer.
 
+For UI/stream/chat changes under an authorized credit budget (`authorized_credit_budget` in `configs/agent-api-spend-guard.yaml` or `AWX_CREDIT_BUDGET`), the declared real-browser DOM/event probe (e.g. `scripts/trace_dock_browser_probe.js`, headless Chromium by default — headed only for wear-demo/recording) runs to completion rather than stopping early for token save.
+
 Do not:
 
 - run UI smokes just because the tags appear;
@@ -50,3 +52,5 @@ Do not:
 Keep the lanes separate using the reference report template.
 
 If Desktop proof is green and only Supabase project scope is missing, do not keep patching source. Report the exact missing env/auth artifact.
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

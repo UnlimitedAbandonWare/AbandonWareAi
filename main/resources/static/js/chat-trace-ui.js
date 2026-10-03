@@ -134,6 +134,29 @@
     return summaryOnly;
   }
 
+  function expectedSnapshotResponse(response, path) {
+    if (response.redirected || !response.url) return false;
+    const contentType = response.headers?.get?.("content-type") || "";
+    if (!/^text\/html(?:\s*;|$)/i.test(contentType)) return false;
+    try {
+      const expected = new URL(path, window.location.href);
+      const actual = new URL(response.url, window.location.href);
+      return actual.origin === expected.origin && actual.pathname === expected.pathname &&
+        actual.search === expected.search && !actual.hash;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function expectedSnapshotMarkup(html) {
+    const source = String(html || "").trim();
+    if (source.startsWith('<!doctype html><html data-trace-redacted="1">')) return true;
+    if (/^<details data-trace-redacted="1" class="search-trace(?:\s|\")/.test(source)) return true;
+    const metadata = /<section data-trace="(?:trace-memory|chat-harmony)" data-kind="metadata-only">/.test(source);
+    return metadata && (source.startsWith('<section data-trace="') ||
+      source.startsWith('<!doctype html><html><head><meta charset="utf-8"/>'));
+  }
+
   function boundTraceMarkup(fragment) {
     const holder = document.createElement("div");
     holder.appendChild(fragment);
@@ -442,17 +465,23 @@
   function restore(assistant, turnTrace) {
     const snapshotId = typeof turnTrace?.snapshotId === "string" ? turnTrace.snapshotId : "";
     if (!SNAPSHOT_ID.test(snapshotId)) return null;
+    const fields = turnTrace.fields && typeof turnTrace.fields === "object" ? turnTrace.fields : {};
+    const sessionId = fields.sessionId;
+    if (sessionId !== undefined && (typeof sessionId !== "string" || !/^[1-9][0-9]{0,15}$/.test(sessionId)
+        || !Number.isSafeInteger(Number(sessionId)))) return null;
     const state = ensurePanel(assistant);
     if (!state) return null;
     state.panel.hidden = !enabled();
-    if (state.snapshotId !== snapshotId) {
+    if (state.snapshotId !== snapshotId || state.sessionId !== sessionId) {
       abortSnapshot(state);
       state.snapshotId = snapshotId;
+      state.sessionId = sessionId;
       state.loaded = false;
+      delete state.panel.dataset.traceStorage;
+      delete state.panel.dataset.traceError;
     }
     state.panel.dataset.traceSnapshotId = snapshotId;
     state.metadata.replaceChildren();
-    const fields = turnTrace.fields && typeof turnTrace.fields === "object" ? turnTrace.fields : {};
     const list = document.createElement("dl");
     for (const key of Object.keys(fields).slice(0, 16)) {
       const value = fields[key];
@@ -464,6 +493,15 @@
       list.append(term, description);
     }
     state.metadata.replaceChildren(list, state.signals);
+    if (sessionId) {
+      const download = document.createElement("a");
+      download.className = "awx-trace-download";
+      download.textContent = "이 답변 진단 내려받기";
+      download.href = "/api/chat/sessions/" + sessionId + "/traces/" +
+        encodeURIComponent(snapshotId) + "/html?format=bundle";
+      download.download = "answer-trace-bundle.zip";
+      state.metadata.appendChild(download);
+    }
     if (!state.live && !state.loaded) status(state, "저장된 요약입니다. 상세는 펼칠 때 조회합니다.");
     if (state.panel.open) loadSnapshot(state);
     return state.panel;
@@ -492,12 +530,18 @@
       }, SNAPSHOT_FETCH_TIMEOUT_MS);
     });
     try {
-      const response = await Promise.race([fetch("/api/diagnostics/trace/snapshots/" +
-        encodeURIComponent(snapshotId) + "/html", {
+      const detailPath = state.sessionId
+        ? "/api/chat/sessions/" + state.sessionId + "/traces/"
+        : "/api/diagnostics/trace/snapshots/";
+      const requestPath = detailPath + encodeURIComponent(snapshotId) + "/html";
+      const response = await Promise.race([fetch(requestPath, {
         method: "GET", cache: "no-store", credentials: "same-origin", signal: controller.signal
       }), timeout]);
       if (version !== state.version || !state.panel.isConnected || !enabled()) return;
       if (!response.ok) {
+        state.panel.dataset.traceError = response.status === 404 ? "missing_or_evicted"
+          : response.status === 401 || response.status === 403 ? "unauthorized"
+            : response.status >= 500 ? "server_error" : "unexpected_response";
         status(state, response.status === 404
           ? "상세 스냅샷을 현재 저장소에서 찾을 수 없음"
           : response.status === 401 || response.status === 403
@@ -505,14 +549,40 @@
               ? "서버 오류로 상세 조회 불가" : "상세 조회 불가");
         return;
       }
+      if (!expectedSnapshotResponse(response, requestPath)) {
+        state.panel.dataset.traceError = "unexpected_response";
+        status(state, "예상하지 못한 진단 응답으로 표시 불가");
+        return;
+      }
       const html = await Promise.race([response.text(), timeout]);
       if (version !== state.version || state.snapshotId !== snapshotId ||
           controller.signal.aborted || !state.panel.isConnected || !enabled()) return;
+      if (!expectedSnapshotMarkup(html)) {
+        state.panel.dataset.traceError = "unexpected_response";
+        status(state, "예상하지 못한 진단 응답으로 표시 불가");
+        return;
+      }
       state.loaded = showHtml(state, html, true);
+      if (state.loaded) {
+        const header = response.headers?.get?.("x-trace-storage");
+        const storage = header === "ring" || header === "durable_projection" ? header : "unknown";
+        state.panel.dataset.traceStorage = storage;
+        delete state.panel.dataset.traceError;
+        const provenance = document.createElement("p");
+        provenance.className = "awx-trace-status";
+        provenance.textContent = storage === "ring" ? "현재 프로세스 메모리에 보존된 상세입니다."
+          : storage === "durable_projection" ? "저장된 진단 요약입니다. 전체 로그는 보존되지 않았습니다."
+            : "진단 출처는 확인되지 않았습니다.";
+        state.body.appendChild(provenance);
+      } else {
+        state.panel.dataset.traceError = "unexpected_response";
+      }
     } catch (_) {
       if (version === state.version && timedOut && enabled()) {
+        state.panel.dataset.traceError = "timeout";
         status(state, "상세 조회 시간 초과. 다시 펼쳐 주세요.");
       } else if (version === state.version && !controller.signal.aborted) {
+        state.panel.dataset.traceError = "network_error";
         status(state, "네트워크 오류로 상세 조회 불가");
       }
     } finally {

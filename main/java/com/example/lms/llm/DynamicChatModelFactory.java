@@ -34,15 +34,91 @@ import java.util.WeakHashMap;
 @Component
 public class DynamicChatModelFactory {
     @Autowired(required = false)
+    private ChatGptOAuthRegistration chatGptOAuth;
+    @Autowired(required = false)
     private com.example.lms.llm.gateway.HybridLlmGatewayProbeService localGatewayProbe;
     @Autowired(required = false)
     private ai.abandonware.nova.orch.aop.LlmRouterAspect localFailoverRouter;
 
+    @Autowired(required = false)
+    private com.example.lms.config.LocalLlmProcessManager localLlmProcessManager;
+
+    public java.util.concurrent.CompletableFuture<Boolean> requestModelWarmup(String selectedModel) {
+        if (localLlmProcessManager == null || localGatewayProbe == null || selectedModel == null
+                || selectedModel.startsWith("llmrouter.")) return null;
+        try {
+            if (!isLocalModel(selectedModel)) return null;
+            String endpoint = selectLocalBaseUrl(selectedModel);
+            if (LocalLlmGatewaySecurity.routePolicyFailure(
+                    llmRouterProperties, selectedModel, selectedModel, endpoint) != null) return null;
+            if (modelRuntimeHealthTracker != null && modelRuntimeHealthTracker
+                    .endpointSnapshot("local", endpoint, System.currentTimeMillis())
+                    .map(s -> s.state() != ModelRuntimeHealthTracker.EndpointState.CLOSED).orElse(false)) return null;
+            return localLlmProcessManager.requestModelWarmup(selectedModel, endpoint, work ->
+                    LocalLlmGatewaySecurity.routePolicyFailure(
+                            llmRouterProperties, selectedModel, selectedModel, endpoint) == null
+                    && localGatewayProbe.preloadIfIdle(endpoint, work));
+        } catch (RuntimeException unavailable) { return null; }
+    }
+
     private static final Map<ChatModel, ChatUsageLedger.ConfiguredCap> CONFIGURED_TOKEN_BUDGETS =
             Collections.synchronizedMap(new WeakHashMap<>());
-    private static final Map<ChatModel, String> CONFIGURED_MODEL_IDS =
+    /** Construction evidence belongs to the exact returned client, never the last request trace. */
+    public record ConfiguredModelIdentity(String modelId, String provider, String endpointKind,
+                                          String adapterVersion, String endpointHash) { }
+    private static final Map<ChatModel, ConfiguredModelIdentity> CONFIGURED_MODEL_IDS =
             Collections.synchronizedMap(new WeakHashMap<>());
     private static final LlmGatewayFailureClassifier FAILURE_CLASSIFIER = new LlmGatewayFailureClassifier();
+    private final ThreadLocal<Boolean> preparingContext = new ThreadLocal<>();
+    private final ThreadLocal<Boolean> preparedAnswer = new ThreadLocal<>();
+    public static Integer validatedContextCapacity(com.example.lms.llm.spec.ModelSpecSnapshot spec,
+            String model, String endpoint) {
+        if (spec == null || spec.contextTokens() == null || spec.contextTokens() <= 0
+                || spec.model() == null || !spec.model().equalsIgnoreCase(model)
+                || !("ollama".equalsIgnoreCase(spec.provider()) || "local".equalsIgnoreCase(spec.provider()))
+                || spec.observedAt().isBefore(java.time.Instant.now().minusSeconds(86400))
+                || spec.observedAt().isAfter(java.time.Instant.now())) return null;
+        try {
+            String host = java.net.URI.create(endpoint).getHost();
+            return host != null && host.equalsIgnoreCase(spec.endpointHost()) ? spec.contextTokens() : null;
+        } catch (IllegalArgumentException invalid) { return null; }
+    }
+
+    /** The prepared request already reserved its final slot; do not add hidden route/SDK attempts. */
+    public ChatModel lcForPreparedAnswer(String modelName,Double temperature,Double topP,Double frequencyPenalty,
+            Double presencePenalty,Integer maxTokens,int timeoutSeconds){
+        return lcForPreparedAnswer(modelName,temperature,topP,frequencyPenalty,presencePenalty,
+                maxTokens,timeoutSeconds,null);
+    }
+    public ChatModel lcForPreparedAnswer(String modelName,Double temperature,Double topP,Double frequencyPenalty,
+            Double presencePenalty,Integer maxTokens,int timeoutSeconds,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext){
+        preparedAnswer.set(true);
+        try{return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,timeoutSeconds,0,observedContext);}
+        finally{preparedAnswer.remove();}
+    }
+
+    /** Narrow role mapping to the existing free local fast lane; unknown/paid/logical routes fail closed. */
+    public boolean contextPreparationReady(String modelName) {
+        if(!contextPreparationModelAllowed(modelName)||localGatewayProbe==null)return false;
+        return localGatewayProbe.contextPreparationReady(selectLocalBaseUrl(modelName),modelName);
+    }
+
+    private boolean contextPreparationModelAllowed(String modelName) {
+        if(modelName==null||modelName.isBlank()||modelName.startsWith("llmrouter.")||!isLocalModel(modelName))return false;
+        var policy=new com.example.lms.routing.ApiRoutingPolicySnapshot(env);
+        return policy.routes("llm").stream().anyMatch(route->"ollama_fast".equals(route.id())
+            &&"free_local".equals(route.tier())&&route.models().contains(modelName));
+    }
+
+    /** No SDK retry, route failover or primary-selection mutation for this optional single call. */
+    public ChatModel lcForContextPreparation(String modelName,int timeoutSeconds) {
+        if(!contextPreparationModelAllowed(modelName)||modelRuntimeHealthTracker==null)
+            throw new IllegalArgumentException("context_prepare_route_unavailable");
+        preparingContext.set(true);
+        try{return lcWithTimeout(modelName,0.1,null,null,null,1200,timeoutSeconds,0);}
+        finally{preparingContext.remove();}
+    }
 
     @Value("${llm.chat-model:${llm.fast.model:gemma4:26b}}")
     private String defaultModelName;
@@ -122,6 +198,55 @@ public class DynamicChatModelFactory {
     @Autowired(required = false)
     private ai.abandonware.nova.config.LlmRouterProperties llmRouterProperties;
 
+    @Autowired(required = false)
+    private com.example.lms.llm.spec.ModelSpecRegistry modelSpecRegistry;
+
+    private ai.abandonware.nova.config.LlmRouterProperties.ModelConfig registeredRoute(String model) {
+        if (llmRouterProperties == null || model == null) return null;
+        var configs = llmRouterProperties.getModels();
+        model = llmRouterProperties.getAliases().getOrDefault(model, model);
+        if (model.startsWith("llmrouter.")) return configs.get(model.substring("llmrouter.".length()));
+        final String id = model;
+        var matches = configs.entrySet().stream().sorted(Map.Entry.comparingByKey())
+                .map(Map.Entry::getValue).filter(c -> id.equals(c.getName())).toList();
+        if (matches.size() > 1 && localBaseUrl != null) {
+            String endpoint = OpenAiCompatBaseUrl.sanitize(localBaseUrl);
+            return matches.stream().filter(c -> endpoint.equals(OpenAiCompatBaseUrl.sanitize(c.getBaseUrl())))
+                    .findFirst().orElse(matches.get(0));
+        }
+        return matches.isEmpty() ? null : matches.get(0);
+    }
+
+    private String registeredProvider(String model) {
+        var route = registeredRoute(model);
+        if (route != null && trimToNull(route.getProvider()) != null)
+            return route.getProvider().trim().toLowerCase(Locale.ROOT);
+        if (modelSpecRegistry != null) {
+            var providers = modelSpecRegistry.snapshots().stream()
+                    .filter(s -> model != null && model.equals(s.model()))
+                    .map(com.example.lms.llm.spec.ModelSpecSnapshot::provider).filter(Objects::nonNull).distinct().toList();
+            if (providers.size() == 1) return providers.get(0).toLowerCase(Locale.ROOT);
+        }
+        return null;
+    }
+
+    private String resolveRegisteredApiKey(String provider) {
+        if (provider == null) return null;
+        return switch (provider.toLowerCase(Locale.ROOT)) {
+            case "openai" -> resolveOpenAiApiKey();
+            case "gemini" -> keyResolver.resolveGeminiApiKeyStrict();
+            case "groq" -> keyResolver.resolveGroqApiKeyStrict();
+            case "cerebras" -> keyResolver.resolveCerebrasApiKeyStrict();
+            case "openrouter" -> keyResolver.resolveOpenRouterApiKeyStrict();
+            case "opencode" -> keyResolver.resolveOpenCodeApiKeyStrict();
+            case "mistral" -> {
+                String key = firstNonBlank(env.getProperty("llm.mistral.api-key"), env.getProperty("MISTRAL_API_KEY"));
+                yield LocalLlmGatewaySecurity.hasUsableRemoteSecret(key) ? key : null;
+            }
+            default -> null;
+        };
+    }
+
     @Autowired
     public DynamicChatModelFactory(Environment env,
                                    KeyResolver keyResolver,
@@ -185,12 +310,30 @@ public class DynamicChatModelFactory {
      * - OpenAI 계열(gpt-/o*) 요청인데 OpenAI 키가 없으면 false
      */
     public boolean canServe(String modelName) {
+        if (ChatGptOAuthRegistration.isRoute(modelName))
+            return chatGptOAuth != null && chatGptOAuth.available(modelName);
         String model = ModelCapabilities.canonicalModelName(modelName);
-        if (isLocalModel(model)) {
-            return true;
+        var route = registeredRoute(modelName);
+        if (route == null) route = registeredRoute(model);
+        String provider = registeredProvider(modelName);
+        if (provider == null) provider = registeredProvider(model);
+        if (route != null && !route.isEnabled()) return false;
+        boolean local;
+        try { local = isLocalModel(modelName); }
+        catch (LlmGatewayException unknown) { return false; }
+        if (!local) {
+            String key = provider == null ? resolveOpenAiApiKey() : resolveRegisteredApiKey(provider);
+            if (!LocalLlmGatewaySecurity.hasUsableRemoteSecret(key)) return false;
         }
-        String key = resolveOpenAiApiKey();
-        return key != null && !key.trim().isEmpty();
+        if (route != null && localGatewayProbe != null)
+            return localGatewayProbe.evaluate(modelName, route, "chat").eligible();
+        String healthProvider = provider == null ? (local ? "local" : "openai") : provider;
+        return modelRuntimeHealthTracker.snapshot(healthProvider, route == null ? model : route.getName())
+                .map(ModelRuntimeHealthTracker.Snapshot::lastSuccess).orElse(true);
+    }
+
+    public String automaticMainRoute() {
+        return chatGptOAuth == null ? null : chatGptOAuth.automaticMainRoute();
     }
 
     public boolean canServeQuietly(String modelName) {
@@ -224,6 +367,36 @@ public class DynamicChatModelFactory {
             Integer maxTokens,
             int timeoutSeconds,
             Integer maxRetriesOverride) {
+        return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,
+                maxTokens,timeoutSeconds,maxRetriesOverride,null);
+    }
+    public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+            Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
+            int timeoutSeconds, Integer maxRetriesOverride,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext) {
+        return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,
+                timeoutSeconds,maxRetriesOverride,observedContext,null);
+    }
+
+    public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+            Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
+            int timeoutSeconds, Integer maxRetriesOverride,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext,
+            com.example.lms.routing.RoutingInvocation routingInvocation) {
+        if (routingInvocation != null && routingInvocation.candidate(modelName).isEmpty())
+            throw new IllegalArgumentException("routing_candidate_forbidden");
+        if (routingInvocation != null && ChatGptOAuthRegistration.isRoute(modelName))
+            throw new IllegalArgumentException("routing_personal_oauth_forbidden");
+
+        if (ChatGptOAuthRegistration.isRoute(modelName)) {
+            if (chatGptOAuth == null) throw ChatGptOAuthRegistration.unavailable("chatgpt_oauth_not_configured");
+            long timeoutMs = java.util.concurrent.TimeUnit.SECONDS.toMillis(Math.max(0, timeoutSeconds));
+            var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            if (budget != null) timeoutMs = Math.min(timeoutMs, budget.remainingMillis());
+            ChatModel selected = chatGptOAuth.modelFor(modelName, timeoutMs);
+            CONFIGURED_MODEL_IDS.put(selected, new ConfiguredModelIdentity(modelName, null, null, null, null));
+            return selected;
+        }
 
         boolean creativeSamplingClaimed = claimCreativeProviderSampling();
         try {
@@ -250,9 +423,12 @@ public class DynamicChatModelFactory {
         // Route selection + credential selection (fail-soft):
         // - local 모델이면 configured device endpoint + central provider credential resolution
         // - OpenAI 모델이면 openAiBaseUrl + OpenAI key(없으면 IllegalStateException)
+        var registered = registeredRoute(rawModel);
+        if (registered == null) registered = registeredRoute(effectiveModel);
         boolean local = isLocalModel(effectiveModel);
         String baseUrl = OpenAiCompatBaseUrl.sanitize(local
-                ? selectLocalBaseUrl(effectiveModel) : openAiBaseUrl);
+                ? selectLocalBaseUrl(effectiveModel)
+                : registered != null && trimToNull(registered.getBaseUrl()) != null ? registered.getBaseUrl() : openAiBaseUrl);
         LlmGatewayException routeFailure = LocalLlmGatewaySecurity.routePolicyFailure(
                 llmRouterProperties, rawModel, effectiveModel, baseUrl);
         if (routeFailure != null) {
@@ -260,8 +436,9 @@ public class DynamicChatModelFactory {
         }
         // Agent-mode soft spend gate: 로컬 모델·비-agent 트래픽은 그대로 통과하고,
         // agent 모드의 stale paid 자동 모델만 자격 증명 해석 전에 why_code로 차단한다.
-        if (!local && ApiSpendAttribution.agentModeActive()) {
+        if (!local && ApiSpendAttribution.agentModeActive(env)) {
             AgentApiSpendGuard.Decision spend = AgentApiSpendGuard.beforeCall(
+                    new com.example.lms.routing.ApiRoutingPolicySnapshot(env),
                     "llm_factory_build", "openai", effectiveModel,
                     "DynamicChatModelFactory", rawModel, false);
             if (!spend.allow()) {
@@ -269,7 +446,9 @@ public class DynamicChatModelFactory {
                         + SafeRedactor.traceLabelOrFallback(spend.why(), "blocked"));
             }
         }
-        String apiKeyForCall = local ? resolveLocalApiKey() : resolveOpenAiApiKey();
+        String provider = registeredProvider(effectiveModel);
+        String apiKeyForCall = local ? resolveLocalApiKey()
+                : provider == null ? resolveOpenAiApiKey() : resolveRegisteredApiKey(provider);
 
         // Best-effort trace breadcrumbs (no secrets).
         try {
@@ -300,10 +479,14 @@ public class DynamicChatModelFactory {
             assertOpenAiReady(effectiveModel, baseUrl, apiKeyForCall);
         }
 
+        var sampling = OpenAiSamplingContract.resolve(baseUrl, effectiveModel, null);
         Double safeTemp = null;
         if (temperature != null) {
-            double sanitized = ModelCapabilities.sanitizeTemperature(effectiveModel, temperature);
-            safeTemp = sanitized;
+            safeTemp = switch (sampling.temperature()) {
+                case OMIT -> null;
+                case SEND -> temperature;
+                case LEGACY -> ModelCapabilities.sanitizeTemperature(effectiveModel, temperature);
+            };
             if (!Objects.equals(temperature, safeTemp)) {
                 log.debug("Adjusted temperature {} -> {} for modelHash={} modelLength={}", temperature, safeTemp, SafeRedactor.hashValue(effectiveModel), effectiveModel == null ? 0 : effectiveModel.length());
             }
@@ -311,8 +494,11 @@ public class DynamicChatModelFactory {
 
         Double safeTopP = null;
         if (topP != null) {
-            double sanitized = ModelCapabilities.sanitizeTopP(effectiveModel, topP);
-            safeTopP = sanitized;
+            safeTopP = switch (sampling.topP()) {
+                case OMIT -> null;
+                case SEND -> topP;
+                case LEGACY -> ModelCapabilities.sanitizeTopP(effectiveModel, topP);
+            };
             if (!Objects.equals(topP, safeTopP)) {
                 log.debug("Adjusted top_p {} -> {} for modelHash={} modelLength={}", topP, safeTopP, SafeRedactor.hashValue(effectiveModel), effectiveModel == null ? 0 : effectiveModel.length());
             }
@@ -341,7 +527,7 @@ public class DynamicChatModelFactory {
                     ? localApiKeyForCall(apiKeyForCall)
                     : apiKeyForCall.trim();
             Integer wireMaxTokens = maxTokens != null && maxTokens > 0 ? maxTokens : null;
-            boolean sharedLocalFailover = !exactSelection && local && localFailoverRouter != null && localGatewayProbe != null
+            boolean sharedLocalFailover = routingInvocation == null && !Boolean.TRUE.equals(preparingContext.get()) && !Boolean.TRUE.equals(preparedAnswer.get()) && !exactSelection && local && localFailoverRouter != null && localGatewayProbe != null
                     && localGatewayProbe.localFailoverEnabled() && localGatewayProbe.cloudFallbackEnabled();
             Duration primaryTimeout = localPrimaryTimeout(timeoutSeconds, sharedLocalFailover);
             if (local && shouldUseOllamaNativeThinkFalse(effectiveModel, baseUrl)) {
@@ -359,7 +545,8 @@ public class DynamicChatModelFactory {
                         modelRuntimeHealthTracker,
                         !sharedLocalFailover && (maxRetriesOverride == null || maxRetriesOverride > 0),
                         localGatewayProbe == null ? llmGatewayProperties.getLocalDeviceFailover().toEndpointQuarantinePolicy()
-                                : ModelRuntimeHealthTracker.EndpointQuarantinePolicy.disabled());
+                                : ModelRuntimeHealthTracker.EndpointQuarantinePolicy.disabled(),
+                        validatedContextCapacity(observedContext, effectiveModel, baseUrl));
                 recordSelectedRequestEndpoint(effectiveModel, baseUrl);
                 if (sharedLocalFailover) selectedModel = localFailoverRouter.routeLocalInference(selectedModel,
                         baseUrl, effectiveModel, timeoutSeconds * 1000, safeTemp, safeTopP,
@@ -382,10 +569,12 @@ public class DynamicChatModelFactory {
                 }
                 recordCreativeEffectiveSampling(creativeSamplingClaimed, safeTemp, safeTopP);
                 return rememberConfiguredTokenBudget(
-                        selectedModel,
+                        routingInvocation == null ? selectedModel : routingInvocation.wrap(selectedModel,routingInvocation.candidate(modelName).orElseThrow(),false),
                         effectiveModel,
                         maxTokens,
-                        ChatUsageLedger.ParameterKind.NUM_PREDICT);
+                        ChatUsageLedger.ParameterKind.NUM_PREDICT,
+                        sharedLocalFailover ? null : new ConfiguredModelIdentity(effectiveModel, "ollama", "ollama_native",
+                                null, ModelRuntimeHealthTracker.endpointIdentityHash(baseUrl)));
             }
             String tokenParam = OpenAiTokenParamCompat.tokenParamKey(effectiveModel, baseUrl);
             if (tokenParam == null) {
@@ -444,14 +633,14 @@ public class DynamicChatModelFactory {
             // Safety: ensure modelName is not dropped by later builder mutations (e.g., maxTokens/maxCompletionTokens)
             builder.modelName(effectiveModel);
 
-            ChatModel selectedModel = builder.build();
+            ChatModel selectedModel = buildOpenAiSdkModel(builder, baseUrl);
             recordSelectedRequestEndpoint(effectiveModel, baseUrl);
             if (sharedLocalFailover) selectedModel = localFailoverRouter.routeLocalInference(selectedModel,
                     baseUrl, effectiveModel, timeoutSeconds * 1000, safeTemp, safeTopP,
                     safeFreqPenalty, safePresencePenalty, wireMaxTokens, "openai_chat_completions");
             else selectedModel = decorateRequestAttempt(
                     selectedModel,
-                    local ? "local_openai_compatible" : "openai",
+                    local ? "local_openai_compatible" : provider == null ? "openai" : provider,
                     effectiveModel,
                     baseUrl,
                     "openai_chat_completions",
@@ -471,7 +660,12 @@ public class DynamicChatModelFactory {
                     : "max_tokens".equals(tokenParam)
                             ? ChatUsageLedger.ParameterKind.MAX_TOKENS
                             : ChatUsageLedger.ParameterKind.MAX_COMPLETION_TOKENS;
-            return rememberConfiguredTokenBudget(selectedModel, effectiveModel, maxTokens, parameterKind);
+            return rememberConfiguredTokenBudget(routingInvocation == null ? selectedModel
+                    : routingInvocation.wrap(selectedModel,routingInvocation.candidate(modelName).orElseThrow(),false), effectiveModel, maxTokens, parameterKind,
+                    sharedLocalFailover ? null : new ConfiguredModelIdentity(effectiveModel,
+                            local ? "local_openai_compatible" : provider == null ? "openai" : provider,
+                            "openai_chat_completions", OpenAiChatModel.class.getPackage().getImplementationVersion(),
+                            ModelRuntimeHealthTracker.endpointIdentityHash(baseUrl)));
         } catch (Exception e) {
             throw wrapConnect(e, baseUrl);
         }
@@ -482,6 +676,11 @@ public class DynamicChatModelFactory {
     }
 
     public static String configuredModelId(ChatModel model) {
+        var identity = configuredModelIdentity(model);
+        return identity == null ? null : identity.modelId();
+    }
+
+    public static ConfiguredModelIdentity configuredModelIdentity(ChatModel model) {
         return model == null ? null : CONFIGURED_MODEL_IDS.get(model);
     }
 
@@ -639,7 +838,8 @@ public class DynamicChatModelFactory {
             ChatModel model,
             String modelId,
             Integer maxTokens,
-            ChatUsageLedger.ParameterKind parameterKind) {
+            ChatUsageLedger.ParameterKind parameterKind,
+            ConfiguredModelIdentity identity) {
         ChatUsageLedger.ConfiguredCap configured;
         if (maxTokens == null
                 || (maxTokens > 0 && parameterKind == ChatUsageLedger.ParameterKind.OMITTED)) {
@@ -665,12 +865,14 @@ public class DynamicChatModelFactory {
         }
         CONFIGURED_TOKEN_BUDGETS.put(model, configured);
         if (modelId != null && !modelId.isBlank()) {
-            CONFIGURED_MODEL_IDS.put(model, modelId.trim());
+            CONFIGURED_MODEL_IDS.put(model, identity == null
+                    ? new ConfiguredModelIdentity(modelId.trim(), null, null, null, null) : identity);
         }
         return model;
     }
 
     private void recordSelectedRequestEndpoint(String modelId, String baseUrl) {
+        if(Boolean.TRUE.equals(preparingContext.get()))return;
         try {
             Object captureEnabled = com.example.lms.search.TraceStore.get(
                     ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY);
@@ -726,7 +928,7 @@ public class DynamicChatModelFactory {
         ownedOptions.put("maxRetries", maxRetriesOverride == null ? dynamicMaxRetries : maxRetriesOverride);
         return modelRuntimeHealthTracker.decorateRequestAttempt(
                 model,
-                "primary",
+                Boolean.TRUE.equals(preparingContext.get())?"context_prepare":"primary",
                 modelRuntimeHealthTracker.redactedRequestAttemptRoute(
                         "dynamic_factory", modelId, baseUrl, protocol),
                 ModelRuntimeHealthTracker.requestAttemptOptionEnvelope(
@@ -874,6 +1076,33 @@ public class DynamicChatModelFactory {
                 : apiKeyForCall.trim();
     }
 
+    /** Shared SDK creation boundary: clear forbidden keys after 1.0.1 merges defaults and overrides. */
+    public static OpenAiChatModel buildOpenAiSdkModel(OpenAiChatModel.OpenAiChatModelBuilder builder,
+                                                     String baseUrl) {
+        if (!OpenAiSamplingContract.isOfficialEndpoint(baseUrl)) return builder.build();
+        return new OpenAiChatModel(builder) {
+            private dev.langchain4j.model.openai.OpenAiChatRequestParameters samplingParameters(
+                    dev.langchain4j.model.openai.OpenAiChatRequestParameters parameters) {
+                var policy = OpenAiSamplingContract.resolve(baseUrl, parameters.modelName(), parameters.reasoningEffort());
+                if (policy.temperature() != OpenAiSamplingContract.Action.OMIT
+                        && policy.topP() != OpenAiSamplingContract.Action.OMIT) return parameters;
+                var copy = dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder().overrideWith(parameters);
+                if (policy.temperature() == OpenAiSamplingContract.Action.OMIT) copy.temperature(null);
+                if (policy.topP() == OpenAiSamplingContract.Action.OMIT) copy.topP(null);
+                return copy.build();
+            }
+
+            @Override
+            public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                var parameters = samplingParameters(
+                        (dev.langchain4j.model.openai.OpenAiChatRequestParameters) request.parameters());
+                // super.doChat serializes directly, avoiding a second default-parameter merge.
+                return super.doChat(dev.langchain4j.model.chat.request.ChatRequest.builder()
+                        .messages(request.messages()).parameters(parameters).build());
+            }
+        };
+    }
+
     private String resolveOpenAiApiKey() {
         return keyResolver.resolveOpenAiApiKeyStrict();
     }
@@ -907,6 +1136,14 @@ public class DynamicChatModelFactory {
     }
 
     private boolean isLocalModel(String model) {
+        if (ChatGptOAuthRegistration.isRoute(model)) return false;
+        String provider = registeredProvider(model);
+        if (provider != null)
+            return java.util.Set.of("local", "ollama", "local_llm").contains(provider);
+        if (llmRouterProperties != null && llmRouterProperties.isEnabled()) {
+            com.example.lms.search.TraceStore.put("llm.gateway.fallback.skippedReason", "route_unknown");
+            throw new LlmGatewayException("Unregistered chat route", LlmFailureClass.DISABLED, "route_unknown");
+        }
         if (model == null || model.isBlank())
             return true;
 
@@ -931,6 +1168,22 @@ public class DynamicChatModelFactory {
     }
 
     private String selectLocalBaseUrl(String model) {
+        var route = registeredRoute(model);
+        if (route != null) {
+            if (trimToNull(route.getBaseUrl()) != null) return route.getBaseUrl();
+            String role = route.getDeviceRole();
+            if (role != null) {
+                String endpoint = switch (role.toLowerCase(Locale.ROOT)) {
+                    case "rtx3090", "high", "chat" -> firstNonBlank(highLocalBaseUrl, localBaseUrl);
+                    case "rtx3060", "fast", "light" -> firstNonBlank(fastLocalBaseUrl, localBaseUrl);
+                    case "judge" -> firstNonBlank(judgeLocalBaseUrl, highLocalBaseUrl, localBaseUrl);
+                    case "coder" -> firstNonBlank(coderLocalBaseUrl, highLocalBaseUrl, localBaseUrl);
+                    case "vision" -> firstNonBlank(visionLocalBaseUrl, fastLocalBaseUrl, localBaseUrl);
+                    default -> null;
+                };
+                if (endpoint != null) return endpoint;
+            }
+        }
         String m = model == null ? "" : model.toLowerCase(Locale.ROOT);
 
         String configuredCoderModel = trimToNull(env.getProperty("llm.coder.model"));

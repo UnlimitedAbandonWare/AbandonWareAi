@@ -186,6 +186,7 @@ class ChatApiControllerUtf8StreamContractTest {
             ChatSession session = new ChatSession("synthetic", "synthetic-owner", "ANON");
             session.setId(42L);
             when(history.getSessionWithMessages(42L)).thenReturn(session);
+            when(history.getSessionForRequest(42L)).thenReturn(session);
             when(history.appendMessageReturningId(42L, "assistant", "synthetic answer")).thenReturn(421L);
             when(chat.continueChat(any(ChatRequestDto.class), any()))
                     .thenReturn(ChatResult.of("synthetic answer", "synthetic-model", false));

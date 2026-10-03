@@ -1,3 +1,12 @@
+---
+name: demo1-gpu-lane-evidence
+description: >-
+  Use for dual-GPU Ollama lane work on DESKTOP-M5NOV6K (RTX 3060 + RTX 3090):
+  routing chat/fast/embed roles to the intended card, proving which GPU
+  actually ran a request, and separating "resident model" from "generating
+  tokens" from "answer held".
+---
+
 # Demo1 GPU Lane Evidence (DESKTOP-M5NOV6K, RTX 3060 + RTX 3090)
 
 Dual-GPU Ollama lane work: routing chat/fast/embed roles to the intended card,
@@ -106,3 +115,5 @@ supporting evidence only, never completion.
 - `$demo1-mutable-spec-policy` (ports/models are SSOT variables, not constants)
 - `$demo1-api-spec-drift-guard` (docs vs live inventory conflicts)
 - `agent-prompts/gpu-lane-repair-20260924/brief.md` (current repair directive)
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

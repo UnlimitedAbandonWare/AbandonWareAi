@@ -78,13 +78,23 @@ public class AutolearnRagRetrainOrchestrator {
             return 0;
         }
 
-        int n = ingestService.ingestNewSamples(jsonl, datasetName, token);
+        TrainRagIngestService.IngestOutcome outcome =
+                ingestService.ingestNewSamplesDetailed(jsonl, datasetName, token);
+        int n = outcome.storedDocs();
         TraceStore.put("uaw.retrain.ingest.count", n);
+        TraceStore.put("uaw.retrain.ingest.complete", outcome.complete());
+        TraceStore.put("uaw.retrain.ingest.reason", outcome.reasonCode());
+        TraceStore.put("uaw.retrain.ingest.checkpointConfirmed", outcome.checkpointConfirmedDocs());
+        TraceStore.put("uaw.retrain.ingest.unconfirmed", outcome.unconfirmedDocs());
+        if (!outcome.complete()) {
+            log.warn("[UAW] ingest incomplete reason={} stored={} checkpointConfirmed={} unconfirmed={}",
+                    outcome.reasonCode(), n, outcome.checkpointConfirmedDocs(), outcome.unconfirmedDocs());
+        }
         if (n > 0) {
             todayTrainCount.incrementAndGet();
             log.info("[UAW] ingested {} new samples from datasetFileHash={} datasetFileLength={} datasetPathHash={}",
                     n, datasetFileHash(jsonl), datasetFileLength(jsonl), hashOrEmpty(jsonl));
-        } else {
+        } else if (outcome.complete()) {
             log.debug("[UAW] no new samples to ingest from datasetFileHash={} datasetFileLength={} datasetPathHash={}",
                     datasetFileHash(jsonl), datasetFileLength(jsonl), hashOrEmpty(jsonl));
         }

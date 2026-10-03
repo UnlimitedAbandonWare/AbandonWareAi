@@ -1,24 +1,65 @@
-# Agent/dev spend guard — does NOT hard-cap production traffic.
-version: "2026-09-17"
+# Agent/dev spend guard — does NOT spend-cap production traffic.
+# Wall-clock timeouts are a separate contract: public.request-budget.max-time-budget-ms
+# (application-llm.yaml, ~300s) bounds every request; this file never lifts it.
+version: "2026-10-03"
 activation:
   env_any_true: [AWX_AGENT_SPEND_GUARD]
   env_present: [AWX_AGENT_HOST]
   spring_profiles: [agent-spend-guard]
 
 policy:
+  # Spend-blocking OFF only — NOT a timeout waiver. The request wall-clock
+  # budget (public.request-budget.max-time-budget-ms) stays bounded regardless.
   production_hard_caps: false
   dedupe_identical_probes: true
   skip_successful_verification_replay: true
-  connectivity_max_tokens: 16
+  # Agent-work spend/model order — SSOT (2026-10-03 directive).
+  # Capability-first, not savings-first. This block governs AGENT sessions
+  # (Codex/Devin/Grok CLI/Cline vibe coding & verification) only — product
+  # runtime routing stays in configs/api-routing.yaml (HOLD).
+  #   1. codex_credits     — ChatGPT OAuth plan lane (chatgpt-oauth:*, Codex CLI)
+  #   2. external_paid_api — OpenAI/Anthropic/Gemini/Groq paid keys, OpenRouter
+  #      paid, Vercel AI Gateway USD (separate budget, never mix units)
+  #   3. free_tier         — free provider tiers
+  #   4. local_ollama      — local Ollama (RTX 3090)
+  agent_spend_order: [codex_credits, external_paid_api, free_tier, local_ollama]
+  posture: capability_first
+  # Codex (ChatGPT OAuth plan) credits — as of 2026-10-03, a user-reported
+  # ALLOCATION input, not an observed balance (observed stays null/unknown).
+  codex_credits_reported: 62500
+  # 2026-09-30 user-authorized credit budget. Unit = ChatGPT OAuth plan
+  # credits — a user-reported ALLOCATION input, not an observed balance
+  # (reported expiry 2026-12-31, timezone unconfirmed). Vercel AI Gateway
+  # (Jev/glm) spends from a separate USD balance — never mix the two units.
+  authorized_credit_budget: 62500
+  # One warn-level [AWX][api-spend] log when cumulative session spend crosses it.
+  credit_warn_threshold: 50000
+  # Session opt-out: $env:AWX_AGENT_ALLOW_PAID_MODELS='0' (kill switch);
+  # paid is ON by default. $env:AWX_CREDIT_BUDGET='62500' stays the budget marker.
+  connectivity_max_tokens: 512
   max_classified_retries: 1
-  forbid_multi_model_fanout_unless_explicit: true
-  prefer_local_ollama_first: true
+  # Purpose-picked parallel lanes are allowed by default (firepower);
+  # identical-probe dedupe + successful-verification replay block still apply.
+  forbid_multi_model_fanout_unless_explicit: false
+  # Bounded exception: a single verification may fan out to at most this many
+  # purpose-picked models; blanket compare-all stays blocked.
+  verification_allow_fanout_max: 3
+  prefer_local_ollama_first: false
   block_stale_auto_models_in_agent_mode:
     - gpt-4
     - gpt-4o
     - gpt-5
     - gpt-5-mini
     - gpt-5-chat-latest
+  # Named verification picks exempt from the stale-auto block when the credit
+  # budget authorizes the call; still never silently auto-selected.
+  verification_allow_models:
+    - gpt-5.5
+    - gpt-4o
+  # Paid calls are ON by default in agent sessions (2026-10-03 posture).
+  # This env is now a KILL SWITCH, not an opt-in: =0|false|no|off blocks
+  # paid calls; unset or any other value = default ON.
+  paid_default_on: true
   allow_explicit_override_env: AWX_AGENT_ALLOW_PAID_MODELS
   failure_classify_before_retry: true
 
@@ -34,6 +75,7 @@ why_codes:
   - soak_iteration
   - compare_fanout_blocked
   - explicit_override
+  - credit_budget_authorized
 
 hotspots:
   scripts:

@@ -31,7 +31,7 @@ GREEN. Store only decision-changing sentences, counts, hashes, and reason codes.
 
 - `excludedCount: 12`; reason: `excluded-count-undercounted`; expected: `18`.
 - `canonicalSourceRoot: null`; reason: `canonical-source-root-unresolved`;
-  expected: `C:\AbandonWare\demo-1\demo-1\src`.
+  expected: `<repo>`.
 
 ## Observed GREEN Results
 

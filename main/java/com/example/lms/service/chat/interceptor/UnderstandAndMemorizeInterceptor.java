@@ -41,10 +41,10 @@ public class UnderstandAndMemorizeInterceptor {
     private boolean globalEnabled;
 
     // Prefix for understanding summary meta persisted as a system message.
-    private static final String USUM_META_PREFIX = "⎔USUM⎔";
+    public static final String USUM_META_PREFIX = "⎔USUM⎔";
 
     /**
-     * Invoke the understanding pipeline.  This method is idempotent and
+     * Invoke the understanding pipeline. This compatibility entry point
      * will return immediately if any required input is missing or the feature
      * toggles are disabled.  Exceptions thrown from downstream services are
      * caught and logged to avoid disrupting the normal chat flow.
@@ -66,11 +66,40 @@ public class UnderstandAndMemorizeInterceptor {
                               String finalAnswer,
                               boolean requestEnabled,
                               ChatRunExecutionContext runContext) {
-        if (!globalEnabled) return;
-        if (!requestEnabled) return;
-        if (finalAnswer == null || finalAnswer.isBlank()) return;
+        AnswerUnderstanding prepared = prepare(question, finalAnswer, requestEnabled);
+        if (runContext == null) {
+            commitPrepared(sessionKey, question, prepared, null);
+        } else {
+            runContext.runTerminalSideEffect(() -> commitPrepared(sessionKey, question, prepared, runContext));
+        }
+    }
+
+    /** Compute only; the caller must enter the existing commit fence afterward. */
+    public AnswerUnderstanding prepare(String question, String finalAnswer, boolean requestEnabled) {
+        if (!globalEnabled || !requestEnabled || finalAnswer == null || finalAnswer.isBlank()) {
+            TraceStore.put("understanding.status", "skipped");
+            TraceStore.put("understanding.reason", "disabled_or_empty");
+            return null;
+        }
+        ChatRunExecutionContext.throwIfCancelled();
         try {
-            AnswerUnderstanding u = understandingService.understand(finalAnswer, question);
+            return understandingService.understand(finalAnswer, question);
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            throw cancelled;
+        } catch (Exception ex) {
+            ChatRunExecutionContext.throwIfCancelled();
+            log.warn("[Understand] summarization failed. errorHash={} errorLength={}",
+                    SafeRedactor.hashValue(messageOf(ex)), messageLength(ex));
+            TraceStore.put("understanding.status", "failed");
+            traceFailSoft("summarization", ex);
+            return null;
+        }
+    }
+
+    /** Store/emit the prepared value inside the caller's terminal side-effect fence. */
+    public void commitPrepared(String sessionKey, String question, AnswerUnderstanding u,
+                               ChatRunExecutionContext runContext) {
+        try {
             if (u != null) {
                 // Render summary into a single snippet for memory storage
                 String text = renderForMemory(u);
@@ -120,7 +149,7 @@ if (runContext != null) {
      * representation is stored into the translation memory and used for
      * embedding.
      */
-    private static String renderForMemory(AnswerUnderstanding u) {
+    public static String renderForMemory(AnswerUnderstanding u) {
         StringBuilder sb = new StringBuilder();
         if (u == null) return "";
         if (u.tldr() != null && !u.tldr().isBlank()) {

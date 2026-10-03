@@ -28,7 +28,10 @@ PURPOSES = ("search", "asr", "embed", "llm")
 REASON_PATTERNS = (
     ("power_limit_suspect", (
         r"hw_power_brake", r"hw_slowdown", r"sw_power_cap", r"power[_ ]?limit",
-        r"power[_ ]?brake", r"power[_ ]?peak", r"throttl", r"전력", r"위이잉")),
+        r"power[_ ]?brake", r"power[_ ]?peak", r"throttl", r"전력", r"위이잉",
+        # 케이블/순시 전력 피크 watch 신호 (compound anchor — 일반 문구 오분류 방지)
+        r"cable[_ ]?(?:power[_ ]?)?trip", r"power[_ ]?trip",
+        r"transient[_ ]?(?:power[_ ]?)?(?:spike|excursion)", r"power[_ ]?excursion")),
     ("driver_reset", (
         r"nvlddmkm", r"\btdr\b", r"\bxid\b", r"driver.*(?:reset|recover|crash)",
         r"gpu.*(?:lost|reset|hang)", r"new_error_events", r"smi_error_text",

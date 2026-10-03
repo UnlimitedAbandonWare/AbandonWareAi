@@ -94,7 +94,7 @@ class OpsSnapshotToolDebugAiWindowTest {
                 provider(new DebugEventStore()),
                 provider(null));
 
-        ToolResponse response = tool.execute(new ToolRequest(Map.of("limit", "private limit"), null));
+        ToolResponse response = tool.execute(new ToolRequest(Map.of("mode", "global_recent", "limit", "private limit"), null));
 
         assertEquals(20, response.data().get("limit"));
         assertEquals(Boolean.TRUE, TraceStore.get("agent.ops.debugTraceLookup.suppressed"));
@@ -109,7 +109,7 @@ class OpsSnapshotToolDebugAiWindowTest {
                 provider(new DebugEventStore()),
                 provider(null));
 
-        ToolResponse response = tool.execute(new ToolRequest(Map.of("limit", " 7 "), null));
+        ToolResponse response = tool.execute(new ToolRequest(Map.of("mode", "global_recent", "limit", " 7 "), null));
 
         assertEquals(7, response.data().get("limit"));
         assertEquals(null, TraceStore.get("agent.ops.debugTraceLookup.suppressed"));

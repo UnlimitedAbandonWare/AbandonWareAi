@@ -18,7 +18,7 @@ For non-trivial judgments, run a short **affirmative (opportunity) -> adversaria
 - Trivial wording, typos, or a patch whose seam is already obvious
 - User asked to save tokens, self-verify, or stop -> `$demo1-agent-api-spend-guard`
 - Another primary skill already owns the seam (`$demo1-conversate-hint-evidence`, `$demo1-meta-display-simple-caption`, etc.) -> that skill wins; triad is optional
-- No paid multi-model fanout unless `AWX_AGENT_ALLOW_PAID_MODELS=1`. Prefer **1-2 internal role passes in one session**
+- Paid lanes follow the `$demo1-agent-api-spend-guard` SSOT: paid ON by default, `AWX_AGENT_ALLOW_PAID_MODELS=0` kill switch, identical-probe dedupe stays. Prefer **1-2 internal role passes in one session**
 
 ## Priority
 
@@ -69,6 +69,32 @@ Never say the word "mode" to the user.
 - Prefer env / `.secrets` / existing key loaders; never print secret values
 - Empty-search progressive recovery belongs to search/RAG owners (`$demo1-api-spec-drift-guard`). Do **not** override Conversate hint-empty policy (`$demo1-conversate-hint-evidence`)
 - Fact vs estimate; reversible next probes with expected effect, success metric, stop condition. Temporary improvement != root cause
+
+## agy execution (3 real model calls — cross-check.mjs)
+
+When the triad should run as **separate model calls** instead of one internal
+reasoning pass, use the headless kit (basis: `~/.codex/demo1-triad-global-instructions.md`,
+`.codex/rules/demo1-triad-deliberation.md`):
+
+```cmd
+tools\agents\cross-check.cmd <scope-path> [--cli agy] [--model m] [--test-log f]
+```
+
+- Sequence: `.agents/prompts/positive.md` -> `negative.md` -> `judge.md`, each a
+  separate `run-agent.mjs --mode plan` call. Evidence bundle = scoped git
+  status/diff + untracked file bodies (bounded) + optional test log, built by
+  `tools/agents/cross-check.mjs`.
+- Output: `data/agent-handoff/agent-runs/<ts>-crosscheck-<cli>/verdict.json`
+  (`PASS|PARTIAL|FAIL`, per-claim `verified|evidence_needed|NOT_RUN|contradicted`).
+- Judge is schema-forced and tool-free; plan-mode tool attempts end as
+  `NOT_RUN(denied …)`, which is an answer, not a PASS. `Agreement is not proof`
+  still applies — treat verdict.json as an opinion layered on the evidence,
+  not as verification itself.
+- Cost: **3 live calls** that spend the user's Google quota — run only on an
+  explicit cross-check ask; `--reextract <dir>` re-derives verdict.json offline
+  for free when the extractor improves.
+- Internal one-session triad (this skill's default) stays free and preferred
+  for routine ambiguity; cross-check.mjs is for the explicit 3-call variant.
 
 ## Pair with
 

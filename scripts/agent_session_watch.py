@@ -12,7 +12,8 @@ Session stores discovered (no writes, ever):
                                      + archived_sessions/, state_*.sqlite presence
   grok  : ~/.grok/sessions/<enc-cwd>/<id>/{chat_history,events}.jsonl
                                      + session_search.sqlite, active_sessions.json
-  devin : %APPDATA%/devin             cli/transcripts, summaries/, sessions.db
+  devin : %APPDATA%/devin             cli/transcripts, summaries/, cli/summaries/,
+                                     cli/sessions.db (root sessions.db still accepted)
   cline : ~/Documents/Cline           rules-only; no local session store expected
 
 Patterns (severity auto = safe to auto-diagnose; warn/info = report only):
@@ -30,6 +31,11 @@ Patterns (severity auto = safe to auto-diagnose; warn/info = report only):
   P8  edit-outside-cwd           warn  patch targets outside the session cwd root
   P9  stale-incomplete-session   warn  task_started>task_complete and file idle
                                        longer than --stale-hours
+  P14 child-stale-no-evidence    warn  child session (parent_thread_id) with
+                                       incomplete tasks and zero tool-call
+                                       evidence, idle past --stale-hours —
+                                       the quarantine-9only class; fires info
+                                       early while the file is still fresh
   P10 subagent-fanout            info  spawn_agent/followup_task volume >=20
   P11 in-output-command-failure  auto  Script completed but output has
                                        Cannot-find-path / CreateProcess-Rejected
@@ -37,6 +43,9 @@ Patterns (severity auto = safe to auto-diagnose; warn/info = report only):
   P12 same-target-retry          auto  same relative file in >=3 failed
                                        exec_command calls (mutated one-liners)
   P13 scan-coverage-gap          warn  home discovery skipped oversized jsonl
+  P15 devin-lock-pileup          auto  devin cli/session_locks/*.lock >20 warn,
+                                       >100 auto. Live P14 stays
+                                       child-stale-no-evidence.
 
 Non-Codex stores (grok events/chat_history, devin transcripts) get generic
 marker counts only — warn-level, never auto-diagnose.
@@ -47,6 +56,8 @@ Actions:
   patterns                   list the pattern table
   scan [--file F|--dir D|--agent A|--since-hours H|--max-files N|
         --max-file-mb M|--stale-hours H|--out DIR]
+                             e.g. scan --agent grok --since-hours 72
+                             (Grok store; default agent is codex)
   diagnose                   run the bounded diagnostic bundle (read-only)
   watch                      scan, then on 'auto' findings run diagnostics
                              PLUS agent_work_guard advise (records missing /
@@ -117,6 +128,9 @@ PATTERNS = [
     ("P8", "edit-outside-cwd", "warn", "patch target outside the session cwd root"),
     ("P9", "stale-incomplete-session", "warn",
      "task_started>task_complete and mtime older than --stale-hours"),
+    ("P14", "child-stale-no-evidence", "warn",
+     "child session + incomplete tasks + zero tool evidence; info while fresh,"
+     " warn once idle past --stale-hours"),
     ("P10", "subagent-fanout", "info", "spawn_agent+followup_task >=20"),
     ("P11", "in-output-command-failure", "auto",
      "Script completed with Cannot-find-path / CreateProcess-Rejected "
@@ -125,6 +139,9 @@ PATTERNS = [
      "same relative file in >=3 failed exec_command calls"),
     ("P13", "scan-coverage-gap", "warn",
      "home discovery skipped oversized session jsonl"),
+    ("P15", "devin-lock-pileup", "auto",
+     "devin cli/session_locks/*.lock count >20 warn, >100 auto "
+     "(P14 remains child-stale-no-evidence)"),
     ("G1", "generic-error-markers", "warn",
      "non-codex jsonl: >=3 error markers (isError/error/failed)"),
 ]
@@ -174,6 +191,48 @@ def agent_homes() -> dict:
     }
 
 
+def devin_sessions_db_present(home: Path) -> bool:
+    """True when sessions.db is at the Devin home or under home/cli.
+
+    The formatting call site must parenthesize this whole expression. `%`
+    binds tighter than `or`, so an unparenthesized cli-only file used to
+    render as sessions_db=False.
+    """
+    return (home / "sessions.db").exists() or (home / "cli" / "sessions.db").exists()
+
+
+def devin_lock_dir(home: Path) -> Path:
+    return home / "cli" / "session_locks"
+
+
+def count_devin_locks(home: Path) -> int:
+    directory = devin_lock_dir(home)
+    if not directory.is_dir():
+        return 0
+    count = 0
+    try:
+        for path in directory.iterdir():
+            if path.is_file() and path.suffix.lower() == ".lock":
+                count += 1
+    except OSError:
+        return -1
+    return count
+
+
+def devin_lock_pileup_finding(count: int):
+    """P15. Brief text said P14; live P14 is child-stale-no-evidence."""
+    if count is None or count <= 20:
+        return None
+    severity = "auto" if count > 100 else "warn"
+    return {
+        "pattern": "P15",
+        "name": "devin-lock-pileup",
+        "severity": severity,
+        "summary": "devin session lock files=%d (warn>20, auto>100)" % count,
+        "evidence": {"lockFiles": count, "warnAbove": 20, "autoAbove": 100},
+    }
+
+
 def discover_stores() -> list:
     out = []
     for agent, home in agent_homes().items():
@@ -196,10 +255,10 @@ def discover_stores() -> list:
                 row["notes"].append(
                     "index_db=%s" % (home / "sessions" / "session_search.sqlite").exists())
             elif agent == "devin":
-                pats = ["cli/transcripts/**/*", "summaries/*.md"]
+                pats = ["cli/transcripts/**/*", "summaries/*.md",
+                        "cli/summaries/*.md"]
                 row["notes"].append(
-                    "sessions_db=%s" % (home / "sessions.db").exists()
-                    or (home / "cli" / "sessions.db").exists())
+                    "sessions_db=%s" % devin_sessions_db_present(home))
             else:  # cline
                 pats = ["**/*.json", "**/*.jsonl", "tasks/**/*"]
                 row["notes"].append("rules-only store expected")
@@ -239,7 +298,7 @@ def iter_generic_files(home: Path, agent: str):
             yield from sorted(root.glob("*/*/events.jsonl"))
     elif agent == "devin":
         for pat in ("cli/transcripts/**/*.jsonl", "cli/transcripts/**/*.json",
-                    "summaries/*.md"):
+                    "summaries/*.md", "cli/summaries/*.md"):
             yield from sorted(home.glob(pat))
     elif agent == "cline":
         for pat in ("**/tasks/**/*.jsonl", "**/tasks/**/*.json"):
@@ -468,6 +527,25 @@ def scan_codex(path: Path, stale_ms: int, max_lines: int) -> dict:
         add("P10", "subagent-fanout", "info",
             "high subagent fan-out — stale-child cleanup candidates",
             {"spawnCalls": fanout})
+    is_child = bool(meta.get("parent"))
+    if (is_child and stats["taskStarted"] > stats["taskComplete"]
+            and stats["toolCalls"] == 0):
+        if mtime_ms and mtime_ms < stale_ms:
+            add("P14", "child-stale-no-evidence", "warn",
+                "child session idle past stale window with zero tool-call "
+                "evidence (quarantine-9only class)",
+                {"parent": meta.get("parent"),
+                 "taskStarted": stats["taskStarted"],
+                 "taskComplete": stats["taskComplete"],
+                 "mtimeUtc": stats["mtimeUtc"]})
+        else:
+            add("P14", "child-no-evidence-early", "info",
+                "child session incomplete with no tool-call evidence yet — "
+                "early child-stale-no-evidence watch",
+                {"parent": meta.get("parent"),
+                 "taskStarted": stats["taskStarted"],
+                 "taskComplete": stats["taskComplete"],
+                 "mtimeUtc": stats["mtimeUtc"]})
     if soft_fail_n >= 3:
         add("P11", "in-output-command-failure", "auto",
             "command output reported path-not-found or CreateProcess reject "
@@ -639,6 +717,17 @@ def cmd_scan(a) -> int:
         for f_ in row["findings"]:
             counts[f_["severity"]] = counts.get(f_["severity"], 0) + 1
         sessions.append(row)
+    scanned_files = len(sessions)
+    if a.agent in ("devin", "all"):
+        home = homes.get("devin")
+        lock_finding = devin_lock_pileup_finding(
+            count_devin_locks(home) if home is not None else 0)
+        if lock_finding:
+            sessions.append({
+                "file": None, "agent": "devin", "meta": {},
+                "stats": empty_stats(), "findings": [lock_finding]})
+            counts[lock_finding["severity"]] = counts.get(
+                lock_finding["severity"], 0) + 1
     if skipped:
         sessions.append({
             "file": None, "agent": a.agent, "meta": {}, "stats": empty_stats(),
@@ -655,7 +744,7 @@ def cmd_scan(a) -> int:
                          "maxFiles": a.max_files, "maxFileMB": a.max_file_mb,
                          "maxLines": a.max_lines, "enumBounded": bounded,
                          "skippedOversize": len(skipped)},
-              "filesScanned": len(sessions) - (1 if skipped else 0),
+              "filesScanned": scanned_files,
               "severityCounts": counts,
               "sessions": sessions}
     if a.out:

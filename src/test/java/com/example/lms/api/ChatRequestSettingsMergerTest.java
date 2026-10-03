@@ -22,6 +22,109 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatRequestSettingsMergerTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5.1", "gpt-5.2"})
+    void supportedSamplingPreferencesSurviveRequestAndSettingsMerge(String model) {
+        ChatRequestDto explicit = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().message("synthetic fixture").model(model)
+                        .temperature(0.37).topP(0.83).build(),
+                Map.of(SettingsService.KEY_TEMPERATURE, "0.9", SettingsService.KEY_TOP_P, "0.7"),
+                false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(0.37, explicit.getTemperature());
+        assertEquals(0.83, explicit.getTopP());
+        ChatRequestDto inherited = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().message("synthetic fixture").temperature(null).topP(null).build(),
+                Map.of(SettingsService.KEY_OPENAI_MODEL, model,
+                        SettingsService.KEY_TEMPERATURE, "0.37", SettingsService.KEY_TOP_P, "0.83"),
+                false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(0.37, inherited.getTemperature());
+        assertEquals(0.83, inherited.getTopP());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5.1", "gpt-5.2"})
+    void supportedSamplingPreferencesStillUseRangeClamps(String model) {
+        ChatRequestDto merged = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().message("synthetic fixture").model(model)
+                        .temperature(3.0).topP(-0.5).build(),
+                Map.of(), false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(2.0, merged.getTemperature());
+        assertEquals(0.0, merged.getTopP());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5.1", "gpt-5.2"})
+    void eachOmittedSamplingFieldKeepsItsLegacyDefault(String model) {
+        ChatRequestDto temperatureOnly = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().model(model).temperature(0.37).topP(null).build(),
+                Map.of(), false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(0.37, temperatureOnly.getTemperature());
+        assertEquals(1.0, temperatureOnly.getTopP());
+        ChatRequestDto topPOnly = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().model(model).temperature(null).topP(0.83).build(),
+                Map.of(), false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(1.0, topPOnly.getTemperature());
+        assertEquals(0.83, topPOnly.getTopP());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+            "gpt-5.1-2025-11-13", "gpt-5.2-pro"})
+    void unverifiedModelSamplingKeepsLegacyMergeContract(String model) {
+        ChatRequestDto merged = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().model(model).temperature(0.37).topP(0.83).build(),
+                Map.of(), false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(1.0, merged.getTemperature());
+        assertEquals(1.0, merged.getTopP());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5", "gpt-5-mini", "gpt-5-nano"})
+    void initialContractModelsPreservePreferencesForDownstreamOmission(String model) {
+        ChatRequestDto merged = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().model(model).temperature(0.37).topP(0.83).build(),
+                Map.of(), false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(0.37, merged.getTemperature());
+        assertEquals(0.83, merged.getTopP());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"NaN", "malformed", "3.0"})
+    void invalidStoredSamplingRemainsAnUnspecifiedDefault(String stored) {
+        for (String model : List.of("gpt-5.1", "gpt-5.2")) {
+            Map<String, String> settings = new HashMap<>();
+            settings.put(SettingsService.KEY_TEMPERATURE, stored);
+            settings.put(SettingsService.KEY_TOP_P, stored);
+            ChatRequestDto merged = ChatRequestSettingsMerger.merge(
+                    ChatRequestDto.builder().model(model).build(), settings, false,
+                    LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+            assertEquals(1.0, merged.getTemperature(), model);
+            assertEquals(1.0, merged.getTopP(), model);
+            assertEquals(stored, settings.get(SettingsService.KEY_TEMPERATURE));
+            assertEquals(stored, settings.get(SettingsService.KEY_TOP_P));
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5.1", "gpt-5.2"})
+    void dirtySamplingEntriesUsePreservedPreferencesWithoutOverwritingSettings(String model) throws Exception {
+        Map<String, String> settings = new HashMap<>(Map.of(
+                SettingsService.KEY_TEMPERATURE, "0.9", SettingsService.KEY_TOP_P, "0.7"));
+        ChatRequestDto merged = ChatRequestSettingsMerger.merge(
+                ChatRequestDto.builder().model(model).temperature(0.37).topP(0.83).build(),
+                settings, false, LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        Map<String, String> dirty = new HashMap<>();
+        // The existing hook receives the same final sampling values used by the returned DTO.
+        var trackChange = ChatRequestSettingsMerger.class.getDeclaredMethod(
+                "trackChange", Map.class, String.class, Object.class, Map.class);
+        trackChange.setAccessible(true);
+        trackChange.invoke(null, settings, SettingsService.KEY_TEMPERATURE, merged.getTemperature(), dirty);
+        trackChange.invoke(null, settings, SettingsService.KEY_TOP_P, merged.getTopP(), dirty);
+        assertEquals(Map.of(SettingsService.KEY_TEMPERATURE, "0.37", SettingsService.KEY_TOP_P, "0.83"), dirty);
+        assertEquals(Map.of(SettingsService.KEY_TEMPERATURE, "0.9", SettingsService.KEY_TOP_P, "0.7"), settings);
+    }
+
     @Test
     void omittedJsonTemperatureUsesServerSettingInsteadOfDtoLegacyDefault() throws Exception {
         ChatRequestDto ui = new ObjectMapper().readValue(

@@ -3,6 +3,7 @@ package com.example.lms.service.routing.plan;
 import com.abandonware.ai.addons.budget.TimeBudget;
 import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.chat.ChatRunExecutionContext;
 import com.example.lms.trace.SafeRedactor;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -49,6 +50,9 @@ public class RouterDecisionCache {
     @Value("${addons.budget.default-ms:1500}")
     private long fallbackWaitMillis = 1_500L;
 
+    @Value("${chat.run.max-duration-seconds:600}")
+    private long maxRunDurationSeconds = 600L;
+
     // De-duplicate in-flight computations for the same (key, slice).
     private final ConcurrentHashMap<String, CompletableFuture<CacheEntry>> inflight = new ConcurrentHashMap<>();
 
@@ -76,6 +80,7 @@ public class RouterDecisionCache {
             Class<T> expectedType,
             Supplier<T> supplier) {
 
+        ChatRunExecutionContext.throwIfCancelled();
         final String traceKey = traceKey(namespace, decisionKey);
         final String fp = (sliceFingerprint == null) ? "" : sliceFingerprint;
 
@@ -113,14 +118,24 @@ public class RouterDecisionCache {
                             inflight.remove(inflightKey, fresh);
                         }
                     });
-            try {
+            try (var call = ChatRunExecutionContext.isAcceptedExecution()
+                    ? ChatRunExecutionContext.interruptibleCall("http") : null) {
                 T computed = supplier.get();
+                ChatRunExecutionContext.throwIfCancelled();
                 CacheEntry stored = new CacheEntry(fp, computed);
-                if (fresh.complete(stored)) {
-                    TraceStore.put(traceKey, stored);
-                    if (l2Enabled) {
-                        l2Cache.put(traceKey, stored);
+                Runnable publish = () -> {
+                    if (fresh.complete(stored)) {
+                        TraceStore.put(traceKey, stored);
+                        if (l2Enabled) {
+                            l2Cache.put(traceKey, stored);
+                        }
                     }
+                };
+                ChatRunExecutionContext run = ChatRunExecutionContext.current();
+                if (run == null) {
+                    publish.run();
+                } else if (!run.admitCall(publish)) {
+                    throw new CancellationException("router_decision_compute_cancelled");
                 }
             } catch (Throwable t) {
                 traceSuppressed("compute", traceKey, t);
@@ -153,8 +168,10 @@ public class RouterDecisionCache {
             String role) {
         long remainingMillis = remainingWaitMillis();
         long startedNanos = System.nanoTime();
-        try {
+        try (var call = ChatRunExecutionContext.isAcceptedExecution()
+                ? ChatRunExecutionContext.interruptibleCall("http") : null) {
             CacheEntry resolved = future.get(remainingMillis, TimeUnit.MILLISECONDS);
+            ChatRunExecutionContext.throwIfCancelled();
             traceWait(traceKey, role, startedNanos, remainingMillis,
                     "success", "completed", "not_required");
             return resolved;
@@ -192,6 +209,10 @@ public class RouterDecisionCache {
     }
 
     private long remainingWaitMillis() {
+        if (ChatRunExecutionContext.isAcceptedExecution()) {
+            return ChatRunExecutionContext.capRequestWait(
+                    TimeUnit.SECONDS.toMillis(Math.max(1L, maxRunDurationSeconds)));
+        }
         TimeBudget budget = TimeBudgetContext.get();
         return budget == null
                 ? Math.max(1L, fallbackWaitMillis)

@@ -1,6 +1,7 @@
 package ai.abandonware.nova.orch.aop;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.api.SettingsExposurePolicy;
 import com.example.lms.trace.SafeRedactor;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.aspectj.lang.annotation.Around;
@@ -11,7 +12,6 @@ import org.springframework.core.env.Environment;
 import org.springframework.http.ResponseEntity;
 
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -57,7 +57,7 @@ public class SettingsControllerSecretMaskAspect {
             String k = (e.getKey() == null) ? "" : String.valueOf(e.getKey());
             String v = (e.getValue() == null) ? null : String.valueOf(e.getValue());
 
-            if (isSensitiveKey(k) || looksLikeSecret(v)) {
+            if (SettingsExposurePolicy.shouldMask(k, v)) {
                 out.put(k, maskValue(v));
                 masked++;
             } else {
@@ -80,113 +80,22 @@ public class SettingsControllerSecretMaskAspect {
         if (!enabled()) {
             return pjp.proceed();
         }
-        boolean allowSecretUpdate = env.getProperty("nova.security.settings.allowSecretUpdate", Boolean.class, false);
         Object[] args = pjp.getArgs();
-        if (allowSecretUpdate || args == null || args.length == 0 || !(args[0] instanceof Map<?, ?> in)) {
-            return pjp.proceed();
-        }
-
-        Map<String, String> filtered = new LinkedHashMap<>();
-        int stripped = 0;
-        for (Map.Entry<?, ?> e : in.entrySet()) {
-            String k = (e.getKey() == null) ? "" : String.valueOf(e.getKey());
-            String v = (e.getValue() == null) ? null : String.valueOf(e.getValue());
-            if (isSensitiveKey(k)) {
-                stripped++;
-                continue;
-            }
-            filtered.put(k, v);
-        }
-
-        if (stripped > 0) {
+        if (args != null && args.length > 0 && args[0] instanceof Map<?, ?> in
+                && SettingsExposurePolicy.hasForbiddenWrite(in)) {
             try {
-                TraceStore.put("security.settings.write.strippedSecrets", true);
-                TraceStore.put("security.settings.write.strippedSecrets.count", stripped);
+                TraceStore.put("security.settings.write.strippedSecrets", false);
+                TraceStore.put("security.settings.write.rejectedSecrets", true);
             } catch (Throwable ignore) {
                 WebFailSoftTraceSuppressions.trace("settingsSecretMask.saveTrace", ignore);
             }
-            // preserve behavior but avoid persisting secrets from the browser.
-            return pjp.proceed(new Object[]{filtered});
+            return ResponseEntity.badRequest().body(Map.of("code", "SETTINGS_SECRET_VALUE_FORBIDDEN"));
         }
-
         return pjp.proceed();
     }
 
     private boolean enabled() {
         return env.getProperty("nova.security.settings.mask.enabled", Boolean.class, true);
-    }
-
-    private static boolean isSensitiveKey(String key) {
-        if (key == null) {
-            return false;
-        }
-        String k = key.trim().toLowerCase(Locale.ROOT);
-        if (k.isBlank()) {
-            return false;
-        }
-        return k.contains("apikey")
-                || k.contains("api_key")
-                || k.contains("api-key")
-                || k.endsWith(".key")
-                || k.contains("secret")
-                || k.contains("token")
-                || k.contains("password")
-                || k.contains("access_key")
-                || k.contains("access-key")
-                || k.contains("accesskey")
-                || k.contains("private_key")
-                || k.contains("private-key")
-                || k.contains("privatekey")
-                || k.contains("bearer")
-                || k.contains("gemini")
-                || k.contains("openai")
-                || k.contains("jammini");
-    }
-
-    private static boolean looksLikeSecret(String v) {
-        if (v == null) {
-            return false;
-        }
-        String t = v.trim();
-        if (t.isBlank()) {
-            return false;
-        }
-        // Heuristic: long opaque strings are likely secrets.
-        if (t.length() >= 28 && t.matches("[A-Za-z0-9_\\-\\.]{28,}")) {
-            return true;
-        }
-        String lower = t.toLowerCase(Locale.ROOT);
-        return t.startsWith("AIza")
-                || t.startsWith("sk-")
-                || lower.startsWith("sb_secret_")
-                || lower.startsWith("sb_publishable_")
-                || t.startsWith("Bearer ")
-                || hasUriUserInfo(lower)
-                || (lower.contains("-----begin ") && lower.contains("private key-----"));
-    }
-
-    private static boolean hasUriUserInfo(String value) {
-        int schemeEnd = value.indexOf("://");
-        if (schemeEnd <= 0) {
-            return false;
-        }
-        int authorityStart = schemeEnd + 3;
-        int authorityEnd = value.length();
-        int slash = value.indexOf('/', authorityStart);
-        int query = value.indexOf('?', authorityStart);
-        int fragment = value.indexOf('#', authorityStart);
-        if (slash >= 0) {
-            authorityEnd = Math.min(authorityEnd, slash);
-        }
-        if (query >= 0) {
-            authorityEnd = Math.min(authorityEnd, query);
-        }
-        if (fragment >= 0) {
-            authorityEnd = Math.min(authorityEnd, fragment);
-        }
-        int colon = value.indexOf(':', authorityStart);
-        int at = value.indexOf('@', authorityStart);
-        return colon > authorityStart && colon < at && at < authorityEnd;
     }
 
     private static String maskValue(String v) {

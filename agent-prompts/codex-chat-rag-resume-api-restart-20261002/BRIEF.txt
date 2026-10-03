@@ -1,0 +1,110 @@
+# Codex — [재개] /chat RAG 자가점검: 재기동 1회 추가 허용 + 검증 모델은 API로
+[Contract: DEMO1-CODEX-CHAT-RAG-RESUME-API-RESTART-20261002]
+[적용 대상: DEMO1-CODEX-CHAT-RAG-BROWSER-SELFCHECK-20261002, 장부 data/agent-handoff/codex-chat-rag-browser-selfcheck-63b0c67a. 새 작업이 아니라 blocked 상태를 푸는 사용자 결정이다. 18:2x에 보낸 API-first 보충(PASTE_CODEX_chat-rag-api-first_20261002)이 이 세션에 들어갔든 안 들어갔든, 이 글이 그 내용을 포함하고 대체한다.]
+
+[ANTI-STOP] 이 글을 읽은 건 intake일 뿐이다. goal 상태를 blocked에서 active로 돌리고, 아래 S0부터 바로 실행한다. 완료 = Acceptance PASS. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용). git은 `F:\git\cmd\git.exe`.
+
+## 0) 한 줄 목표
+첨부 세션 연결(attachment.bind) 수정을 실제 서버에 반영하고, **ChatGPT 계정 크레딧 API 모델로** C1~C9와 마지막 3회 반복을 끝낸다.
+
+## 1) 지금 상태 (장부 기준, Grok Bot이 20:1x에 확인)
+- `acceptance.json`: PARTIAL. AC7·AC9 FAIL, AC4 NOT_RUN.
+  - C1 FAIL(`answer_unavailable`, 화면에 backend_timeout), C2 FAIL, C3 FAIL, C4 BLOCKED, C6 FAIL, C9 PASS, C5·C7·C8 NOT_RUN
+- 실행 중 JVM은 PID 17332이고, 09:43:55Z(18:43 KST)에 시작했다. attachment.bind 수정은 09:58Z에 들어가서 **아직 서버에 반영되지 않았다.** 재기동은 3/3을 다 써서 goal이 blocked로 바뀌었다(`RUNNER_FIX_REPORT.md`, 11:04Z).
+- 지금까지 live 확인은 **전부 로컬(qwen3.5:9b, gemma4:26b)**로 했다. `selectedLocal 10`, `paidGenerationObserved 0`. C1의 backend_timeout은 9b 로컬 모델 응답이 늦은 탓일 수 있어서 제품 결함과 구분되지 않는다.
+- runner C7을 "다른 Ollama 모델만 대체로 고르고, 없으면 BLOCKED"로 바꿨다. 사용자 방향(API 우선)과 반대라서 아래 D3에서 되돌린다. 다만 "화면 라벨은 실제 모델 증거가 아니다(observed-model RED)"는 맞는 판단이니 유지한다.
+- Devin이 테스트 모델 정책을 만들어 뒀다. `configs\agent-test-model-policy.yaml`, `scripts\test_model_policy.py`, `scripts\browser_model_select.js`, `scripts\chat_practice_browser.js`가 있다. 이 파일들은 Devin lease로 잡혀 있다(`devin-test-model-api-policy-e575d169`, 만료 14:14Z = 23:14 KST). **읽기와 호출만 하고 고치지 않는다.**
+- runner를 잡고 있던 다른 lease(`chatrag-golden-api-models-r2`)는 20:1x 기준으로 이미 활성 목록에 없다. S0에서 다시 확인한다.
+
+## 2) 사용자 결정 (goal 파일보다 우선)
+- **D1 재기동:** 로컬 dev 재기동을 **최대 2회 추가로 허용**한다.
+  - R4는 지금 소스(첨부 bind 수정 포함)를 반영하는 데 쓴다.
+  - R5는 R4 이후 새 수정이 focused RED→GREEN을 거쳤을 때만 쓴다.
+  - 그 이상은 하지 않는다. 자동 재기동 감시(DevWatch)는 계속 꺼 둔다.
+- **D2 검증 모델은 API:** goal 파일의 "로컬 우선 / 유료 선택 금지"는 비용 안전장치였지 제품 방향이 아니다. 이 결정으로 철회한다.
+  - 모델은 `python -B scripts/test_model_policy.py resolve --purpose <quality|regression|cross_provider>`로 고른다. 정책이 안 되면 다음 순서로 고른다.
+    - quality: `chatgpt-oauth:gpt-6-astra`, 안 되면 `chatgpt-oauth:gpt-5.6-sol`
+    - regression: `chatgpt-oauth:gpt-5.6-terra`, 안 되면 `chatgpt-oauth:gpt-5.6-luna`
+    - cross_provider: `llmrouter.api3`
+  - 로컬 모델에서만 나는 문제(9b timeout 등)는 `LOCAL_ONLY`로 표시하고 NEXT로 보낸다. 쫓지 않는다.
+- **D3 C7 되돌리기:** C7의 대체 모델은 정책의 `cross_provider` 또는 다른 `chatgpt-oauth` 모델로 한다. 로컬은 정책 purpose가 `local_fallback`일 때만 쓴다.
+  - "Ollama만 대체로 고름"은 이번 runner hunk만 preimage 기준으로 되돌리고, observed-model 증거 규칙은 유지한다.
+  - `browser_model_select.js`는 Devin lease 파일이니 수정하지 않는다. 필요한 차이는 runner 쪽에서 처리한다.
+- **D4 크레딧:** 이번 재개에서 쓸 수 있는 API 생성 요청은 **최대 25회**다. 401·403·429·쿼터 오류가 나면 같은 모델로 재시도하지 않고, 정책의 다음 순위로 한 번만 넘어간다. 오류 원문은 보고서 맨 위에 적는다. 공개 URL로는 보내지 않는다.
+
+## S0 — 사전 확인 (변경 없음)
+- `agent_preflight.py`와 `agent_scope_lease.py who`를 돌린다. runner(`chat_rag_golden_browser*.js`)를 다른 세션이 다시 잡았으면, 그 파일은 고치지 않고 D3를 NEXT로 남긴다. 측정은 runner를 실행만 해서 진행한다.
+- `/api/chat/models`에서 chatgpt-oauth 모델과 `llmrouter.api3`가 `selectable=true`인지 확인한다.
+- `test_model_policy.py resolve` 결과(모델 id와 대체 순서)를 장부에 남긴다.
+
+## S1 — R4 재기동
+- 이번 실행에 한해 선택적 HTTPS 분기를 끈 런처로 재기동한다(환경변수로만 끄고, 런처 파일은 고치지 않는다). 공개 주소 상태 확인은 0회로 한다.
+- 확인할 것:
+  - 새 PID가 생겼는지
+  - `springReused=false`인지
+  - 시작 시각이 attachment.bind 수정 파일의 mtime보다 뒤인지
+  - 새 진단 이벤트(첨부 수, 바인딩 여부, 사유 코드)가 로그에 찍히는지
+- 기동에 실패하면 원인을 적고 HOLD한다. R5를 기동 재시도에 쓰지 않는다.
+
+## S2 — 핵심 RAG (quality 모델)
+- C2 → C3 → C4 순서로 각 1회씩 돌린다. 매번 새 대화를 열고, 모델은 runner `--model <정책 결과>`로 지정한다.
+- 판정할 것: 답 본문, 출처 파일명, 근거가 없을 때의 거절(C4), 관측 모델 = 선택 모델
+  - 관측 모델이 없거나 다르면 `SILENT_FALLBACK` 또는 `OBSERVED_UNKNOWN`으로 보고, PASS로 치지 않는다.
+- C2가 또 실패하면 새 진단의 bind 사유 코드로 원인을 하나만 고른다. focused RED→GREEN으로 고친 뒤 D1의 R5로 반영하고, C2를 다시 1회 돌린다.
+
+## S3 — 나머지 (regression 모델)
+- C1, C5, C6, C8을 각 1회씩 돌린다. C7은 정책의 `cross_provider` 대체로 돌린다(D3).
+- C1이 API 모델에서는 PASS면, 아까 로컬 C1의 backend_timeout은 `LOCAL_ONLY`로 분류한다.
+
+## S4 — 마지막 3회 반복
+- C2~C4를 regression 모델로 3회 반복한다. 3회 모두 PASS여야 한다.
+- 남은 크레딧 상한이 모자라면, 반복 횟수는 줄이지 말고 S3에서 남은 항목을 NOT_RUN으로 돌린다.
+
+## S5 — 정리
+- `acceptance.json`, `FINAL_REPORT.md`를 갱신한다. 시나리오마다 모델 id와 관측 모델을 붙인다.
+- 그대로 두는 것:
+  - DevWatch는 꺼 둔 상태로 두고, 처음 상태가 어땠는지와 다시 켜는 명령 1줄만 보고한다. 사용자가 켠다.
+  - HTTPS 분기는 이번 실행에서만 꺼졌고, 런처 파일이 바뀌지 않았다는 증거(sha)를 붙인다.
+- 넓게 돌린 워크플로 테스트 클래스의 44개 중 17개 실패는 수정 전 소스에서도 똑같이 실패했다. 기존 실패로 기록만 하고, 이번에 고치지 않는다(NEXT).
+
+## HOLD
+- 제품 라우팅을 API 우선으로 재배선하는 것(WP1~WP3), 웹 기본 모델 `app.ai.ui-default-model`을 바꾸는 것: 다음 지시서에서 한다.
+- Devin의 정책 파일과 helper를 수정하는 것
+
+## 절대 금지
+- D1 범위를 넘는 재기동, 공개 URL 생성 요청, 같은 모델로 401·403·429 재시도
+- 소유자·세션 보호를 느슨하게 하는 것(다른 소유자나 다른 세션의 첨부 차단은 유지)
+- 다른 세션 lease, hunk, 장부를 고치거나 강제로 푸는 것
+- secrets, `.env`, `auth.json`, 토큰 읽기나 출력
+- push, pull, commit, `git add -A`, reset, checkout, restore, stash, clean
+- 전체 suite, `chat.js` 수정
+- PROTO_OPEN이나 admin 강화, DB 스키마 변경, 데이터셋 삭제
+
+## Acceptance (실행 안 한 항목은 NOT_RUN과 사유)
+- [ ] AR1 R4 새 JVM: 새 PID, springReused=false, 시작 시각이 bind 수정보다 뒤, 진단 이벤트 확인
+- [ ] AR2 C2·C3 PASS, C4는 근거가 없을 때 올바르게 거절. 모두 API quality 모델이고 관측 모델 = 선택 모델
+- [ ] AR3 C1·C5·C6·C8 판정과 C7 cross_provider 판정(PASS/FAIL/LOCAL_ONLY와 근거)
+- [ ] AR4 C2~C4 3회 반복 모두 PASS
+- [ ] AR5 C7 runner의 "Ollama만 대체"를 되돌림(또는 lease 때문에 NEXT). observed-model 규칙은 유지, runner 테스트 GREEN
+- [ ] AR6 API 생성 25회 이하, 재기동 2회 이하, 공개 URL 0회, 런처 파일 sha 그대로, Devin 정책 파일 sha 그대로
+
+## 보고 형식
+```
+외부 API: 생성 <n>/25 (모델별 <id>:<n>) / 401·403·429 원문: <그대로 또는 없음>
+CODEX-CHAT-RAG-BROWSER-SELFCHECK: DONE | PARTIAL | HOLD
+재기동: R4 <PID, springReused, 시작시각> / R5 <사용함·안 함과 이유>
+C1~C9: <판정 / 모델 / 관측 모델> 한 줄씩
+반복 3회(C2~C4): <PASS n/3>
+C2 원인과 수정: <파일:줄, 테스트>
+LOCAL_ONLY: <목록>
+AUTO_DECISION: …
+FILES_TOUCHED: …
+DevWatch: <처음 상태 / 다시 켜는 명령>
+기존 실패: 워크플로 테스트 클래스 17/44 (수정 전 소스에서도 같음)
+NEXT: 라우팅 API 우선 재배선, 웹 기본 모델 변경, <기타>
+```
+
+[ANTI-STOP] 읽기 = intake. blocked를 풀고 S0부터 바로 진행한다. 완료 증거는 새 JVM, API 모델로 C2~C4 PASS와 3회 반복, 관측 모델 일치다.

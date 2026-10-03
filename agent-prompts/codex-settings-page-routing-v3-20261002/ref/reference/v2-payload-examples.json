@@ -1,0 +1,53 @@
+{
+  "notice": "모든 값은 합성 계약 예시다. 실제 실행·잔액·지원 여부의 관측 결과가 아니다.",
+  "activation": {
+    "property": "chat.settings.routing.enabled",
+    "default": false,
+    "namingStatus": "PROPOSAL_CHECK_API_ROUTING_SPEC_SECTION_6",
+    "newEnvironmentVariable": null
+  },
+  "saveRequest": {
+    "expectedRevision": 0,
+    "expectedProfileHash": null,
+    "profile": {
+      "schemaVersion": 1,
+      "enabled": false,
+      "bindings": {},
+      "additionalPaidAllowed": false,
+      "additionalCostCapUsd": 0
+    }
+  },
+  "readResponse": {
+    "profileRevision": 0,
+    "profileHash": null,
+    "runtimeSupported": null,
+    "runtimeEnabled": false,
+    "profileEnabled": false,
+    "state": "INHERITED",
+    "profile": null,
+    "outcome": null
+  },
+  "previewResponse": {
+    "externalCalls": 0,
+    "writes": 0,
+    "basis": "SCENARIO_AND_OBSERVATIONS",
+    "predictedCandidate": null,
+    "responseModelId": null,
+    "costEstimateUsd": null,
+    "warnings": [
+      "health_not_observed"
+    ]
+  },
+  "outcomeExample": {
+    "role": "MAIN_DEFAULT",
+    "profileRevision": 12,
+    "requestedChoiceId": "llmrouter.auto",
+    "selectedRouteKey": "llmrouter.gemma",
+    "configuredModelId": null,
+    "responseModelId": null,
+    "verificationStatus": "unverified",
+    "answerOriginAttemptId": null,
+    "resultOrigin": "unknown",
+    "notice": "합성 예시; 실제 모델 사용을 증명하지 않음."
+  }
+}

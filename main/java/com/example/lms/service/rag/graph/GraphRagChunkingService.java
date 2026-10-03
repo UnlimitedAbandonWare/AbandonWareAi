@@ -47,6 +47,67 @@ public class GraphRagChunkingService {
 
     @Autowired(required = false)
     private GeneralGraphSourceAuthority sourceAuthority;
+    @Autowired
+    private com.example.lms.service.AttachmentSourceStore attachmentSources;
+
+    /** Only an explicitly consented, current typed source may enter the existing private indexes. */
+    public IngestReport ingestAttachmentSource(GeneralGraphScope scope, KgChunk.SourceRef reference) {
+        String sid=scope==null?"__TRANSIENT__":Long.toString(scope.sessionId());
+        if(sourceAuthority==null||attachmentSources==null||scope==null||reference==null
+                ||GeneralGraphSourceAuthority.sourceAttachmentId(reference.sourceId())==null)
+            return IngestReport.disabled(sid,"attachment_authority_missing");
+        if(!properties.isEnabled()||!properties.getIndexing().isEnabled())
+            return IngestReport.disabled(sid,"brain_state_disabled");
+        attachmentWorkCurrent();
+        var original=sourceAuthority.source(scope,reference);
+        if(original.isEmpty())return IngestReport.disabled(sid,"attachment_source_unavailable");
+        List<KgChunk> chunks=new ArrayList<>();
+        try {
+            var units=new com.fasterxml.jackson.databind.ObjectMapper().readTree(original.get().text());
+            if(!units.isArray()||units.size()>128)return IngestReport.disabled(sid,"attachment_units_budget");
+            for(var unit:units){
+                String body=unit.path("text").asText("");
+                if(body.isBlank()||"ARCHIVE_LIST".equals(unit.path("locatorType").asText()))continue;
+                for(String piece:splitToBrainSize(body)){
+                    attachmentWorkCurrent();
+                    if(chunks.size()>=64)return IngestReport.disabled(sid,"attachment_chunk_budget");
+                    Set<String> names=new LinkedHashSet<>();
+                    addManualFallbackEntities(names,piece);
+                    // Every entity is an exact original span. No injected NER/model call in this lane.
+                    var entities=names.stream().filter(piece::contains).limit(8)
+                        .map(name->new KgChunk.KgEntity(name,"ENTITY","general",0.55d)).toList();
+                    var chunk=new KgChunk(stableId("attachment",sid,piece,reference.sourceId(),chunks.size()),
+                        sid,piece,entities,coOccurrenceRelations(entities),"general",confidenceFor(entities),
+                        Instant.now(),"ATTACHMENT","BRAIN_STATE","CONVERSATION","brain_state")
+                        .withSource(scope,original.get());
+                    chunks.add(chunk);
+                }
+            }
+        } catch(com.fasterxml.jackson.core.JsonProcessingException invalid){
+            return IngestReport.disabled(sid,"attachment_units_invalid");
+        }
+        if(chunks.isEmpty())return IngestReport.disabled(sid,"attachment_no_body");
+        return sourceAuthority.withCurrentSource(scope,original.get(),current->{
+            attachmentWorkCurrent();
+            Map<String,Object> backend=new LinkedHashMap<>();
+            backend.put("meaningfulGate","source_verified");
+            backend.put("semanticAttempts",0);
+            backend.put("semanticExtraction","RULES_ONLY");
+            var report=persistChunks(sid,"ATTACHMENT",chunks,BrainStateText.hash12(current.text()),backend,IngestOptions.defaults());
+            String outcome=report.captureOutcome().toUpperCase(Locale.ROOT);
+            attachmentSources.recordIndex(GeneralGraphSourceAuthority.sourceAttachmentId(reference.sourceId()),
+                reference.sourceRevision(),"SUCCEEDED".equals(outcome)?"READY":outcome,
+                String.valueOf(report.backend().getOrDefault("vectorStatus","NOT_INDEXED")).toUpperCase(Locale.ROOT),
+                report.disabledReason());
+            return report;
+        }).orElseGet(()->IngestReport.disabled(sid,"attachment_source_invalidated"));
+    }
+
+    private static void attachmentWorkCurrent(){
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        if(budget!=null&&budget.expired())throw new CancellationException("attachment_budget_exhausted");
+    }
 
     public IngestReport ingestFinalizedTurn(GeneralGraphScope scope, long assistantMessageId) {
         return ingestFinalizedTurn(scope, null, assistantMessageId);
@@ -309,6 +370,7 @@ public class GraphRagChunkingService {
             vectorStatus = "unavailable";
         } else {
             for (KgChunk chunk : persistedChunks) {
+                if("ATTACHMENT".equals(normalizedSourceTag))attachmentWorkCurrent();
                 vectorAttempts++;
                 try {
                     enqueueVector(chunk, normalizedSourceTag, laneOptions);
@@ -324,6 +386,7 @@ public class GraphRagChunkingService {
             vectorStatus = persistenceStatus(vectorAttempts, vectorFailures, "queued");
         }
 
+        if("ATTACHMENT".equals(normalizedSourceTag))attachmentWorkCurrent();
         String brainStateStatus = "skipped";
         try {
             if (laneOptions.dryRun()) {
@@ -345,6 +408,7 @@ public class GraphRagChunkingService {
             log.warn("[AWX][brain-state] status=failed failureClass={}", failureClass(ex));
         }
 
+        if("ATTACHMENT".equals(normalizedSourceTag))attachmentWorkCurrent();
         Neo4jKgChunkWriter.WriteReport writeReport = null;
         String neo4jStatus = "skipped";
         String neo4jDisabledReason = "";

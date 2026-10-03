@@ -48,11 +48,20 @@ $script:SchemaVersion = 'awx.rtx3090-watch.v1'
 $RootResolved = $Root
 if ([string]::IsNullOrWhiteSpace($RootResolved)) {
   if ($PSScriptRoot) { $RootResolved = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path }
-  else { $RootResolved = 'C:\AbandonWare\demo-1\demo-1\src' }
+  elseif ($env:AWX_ROOT) { $RootResolved = $env:AWX_ROOT }
+  else {
+    try {
+      . (Join-Path (Get-Location) 'scripts\AwxPaths.ps1')
+      $RootResolved = Resolve-AwxPath -Key 'repo.root'
+    } catch { $RootResolved = (Get-Location).Path }
+  }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $RootResolved 'AGENTS.md'))) {
-  $cand = 'C:\AbandonWare\demo-1\demo-1\src'
-  if (Test-Path -LiteralPath (Join-Path $cand 'AGENTS.md')) { $RootResolved = $cand }
+  $cand = if ($env:AWX_ROOT) { $env:AWX_ROOT } else { $null }
+  if (-not $cand -and $PSScriptRoot) {
+    try { . (Join-Path $PSScriptRoot 'AwxPaths.ps1'); $cand = Resolve-AwxPath -Key 'repo.root' } catch {}
+  }
+  if ($cand -and (Test-Path -LiteralPath (Join-Path $cand 'AGENTS.md'))) { $RootResolved = $cand }
 }
 
 $WatchDir   = Join-Path $RootResolved 'var\debug\rtx3090-watch'

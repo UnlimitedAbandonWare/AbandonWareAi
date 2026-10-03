@@ -71,6 +71,14 @@ public class BraveOperationalGateAspect {
         }
 
         brave.resetQuotaForMonthRollover(LocalDate.now());
+        if (brave.hasIndependentKeyLanes()) {
+            if (brave.hasUsableIndependentLane()) brave.clearOperationalDisableIfQuota();
+            else if (brave.isQuotaExhausted()
+                    && state.forLane("base").quotaExhaustedUntilEpochMs() > System.currentTimeMillis()) {
+                setOperationalDisabled(brave, state.forLane("base").quotaExhaustedUntilEpochMs(), 0L);
+            }
+            return;
+        }
 
         long now = System.currentTimeMillis();
         long until = state.quotaExhaustedUntilEpochMs();

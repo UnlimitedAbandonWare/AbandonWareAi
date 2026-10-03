@@ -16,7 +16,7 @@ the already authorized finalization hook passes `-Apply` automatically.
   "allRequiredWorkComplete": true,
   "completionFlag": true,
   "completionReport": {"path": "data/agent-handoff/selected-task/final/completion.json", "sha256": "<actual hash>"},
-  "postimages": [{"path": "scripts/changed.py", "sha256": "<verified current hash>"}],
+  "postimages": [{"path": "scripts/agent_preflight.py", "sha256": "<verified current hash>"}],
   "evidenceFiles": [{"path": "data/agent-handoff/selected-task/final/verify.log", "sha256": "<actual log hash>"}],
   "preserveFiles": [
     {"path": "data/agent-handoff/selected-task/final/report.md", "sha256": "<actual hash>"},
@@ -93,7 +93,7 @@ deleting anything. Keep at least one postimage and acceptance evidence file.
 ## Invocation and lifecycle
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .agents/skills/demo1-completed-directive-cleanup/scripts/cleanup_completed_directives.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File .agents\skills\demo1-completed-directive-cleanup\scripts\cleanup_completed_directives.ps1 `
   -Root . -RequestPath <exact-task-request.json> -LogDirectory <task-cleanup-output>
 # The authorized finalization caller uses the same arguments with -Apply.
 ```

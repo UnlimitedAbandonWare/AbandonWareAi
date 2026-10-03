@@ -160,6 +160,39 @@ public class LocalFileStorageService implements FileStorageService {
         return new IllegalArgumentException("허용되지 않은 업로드 경로입니다.");
     }
 
+    /** Resolve an issued-style locator through the configured root, without accepting local paths. */
+    public java.util.Optional<Path> resolveStoredPath(String storedPath) {
+        try {
+            String prefix=normalizedPublicPrefix();
+            if(storedPath==null||!storedPath.startsWith(prefix))return java.util.Optional.empty();
+            String relativeText=storedPath.substring(prefix.length()).replace('\\','/');
+            if(relativeText.isBlank())return java.util.Optional.empty();
+            Path relative=Path.of(relativeText),root=Path.of(rootDir).toAbsolutePath().normalize();
+            if(relative.isAbsolute())return java.util.Optional.empty();
+            Path target=root.resolve(relative).normalize();
+            if(target.equals(root)||!target.startsWith(root))return java.util.Optional.empty();
+            Path realRoot=root.toRealPath();
+            if(!realRoot.equals(root.toRealPath(LinkOption.NOFOLLOW_LINKS)))return java.util.Optional.empty();
+            Path realTarget=realRoot.resolve(root.relativize(target)).normalize();
+            if(!realTarget.startsWith(realRoot)||hasUnsafeExistingComponent(realRoot,realTarget)
+                    ||!Files.isRegularFile(realTarget,LinkOption.NOFOLLOW_LINKS))return java.util.Optional.empty();
+            return java.util.Optional.of(realTarget);
+        }catch(IOException|RuntimeException unavailable){return java.util.Optional.empty();}
+    }
+
+    /** A durable tombstone can restore the deletion claim after restart; bytes must still match it. */
+    public boolean deletePersisted(String storedPath,long expectedSize,String expectedSha256) {
+        if(expectedSha256==null||!expectedSha256.matches("[a-f0-9]{64}")
+                ||expectedSize<0||expectedSize>25*1048576L)return false;
+        var path=resolveStoredPath(storedPath);
+        if(path.isEmpty())return false;
+        try(var input=Files.newInputStream(path.get())){
+            byte[] bytes=input.readNBytes(Math.toIntExact(expectedSize)+1);
+            if(bytes.length!=expectedSize||!expectedSha256.equals(org.apache.commons.codec.digest.DigestUtils.sha256Hex(bytes)))return false;
+        }catch(IOException failure){return false;}
+        issuedStoredPaths.add(storedPath);
+        return delete(storedPath);
+    }
     @Override
     public boolean delete(String storedPath) {
         Path root = null;

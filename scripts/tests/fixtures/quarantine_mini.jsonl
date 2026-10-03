@@ -1,0 +1,14 @@
+{"timestamp": "2026-09-12T08:00:00Z", "type": "session_meta", "payload": {"id": "11111111-2222-3333-4444-555555555555", "session_id": "11111111-2222-3333-4444-555555555555", "source": {"subagent": {"thread_spawn": {"agent_nickname": "FixtureChild"}}}}}
+{"timestamp": "2026-09-12T08:00:01Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "t1"}}
+{"timestamp": "2026-09-12T08:00:30Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Read goal-objective.md — Done, task finished."}]}}
+{"timestamp": "2026-09-12T08:00:40Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "승인해 주세요: 1) proceed with local change 2) hold"}]}}
+{"timestamp": "2026-09-12T08:00:45Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "choose an option: 1) A 2) B 3) C"}]}}
+{"timestamp": "2026-09-12T08:00:50Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "admin login verified works"}]}}
+{"timestamp": "2026-09-12T08:01:00Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec", "call_id": "c1", "input": "{\"cmd\": \"python -B scripts/dup_service_probe.py --flag\"}"}}
+{"timestamp": "2026-09-12T08:01:05Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec", "call_id": "c2", "input": "{\"cmd\": \"curl -H 'X-Auth: FIXTURE-REDACTION-PROBE' https://example.invalid\"}"}}
+{"timestamp": "2026-09-12T08:01:10Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "credential-shaped field present upstream; recommended_plugins: [x, y]"}]}}
+{"timestamp": "2026-09-12T08:01:20Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "I will write a new service instead of reusing JobService"}]}}
+{"timestamp": "2026-09-12T08:02:00Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "duplicate JobService implementation again for safety"}]}}
+{"timestamp": "2026-09-12T08:02:10Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "duplicate service wrapper created"}]}}
+{"timestamp": "2026-09-12T08:03:00Z", "type": "token_usage_record", "payload": {"usage": {"total_tokens": 999999}, "thread_token_usage": {"total_tokens": 250000}}}
+

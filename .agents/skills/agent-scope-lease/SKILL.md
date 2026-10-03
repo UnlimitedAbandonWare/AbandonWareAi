@@ -1,3 +1,11 @@
+---
+name: agent-scope-lease
+description: >-
+  Use when parallel agents on this checkout must coordinate work scope before
+  touching files or logic: ask who owns what, claim a work unit, release on
+  done/abort — composes the existing lease and journal machinery, never a VCS.
+---
+
 # agent-scope-lease
 
 One-command work-scope coordinator for parallel agents on this checkout —
@@ -5,6 +13,15 @@ Codex writing source directives while Devin applies them, Grok, Notebook
 producers. Before touching files or logic, ask it who owns what; claim your
 work unit; it releases on done/abort. It composes the existing lease and
 journal machinery — it is not a new VCS and never grants edit authority.
+
+## Steps
+
+1. `who` — merged inventory first: live/stale/orphan leases, claims, journals.
+2. `check --path <target>` — exit 0 free, 7 conflict; journal/feature overlap is advisory unless `--strict`.
+3. `claim --agent <name> --task <id> --path <t>` — opens/attaches the work journal and begins the source lease (repeat `--path` for each target).
+4. `verify --task <id>` right before editing — nonzero = foreign drift, stop.
+5. Edit; `heartbeat --task <id>` at progress boundaries to keep the lease live.
+6. `done --task <id>` on completion, `abort` on abandon — release is mandatory on every exit path.
 
 ## Commands
 
@@ -56,3 +73,26 @@ session.
   `data/agent-handoff/codex-autonomy/<taskId>/`). Git is never required.
 - Claiming a scope does not replace the work-ledger gates: checkpoint
   preimage and three-way preflight still apply to source edits.
+
+## Output
+
+- `check`: exit 0 free / 7 conflict, plus advisory notes for journal-scope or
+  feature/region overlap (`--strict` turns advisories into blocks).
+- `claim`: writes `scope-claim-<topic>.json` under the task dir and reports
+  the opened journal + begun lease; on a stale-overlap conflict it
+  auto-reclaims and retries `begin` once, then reports success/failure.
+- `who`/`show`: JSON inventory (`lifecycle` = live/stale/orphan) — cite it in
+  reports instead of asserting ownership.
+- `done`/`abort`: releases lease(s) and closes/annotates the journal; a left-
+  behind `end` becomes someone else's stale cleanup — report the release in
+  the task journal.
+
+## Parallel-lane preflight (additive)
+
+When several chats may hold the same goal, run
+`python -B scripts/codex_parallel_preflight.py --root . --goal-key <key>
+--scope <paths> --agent <name> --json` **before the first edit**: it returns
+`OWNER`/`VERIFIER`/`TAKEOVER`/`WAIT`, lists `UNCLAIMED_EDIT` / `STALE_CLAIM`
+(dry-run) and `LANE_VIOLATION`, and prints the claim + writer-begin + quota
+commands in `nextCommands`. See
+`.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.

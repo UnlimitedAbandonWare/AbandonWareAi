@@ -156,7 +156,10 @@ def lint(index: dict, root: Path) -> dict:
     elif fallback.get("primary_skill"):
         referenced.add(fallback["primary_skill"])
 
-    unindexed = sorted(_disk_skills(root) - referenced)
+    direct_only = {str(n).split("#")[0].split()[0]
+                   for n in (index.get("direct_call_only") or [])
+                   if isinstance(n, str)}
+    unindexed = sorted(_disk_skills(root) - referenced - direct_only)
     if unindexed:
         warnings.append(f"unindexed-skills:{len(unindexed)}:" +
                         ",".join(unindexed))
@@ -166,6 +169,7 @@ def lint(index: dict, root: Path) -> dict:
         "warnings": warnings,
         "counts": {"intents": len(intents), "families": len(families),
                    "referencedSkills": len(referenced),
+                   "directCallOnly": len(direct_only & _disk_skills(root)),
                    "unindexed": len(unindexed)},
     }
 

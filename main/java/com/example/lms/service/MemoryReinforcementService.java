@@ -300,7 +300,17 @@ public class MemoryReinforcementService {
             String sourceTag,
             double score,
             String hash) {
-        if (skipReinforceForSensitive()) {
+        upsertPendingCandidate(sid, query, payload, sourceTag, score, hash, false);
+    }
+
+    private void upsertPendingCandidate(
+            String sid,
+            String query,
+            String payload,
+            String sourceTag,
+            double score,
+            String hash, boolean strict) {
+        if (!strict && skipReinforceForSensitive()) {
             log.debug("[MEMORY_GATE] sensitive/forceOff -> skip reinforcement");
             return;
         }
@@ -312,6 +322,8 @@ public class MemoryReinforcementService {
 
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
                 .orElseGet(() -> new TranslationMemory(hash));
+
+        if (strict && tm.getId() != null && !java.util.Objects.equals(sid, tm.getSessionId())) return;
 
         // basic fields
         tm.setSourceHash(hash);
@@ -325,6 +337,7 @@ public class MemoryReinforcementService {
         try {
             memoryRepository.save(tm);
         } catch (Exception e) {
+            if (strict) throw new IllegalStateException("understanding_local_memory_failed", e);
             log.warn("[MEMORY] Failed to save PENDING candidate: {}", errorSummary(e));
         }
     }
@@ -336,7 +349,16 @@ public class MemoryReinforcementService {
             String sourceTag,
             double score,
             String hash) {
-        if (skipReinforceForSensitive()) {
+        upsertViaRepository(sid, query, payload, sourceTag, score, hash, false);
+    }
+
+    private void upsertViaRepository(String sid,
+            String query,
+            String payload,
+            String sourceTag,
+            double score,
+            String hash, boolean strict) {
+        if (!strict && skipReinforceForSensitive()) {
             log.debug("[MEMORY_GATE] sensitive/forceOff -> skip reinforcement");
             return;
         }
@@ -346,6 +368,9 @@ public class MemoryReinforcementService {
         // no-arg constructor that may not be present if annotation processing fails.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
                 .orElseGet(() -> new TranslationMemory(hash));
+
+        if (strict && tm.getId() != null && !java.util.Objects.equals(sid, tm.getSessionId())) return;
+        if (strict) { tm.setQuery(query); tm.setContent(payload); }
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
@@ -950,26 +975,48 @@ public class MemoryReinforcementService {
         log.debug("[MEMORY_GATE] AutoLearn validation sample stored as PENDING sidHash={} score={}", com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(sid)), finalScore);
     }
 
+    /** Capture while the original request policy is present; deferred workers never reconstruct it. */
+    public boolean understandingMemoryApproved() {
+        return memoryEnabled && !skipReinforceForSensitive();
+    }
+
     @Transactional
     public void reinforceWithSnippet(String sessionId,
             String query,
             String snippet,
             String sourceTag,
             double score) {
-        final boolean blockVectorStore = ("ASSISTANT".equalsIgnoreCase(sourceTag) || "LLM".equalsIgnoreCase(sourceTag));
+        reinforceWithSnippetCore(sessionId, query, snippet, sourceTag, score, null, false);
+    }
+
+    /** B already owns a verified source/receipt transaction. No vectors or request ThreadLocal policy. */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void reinforceUnderstandingLocal(com.example.lms.service.understanding.DeferredUnderstandingTask task,
+            String question, String snippet, double score) {
+        if (!org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("understanding_local_transaction_required");
+        java.util.Objects.requireNonNull(task);
+        if (!task.sensitiveMemoryApproved()) throw new com.example.lms.jobs.JobService.DerivedRejected();
+        reinforceWithSnippetCore("chat-" + task.sessionId(), question, snippet, "UNDERSTANDING", score,
+                task.guardProfile(), true);
+    }
+
+    private void reinforceWithSnippetCore(String sessionId, String query, String snippet, String sourceTag,
+            double score, GuardProfile approvedProfile, boolean localOnly) {
+        final boolean blockVectorStore = localOnly || ("ASSISTANT".equalsIgnoreCase(sourceTag) || "LLM".equalsIgnoreCase(sourceTag));
         // [Jammini No-Memory Guard]
         if (!memoryEnabled) {
             log.debug("[Memory] Disabled. Skipping reinforcement for sessionHash={}", com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(sessionId)));
             return;
         }
 
-        if (skipReinforceForSensitive()) {
+        if (!localOnly && skipReinforceForSensitive()) {
             log.debug("[MEMORY_GATE] sensitive/forceOff -> skip reinforcement");
             return;
         }
 
         // 신규 GuardProfile 기반 메모리 비활성화 모드
-        GuardProfile profile = guardProfileProps.currentProfile();
+        GuardProfile profile = localOnly ? approvedProfile : guardProfileProps.currentProfile();
         if (profile == GuardProfile.PROFILE_FREE) {
             log.debug("[MEMORY_GATE] FREE profile → reinforcement disabled for sessionHash={}", com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(sessionId)));
             return;
@@ -1033,7 +1080,7 @@ public class MemoryReinforcementService {
             }
             String sid = org.springframework.util.StringUtils.hasText(sessionId) ? sessionId : "__TRANSIENT__";
             String hash = sha1(snippet);
-            upsertViaRepository(sid, query, trimmedSnippet, sourceTag, score, hash);
+            upsertViaRepository(sid, query, trimmedSnippet, sourceTag, score, hash, localOnly);
             try {
                 if (!blockVectorStore) {
                     int citationCount = detectCitationCount(snippet);
@@ -1055,7 +1102,7 @@ public class MemoryReinforcementService {
                 String safePayload = trimmedSnippet == null ? "" : trimmedSnippet.trim();
                 if (!safePayload.isBlank()) {
                     String hash = sha1(safePayload);
-                    upsertPendingCandidate(sid, query, safePayload, sourceTag, score, hash);
+                    upsertPendingCandidate(sid, query, safePayload, sourceTag, score, hash, localOnly);
                     log.info("[MEMORY] Stored WEAK snippet as PENDING (score={}, sidHash={})", score, com.example.lms.trace.SafeRedactor.hashValue(String.valueOf(sid)));
                 }
             } else {
@@ -1179,14 +1226,14 @@ public class MemoryReinforcementService {
                     ? Math.min(lowScoreCutoff, 0.15) // 🔥 0.3 → 0.15
                     : lowScoreCutoff;
 
-            if (score < effectiveCutoff || !shouldStore(snippet)) {
+            if (score < effectiveCutoff || !shouldStore(snippet, !localOnly)) {
                 log.debug("[Reinforce] skip store (score < cutoff or bad snippet). " +
                         "score={}, cutoff={}", score, effectiveCutoff);
                 return;
             }
         } else {
             if (!isSubcultureDomain) {
-                if (score < lowScoreCutoff || !shouldStore(snippet)) {
+                if (score < lowScoreCutoff || !shouldStore(snippet, !localOnly)) {
                     log.debug(
                             "[Reinforce][EXPLORE] skip store (non-subculture, score < cutoff or bad snippet). score={}, cutoff={}",
                             score, lowScoreCutoff);
@@ -1212,6 +1259,9 @@ public class MemoryReinforcementService {
         // snippet's hash.
         TranslationMemory tm = memoryRepository.findBySourceHash(hash)
                 .orElseGet(() -> new TranslationMemory(hash));
+
+        if (localOnly && tm.getId() != null && !java.util.Objects.equals(sid, tm.getSessionId())) return;
+        if (localOnly) { tm.setQuery(query); tm.setContent(trimmedSnippet); tm.setSourceTag(sourceTag); }
 
         if (tm.getId() == null) {
             tm.setSourceHash(hash);
@@ -1261,13 +1311,21 @@ public class MemoryReinforcementService {
             memoryRepository.save(tm);
         }
         // 저장 후에는 “봤다”로 마킹 → 이후 동일 스니펫은 shouldStore에서 중복으로 필터
-        try {
-            if (recentSnippetCache != null) {
-                recentSnippetCache.put(hash, Boolean.TRUE);
+        Runnable remember = () -> {
+            try {
+                if (recentSnippetCache != null) {
+                    recentSnippetCache.put(hash, Boolean.TRUE);
+                }
+            } catch (Exception ignore) {
+                MemoryReinforcementTraceSuppressions.traceSuppressed("recentSnippetCache.put", ignore);
             }
-        } catch (Exception ignore) {
-            MemoryReinforcementTraceSuppressions.traceSuppressed("recentSnippetCache.put", ignore);
-        }
+        };
+        if (localOnly) {
+            org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                    new org.springframework.transaction.support.TransactionSynchronization() {
+                        @Override public void afterCommit() { remember.run(); }
+                    });
+        } else remember.run();
         // + 벡터 색인 큐에 적재(예외 무시)
         try {
             if (!blockVectorStore) {
@@ -1545,11 +1603,13 @@ public class MemoryReinforcementService {
     }
 
     // 간단한 보관 전 품질 게이트(너무 짧은/중복성 높은 스니펫 차단)
-    private boolean shouldStore(String text) {
+    private boolean shouldStore(String text) { return shouldStore(text, true); }
+
+    private boolean shouldStore(String text, boolean useRecentCache) {
         String s = text.trim();
         if (s.length() < 40)
             return false; // 너무 짧음 → 노이즈
-        if (recentSnippetCache != null) { // 최근 중복 방지(있으면)
+        if (useRecentCache && recentSnippetCache != null) { // 최근 중복 방지(있으면)
             String h = storageHashFromSnippet(s);
             // 캐시에 "이미 본" 기록이 있을 때만 중복으로 간주
             if (Boolean.TRUE.equals(recentSnippetCache.getIfPresent(h)))

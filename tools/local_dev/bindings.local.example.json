@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "awx.aw-dev.bindings.v1",
+  "fields": {
+    "python": "absolute path to a local CPython >=3.9 (optional; else uv/PATH fallback)",
+    "repoRoot": "absolute path to the repo root (optional; default = wrapper location)",
+    "createdAt": "ISO timestamp written by bootstrap --apply",
+    "createdBy": "aw-dev bootstrap --apply"
+  },
+  "note": "copy to var/local_dev/bindings.local.json (gitignored) or let bootstrap --apply write it. Never store secrets here; only interpreter/root bindings."
+}

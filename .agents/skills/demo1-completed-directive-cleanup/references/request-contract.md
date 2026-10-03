@@ -15,7 +15,7 @@ explicit reconciliation of the whole task, not a substitute for source evidence.
   "directive": {"path": "data/agent-handoff/notebook/selected.md", "sha256": "<current-intake-hash>"},
   "relatedMarkdown": [],
   "completionReport": {"path": "data/agent-handoff/codex/report/task/session.json", "sha256": "<final-report-hash>"},
-  "postimages": [{"path": "scripts/changed.py", "sha256": "<verified-current-source-hash>"}],
+  "postimages": [{"path": "scripts/agent_preflight.py", "sha256": "<verified-current-source-hash>"}],
   "evidenceFiles": [{"path": "data/agent-handoff/codex/report/task/green.log", "sha256": "<actual-verification-log-hash>"}]
 }
 ```

@@ -1,6 +1,6 @@
 ---
 name: demo1-long-think-goal-composer
-description: Use when demo-1 work starts from an ambiguous or pasted 5-9 hour Safe Patch goal
+description: "demo-1 작업의 목표·범위·Acceptance를 먼저 정리해 구현 전 목표 계약을 작성할 때. 소스 구현·실행 지시서 수행·완료 보고 판정에는 쓰지 않음."
 ---
 
 # Demo1 Long Think Goal Composer

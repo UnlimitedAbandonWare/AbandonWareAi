@@ -20,8 +20,34 @@ public record RagEvidenceMetadata(
         Integer lineEnd,
         Integer rank,
         Double confidence,
-        String confidenceSource
+        String confidenceSource,
+        AttachmentProvenance attachment
 ) {
+    public RagEvidenceMetadata(String marker,String kind,String title,String source,String filePath,
+            Integer lineStart,Integer lineEnd,Integer rank,Double confidence,String confidenceSource){
+        this(marker,kind,title,source,filePath,lineStart,lineEnd,rank,confidence,confidenceSource,null);
+    }
+
+    /** Local provenance is not a web URL, filesystem path, or executable instruction. */
+    public record AttachmentProvenance(String sourceId,long revision,String filename,String role,String locator){
+        public AttachmentProvenance{
+            if(com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.sourceAttachmentId(sourceId)==null
+                    ||revision<=0)throw new IllegalArgumentException("attachment_citation_identity");
+            filename=clean(filename);role=clean(role);locator=clean(locator);
+            if(filename==null||role==null||locator==null)throw new IllegalArgumentException("attachment_citation_locator");
+            filename=filename.replace('\\','/');filename=filename.substring(filename.lastIndexOf('/')+1);
+        }
+        public String label(){return filename+" — "+role+"; rev "+revision+"; "+locator+"; DATA_ONLY";}
+        public static AttachmentProvenance from(Map<String,Object> metadata){
+            if(metadata==null||!"attachment".equals(metadata.get("source")))return null;
+            try{
+                Object revision=metadata.get("sourceRevision");
+                if(!(revision instanceof Number number))return null;
+                return new AttachmentProvenance((String)metadata.get("sourceId"),number.longValue(),
+                    (String)metadata.get("displayName"),(String)metadata.get("documentRole"),(String)metadata.get("locator"));
+            }catch(IllegalArgumentException|ClassCastException invalid){return null;}
+        }
+    }
     public RagEvidenceMetadata {
         marker = clean(marker);
         kind = clean(kind);
@@ -46,6 +72,8 @@ public record RagEvidenceMetadata(
         put(out, "rank", rank);
         put(out, "confidence", confidence);
         put(out, "confidenceSource", confidenceSource);
+        if(attachment!=null)out.put("attachment",Map.of("sourceId",attachment.sourceId(),"revision",attachment.revision(),
+            "filename",attachment.filename(),"role",attachment.role(),"locator",attachment.locator()));
         return out;
     }
 

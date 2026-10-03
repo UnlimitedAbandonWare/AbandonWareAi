@@ -169,8 +169,19 @@ final class ChatStreamSignalBuilder {
                 planWhenState(safeMeta.get("plan.when")),
                 planWhenState(safeMeta.get("plan.when.post")),
                 safeMeta.get("plan.when.lateActivation") instanceof Boolean late ? late : null,
-                planStages(safeMeta));
+                planStages(safeMeta),
+                agentWebSearchSnapshot(safeMeta));
         return isEmptyPipelineSnapshot(snapshot) ? null : snapshot;
+    }
+
+    private static ChatStreamEvent.AgentWebSearchSnapshot agentWebSearchSnapshot(Map<String, Object> meta) {
+        Object status = meta.get("agent.webSearch.prompt.status");
+        if (!(status instanceof String state) || !Set.of("OK", "FAIL_SOFT", "SKIPPED").contains(state)) {
+            return null;
+        }
+        Object reason = meta.get("agent.webSearch.prompt.reasonCode");
+        return new ChatStreamEvent.AgentWebSearchSnapshot(state, reason instanceof String label ? label : null,
+                countValue(meta.get("agent.webSearch.prompt.returnedCount")));
     }
 
     private static String planWhenState(Object value) {
@@ -568,11 +579,12 @@ final class ChatStreamSignalBuilder {
                 || truthy(value(meta, "overdrive.triggered"))
                 || truthy(value(meta, "rag.anchor.enabled"))
                 || numberAsInt(value(meta, "overdrive.stagesApplied"), 0) > 0
-                || numberAsInt(value(meta, "overdrive.anchor.narrowed.k"), 0) > 0
+                || (!truthy(value(meta, "overdrive.narrow.failSoft"))
+                    && numberAsInt(value(meta, "overdrive.anchor.narrowed.k"), 0) > 0)
                 || numberAsInt(value(meta, "rag.anchor.acceptedCandidateCount"), 0) > 0) {
             return "done";
         }
-        if (firstNonBlank(
+        if (truthy(value(meta, "overdrive.narrow.failSoft")) || firstNonBlank(
                 safeString(value(meta, "overdrive.anchor.error")),
                 safeString(value(meta, "overdrive.bypassReason")),
                 safeString(value(meta, "overdrive.blackbox.disabledReason"))) != null) {
@@ -1516,7 +1528,8 @@ final class ChatStreamSignalBuilder {
                 snapshot.planWhen(),
                 snapshot.planWhenPost(),
                 snapshot.planLateActivation(),
-                snapshot.planStages());
+                snapshot.planStages(),
+                snapshot.agentWebSearch());
     }
 
     @SuppressWarnings("unchecked")
@@ -1573,7 +1586,8 @@ final class ChatStreamSignalBuilder {
                 && snapshot.disabledReason() == null
                 && snapshot.planWhen() == null
                 && snapshot.planWhenPost() == null
-                && snapshot.planStages() == null);
+                && snapshot.planStages() == null
+                && snapshot.agentWebSearch() == null);
     }
 
     private static ChatStreamEvent.TransformerBlockSignal block(

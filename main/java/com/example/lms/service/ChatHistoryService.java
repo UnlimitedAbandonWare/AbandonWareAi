@@ -11,6 +11,11 @@ import com.example.lms.domain.enums.MemoryProfile;
 
 public interface ChatHistoryService {
 
+    /** Internal B boundary; callers own the enclosing origin/intent or USUM/receipt transaction. */
+    default Long appendMessageStrictReturningId(Long sessionId, String role, String content) {
+        throw new UnsupportedOperationException("strict_chat_persistence_required");
+    }
+
     int DEFAULT_SESSION_LIST_LIMIT = 50;
     int MAX_SESSION_LIST_LIMIT = 100;
     int DEFAULT_SESSION_DETAIL_LIMIT = 200;
@@ -141,6 +146,9 @@ public interface ChatHistoryService {
     }
 
     ChatSession getSessionWithMessages(Long id);
+
+    /** Internal request settings/owner lookup; does not hydrate or modify messages. */
+    ChatSession getSessionForRequest(Long id);
 
     default ChatSession getSessionWithMessages(Long id, int requestedLimit) {
         ChatSession session = getSessionWithMessages(id);

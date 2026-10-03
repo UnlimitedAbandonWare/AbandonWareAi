@@ -1,0 +1,44 @@
+{
+ "targets": [
+  {
+   "path": "main/java/com/example/lms/routing/ApiRoutingDebug.java",
+   "sha256": "0e03e382e936667e05bb4a983721eb818cf755fa1a26f62e9ca3d046c223c983"
+  },
+  {
+   "path": "main/java/com/example/lms/guard/KeyResolver.java",
+   "sha256": "9752f15bb339adb8539d843c5226e98f5d97c4ac3571a1e01589fa28503abd28"
+  },
+  {
+   "path": "main/java/com/example/lms/routing/ApiRoutingInventoryLogger.java",
+   "sha256": "5b4dfc5d12fd8f245d001708298bfa4445e1f37e687a04cd25404d6643fb323b"
+  },
+  {
+   "path": "main/java/com/example/lms/llm/gateway/LlmGatewayBreadcrumbPublisher.java",
+   "sha256": "b3296367699c2969503ed19dc774f591138fd64a8eb3dd8aecc9de3b89938283"
+  },
+  {
+   "path": "main/java/com/example/lms/debug/DebugEventTracePromotionService.java",
+   "sha256": "c72e42caf855b43a24808ea9c75fe7f63371b7708c958187e35cafdffd58036c"
+  },
+  {
+   "path": "main/resources/templates/debug-events.html",
+   "sha256": "738a58cd226ab6a3c93dedcb53f086d0f42e92cd3bad63723b4db06c1de067d6"
+  },
+  {
+   "path": "main/java/com/example/lms/trace/SafeRedactor.java",
+   "sha256": "c0a3ddc74d495edccfee53c3de5bf662e4234c1d0cc97c2c532ffc2f2364fea4"
+  },
+  {
+   "path": "src/test/java/com/example/lms/routing/ApiRoutingDebugRedactionTest.java",
+   "sha256": "bf720bbb6eee2a879914aab2c10dad73f4c7a8c4310872bb61df9ca01c41abfd"
+  },
+  {
+   "path": "src/test/java/com/example/lms/routing/ApiRoutingInventoryLoggerTest.java",
+   "sha256": "6d4deb0d9eff7e397cf890ba24a49871cfc2e2c0ce4069daf04659bd71ee9e06"
+  },
+  {
+   "path": "src/test/java/com/example/lms/llm/gateway/RoutingDebugEventBridgeTest.java",
+   "sha256": "2e6c33d5efcd7489fb378b0e92c198b3e58fd3754a517664b190a02a6c9f34a2"
+  }
+ ]
+}

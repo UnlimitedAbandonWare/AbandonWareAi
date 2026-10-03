@@ -7,7 +7,7 @@ description: Use when two or more Notebook-produced demo-1 source directives
 
 ## Core Contract
 
-- Use C:\AbandonWare\demo-1\demo-1\src as canonicalExecutionRoot.
+- Use <repo> as canonicalExecutionRoot.
 - Treat Notebook and Y evidence as supporting_only.
 - Keep `agent-prompts/` content supporting_only: link prompt material by
   path+hash as evidence, never auto-attach a mega brief (large pasted or

@@ -42,6 +42,9 @@ public class ChatOpenSecurityConfig {
     @Value("${demo.interview.enabled:false}")
     private boolean interviewDemo;
 
+    @Value("${debug.studio.enabled:false}")
+    private boolean debugStudio;
+
     @Value("${conversate.display.enabled:false}")
     private boolean publicDisplay;
 
@@ -58,6 +61,13 @@ public class ChatOpenSecurityConfig {
     private boolean displayRequest(jakarta.servlet.http.HttpServletRequest request) {
         String path = request.getRequestURI().substring(request.getContextPath().length());
         return publicDisplay && "POST".equals(request.getMethod()) && (DISPLAY_TEXT.contains(path) || displayAudio && DISPLAY_AUDIO.contains(path));
+    }
+
+    // debug.studio.enabled + GET + loopback peer only; the controller re-checks loopback host.
+    private boolean debugStudioRequest(jakarta.servlet.http.HttpServletRequest request) {
+        String path = request.getRequestURI().substring(request.getContextPath().length());
+        return debugStudio && "GET".equals(request.getMethod()) && path.startsWith("/debug/")
+                && com.example.lms.web.DebugStudioController.isLoopback(request.getRemoteAddr());
     }
 
     /** Removes unused routes before any legacy authentication/HTTPS chain can run. */
@@ -99,10 +109,16 @@ public class ChatOpenSecurityConfig {
             boolean displayWrite = displayEnabled.getAsBoolean() && (DISPLAY_TEXT.contains(path) || audioEnabled.getAsBoolean() && DISPLAY_AUDIO.contains(path));
             // This one observer route still goes through the existing ADMIN chain.
             boolean displayDiagnostics=displayEnabled.getAsBoolean() && path.equals("/api/diagnostics/display");
-            if (!(read && (page || asset || assistRead || displayDiagnostics)) && !(method.equals("POST") && (path.equals("/api/chat/sync") || assistWrite || displayWrite))) {
+            // Each named route keeps its controller's existing client/session and exact-run guard.
+            boolean ownedChatRead = read && (path.equals("/api/chat/state")
+                    || path.equals("/api/chat/sessions") || path.matches("/api/chat/sessions/[0-9]+"));
+            boolean ownedChatWrite = method.equals("POST") && List.of(
+                    "/api/chat/stream", "/api/chat/cancel", "/api/chat/ack").contains(path);
+            if (!(read && (page || asset || assistRead || displayDiagnostics)) && !ownedChatRead
+                    && !(method.equals("POST") && (path.equals("/api/chat/sync") || assistWrite || displayWrite)) && !ownedChatWrite) {
                 response.setStatus(404); return;
             }
-            if (!read && !sameOrigin(request)) {
+            if ((!read || ownedChatRead) && !sameOrigin(request)) {
                 response.setStatus(403); return;
             }
             chain.doFilter(request, response);
@@ -152,6 +168,7 @@ public class ChatOpenSecurityConfig {
         http
             .securityMatcher(new OrRequestMatcher(
                 this::displayRequest,
+                this::debugStudioRequest,
                 request -> interviewDemo && request.getRequestURI().startsWith(request.getContextPath() + "/api/assist/"),
                 AntPathRequestMatcher.antMatcher("/"),
                 AntPathRequestMatcher.antMatcher("/index"),

@@ -122,9 +122,9 @@ class RuntimeConfigShadowGuardTest {
 
     @Test
     void appDefaultResourcesAreOptInForOperationalRisk() throws IOException {
-        String appYml = Files.readString(Path.of("app/src/main/resources/application.yml"));
-        String appYaml = Files.readString(Path.of("app/src/main/resources/application.yaml"));
-        String appProps = Files.readString(Path.of("app/src/main/resources/application.properties"));
+        String appYml = Files.readString(Path.of("app/quarantine/resources_legacy/application.yml"));
+        String appYaml = Files.readString(Path.of("app/quarantine/resources_legacy/application.yaml"));
+        String appProps = Files.readString(Path.of("app/quarantine/resources_legacy/application.properties"));
         String combined = appYml + "\n" + appYaml + "\n" + appProps;
 
         assertFalse(Pattern.compile("(?m)^\\s*active\\s*:").matcher(appYml).find(),
@@ -155,9 +155,8 @@ class RuntimeConfigShadowGuardTest {
         assertTrue(ultra.contains("spring.reactor.netty.http.client.wiretap=false"));
         assertTrue(rootBuild.contains("srcDirs(\"main/resources\")"),
                 "root module must own packaged runtime configuration");
-        assertTrue(appBuild.contains(
-                        "exclude(\"application*.yml\", \"application*.yaml\", \"application*.properties\")"),
-                ":app must exclude duplicate application configuration resources");
+        assertTrue(appBuild.contains("resources.setSrcDirs(emptyList<String>())"),
+                ":app must declare an empty resources sourceSet so it cannot shadow root configuration");
 
         assertAll(
                 () -> assertTrue(ultra.contains(

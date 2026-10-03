@@ -129,6 +129,32 @@ class PublicRequestBudgetGuardTest {
     }
 
     @Test
+    void chatEndpointAdmitsRequestedBudgetUpToChatRunCap() {
+        PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
+        guard.setMaxTimeBudgetMs(600_000L);
+
+        MockHttpServletRequest chat = new MockHttpServletRequest("POST", "/api/chat");
+        chat.addHeader("X-Budget-Ms", "600000");
+        Long admitted = ReflectionTestUtils.invokeMethod(guard, "validateTimeBudgetHeader",
+                chat, new MockHttpServletResponse(), 0L);
+        assertEquals(600_000L, admitted);
+        assertEquals(600_000L, TraceStore.get("public.request.budget.timeBudgetMs"));
+
+        MockHttpServletResponse overResponse = new MockHttpServletResponse();
+        MockHttpServletRequest over = new MockHttpServletRequest("POST", "/api/chat");
+        over.addHeader("X-Budget-Ms", "600001");
+        assertNull(ReflectionTestUtils.invokeMethod(guard, "validateTimeBudgetHeader",
+                over, overResponse, 0L));
+        assertEquals(HttpStatus.BAD_REQUEST.value(), overResponse.getStatus());
+        assertEquals("public_time_budget_invalid", TraceStore.get("public.request.budget.rejectReason"));
+
+        MockHttpServletRequest noHeader = new MockHttpServletRequest("POST", "/api/chat");
+        Long defaulted = ReflectionTestUtils.invokeMethod(guard, "validateTimeBudgetHeader",
+                noHeader, new MockHttpServletResponse(), 0L);
+        assertEquals(1_500L, defaulted);
+    }
+
+    @Test
     void chatRejectsNonFiniteOutOfRangeAndAggregateModelBudgets() {
         PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
 
@@ -841,20 +867,27 @@ class PublicRequestBudgetGuardTest {
 
         assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
                 () -> controller.chatStream(request, false, false, null, http));
-        verifyNoInteractions(owner, history, runs);
+        verify(owner).ownerKey();
+        org.mockito.Mockito.verifyNoMoreInteractions(owner);
+        verifyNoInteractions(history, runs);
     }
 
     @Test
-    void allThreeChatGenerationEndpointsRejectInvalidEffectiveSettingsBeforeOwnerWork() {
+    void allThreeChatGenerationEndpointsRejectInvalidEffectiveSettingsBeforeRunOrHistoryWork() {
         PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
         SettingsService settings = mock(SettingsService.class);
         ClientOwnerKeyResolver owner = mock(ClientOwnerKeyResolver.class);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        com.example.lms.service.chat.ChatRunRegistry runs =
+                mock(com.example.lms.service.chat.ChatRunRegistry.class);
         when(settings.getAllSettings()).thenReturn(Map.of(
                 SettingsService.KEY_OPENAI_MODEL, "m".repeat(257)));
         ChatApiController controller = mock(ChatApiController.class, Answers.CALLS_REAL_METHODS);
         ReflectionTestUtils.setField(controller, "publicRequestBudgetGuard", guard);
         ReflectionTestUtils.setField(controller, "settingsService", settings);
         ReflectionTestUtils.setField(controller, "ownerKeyResolver", owner);
+        ReflectionTestUtils.setField(controller, "historyService", history);
+        ReflectionTestUtils.setField(controller, "runRegistry", runs);
         ChatRequestDto request = ChatRequestDto.builder().message("valid raw message").build();
 
         assertRejection(HttpStatus.PAYLOAD_TOO_LARGE, "chat_model_too_large",
@@ -863,45 +896,27 @@ class PublicRequestBudgetGuardTest {
                 () -> controller.chat(request, null, new MockHttpServletRequest()));
         assertRejection(HttpStatus.PAYLOAD_TOO_LARGE, "chat_model_too_large",
                 () -> controller.chatStream(request, false, false, null, new MockHttpServletRequest()));
-        verifyNoInteractions(owner);
+        verify(owner, org.mockito.Mockito.times(3)).ownerKey();
+        org.mockito.Mockito.verifyNoMoreInteractions(owner);
+        verifyNoInteractions(history, runs);
     }
 
     @Test
-    void sessionAttachmentExpansionUsesOnlyOneItemOfLookaheadBeforeRejecting() {
-        PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
-        guard.setMaxAttachmentIds(2);
-        SettingsService settings = mock(SettingsService.class);
-        ClientOwnerKeyResolver owner = mock(ClientOwnerKeyResolver.class);
-        ChatHistoryService history = mock(ChatHistoryService.class);
-        ChatService chat = mock(ChatService.class);
-        AttachmentService attachments = mock(AttachmentService.class);
-        when(settings.getAllSettings()).thenReturn(Map.of());
-        when(owner.ownerKey()).thenReturn("owner-a");
-        when(attachments.findIdsBySession(
-                org.mockito.ArgumentMatchers.eq("7"),
-                org.mockito.ArgumentMatchers.eq(3),
-                org.mockito.ArgumentMatchers.any(com.example.lms.service.AttachmentOwnerIdentity.class)))
-                .thenReturn(List.of("a", "b", "c"));
-        ChatApiController controller = mock(ChatApiController.class, Answers.CALLS_REAL_METHODS);
-        ReflectionTestUtils.setField(controller, "publicRequestBudgetGuard", guard);
-        ReflectionTestUtils.setField(controller, "settingsService", settings);
-        ReflectionTestUtils.setField(controller, "ownerKeyResolver", owner);
-        ReflectionTestUtils.setField(controller, "historyService", history);
-        ReflectionTestUtils.setField(controller, "chatService", chat);
-        ReflectionTestUtils.setField(controller, "attachmentService", attachments);
-        ChatRequestDto request = ChatRequestDto.builder()
-                .message("summarize the uploaded file")
-                .sessionId(7L)
-                .build();
-
-        assertRejection(HttpStatus.PAYLOAD_TOO_LARGE, "chat_attachment_count_exceeded",
-                () -> controller.chat(request, null, new MockHttpServletRequest()));
-
-        verify(attachments).findIdsBySession(
-                org.mockito.ArgumentMatchers.eq("7"),
-                org.mockito.ArgumentMatchers.eq(3),
-                org.mockito.ArgumentMatchers.any(com.example.lms.service.AttachmentOwnerIdentity.class));
-        verifyNoInteractions(chat);
+    void restoredApprovedAttachmentSelectionStillHonorsPublicCountBudget() {
+        PublicRequestBudgetGuard guard=new PublicRequestBudgetGuard();guard.setMaxAttachmentIds(2);
+        var authority=mock(com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.class);
+        when(authority.selectedAttachmentIds(org.mockito.ArgumentMatchers.any())).thenReturn(List.of("a","b","c"));
+        AttachmentService attachments=mock(AttachmentService.class);
+        var controller=mock(ChatApiController.class,Answers.CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(controller,"generalGraphSourceAuthority",authority);
+        ReflectionTestUtils.setField(controller,"attachmentService",attachments);
+        var session=new com.example.lms.domain.ChatSession("fixture","owner-a","ANON");session.setId(7L);
+        var request=ChatRequestDto.builder().message("그 보고서를 다시 비교해줘").sessionId(7L).build();
+        ReflectionTestUtils.invokeMethod(controller,"restoreAttachmentSelection",request,session,null,"owner-a");
+        assertRejection(HttpStatus.PAYLOAD_TOO_LARGE,"chat_attachment_count_exceeded",
+            ()->guard.validateChatEffective(request));
+        verify(authority).selectedAttachmentIds(org.mockito.ArgumentMatchers.any());
+        verifyNoInteractions(attachments);
     }
 
     @Test
@@ -1045,6 +1060,40 @@ class PublicRequestBudgetGuardTest {
     }
 
     @Test
+    void ordinaryChatCapsConfiguredAndRequestedBudgetWithoutExpandingShorterLimits() throws Exception {
+        var guard = new PublicRequestBudgetGuard();
+        ReflectionTestUtils.setField(guard, "defaultTimeBudgetMs", 240_000L);
+        guard.setMaxTimeBudgetMs(600_000L);
+        for (String path : List.of("/api/chat", "/api/chat/sync", "/api/chat/stream")) {
+            for (String header : List.of("absent", "240000", "540000", "600000", "1500")) {
+                var request = new MockHttpServletRequest("POST", path);
+                if (!header.equals("absent")) request.addHeader("X-Budget-Ms", header);
+                request.setContentType(MediaType.APPLICATION_JSON_VALUE);
+                request.setContent("{}".getBytes(StandardCharsets.UTF_8));
+                var response = new MockHttpServletResponse();
+                var remaining = new java.util.concurrent.atomic.AtomicLong(-1);
+                guard.doFilter(request, response, (req, res) -> remaining.set(TimeBudgetContext.get().remainingMillis()));
+                long expected = header.equals("1500") ? 1500L
+                        : header.equals("absent") ? 240_000L : Long.parseLong(header);
+                assertEquals(200, response.getStatus());
+                assertTrue(remaining.get() > 0 && remaining.get() <= expected, path + "/" + header);
+                assertEquals(expected, TraceStore.get("public.request.budget.timeBudgetMs"));
+            }
+        }
+    }
+
+    @Test
+    void separateTaskBudgetIsNotSilentlyReclassifiedAsOrdinaryChat() throws Exception {
+        var guard = new PublicRequestBudgetGuard();
+        var request = new MockHttpServletRequest("POST", "/v1/tasks/ask");
+        request.addHeader("X-Budget-Ms", "240000");
+        request.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        request.setContent("{}".getBytes(StandardCharsets.UTF_8));
+        guard.doFilter(request, new MockHttpServletResponse(), new MockFilterChain());
+        assertEquals(240000L, TraceStore.get("public.request.budget.timeBudgetMs"));
+    }
+
+    @Test
     void publicBudgetHeaderCannotExtendOrOverflowServerDeadline() throws Exception {
         PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
         guard.setMaxTimeBudgetMs(120L);
@@ -1108,7 +1157,7 @@ class PublicRequestBudgetGuardTest {
     }
 
     @Test
-    void downstreamTimeBudgetFilterReusesTheSameAbsoluteDeadline() throws Exception {
+    void downstreamFilterDoesNotReturn408AfterCompleteBodyReception() throws Exception {
         PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
         guard.setMaxTimeBudgetMs(40L);
         com.abandonware.ai.addons.config.AddonsProperties props =
@@ -1137,9 +1186,8 @@ class PublicRequestBudgetGuardTest {
         });
 
         assertTrue(beforeDelay.get() != null);
-        assertFalse(nestedCalled.get(), "an expired absolute deadline must not be resurrected downstream");
-        assertEquals(408, response.getStatus());
-        assertTrue(response.getContentAsString().contains("request_deadline_exhausted"));
+        assertTrue(nestedCalled.get(), "fully received requests must reach acceptance even after the ingress budget expires");
+        assertEquals(200, response.getStatus());
         assertEquals(null, TimeBudgetContext.get());
     }
 

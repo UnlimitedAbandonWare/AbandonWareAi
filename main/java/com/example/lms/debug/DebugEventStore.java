@@ -198,8 +198,8 @@ public class DebugEventStore {
                 fp,
                 safeStr(finalMessage),
                 SafeRedactor.hashValue(correlationSid()),
-                SafeRedactor.hashValue(correlationTraceId()),
-                SafeRedactor.hashValue(correlationRequestId()),
+                SafeRedactor.hashValueOrPreserve(correlationTraceId()),
+                SafeRedactor.hashValueOrPreserve(correlationRequestId()),
                 Thread.currentThread().getName(),
                 safeStr(where),
                 sanitized,
@@ -232,6 +232,31 @@ public class DebugEventStore {
             out.add(ev);
         }
         return out;
+    }
+
+    public record EventPage(List<DebugEvent> items, String nextId, boolean hasMore, String cursorStatus) {}
+
+    /** Exact correlation filters run before the page limit, in ring insertion order. */
+    public EventPage page(String requestIdHash, String traceIdHash, String afterId, int limit) {
+        List<DebugEvent> snapshot = new ArrayList<>(ring);
+        int start = 0;
+        if (afterId != null) {
+            while (start < snapshot.size() && !afterId.equals(snapshot.get(start).id())) start++;
+            if (start == snapshot.size()) return new EventPage(List.of(), null, false, "evicted");
+            start++;
+        }
+        int bounded = Math.max(1, Math.min(limit, 500));
+        List<DebugEvent> items = new ArrayList<>(bounded);
+        boolean hasMore = false;
+        for (int i = start; i < snapshot.size(); i++) {
+            DebugEvent event = snapshot.get(i);
+            if (requestIdHash != null && !requestIdHash.equals(event.requestId())) continue;
+            if (traceIdHash != null && !traceIdHash.equals(event.traceId())) continue;
+            if (items.size() == bounded) { hasMore = true; break; }
+            items.add(event);
+        }
+        String nextId = hasMore ? items.get(items.size() - 1).id() : null;
+        return new EventPage(List.copyOf(items), nextId, hasMore, afterId == null ? "initial" : "ok");
     }
 
     /** List recent events for one probe type, newest first. */

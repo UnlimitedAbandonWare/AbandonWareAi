@@ -152,6 +152,63 @@ class ChatWorkflowStrictSingleAttemptHttpIntegrationTest {
                 "endpoint repair must not run after partial output");
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {-2, -1, 0, 128, 2048})
+    void exactTimeoutRebuildRetainsAdmittedOutputBound(int requested) {
+        String route = "llmrouter.api3";
+        ChatRequestDto request = ChatRequestDto.builder().message("synthetic exact request").model(route)
+                .strictModelSelection(true).build();
+        if (requested != -2) request.setMaxTokens(requested < 0 ? null : requested);
+        int routedLimit = requested == -2
+                ? new com.example.lms.service.verbosity.VerbosityDetector()
+                        .detect("Explain photosynthesis in one sentence.").targetTokenBudgetOut()
+                : 512;
+        if (requested == -2) {
+            assertEquals(2048, request.getMaxTokens());
+            assertEquals(160, routedLimit);
+        }
+        com.example.lms.llm.RequestedModelSelection.begin(route);
+        com.example.lms.llm.RequestedModelSelection.rememberOutputLimit(route, routedLimit);
+        AtomicInteger rebuilds = new AtomicInteger();
+        AtomicInteger calls = new AtomicInteger();
+        ChatModel bounded = new ChatModel() {
+            @Override public ChatResponse chat(List<ChatMessage> messages) {
+                calls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(AiMessage.from("bounded answer")).build();
+            }
+        };
+        DynamicChatModelFactory factory = mock(DynamicChatModelFactory.class, invocation -> {
+            if ("lcWithTimeout".equals(invocation.getMethod().getName())) {
+                rebuilds.incrementAndGet();
+                assertEquals(route, invocation.getArgument(0));
+                int expected = request.getMaxTokens() != null && request.getMaxTokens() > 0
+                        ? Math.min(request.getMaxTokens(), routedLimit) : routedLimit;
+                assertEquals(Integer.valueOf(expected), invocation.getArgument(5));
+                assertEquals(Integer.valueOf(0), invocation.getArgument(7));
+                return bounded;
+            }
+            return org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation);
+        });
+        ChatWorkflow workflow = mock(ChatWorkflow.class, CALLS_REAL_METHODS);
+        ReflectionTestUtils.setField(workflow, "dynamicChatModelFactory", factory);
+        ReflectionTestUtils.setField(workflow, "llmProvider", "openai");
+        ReflectionTestUtils.setField(workflow, "llmTimeoutSeconds", 2);
+        ReflectionTestUtils.setField(workflow, "requestedModelTimeoutSeconds", 2);
+        ReflectionTestUtils.setField(workflow, "llmMaxAttempts", 3);
+        ReflectionTestUtils.setField(workflow, "llmRetryMaxTotalMs", 5_000L);
+        String result = ReflectionTestUtils.invokeMethod(workflow, "callWithRetryReportingSuccess", bounded,
+                List.of(UserMessage.from("synthetic exact request")),
+                request,
+                (Consumer<Object>) ignored -> { }, true);
+        assertEquals("bounded answer", result);
+        assertEquals(1, rebuilds.get());
+        assertEquals(1, calls.get());
+        assertNull(com.example.lms.llm.RequestedModelSelection.outputLimit("llmrouter.other", null));
+        assertEquals(2048, com.example.lms.llm.RequestedModelSelection.outputLimit("llmrouter.other", 2048));
+        com.example.lms.llm.RequestedModelSelection.begin(route);
+        assertNull(com.example.lms.llm.RequestedModelSelection.outputLimit(route, null), "new request cannot inherit a cap");
+    }
+
     @Test
     void safeFailureBeforeAnyOutputCanStillRetry() {
         AtomicInteger calls = new AtomicInteger();

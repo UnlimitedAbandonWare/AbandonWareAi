@@ -28,6 +28,45 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 
 class DynamicChatModelFactoryRequestTimelineTest {
 
+    @Test
+    void contextPreparationUsesOneWireAttemptAndCannotOverwritePrimarySelection() throws Exception {
+        for(boolean fails:List.of(false,true)){
+            TraceStore.clear();
+            AtomicInteger calls=new AtomicInteger();AtomicReference<String> body=new AtomicReference<>();
+            HttpServer server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+            server.createContext("/v1/chat/completions",exchange->{
+                body.set(new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8));calls.incrementAndGet();
+                byte[] response=(fails?"{\"error\":{\"message\":\"synthetic overload\"}}":
+                    "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"fixture\"},\"finish_reason\":\"stop\"}]}")
+                    .getBytes(StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type","application/json");
+                exchange.sendResponseHeaders(fails?500:200,response.length);
+                try(var output=exchange.getResponseBody()){output.write(response);}
+            });
+            server.start();
+            try{
+                var tracker=new ModelRuntimeHealthTracker();
+                String timeline=pendingTimeline(tracker,"preparation","scope","gemma4:26b");
+                TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY,true);
+                var factory=configuredFactory(tracker);
+                ReflectionTestUtils.setField(factory,"fastLocalBaseUrl","http://127.0.0.1:"+server.getAddress().getPort()+"/v1");
+                ReflectionTestUtils.setField(factory,"ollamaNativeThinkFalseEnabled",false);
+                assertEquals(true,tracker.contextPreparationAvailable(timeline));
+                var model=factory.lcForContextPreparation("qwen3.5:9b",2);
+                assertEquals("unknown",tracker.redactedRequestTimeline(timeline).get(1).get("endpointLabel"));
+                if(fails)assertThrows(RuntimeException.class,()->model.chat(List.of(UserMessage.from("synthetic source"))));
+                else assertEquals("fixture",model.chat(List.of(UserMessage.from("synthetic source"))).aiMessage().text());
+                assertEquals(1,calls.get());
+                var wire=new ObjectMapper().readTree(body.get());
+                assertEquals("qwen3.5:9b",wire.path("model").asText());assertEquals(1200,wire.path("max_tokens").asInt());
+                assertThrows(IllegalArgumentException.class,()->factory.lcForContextPreparation("llmrouter.light",2));
+                assertThrows(IllegalArgumentException.class,()->factory.lcForContextPreparation("gpt-synthetic-paid",2));
+                assertEquals(1,calls.get());
+            }finally{server.stop(0);}
+        }
+    }
+
+
     @AfterEach
     void clearTraceStore() {
         TraceStore.clear();

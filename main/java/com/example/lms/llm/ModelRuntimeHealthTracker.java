@@ -45,17 +45,43 @@ public class ModelRuntimeHealthTracker {
 
     private com.example.lms.agent.GroqFreeTierGuard.Reservation reserveGroq(dev.langchain4j.http.client.HttpRequest request) {
         if(!com.example.lms.agent.GroqFreeTierGuard.isGroq(request.url()))return null;
-        if(groqFreeTierGuard==null)throw new IllegalStateException("groq_free_guard_unavailable");
+        long bodyBytes = request.body() == null ? 0 : request.body().getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        long output = 0;
+        if(groqFreeTierGuard==null)throw groqAdmissionFailure("groq_free_guard_unavailable", bodyBytes, output);
         try {
             var body=REQUEST_ATTEMPT_MESSAGE_MAPPER.readTree(request.body());
             String key=request.headers().entrySet().stream().filter(e->"authorization".equalsIgnoreCase(e.getKey()))
                     .flatMap(e->e.getValue().stream()).findFirst().orElse("");
             if(key.startsWith("Bearer "))key=key.substring(7);
-            long output=body.path("max_completion_tokens").asLong(body.path("max_tokens").asLong(0));
-            if(output<=0)throw new IllegalStateException("groq_output_bound_required");
+            output=body.path("max_completion_tokens").asLong(body.path("max_tokens").asLong(0));
+            if(output<=0)throw groqAdmissionFailure("groq_output_bound_required", bodyBytes, output);
             return groqFreeTierGuard.reserve(body.path("model").asText(),key,
-                    request.body().getBytes(java.nio.charset.StandardCharsets.UTF_8).length+output,0);
-        }catch(java.io.IOException denied){throw new IllegalStateException("groq_free_admission_denied");}
+                    bodyBytes+output,0);
+        }catch(java.io.IOException denied){throw groqAdmissionFailure(denied.getMessage(), bodyBytes, output);}
+    }
+
+    private static com.example.lms.llm.gateway.LlmGatewayException groqAdmissionFailure(
+            String rawReason, long bodyBytes, long output) {
+        Set<String> reasons = Set.of("groq_free_guard_unavailable", "groq_output_bound_required",
+                "groq_rpm_exhausted", "groq_rpd_exhausted", "groq_tpm_exhausted", "groq_tpd_exhausted",
+                "groq_header_requests_exhausted", "groq_header_tokens_exhausted", "groq_retry_after",
+                "groq_auth_latched", "groq_free_account_evidence_needed", "groq_account_limits_unverified",
+                "groq_model_or_key_unverified", "groq_request_dimensions_invalid", "groq_margin_invalid",
+                "groq_ledger_busy", "groq_ledger_full", "groq_ledger_invalid", "groq_ledger_torn",
+                "groq_ledger_observation_failed", "groq_ledger_organization_mismatch",
+                "groq_clock_rollback", "groq_unsafe_path");
+        String reason = rawReason != null && reasons.contains(rawReason) ? rawReason : "groq_free_admission_denied";
+        LlmFailureClass category = reason.endsWith("_exhausted") || "groq_retry_after".equals(reason)
+                ? LlmFailureClass.RATE_LIMIT_COOLDOWN
+                : "groq_auth_latched".equals(reason) ? LlmFailureClass.AUTH_MISSING
+                : Set.of("groq_output_bound_required", "groq_request_dimensions_invalid").contains(reason)
+                ? LlmFailureClass.BAD_REQUEST : LlmFailureClass.DISABLED;
+        org.slf4j.LoggerFactory.getLogger(ModelRuntimeHealthTracker.class).warn(
+                "[GROQ_ADMISSION] reason={} requestBodyBytes={} outputLimit={}", reason, bodyBytes, output);
+        com.example.lms.search.TraceStore.put("llm.groq.admission.reason", reason);
+        com.example.lms.search.TraceStore.put("llm.groq.admission.requestBodyBytes", bodyBytes);
+        com.example.lms.search.TraceStore.put("llm.groq.admission.outputLimit", output);
+        return new com.example.lms.llm.gateway.LlmGatewayException(reason, category, reason);
     }
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.example.lms.debug.ApiFailureRecorder apiFailureRecorder;
@@ -221,6 +247,7 @@ public class ModelRuntimeHealthTracker {
         RequestAttemptAppContext appReservation = requestAttemptAppContext.get();
         if (appReservation == null || !timelineId.equals(appReservation.timelineId())
                 || !appReservation.firstClientReservation().compareAndSet(true, false)) {
+            if(appReservation!=null&&"context_prepare".equals(appReservation.role()))throw inferenceLimitFailure();
             reserveRequestInferenceAttempt(timelineId);
         }
         var run = com.example.lms.service.chat.ChatRunExecutionContext.current();
@@ -362,7 +389,10 @@ public class ModelRuntimeHealthTracker {
                                 var resolved = resolveServiceRequest(request);
                                 var receipt = directReceipt.get();
                                 if(receipt!=null)receipt.started(resolved.url());
+                                var judge = JudgeCallObservation.current();
+                                if (judge != null) judge.wireStarted();
                                 var response = client.execute(resolved);
+                                if (judge != null) judge.wireStatus(response.statusCode());
                                 if(groq!=null)groqFreeTierGuard.observe(groq,response.statusCode(),response.headers());
                                 if(receipt!=null)receipt.received(response.statusCode(),response.headers());
                                 attempt.finished(null);
@@ -372,6 +402,8 @@ public class ModelRuntimeHealthTracker {
                                 recordApiFailure(request.url(), com.example.lms.debug.ApiFailureRecorder.requestModel(request.body()), failure);
                                 var receipt = directReceipt.get();
                                 if(receipt!=null)receipt.failed(failure);
+                                var judge = JudgeCallObservation.current();
+                                if (judge != null) judge.failed(failure);
                                 attempt.finished(failure); throw failure;
                             }
                         }
@@ -951,7 +983,21 @@ public class ModelRuntimeHealthTracker {
         }
     }
 
+    /** Existing request ledger admission; never grant an auxiliary its own attempt budget. */
+    public boolean contextPreparationAvailable(String timelineId) {
+        limitRequestInferenceAttempts(timelineId, 2);
+        synchronized (requestTimelineLock) {
+            RequestTimeline timeline=requestTimelines.get(timelineId);
+            return timeline!=null&&!timeline.contextPreparationStarted
+                    &&timeline.inferenceAttemptLimit-timeline.inferenceAttemptTotal>=2;
+        }
+    }
+
     private boolean reserveRequestInferenceAttempt(String timelineId) {
+        return reserveRequestInferenceAttempt(timelineId, "primary");
+    }
+
+    private boolean reserveRequestInferenceAttempt(String timelineId,String role) {
         synchronized (requestTimelineLock) {
             RequestTimeline timeline = requestTimelines.get(timelineId);
             if (timeline == null || timeline.inferenceAttemptLimit == 0) return false;
@@ -963,6 +1009,11 @@ public class ModelRuntimeHealthTracker {
                         "Inference deadline exhausted", LlmFailureClass.TIMEOUT_SOFT, "failover_exhausted");
             }
             if (timeline.inferenceAttemptTotal >= timeline.inferenceAttemptLimit) throw inferenceLimitFailure();
+            if ("context_prepare".equals(role)) {
+                if(timeline.contextPreparationStarted
+                        ||timeline.inferenceAttemptLimit-timeline.inferenceAttemptTotal<2)throw inferenceLimitFailure();
+                timeline.contextPreparationStarted=true;
+            }
             timeline.inferenceAttemptTotal++;
             com.example.lms.search.TraceStore.put("llm.gateway.attemptCount", timeline.inferenceAttemptTotal);
             return true;
@@ -1016,7 +1067,8 @@ public class ModelRuntimeHealthTracker {
                 delegate,
                 canonicalTimelineValue(role),
                 route,
-                requestAttemptOptionsFingerprint(options));
+                requestAttemptOptionsFingerprint(options),
+                options == null ? null : options.get("provider"));
     }
 
     /**
@@ -1099,7 +1151,7 @@ public class ModelRuntimeHealthTracker {
 
     private RequestAttemptAppContext installRequestAttemptAppContext(
             String timelineId,
-            RequestAttemptAppEvidence evidence) {
+            RequestAttemptAppEvidence evidence,String role) {
         RequestAttemptAppContext previous = requestAttemptAppContext.get();
         int logicalCallOrdinal = previous != null && timelineId.equals(previous.timelineId())
                 ? previous.logicalCallOrdinal()
@@ -1108,7 +1160,8 @@ public class ModelRuntimeHealthTracker {
                 timelineId, logicalCallOrdinal, evidence,
                 previous != null && timelineId.equals(previous.timelineId())
                         ? previous.firstClientReservation()
-                        : new java.util.concurrent.atomic.AtomicBoolean(reserveRequestInferenceAttempt(timelineId))));
+                        : new java.util.concurrent.atomic.AtomicBoolean(reserveRequestInferenceAttempt(timelineId,role)),
+                previous!=null&&timelineId.equals(previous.timelineId())?previous.role():role));
         return previous;
     }
 
@@ -2343,6 +2396,7 @@ public class ModelRuntimeHealthTracker {
     private static final class RequestTimeline {
         private int inferenceAttemptLimit;
         private int inferenceAttemptTotal;
+        private boolean contextPreparationStarted;
         private final String timelineId;
         private final String requestHash;
         private final String sessionHash;
@@ -2799,18 +2853,20 @@ public class ModelRuntimeHealthTracker {
         private final String role;
         private final RequestAttemptRoute route;
         private final RequestAttemptFingerprint options;
+        private final String observedProvider;
 
         private RequestAttemptRecordingChatModel(
                 ModelRuntimeHealthTracker tracker,
                 ChatModel delegate,
                 String role,
                 RequestAttemptRoute route,
-                RequestAttemptFingerprint options) {
+                RequestAttemptFingerprint options, Object provider) {
             this.tracker = tracker;
             this.delegate = delegate;
             this.role = role;
             this.route = route;
             this.options = options;
+            this.observedProvider = provider instanceof String s && s.matches("[A-Za-z0-9_.:-]{1,80}") ? s : null;
         }
 
         @Override
@@ -2828,15 +2884,18 @@ public class ModelRuntimeHealthTracker {
             Object rawTimelineId = com.example.lms.search.TraceStore.get(REQUEST_TIMELINE_TRACE_KEY);
             String timelineId = rawTimelineId == null ? "" : String.valueOf(rawTimelineId).trim();
             if (timelineId.isBlank() || route == null) {
-                return invokeDelegate(messages, request);
+                ChatResponse response = invokeDelegate(messages, request);
+                observeResponse(response);
+                return response;
             }
             RequestAttemptFingerprint prompt = requestAttemptMessageFingerprint(messages);
             RequestAttemptAppEvidence appEvidence = requestAttemptAppEvidence(prompt, options);
-            RequestAttemptAppContext previousContext = tracker.installRequestAttemptAppContext(timelineId, appEvidence);
+            RequestAttemptAppContext previousContext = tracker.installRequestAttemptAppContext(timelineId, appEvidence,role);
             int attemptTotalBefore = tracker.currentThreadRequestAttemptTotal(timelineId);
             long startedNanos = System.nanoTime();
             try {
                 ChatResponse response = invokeDelegate(messages, request);
+                observeResponse(response);
                 if (tracker.currentThreadRequestAttemptTotal(timelineId) == attemptTotalBefore) {
                     String responseText = response == null || response.aiMessage() == null
                             ? null
@@ -2895,6 +2954,19 @@ public class ModelRuntimeHealthTracker {
         }
 
         /** Forward the full request; a legacy list-only delegate keeps its original entry point. */
+        private void observeResponse(ChatResponse response) {
+            var judge = JudgeCallObservation.current();
+            if (judge != null) {
+                judge.responseReceived(response);
+                return;
+            }
+            if (response != null && response.aiMessage() != null && response.aiMessage().text() != null
+                    && !response.aiMessage().text().isBlank()) {
+                com.example.lms.dto.GenerationObservation.capture(response, observedProvider,
+                        route == null ? null : route.routeKeyHash(), 0, null).store();
+            }
+        }
+
         private ChatResponse invokeDelegate(List<ChatMessage> messages, ChatRequest request) {
             if (request == null || messages == null || messages.isEmpty()) {
                 return delegate.chat(messages);
@@ -2957,7 +3029,7 @@ public class ModelRuntimeHealthTracker {
             String timelineId,
             int logicalCallOrdinal,
             RequestAttemptAppEvidence evidence,
-            java.util.concurrent.atomic.AtomicBoolean firstClientReservation) {
+            java.util.concurrent.atomic.AtomicBoolean firstClientReservation,String role) {
     }
 
     /** Type-preserving hook used by concrete disabled-model implementations. */

@@ -25,6 +25,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 
 
@@ -116,10 +117,22 @@ public class ChatRunRegistry {
         volatile long ownerLeaseDeadlineNanos = Long.MAX_VALUE;
         volatile boolean clusterFinalized;
         final Object gate = new Object();
+        final ReentrantLock terminalWriteLock = new ReentrantLock();
+        volatile boolean terminalWriteInProgress;
+        boolean cancellationCallbacksComplete;
+        List<ServerSentEvent<ChatStreamEvent>> cancellationTerminalEvidence = List.of();
         final Object commitLease = new Object();
+        final Object routingState = new Object();
+        volatile com.example.lms.routing.RunRoutingSnapshot routingSnapshot;
+        volatile com.example.lms.api.SettingsPlanProjection.View routingPlan;
+        final Map<com.example.lms.routing.RoutingProfile.Role,com.example.lms.routing.RoutingInvocation> routingInvocations = new java.util.EnumMap<>(com.example.lms.routing.RoutingProfile.Role.class);
+        com.example.lms.ensemble.PreparedContextPacket contextPreparation;
+        Long persistedUserMessageId;
+        com.example.lms.service.understanding.UnderstandingCommitService.Intent understandingIntent;
         final Sinks.Many<ServerSentEvent<ChatStreamEvent>> sink;
         volatile Status status = Status.RUNNING;
         long lastProgressMillis;
+        boolean idleDiagnosticRecorded;
         Sinks.Many<ServerSentEvent<ChatStreamEvent>> producerSink;
         Disposable cancellationHandle;
         boolean terminalEvictionScheduled;
@@ -165,6 +178,41 @@ public class ChatRunRegistry {
     private volatile ScheduledFuture<?> staleSweep;
     private volatile ScheduledFuture<?> ownerSweep;
     private ChatRunCluster cluster;
+    private com.example.lms.routing.RoutingProfileResolver routingProfileResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setRoutingProfileResolver(com.example.lms.routing.RoutingProfileResolver resolver) {
+        this.routingProfileResolver = resolver;
+    }
+
+    private com.example.lms.routing.RunRoutingSnapshot captureRouting(Run run) {
+        synchronized (run.routingState) {
+            if (run.routingSnapshot == null) {
+                try {
+                    run.routingSnapshot = routingProfileResolver == null
+                            ? com.example.lms.routing.RunRoutingSnapshot.disabled() : routingProfileResolver.capture();
+                } catch (com.example.lms.routing.RoutingProfileResolver.Unavailable unavailable) {
+                    run.routingSnapshot = com.example.lms.routing.RunRoutingSnapshot.unavailable();
+                }
+            }
+            return run.routingSnapshot;
+        }
+    }
+
+    com.example.lms.routing.RunRoutingSnapshot routingSnapshot(ChatRunExecutionContext context) {
+        Run run = exactRun(context);
+        if (run == null) throw new com.example.lms.routing.RoutingProfileResolver.Unavailable();
+        return captureRouting(run);
+    }
+
+    Optional<com.example.lms.routing.RoutingInvocation> routingInvocation(ChatRunExecutionContext context,com.example.lms.routing.RoutingProfile.Role role) {
+        Run run=exactRun(context);
+        if(run==null)throw new com.example.lms.routing.RoutingProfileResolver.Unavailable();
+        synchronized(run.routingState){
+            return captureRouting(run).binding(role).map(binding->run.routingInvocations.computeIfAbsent(role,
+                    ignored->new com.example.lms.routing.RoutingInvocation(binding)));
+        }
+    }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     public void setCluster(ChatRunCluster cluster) { this.cluster = cluster; }
@@ -177,14 +225,29 @@ public class ChatRunRegistry {
     void renewOwnerLeases() {
         if (cluster == null) return;
         long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ChatRunOwnerDirectory.LEASE_MILLIS);
-        var active = runsByToken.values().stream().filter(r -> isInFlight(r.status)).toList();
+        var active = runsByToken.values().stream()
+                .filter(r -> isInFlight(r.status) || r.terminalWriteInProgress).toList();
         java.util.Set<String> renewed;
         try {
             renewed = cluster.directory().renew(active.stream().map(r -> r.runId).collect(java.util.stream.Collectors.toSet()));
-        } catch (RuntimeException unavailable) { renewed = java.util.Set.of(); }
+        } catch (RuntimeException unavailable) {
+            log.warn("[AWX][chat-run] owner renewal unavailable; ownership=unknown action=retain_run_and_fence_authority");
+            return;
+        }
         for (Run run : active) {
             if (renewed.contains(run.runId)) run.ownerLeaseDeadlineNanos = deadline;
-            else cancelRun(run, () -> { }, false, true);
+            else {
+                // Missing renewal or elapsed lease is not proof that the worker died.
+                // Retain the run; leaseValid still fences new calls and durable effects.
+                try {
+                    if (cluster.directory().currentToken(run.sessionId)
+                            .filter(token -> !token.equals(run.runId)).isPresent()) {
+                        cancelRun(run, () -> { }, false, true);
+                    }
+                } catch (RuntimeException unavailable) {
+                    log.warn("[AWX][chat-run] owner lookup unavailable; ownership=unknown action=retain_run_and_fence_authority");
+                }
+            }
         }
         for (Run run : runsByToken.values()) {
             if (isTerminal(run.status) && !run.clusterFinalized) finishClusterOwner(run);
@@ -208,7 +271,7 @@ public class ChatRunRegistry {
     @Value("${chat.resume.ttl-seconds:300}")
     int ttlSeconds;
 
-    /** Maximum idle time for a nonterminal exact run before timeout terminalization. */
+    /** Compatibility key: diagnostic idle age, never a nonterminal run deadline. */
     @Value("${chat.resume.inflight-idle-timeout-seconds:1800}")
     int inflightIdleTimeoutSeconds = DEFAULT_INFLIGHT_IDLE_TIMEOUT_SECONDS;
 
@@ -295,61 +358,17 @@ public class ChatRunRegistry {
     }
 
     private void timeoutIfStale(Run expectedRun, long nowMillis, long idleTimeoutMillis) {
-        if (expectedRun == null) {
-            return;
-        }
-        AtomicReference<Disposable> cancellationHandle = new AtomicReference<>();
-        AtomicBoolean terminalized = new AtomicBoolean();
+        if (expectedRun == null) return;
         synchronized (expectedRun.gate) {
             if (runs.get(expectedRun.sessionId) != expectedRun
                     || runsByToken.get(expectedRun.runId) != expectedRun
                     || isTerminal(expectedRun.status)
-                    || idleAgeMillis(nowMillis, expectedRun.lastProgressMillis) < idleTimeoutMillis) {
-                return;
-            }
-
-            expectedRun.status = Status.CANCELLED;
-            expectedRun.clientAcknowledgement.countDown();
-            cancellationHandle.set(expectedRun.cancellationHandle);
-            expectedRun.cancellationHandle = null;
-
-            Sinks.Many<ServerSentEvent<ChatStreamEvent>> producerSink = expectedRun.producerSink;
-            expectedRun.producerSink = null;
-            expectedRun.generationOutcome = "timed_out";
-            expectedRun.finalDeliveryFailureReason = "stale_timeout";
-            expectedRun.terminalReason = "stale_timeout";
-
-            if (!expectedRun.terminalEventClaimed) {
-                expectedRun.terminalEventClaimed = true;
-                ChatStreamEvent.StatusSignal timeoutSignal = ChatStreamEvent.StatusSignal.of(
-                        "stream", "stale_timeout", "stream timed out", null, null, true);
-                ChatStreamEvent timeoutPayload = ChatStreamEvent.status(timeoutSignal);
-                ServerSentEvent<ChatStreamEvent> timeoutEvent =
-                        ServerSentEvent.<ChatStreamEvent>builder(timeoutPayload)
-                                .event(timeoutPayload.type())
-                                .build();
-                if (expectedRun.sink.tryEmitNext(timeoutEvent).isSuccess()) {
-                    expectedRun.terminalEventCount = 1;
-                }
-            } else {
-                expectedRun.duplicateSuppressed++;
-            }
-
-            if (producerSink != null) {
-                producerSink.tryEmitComplete();
-            }
-            expectedRun.sink.tryEmitComplete();
-            terminalized.set(true);
+                    || expectedRun.idleDiagnosticRecorded
+                    || idleAgeMillis(nowMillis, expectedRun.lastProgressMillis) < idleTimeoutMillis) return;
+            expectedRun.idleDiagnosticRecorded = true;
+            log.info("[AWX] timeoutSource=ChatRunRegistry.idleDiagnostic phase=run_liveness runHash={} action=retain_run workerExit=not_observed",
+                    SafeRedactor.hashValue(expectedRun.runId));
         }
-
-        if (!terminalized.get()) {
-            return;
-        }
-        Disposable detachedHandle = cancellationHandle.get();
-        if (detachedHandle != null) {
-            disposeSafely(detachedHandle, "stale-timeout");
-        }
-        scheduleTerminalEvictionOnce(expectedRun);
     }
 
     /**
@@ -374,6 +393,7 @@ public class ChatRunRegistry {
             }
             return existing;
         });
+        captureRouting(run); // Outside the commit/cancellation gate and map mutation.
         return new BeginResult(contextFor(run, owner.get()), owner.get());
     }
 
@@ -452,8 +472,7 @@ public class ChatRunRegistry {
 
         private void release(Run run, boolean cancel) {
             synchronized (run.gate) { run.interactiveSubscribers--; }
-            // The zero-consumer condition is rechecked in the same lock as the state transition.
-            if (cancel) cancelRun(run, () -> { }, false, false, List.of(), true);
+            // Subscriber lifetime belongs to the transport. Explicit Stop owns cancellation.
         }
     }
 
@@ -479,6 +498,8 @@ public class ChatRunRegistry {
             }
             boolean emitted = run.sink.tryEmitNext(event).isSuccess();
             if (emitted) {
+                if(event.data()!=null && event.data().pipelineSnapshot()!=null)
+                    run.routingPlan=com.example.lms.api.SettingsPlanProjection.fromPipeline(event.data().pipelineSnapshot());
                 touchProgress(run);
             }
             return emitted;
@@ -510,6 +531,8 @@ public class ChatRunRegistry {
         if (sessionId == null) {
             throw new IllegalArgumentException("sessionId is required");
         }
+        long deadlineNanos = System.nanoTime()
+                + TimeUnit.MILLISECONDS.toNanos(boundedDeletionCancelWaitMillis());
         if (cluster != null) cluster.fenceDeletion(sessionId);
         AtomicReference<Run> selected = new AtomicReference<>();
         runs.compute(sessionId, (id, existing) -> {
@@ -529,9 +552,7 @@ public class ChatRunRegistry {
         });
 
         Run run = selected.get();
-        if (cancelRun(run, () -> { }, false, true)) {
-            return;
-        }
+        cancelRun(run, () -> { }, false, true);
 
         boolean cancellationInProgress;
         synchronized (run.gate) {
@@ -542,9 +563,8 @@ public class ChatRunRegistry {
         }
         if (cancellationInProgress) {
             try {
-                boolean completed = run.cancellationComplete.await(
-                        boundedDeletionCancelWaitMillis(),
-                        TimeUnit.MILLISECONDS);
+                long remaining = Math.max(0L, deadlineNanos - System.nanoTime());
+                boolean completed = run.cancellationComplete.await(remaining, TimeUnit.NANOSECONDS);
                 if (!completed) {
                     throw SessionDeletionFenceException.waitTimedOut();
                 }
@@ -659,7 +679,7 @@ public class ChatRunRegistry {
             return false;
         }
         synchronized (run.gate) {
-            if (!isInFlight(run.status)) {
+            if (!isInFlight(run.status) || run.terminalWriteInProgress) {
                 return false;
             }
             run.status = Status.DONE;
@@ -797,8 +817,8 @@ public class ChatRunRegistry {
 
     /**
      * Linearize one already-admitted durable terminal side effect with session
-     * deletion. The action either completes before deletion obtains the run gate,
-     * or it is not invoked.
+     * deletion. Writes are serialized independently of the control gate; deletion
+     * fences new writes and waits for an admitted write to drain before finishing.
      */
     boolean runTerminalSideEffect(ChatRunExecutionContext context, Runnable action) {
         Run run = exactRun(context);
@@ -806,18 +826,53 @@ public class ChatRunRegistry {
             return false;
         }
         synchronized (run.gate) {
-            if (run.status != Status.COMMITTING || !leaseValid(run)) {
+            if (run.status != Status.COMMITTING || run.deletionFence || !leaseValid(run)) {
                 return false;
             }
-            action.run();
-            touchProgress(run);
-            return true;
+        }
+        run.terminalWriteLock.lock();
+        try {
+            synchronized (run.gate) {
+                if (exactRun(context) != run || runs.get(run.sessionId) != run
+                        || run.status != Status.COMMITTING || run.deletionFence
+                        || !leaseValid(run) || run.terminalWriteInProgress) return false;
+                run.terminalWriteInProgress = true;
+            }
+            try {
+                action.run();
+                return true;
+            } finally {
+                synchronized (run.gate) {
+                    run.terminalWriteInProgress = false;
+                    touchProgress(run);
+                }
+            }
+        } finally {
+            run.terminalWriteLock.unlock();
+            finishCancellation(run);
         }
     }
 
     boolean isCancellationRequested(ChatRunExecutionContext context) {
         Run run = exactRun(context);
-        return run == null || !isInFlight(run.status) || !leaseValid(run);
+        return run == null || !isInFlight(run.status);
+    }
+
+    java.util.Optional<com.example.lms.ensemble.PreparedContextPacket> cachedContextPreparation(
+            ChatRunExecutionContext context,String identity){
+        Run run=exactRun(context);
+        if(run==null)return java.util.Optional.empty();
+        synchronized(run.gate){
+            if(!isOwner(run,context)||!isInFlight(run.status)||!leaseValid(run)||run.deletionFence)return java.util.Optional.empty();
+            return java.util.Optional.ofNullable(run.contextPreparation).filter(p->p.identity().equals(identity));
+        }
+    }
+    void rememberContextPreparation(ChatRunExecutionContext context,com.example.lms.ensemble.PreparedContextPacket packet){
+        Run run=exactRun(context);if(run==null||packet==null)return;
+        synchronized(run.gate){
+            if(isOwner(run,context)&&isInFlight(run.status)&&leaseValid(run)&&!run.deletionFence)
+                run.contextPreparation=packet;
+        }
     }
 
     boolean admitCall(ChatRunExecutionContext context, Runnable onAdmitted) {
@@ -831,6 +886,47 @@ public class ChatRunRegistry {
             }
             onAdmitted.run();
             return true;
+        }
+    }
+
+    boolean bindPersistedUserMessage(ChatRunExecutionContext context, Long id) {
+        Run run = exactRun(context);
+        if (run == null || id == null || id <= 0) return false;
+        synchronized (run.gate) {
+            if (!isOwner(run, context) || !isInFlight(run.status) || !leaseValid(run) || run.deletionFence
+                    || (run.persistedUserMessageId != null && !run.persistedUserMessageId.equals(id))) return false;
+            run.persistedUserMessageId = id;
+            return true;
+        }
+    }
+    Long persistedUserMessageId(ChatRunExecutionContext context) {
+        Run run = exactRun(context);
+        if (run == null) return null;
+        synchronized (run.gate) {
+            return isOwner(run, context) && isInFlight(run.status) && leaseValid(run) && !run.deletionFence
+                    ? run.persistedUserMessageId : null;
+        }
+    }
+    boolean rememberUnderstandingIntent(ChatRunExecutionContext context,
+            com.example.lms.service.understanding.UnderstandingCommitService.Intent intent) {
+        Run run = exactRun(context);
+        if (run == null || intent == null) return false;
+        synchronized (run.gate) {
+            if (!isOwner(run, context) || !isInFlight(run.status) || !leaseValid(run) || run.deletionFence
+                    || !run.runId.equals(intent.originalRunId()) || !intent.scope().matchesSession(run.sessionId)
+                    || !java.util.Objects.equals(run.persistedUserMessageId, intent.userId())
+                    || (run.understandingIntent != null && !run.understandingIntent.equals(intent))) return false;
+            run.understandingIntent = intent;
+            return true;
+        }
+    }
+    java.util.Optional<com.example.lms.service.understanding.UnderstandingCommitService.Intent> understandingIntent(
+            ChatRunExecutionContext context) {
+        Run run = exactRun(context);
+        if (run == null) return java.util.Optional.empty();
+        synchronized (run.gate) {
+            return isOwner(run, context) && isInFlight(run.status) && leaseValid(run) && !run.deletionFence
+                    ? java.util.Optional.ofNullable(run.understandingIntent) : java.util.Optional.empty();
         }
     }
 
@@ -986,11 +1082,29 @@ public class ChatRunRegistry {
         if (run == null) {
             return Optional.empty();
         }
+        boolean current = cluster == null ? runs.get(sessionId) == run
+                : cluster.directory().currentToken(sessionId).map(run.runId::equals).orElse(false);
         synchronized (run.gate) {
-            boolean current = cluster == null ? runs.get(sessionId) == run
-                    : cluster.directory().currentToken(sessionId).map(run.runId::equals).orElse(false);
             return Optional.of(new RunView(run.status, current, outcomeView(run)));
         }
+    }
+
+    public record RoutingView(com.example.lms.routing.RunRoutingSnapshot snapshot,
+            List<com.example.lms.routing.RoutingInvocation.Observation> observations,RunOutcomeView outcome,
+            com.example.lms.api.SettingsPlanProjection.View pipelineView) {}
+
+    /** Caller must have passed the existing exact-run owner gate; never joins or captures a new policy. */
+    public Optional<RoutingView> routingViewForAuthorizedExact(Long sessionId,String runToken) {
+        Run run=exactRun(sessionId,runToken);
+        if(run==null)return Optional.empty();
+        com.example.lms.routing.RunRoutingSnapshot snapshot;
+        List<com.example.lms.routing.RoutingInvocation.Observation> observations;
+        synchronized(run.routingState){
+            snapshot=run.routingSnapshot;
+            if(snapshot==null)return Optional.empty();
+            observations=run.routingInvocations.values().stream().map(com.example.lms.routing.RoutingInvocation::observation).toList();
+        }
+        synchronized(run.gate){return Optional.of(new RoutingView(snapshot,observations,outcomeView(run),run.routingPlan));}
     }
 
     /**
@@ -1032,6 +1146,7 @@ public class ChatRunRegistry {
             return false;
         }
         Disposable cancellationHandle;
+        List<java.util.function.LongConsumer> cancellationObservers;
         synchronized (run.gate) {
             boolean cancellable = run.status == Status.RUNNING
                     || (allowCommitting && run.status == Status.COMMITTING);
@@ -1043,15 +1158,17 @@ public class ChatRunRegistry {
             run.cancellationAcceptedAtEpochMs = System.currentTimeMillis();
             log.info("[LLM_CANCEL_ACCEPTED] runHash={} observedAtEpochMs={} boundary=application_cancellation",
                     SafeRedactor.hashValue(run.runId), run.cancellationAcceptedAtEpochMs);
-            run.cancellationObservers.values().forEach(observer ->
-                    notifyCancellationObserver(observer, run.cancellationAcceptedAtEpochMs));
+            cancellationObservers = List.copyOf(run.cancellationObservers.values());
             run.cancellationObservers.clear();
+            run.cancellationTerminalEvidence = terminalEvidence;
             touchProgress(run);
             run.clientAcknowledgement.countDown();
             cancellationHandle = run.cancellationHandle;
             run.cancellationHandle = null;
         }
         try {
+            cancellationObservers.forEach(observer ->
+                    notifyCancellationObserver(observer, run.cancellationAcceptedAtEpochMs));
             if (cancellationHandle != null) {
                 disposeSafely(cancellationHandle, "exact-cancel");
             }
@@ -1064,10 +1181,21 @@ public class ChatRunRegistry {
                 }
             }
             synchronized (run.gate) {
-                if (run.status != Status.CANCELLING) {
-                    return false;
-                }
-                run.status = Status.CANCELLED;
+                return run.status == Status.CANCELLING;
+            }
+        } finally {
+            synchronized (run.gate) { run.cancellationCallbacksComplete = true; }
+            finishCancellation(run);
+        }
+    }
+
+    private void finishCancellation(Run run) {
+        synchronized (run.gate) {
+            if (run.status != Status.CANCELLING || run.terminalWriteInProgress
+                    || !run.cancellationCallbacksComplete) return;
+            List<ServerSentEvent<ChatStreamEvent>> terminalEvidence = run.cancellationTerminalEvidence;
+            run.cancellationTerminalEvidence = List.of();
+            run.status = Status.CANCELLED;
                 if (!run.terminalEventClaimed) {
                     run.terminalEventClaimed = true;
                     boolean terminalEvidenceEmitted = false;
@@ -1095,12 +1223,9 @@ public class ChatRunRegistry {
                 }
                 run.terminalReason = run.deletionFence ? "session_deleted" : "cancelled";
                 run.sink.tryEmitComplete();
-            }
-        } finally {
-            run.cancellationComplete.countDown();
-            scheduleTerminalEvictionOnce(run);
         }
-        return true;
+        run.cancellationComplete.countDown();
+        scheduleTerminalEvictionOnce(run);
     }
 
     private boolean isOwner(Run run, ChatRunExecutionContext context) {
@@ -1193,7 +1318,8 @@ public class ChatRunRegistry {
             return;
         }
         synchronized (expectedRun.gate) {
-            if (!isTerminal(expectedRun.status) || expectedRun.terminalEvictionScheduled) {
+            if (!isTerminal(expectedRun.status) || expectedRun.terminalWriteInProgress
+                    || expectedRun.terminalEvictionScheduled) {
                 return;
             }
             expectedRun.terminalEvictionScheduled = true;

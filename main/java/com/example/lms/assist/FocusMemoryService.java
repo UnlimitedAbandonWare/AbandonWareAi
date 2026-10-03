@@ -58,12 +58,12 @@ public class FocusMemoryService {
     }
     public FocusMemoryScope scope(String owner,String channel){
         String id=NovaFocusHistoryService.scope(owner,channel);
-        return transaction(()->{var p=em.find(NovaFocusProfile.class,id);
-            return new FocusMemoryScope(id,p==null?0:p.getSettingsVersion(),p==null?0:p.getMemoryRevision(),1,settings(p).recallEnabled());});
+        return transaction(()->{var p=em.find(NovaFocusProfile.class,id);var s=settings(p);
+            return new FocusMemoryScope(id,p==null?0:p.getSettingsVersion(),p==null?0:p.getMemoryRevision(),1,s.effectiveRecallEnabled(),s.memoryOrDefault());});
     }
     private boolean matches(FocusMemoryScope scope,NovaFocusProfile p){
         return p!=null&&p.getSettingsVersion()==scope.consentRevision()&&p.getMemoryRevision()==scope.indexRevision()
-            &&settings(p).recallEnabled()==scope.recallEnabled();
+            &&settings(p).effectiveRecallEnabled()==scope.recallEnabled();
     }
     public boolean current(FocusMemoryScope scope){
         return scope==null||transaction(()->matches(scope,em.find(NovaFocusProfile.class,scope.namespace())));
@@ -83,7 +83,7 @@ public class FocusMemoryService {
     private NovaFocusProfile writable(String scope,long consent,boolean remember){
         var p=em.find(NovaFocusProfile.class,scope,LockModeType.PESSIMISTIC_WRITE);
         if(p==null||p.getSettingsVersion()!=consent)throw new IllegalArgumentException("focus_memory_consent_conflict");
-        if(remember&&!settings(p).rememberFactsEnabled())throw new IllegalArgumentException("focus_memory_save_disabled");
+        if(remember&&!settings(p).effectiveRememberFactsEnabled())throw new IllegalArgumentException("focus_memory_save_disabled");
         return p;
     }
     private static String sourceId(String id){
@@ -105,11 +105,11 @@ public class FocusMemoryService {
             if(term==null||term.isBlank()||term.length()>48||term.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("invalid_memory_entity");
             terms.add(term.strip().toLowerCase(Locale.ROOT));
         }
-        transaction(()->{writable(id,edit.consentRevision(),true);return null;});
+        var policy=transaction(()->settings(writable(id,edit.consentRevision(),true)).memoryOrDefault());
         byte[] vector=null;String fp=null;
         var previous=TimeBudgetContext.get();long allowed=ChatRunExecutionContext.capRequestWait(5000);
         TimeBudgetContext.set(new TimeBudget(allowed));
-        try{var embedded=embed(edit.text(),null);vector=encode(embedded.vector());fp=embedded.fingerprint();}
+        try{var embedded=embed(edit.text(),null,policy);vector=encode(embedded.vector());fp=embedded.fingerprint();}
         catch(CancellationException cancelled){throw cancelled;}
         catch(RuntimeException unavailable){/* Fact remains authoritative; lexical/local-graph fallback is explicit. */}
         finally{if(previous==null)TimeBudgetContext.clear();else TimeBudgetContext.set(previous);}
@@ -149,9 +149,10 @@ public class FocusMemoryService {
             Instant now=Instant.now();for(var f:versions){f.setDeletedAt(now);f.setValidTo(now);f.setText(null);f.setEntitiesJson("[]");f.setEmbedding(null);f.setEmbeddingFingerprint(null);}
             p.setMemoryRevision(p.getMemoryRevision()+1);return null;});
     }
-    private Projection embed(String text,Set<String> compatible){
+    private Projection embed(String text,Set<String> compatible,NovaFocusSettings.Memory memory){
+        var prefer=memory==null?NovaFocusSettings.Memory.EmbeddingPrefer.LOCAL_THEN_CLOUD:memory.embeddingPrefer();
         ChatRunExecutionContext.throwIfCancelled();
-        if(localEnabled&&(localRetryAfterNanos==0||System.nanoTime()-localRetryAfterNanos>=0)
+        if(prefer!=NovaFocusSettings.Memory.EmbeddingPrefer.CLOUD_ONLY&&localEnabled&&(localRetryAfterNanos==0||System.nanoTime()-localRetryAfterNanos>=0)
             &&(compatible==null||compatible.contains(embeddings.privateFingerprint()))){
             try{return checked(embeddings.embedPrivate(text),embeddings.privateDimensions(),embeddings.privateFingerprint());}
             catch(CancellationException cancelled){throw cancelled;}
@@ -161,7 +162,7 @@ public class FocusMemoryService {
             }
         }
         ChatRunExecutionContext.throwIfCancelled();
-        if(cloud!=null&&(compatible==null||compatible.contains(cloud.fingerprint())))
+        if(prefer!=NovaFocusSettings.Memory.EmbeddingPrefer.LOCAL_ONLY&&cloud!=null&&(compatible==null||compatible.contains(cloud.fingerprint())))
             return checked(cloud.embed(text),cloud.dimensions(),cloud.fingerprint());
         throw new IllegalStateException("focus_embedding_route_unavailable");
     }
@@ -194,12 +195,13 @@ public class FocusMemoryService {
             if(candidates.isEmpty())return Result.empty(Status.NO_AUTHORIZED_MEMORY,"no_saved_facts");
             if(candidates.size()>256)return Result.empty(Status.BLOCKED_SCOPE,"owner_fact_limit");
             check(current);var selected=new LinkedHashSet<String>();int vectorHits=0;String reason="";
+            var policy=scope.memoryOrDefault();
             try{
                 // Candidate selection is isolated BEFORE ANN search. No federated/public store is touched.
                 var available=candidates.stream().filter(this::compatible).toList();
                 if(!available.isEmpty()){
                     var spaces=new HashSet<String>();available.forEach(f->spaces.add(f.getEmbeddingFingerprint()));
-                    var query=embed(question,spaces);var store=new InMemoryEmbeddingStore<String>();
+                    var query=embed(question,spaces,policy);var store=new InMemoryEmbeddingStore<String>();
                     for(var f:available)if(query.fingerprint().equals(f.getEmbeddingFingerprint()))
                         store.add(Embedding.from(decode(f.getEmbedding())),f.getSourceId());
                     var q=Embedding.from(query.vector());
@@ -212,12 +214,14 @@ public class FocusMemoryService {
             if(TimeBudgetContext.get().expired())return Result.empty(Status.TIMED_OUT,"memory_budget_exhausted");
             String folded=question.toLowerCase(Locale.ROOT);
             for(var f:candidates)if(selected.size()<6&&entities(f).stream().anyMatch(folded::contains))selected.add(f.getSourceId());
-            int before=selected.size(),hops=0;
+            int before=selected.size(),hops=0;boolean graphed=false;
             boolean relation=folded.matches("(?s).*(관계|연결|함께|원인|related|connected).*");
-            if(relation||selected.size()<2){
+            var graph=policy.graphMode();
+            if(graph==NovaFocusSettings.Memory.GraphMode.ON
+                ||graph==NovaFocusSettings.Memory.GraphMode.AUTO&&(relation||selected.size()<2)){
                 var projection=candidates.stream().map(f->new BrainStateService.PrivateFact(scope.namespace(),f.getSourceId(),new LinkedHashSet<>(entities(f)))).toList();
                 var expansion=BrainStateService.expandPrivate(scope.namespace(),projection,List.copyOf(selected),()->current.getAsBoolean()&&!TimeBudgetContext.get().expired());
-                selected.addAll(expansion.sources());hops=expansion.hops();
+                selected.addAll(expansion.sources());hops=expansion.hops();graphed=true;
             }
             int graphHits=selected.size()-before;var byId=new HashMap<String,FocusMemoryFact>();candidates.forEach(f->byId.put(f.getSourceId(),f));
             var evidence=new ArrayList<MemoryEvidence>();boolean truncated=false;
@@ -228,12 +232,12 @@ public class FocusMemoryService {
                     f.getText(),f.getEventTime(),f.getRecordedAt(),f.getRecordedAt(),null,f.getSupersedesId(),null,null,
                     entities(f),"CO_MENTIONED_WITH");
                 var next=new ArrayList<>(evidence);next.add(e);
-                if(next.size()>4||ChatConversationContext.evidenceBytes(next)>3072){truncated=true;continue;}evidence.add(e);
+                if(next.size()>policy.maxEvidence()||ChatConversationContext.evidenceBytes(next)>3072){truncated=true;continue;}evidence.add(e);
             }
             check(current);if(!valid(scope,evidence))return Result.empty(Status.BLOCKED_SCOPE,"source_revision_changed");
             if(TimeBudgetContext.get().expired())return Result.empty(Status.TIMED_OUT,"memory_budget_exhausted");
             return new Result(List.copyOf(evidence),reason.isEmpty()?Status.OK:Status.DEGRADED,
-                vectorHits>0?"SCOPED_VECTOR_LOCAL_GRAPH":"SCOPED_LEXICAL_LOCAL_GRAPH",vectorHits,graphHits,hops,
+                (vectorHits>0?"SCOPED_VECTOR":"SCOPED_LEXICAL")+(graphed?"_LOCAL_GRAPH":""),vectorHits,graphHits,hops,
                 ChatConversationContext.evidenceBytes(evidence),(System.nanoTime()-started)/1_000_000,truncated,reason);
         }finally{if(prior==null)TimeBudgetContext.clear();else TimeBudgetContext.set(prior);}
     }

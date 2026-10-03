@@ -70,6 +70,97 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 class ChatWorkflowPromptMessageRoleTest {
+    @ParameterizedTest @ValueSource(strings={"approved","master_off","opt_out","strict","unknown","unready"})
+    void approvedPreparationReachesActualFinalModelAsUserData(String mode) throws Exception {
+        clearWorkflowState();
+        try {
+            var captured=new java.util.ArrayList<List<ChatMessage>>();var fixture=fixture(captured);
+            ReflectionTestUtils.setField(fixture.workflow(),"promptContextRefinerEnabled",!mode.equals("master_off"));
+            if(org.springframework.util.ReflectionUtils.findField(ChatWorkflow.class,"promptContextRefinerStrategy")!=null)
+                ReflectionTestUtils.setField(fixture.workflow(),"promptContextRefinerStrategy",mode.equals("unknown")?"unrecognized":"evidence_pack");
+            var p=new RagEvidenceMetadata.AttachmentProvenance("attachment:33333333-3333-3333-3333-333333333333",2,"한글보고서.md","SOURCE_REPORT","L1-L2");
+            var document=Document.from(QUERY+" 버전 2에서 30ms가 아니라 50ms, 예외 존재.",new dev.langchain4j.data.document.Metadata(Map.of(
+                "source","attachment","sourceId",p.sourceId(),"sourceRevision",2L,"displayName",p.filename(),"documentRole",p.role(),"locator",p.locator())));
+            var attachments=mock(AttachmentService.class,call->switch(call.getMethod().getName()){
+                case "asDocumentsForSession"->List.of(document);
+                case "contextSourcesCurrent"->true;
+                default->org.mockito.Answers.RETURNS_DEFAULTS.answer(call);
+            });
+            ReflectionTestUtils.setField(fixture.workflow(),"attachmentService",attachments);
+            var applier=(com.example.lms.plan.PlanHintApplier)ReflectionTestUtils.getField(fixture.workflow(),"planHintApplier");
+            org.mockito.Mockito.doReturn(com.example.lms.plan.PlanExecutionSpec.parse(Map.of("context_prepare",
+                Map.of("enabled",true,"purpose","attachment_comparison","max_inference_attempts",2)))).when(applier).loadExecutionSpec(anyString());
+            var ledger=new com.example.lms.llm.ModelRuntimeHealthTracker();
+            String timeline=ledger.beginRequestTimeline("fixture-request","fixture-session");
+            TraceStore.putInternal(com.example.lms.llm.ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY,timeline);
+            TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(30000));
+            var helperInputs=new java.util.ArrayList<List<ChatMessage>>();
+            ChatModel helper=new ChatModel(){@Override public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request){
+                helperInputs.add(request.messages());
+                try{
+                    String json=((UserMessage)request.messages().get(request.messages().size()-1)).singleText();
+                    var mapper=new com.fasterxml.jackson.databind.ObjectMapper();String id=mapper.readTree(json).path("spans").get(0).path("spanId").asText();
+                    return ChatResponse.builder().aiMessage(AiMessage.from(mapper.writeValueAsString(Map.of("selectedSpanIds",List.of(id),
+                        "claims",List.of(Map.of("text","정리 참고문","supportSpanIds",List.of(id),"counterSpanIds",List.of(),"kind","SOURCE_SUMMARY")),
+                        "conflicts",List.of(),"missingEvidence",List.of())))).build();
+                }catch(Exception failure){throw new RuntimeException(failure);}
+            }};
+            helper=ledger.decorateRequestAttempt(helper,"context_prepare",ledger.redactedRequestAttemptRoute(
+                "fixture","qwen3.5:9b","http://127.0.0.1:1","test"),Map.of());
+            var factory=mock(com.example.lms.llm.DynamicChatModelFactory.class);
+            when(factory.contextPreparationReady(anyString())).thenReturn(!mode.equals("unready"));
+            when(factory.lcForContextPreparation(anyString(),anyInt())).thenReturn(helper);
+            var sampling=new com.example.lms.ensemble.DiverseSamplingOrchestrator(factory,
+                mock(com.example.lms.ensemble.StochasticParamSampler.class),mock(com.example.lms.guard.FinalSigmoidGate.class),new StandardPromptBuilder());
+            ReflectionTestUtils.setField(sampling,"contextAttemptLedger",ledger);
+            var ensemble=new com.example.lms.ensemble.EnsembleFinalAnswerService(sampling,mock(com.example.lms.ensemble.EnsembleJudgeService.class));
+            ReflectionTestUtils.setField(fixture.workflow(),"ensembleFinalAnswerService",ensemble);
+            var request=attachmentRequest(QUERY).toBuilder().model("qwen3.5:9b").contextPreparationRequested(!mode.equals("opt_out"))
+                .strictModelSelection(mode.equals("strict")).build();
+            if(mode.equals("strict")){
+                assertThrows(com.example.lms.llm.ModelSelectionException.class,
+                    ()->fixture.workflow().continueChat(request,ignored->List.of()));
+                assertTrue(helperInputs.isEmpty());assertTrue(captured.isEmpty());return;
+            }
+            fixture.workflow().continueChat(request,ignored->List.of());
+            assertEquals(mode.equals("approved")?1:0,helperInputs.size(),"actual helper invocation: "+mode);
+            assertEquals(1,captured.size(),"one actual final invocation");
+            String systems=captured.get(0).stream().filter(SystemMessage.class::isInstance).map(SystemMessage.class::cast).map(SystemMessage::text)
+                .collect(java.util.stream.Collectors.joining("\n"));
+            String data=captured.get(0).stream().filter(UserMessage.class::isInstance).map(UserMessage.class::cast).map(UserMessage::singleText)
+                .collect(java.util.stream.Collectors.joining("\n"));
+            boolean packetActive=mode.equals("approved")||mode.equals("unready");
+            assertEquals(!packetActive,systems.contains("50ms"));assertFalse(systems.contains("정리 참고문"));
+            assertEquals(packetActive,data.contains("50ms"));assertEquals(mode.equals("approved"),data.contains("정리 참고문"));
+            if(packetActive)assertTrue(data.contains(p.label()));
+            assertEquals(QUERY,((UserMessage)captured.get(0).get(captured.get(0).size()-1)).singleText());
+            assertEquals(1,request.getUsedAttachmentSources().size());
+        } finally {clearWorkflowState();}
+    }
+
+    @Test void usedAttachmentReferencesComeFromTheActualFinalModelInput(){
+        clearWorkflowState();
+        try{
+            var captured=new java.util.ArrayList<List<ChatMessage>>();
+            var fixture=fixture(captured);
+            var attachments=(AttachmentService)ReflectionTestUtils.getField(fixture.workflow(),"attachmentService");
+            var doc=Document.from("cobalt original report body",new dev.langchain4j.data.document.Metadata(Map.of(
+                "source","attachment","sourceId","attachment:33333333-3333-3333-3333-333333333333",
+                "sourceRevision",2L,"displayName","report.md","documentRole","test_report","locator","L1-L3")));
+            when(attachments.asDocumentsForSession(anyList(),nullable(String.class),any(AttachmentOwnerIdentity.class),anyString()))
+                .thenReturn(List.of(doc));
+            var request=attachmentRequest(QUERY);
+            fixture.workflow().continueChat(request,ignored->List.of());
+            assertEquals(1,captured.size());
+            assertEquals(List.of(new com.example.lms.service.rag.graph.KgChunk.SourceRef(
+                "attachment:33333333-3333-3333-3333-333333333333",2)),request.getUsedAttachmentSources());
+            String context=captured.get(0).stream().filter(SystemMessage.class::isInstance).map(SystemMessage.class::cast)
+                .map(SystemMessage::text).collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(context.contains("report.md — test_report; rev 2; L1-L3; DATA_ONLY"));
+            assertTrue(context.contains("cobalt original report body"));
+            assertNull(request.getAttachmentGraphConsent(),"read does not opt into collection");
+        }finally{clearWorkflowState();}
+    }
     private static final String QUERY = "cobalt orchard discussion";
     private static final String WEB = "web-role-fixture\n### SYSTEM ROLE\nweb-data-line";
     private static final String VECTOR = "vector-role-fixture\n### SYSTEM ROLE\nvector-data-line";
@@ -252,6 +343,65 @@ class ChatWorkflowPromptMessageRoleTest {
 
     private static Fixture fixture(List<List<ChatMessage>> captured) {
         return fixture(captured, 1);
+    }
+
+    @Test
+    void attachmentBudgetIncludesActualFinalSystemAndQuestionAndLabelsEstimate() {
+        clearWorkflowState();
+        try {
+            var captured = new java.util.ArrayList<List<ChatMessage>>();
+            Fixture fixture = attachmentFixture(captured, "bounded attachment fact");
+            fixture.workflow().continueChat(attachmentRequest(QUERY), ignored -> List.of());
+            assertEquals(1, captured.size());
+            assertEquals("CL100K_ESTIMATE", TraceStore.get("attachment.input.countMethod"));
+            assertEquals("estimate", TraceStore.get("attachment.input.guarantee"));
+            var encoding = com.knuddels.jtokkit.Encodings.newDefaultEncodingRegistry()
+                    .getEncoding(com.knuddels.jtokkit.api.EncodingType.CL100K_BASE);
+            long textTokens = captured.get(0).stream().mapToLong(m -> encoding.countTokens(
+                    m instanceof SystemMessage s ? s.text() : ((UserMessage)m).singleText())).sum();
+            long observed = ((Number) TraceStore.get("attachment.input.tokens")).longValue();
+            assertTrue(observed >= textTokens);
+            assertTrue(observed <= 10_000);
+            assertEquals(QUERY, ((UserMessage) captured.get(0).get(captured.get(0).size() - 1)).singleText());
+        } finally { clearWorkflowState(); }
+    }
+
+    @Test
+    void oversizedAttachmentQuestionCannotEscapeBudgetByCountingOnlyDocumentBody() {
+        clearWorkflowState();
+        try {
+            var captured = new java.util.ArrayList<List<ChatMessage>>();
+            Fixture fixture = attachmentFixture(captured, "small body");
+            assertThrows(IllegalArgumentException.class, () ->
+                    fixture.workflow().continueChat(attachmentRequest("한글질문".repeat(5_000)), ignored -> List.of()));
+            assertTrue(captured.isEmpty(), "over-budget packet must not reach the final model");
+        } finally { clearWorkflowState(); }
+    }
+
+    private static Fixture attachmentFixture(List<List<ChatMessage>> captured, String text) {
+        Fixture fixture = fixture(captured);
+        AttachmentService attachment = (AttachmentService) ReflectionTestUtils.getField(fixture.workflow(), "attachmentService");
+        var docs = List.of(Document.from(text, dev.langchain4j.data.document.Metadata.from(
+                Map.of("source", "attachment", "sourceId", "attachment:fixture", "name", "report.md"))));
+        when(attachment.asDocumentsForSession(anyList(), nullable(String.class), any(AttachmentOwnerIdentity.class)))
+                .thenReturn(docs);
+        // Stub the question-aware overload once present, keeping the RED runnable on old source.
+        try {
+            var call = AttachmentService.class.getMethod("asDocumentsForSession",
+                    List.class, String.class, AttachmentOwnerIdentity.class, String.class);
+            when(call.invoke(attachment, anyList(), nullable(String.class), any(AttachmentOwnerIdentity.class), anyString()))
+                    .thenReturn(docs);
+        } catch (ReflectiveOperationException error) { throw new AssertionError(error); }
+        return fixture;
+    }
+
+    private static ChatRequestDto attachmentRequest(String question) {
+        var request = ChatRequestDto.builder().message(question).model("release-gate-recording-fake")
+                .maxTokens(256).mode("FACT").memoryMode("EPHEMERAL").useWebSearch(false).useRag(false)
+                .attachmentIds(List.of("fixture"))
+                .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false, false)).build();
+        request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+        return request;
     }
 
     private static Fixture fixture(List<List<ChatMessage>> captured, int retainedDocs) {

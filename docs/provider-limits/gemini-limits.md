@@ -3,7 +3,7 @@
 ```yaml
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-01"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -29,6 +29,12 @@ sourceUrls:
 - 제3자가 추정한 "2.5 Pro 5 RPM" 같은 값은 공식 문서가 아니므로 넣지 않는다.
 - `main/java/com/example/lms/agent/FreeTierApiThrottleService.java`의 기본값
   60 RPM / 1,000 RPD는 **앱 자체의 선택적 로컬 throttle**이며, Google의 공식 한도가 아니다.
+- 2026-10-01 주의: 동 서비스는 `@ConditionalOnProperty(
+  "gemini.api.free-tier.throttle.enabled", matchIfMissing=false)` 빈이라 프로퍼티
+  미설정 시 생성되지 않고, `learning/gemini/GeminiGateway.java:411`의
+  `throttle == null || throttle.canProceed()` 때문에 **fail-open**(전부 허용)이 된다.
+  고정 윈도우 리셋(분 경계 직후 재카운트)과 기동 시점 카운터 특성도 별도 결함으로
+  Codex에 인계한다(`data/agent-handoff/zero-cost-audit/FOR_CODEX.md`).
 
 ## Public policy summary
 

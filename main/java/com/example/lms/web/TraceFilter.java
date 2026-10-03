@@ -254,7 +254,16 @@ public class TraceFilter implements Filter {
                             traceSuppressed("snapshot.hasMl", ignore);
                         }
 
-                        boolean capture = dbgSearch || hasMl || hasTraceMemory || status >= 400 || failure != null;
+                        String path = req.getRequestURI();
+                        String contextPath = req.getContextPath();
+                        if (contextPath != null && !contextPath.isEmpty() && path.startsWith(contextPath + "/")) {
+                            path = path.substring(contextPath.length());
+                        }
+                        boolean routineObserver = "/api/assist/display/poll".equals(path)
+                                || "/api/chat/ui-heartbeat".equals(path);
+                        // Routine observers carry automatic breadcrumbs too; they must not evict answer traces.
+                        boolean capture = dbgSearch || hasTraceMemory || status >= 400 || failure != null
+                                || (hasMl && !routineObserver);
                         if (capture) {
                             String snapId = traceSnapshotStore.captureCurrent(
                                     "http_request",
@@ -292,6 +301,8 @@ public class TraceFilter implements Filter {
             restoreMdc(DBG_SEARCH_BOOST_ENGINES_MDC, prevDbgSearchBoostEngines);
             restoreMdc("requestSid", prevRequestSid);
             restoreMdc("chatSessionId", prevChatSessionId);
+
+            com.example.lms.guard.rulebreak.RuleBreakContextHolder.clear();
 
             // MERGE_HOOK:PROJ_AGENT::TRACE_FILTER_CLEAR_TRACESTORE_V1
             try {

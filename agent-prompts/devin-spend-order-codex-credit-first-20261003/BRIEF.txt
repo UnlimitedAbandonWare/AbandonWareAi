@@ -1,0 +1,119 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-agent-api-spend-guard @demo1-test-model-policy @demo1-skill-family-postprocessor
+
+[DEVIN] 에이전트 작업 비용·모델 우선순위 전환 — Codex 크레딧 우선 · 화력 위주 (2026-10-03)
+
+[ANTI-STOP] 이 지시서를 읽은 것 = 접수입니다. 완료 = 아래 Acceptance 전 항목 PASS입니다. 질문하지 말고 DV0부터 바로 시작해 주세요. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정/부정/반례 → 중립 판정)로 AUTO 진행합니다. AUTO가 Grok Bot과 다른 에이전트의 기본 설정입니다. ASK_ONCE 항목도 기본값으로 먼저 진행하고 보고에만 적어 주세요.
+
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(`&&` 대신 `;`), git = F:\git\cmd\git.exe, Python 3.11 표준 라이브러리만 사용(pip/npm install 금지), 파일은 UTF-8로 읽고 써 주세요.
+
+## 0. 한 줄 목표
+에이전트 작업(Codex·Devin·Grok CLI·Cline 세션의 바이브 코딩/검증)의 모델·비용 우선순위를 「① Codex 크레딧(62,500, 2026-10-03 기준) → ② 외부 유료 클라우드 API → ③ 무료 티어 → ④ 로컬 Ollama(RTX 3090)」로, 절약보다 화력(강한 모델·병렬 처리) 위주로 바꾸고, 이를 하나의 SSOT와 포인터로 정리해 주세요. 제품 런타임 라우팅은 건드리지 않습니다.
+
+## 1. 확인된 사실 (Grok Bot, 2026-10-03 07:55~07:56 KST, PC에서 직접 확인)
+A. 기존 정책 위치 (에이전트용, 수정 대상)
+- configs/agent-api-spend-guard.yaml:23 `authorized_credit_budget: 62500`, :25 `credit_warn_threshold: 50000`, :29 `forbid_multi_model_fanout_unless_explicit: true`, :32 `verification_allow_fanout_max: 3`, :33 `prefer_local_ollama_first: true`, :34-39 stale 모델 자동선택 차단(gpt-4/gpt-4o/gpt-5…), :45 `allow_explicit_override_env: AWX_AGENT_ALLOW_PAID_MODELS`, :13 `production_hard_caps: false`.
+- .agents/skills/demo1-agent-api-spend-guard/SKILL.md:18 "Prefer Ollama / local", :19 soak·비교 금지, :34-42 토큰 절약 stop, :57 "(c) Free/local … Ollama first".
+- docs/AGENT_API_SPEND_GUARD.md:26 "local-first", :42 guard OFF면 로그만 남음.
+- scripts/agent_api_spend_guard.ps1:39-42 `-ExplicitPaid` 없으면 gpt-4/4o/5 차단, :23 `[AWX][api-spend]` 로그.
+- scripts/agent_vibe_auto_decision.py:103-107 `paid_generation_authorized()` = env 또는 credit budget>0 (yaml이 62500이므로 이미 허용 상태), :162-169 미허용 시 paid-provider 질문.
+- scripts/apikit/providers/openai.py:38 env가 있어야 blocked 모델 허용.
+- scripts/chat_ui_vibe_soak.ps1:27, :2014 / scripts/device_probe_gpt_run_all.ps1:21, :231 에이전트 모드에서 env 없으면 차단.
+- AGENTS.md:19 "prefer free/local → cheap → paid", :95 "No paid fanout unless AWX_AGENT_ALLOW_PAID_MODELS=1", :359 "no paid-provider calls … without explicit user authorization", :373 "Prefer local Ollama".
+- .grok/rules/demo1-bridge.md:38-39 "Prefer free/local … no paid fanout unless …".
+- .clinerules/00-demo1-cline-bridge.md:30 무료 모델(Kimi K3) 유지·BYOK 금지, .clinerules/61-demo1-vibe-agent-auth-relax.md:28 유료 fanout은 사용자 승인 먼저, .clinerules/63-demo1-chatgpt-oauth-runtime-rails.md:13 "62,500은 evidence_needed, 하드코딩 금지".
+- .agents/skills/demo1-triad-deliberation/SKILL.md:21, .agents/skills/demo1-vibe-selfask-judge-auto/SKILL.md:53, .agents/skills/demo1-agy-directive-writer/references/grokbot-current/demo1-agent-brief-writer.md:67 ("Spend: free/local → low_cost → paid; live paid 1–3회").
+B. 크레딧 기존 기록
+- configs/agent-test-model-policy.yaml:12 `apiFirstUntil: "2026-12-30"`, :17-19 `USER_CONFIRM: 6250 vs 62,500`, `reportedGrantCredits: 62500`, :24 `maxApiGenerationsPerRun: 25`, :25 401/403/429 동일 모델 재시도 0, :40 `chatgpt-oauth:*` 선호 목록.
+- docs/API_ROUTING_SPEC.md:84 credit one-liner(`AWX_AGENT_ALLOW_PAID_MODELS='1'; AWX_CREDIT_BUDGET='62500'`).
+- 사용자 발화(2026-10-03 07:54 KST) "코덱스 크레딧 6만2천500" → 62,500이 맞습니다(USER_CONFIRM 해소 근거).
+C. 제품 런타임 (HOLD, 수정 금지)
+- configs/api-routing.yaml:7, main/resources/configs/api-routing.yaml:7 `order: [free_local, low_cost, paid_quality]`.
+- main/resources/configs/agent-api-spend-guard.yaml 은 configs/ 사본과 해시가 다릅니다(드리프트) → FOR_CODEX 메모만.
+- AGENTS.md:363-365, :392 와 .windsurf/rules/demo1-gpu-power-fallback.md:3-4, scripts/gpu_power_fallback.py:24 는 로컬 실패 시 런타임 폴백(제품 api-routing.yaml 순서)입니다 → ASK_ONCE 2 참고.
+- .codex/agents/assist_routing_mapper.toml:15 는 제품 라우팅 순서를 읽는 read-only 매퍼 설명입니다(수정 불필요).
+D. 검증기 제약
+- scripts/verify_codex_instructions.ps1:36 이 AGENTS.md 안 `AWX_AGENT_ALLOW_PAID_MODELS` 토큰을 요구합니다 → env 이름은 지우지 말고 의미만 바꿔 주세요. :33 `DEMO1-LOCAL-FIRST-RAG` 마커(RAG 수리용, 비용과 무관)도 유지해 주세요.
+E. lease 현황 (`python -B scripts/agent_scope_lease.py who`, 07:56 KST)
+- active 0, expired 1(blocking 1): `devin-test-model-api-policy-e575d169`(만료 2026-10-02 23:14 KST) — agents.md, configs/agent-test-model-policy.yaml, .agents/skills/demo1-test-model-policy/skill.md 등 포함. 직접 삭제하지 말고 `lease_conflict_autoflow.py reclaim` 경로만 사용해 주세요.
+- 미해제 claim: `chat-rag-api-verify-158f6e91`(scripts/chat_rag_golden_browser*.js), `devin-cwd-autofix-658af8fa`(.windsurf/rules/demo1-cwd-powershell51.md 등) → 피해 주세요.
+F. 확인 필요
+- "Codex 크레딧"과 repo의 "ChatGPT OAuth plan credits"(`chatgpt-oauth:*` 레인, Codex CLI)가 같은 잔고라는 점은 사용자 표현 기준 추정입니다. 관측 잔액은 계속 unknown/null로 두세요.
+- Devin 자체 세션 규칙 위치(.devin/RULES_SSOT.md에는 spend 문구 없음)와 Cline 계정의 실제 모델 설정은 확인하지 않았습니다.
+
+## 공통 규칙
+- ledger: data\agent-handoff\devin-spend-order-<8hex>\ (8hex는 직접 생성), 여기에 PLAN.md / EVIDENCE.md / REPORT.md 를 둡니다.
+- 수정 전 lease 필수(`python -B scripts/agent_scope_lease.py`), 끝나면 해제합니다. 충돌은 `$demo1-lease-conflict-autoflow` 절차로 처리합니다.
+- 수정 허용: .agents/skills/** (spend 관련 SKILL.md·references), configs/agent-api-spend-guard.yaml, configs/agent-test-model-policy.yaml(주석·credit·순서 필드만), docs/AGENT_API_SPEND_GUARD.md, docs/API_ROUTING_SPEC.md:84 부근 에이전트 줄, .grok/rules/*.md, .clinerules/*.md(문구만), .windsurf/rules/*.md(포인터만), .codex/agents/*.toml(포인터만), scripts/agent_api_spend_guard.ps1, scripts/agent_vibe_auto_decision.py, scripts/apikit/providers/openai.py(게이트 기본값만), scripts/chat_ui_vibe_soak.ps1·device_probe_gpt_run_all.ps1(게이트 줄만), scripts/demo1_tool_placement_scan.py:159 규칙 문자열, 이 스크립트들의 scripts/test_*.py. AGENTS.md 는 최소한의 포인터 줄 교체만 허용합니다.
+- 변경 금지: main\ 전체, src\test\ 제품 테스트, chat.js, build.gradle/settings.gradle/gradlew 등 빌드 파일, configs/api-routing.yaml·main/resources/configs/api-routing.yaml·application-llm.yaml 제품 라우팅, DynamicChatModelFactory 등 Java, .devin/PROMPTS/** 과거 지시서(기록물), 다른 세션의 lease/hunk.
+
+## DV 단계
+DV0 인벤토리 + ledger
+- 위 1장의 file:line을 다시 확인해 EVIDENCE.md에 표(파일 | 줄 | 현재 문구 | 분류 AGENT/PRODUCT_HOLD/ARCHIVE)로 적습니다. 추가 발견은 rg로 타깃 검색만 하고(data\agent-handoff 대량 스캔 금지) 표에 추가합니다.
+- lease 획득 후 각 파일 preimage를 work ledger에 남깁니다.
+
+DV1 SSOT 하나로 정리
+- 새 스택을 만들지 말고 기존 `configs/agent-api-spend-guard.yaml` + `.agents/skills/demo1-agent-api-spend-guard/SKILL.md` 를 SSOT로 갱신합니다.
+- yaml에 예: `agent_spend_order: [codex_credits, external_paid_api, free_tier, local_ollama]`, `codex_credits_reported: 62500  # as of 2026-10-03, user-reported allocation, not observed balance`, `prefer_local_ollama_first: false`, `posture: capability_first` 를 넣습니다.
+- SKILL.md 상단에 4단계 순서와 "Codex credits 62,500 (as of 2026-10-03)" 문구, 각 단계의 예시(① `chatgpt-oauth:*`·Codex CLI ② OpenAI/Anthropic/Gemini/Groq 유료·OpenRouter 유료·Vercel AI Gateway USD(별도 예산) ③ 무료 티어 ④ Ollama 3090)를 적습니다. 화폐 단위(credits vs USD)는 섞지 않습니다.
+- docs/AGENT_API_SPEND_GUARD.md 는 SSOT를 가리키는 짧은 포인터로 정리합니다.
+
+DV2 가드 기본값·스크립트
+- 에이전트 작업에서 유료 모델/API는 기본 허용입니다(Codex 크레딧 → 외부 API → 무료 → Ollama). `AWX_AGENT_ALLOW_PAID_MODELS=0` 은 kill switch로 남깁니다(ASK_ONCE 1 기본값).
+- 목적에 맞춘 병렬 레인(화력)은 기본 허용, 동일 프로브 dedupe·성공한 검증 재실행 금지는 유지합니다.
+- 유지: `[AWX][api-spend]` attribution 로그, 401/403/429 재시도 없음 + 보고 맨 위에 원인, 브리프당 live API 상한 약 25회(브라우저 전체 셀프체크 기준), stale 레거시 모델(gpt-4 등) 자동선택 차단(명시 선택은 허용), 제품 트래픽 하드캡 금지(`production_hard_caps: false`).
+- "토큰 절약 stop"은 기본 동작에서 빼고, 선언된 검증은 상한 안에서 끝까지 돌리도록 합니다.
+
+DV3 포인터 정렬·모순 제거
+- AGENTS.md:19, :95, :359, :373 의 해당 구절만 "에이전트 비용 순서: `$demo1-agent-api-spend-guard` SSOT" 포인터로 교체합니다(`AWX_AGENT_ALLOW_PAID_MODELS` 토큰은 유지).
+- .grok/rules/demo1-bridge.md:38-39 → 5줄 이하 포인터. .clinerules 00/61/63 → 포인터와 "62,500은 사용자 보고 할당값, 관측 잔액 아님"으로 문구 정렬(63의 런타임 OAuth fail-closed 규칙은 제품 레일이므로 유지).
+- triad/selfask-judge/brief-writer 스킬 줄을 새 순서로 맞춥니다. configs/agent-test-model-policy.yaml:17 USER_CONFIRM 주석은 62,500 확정으로 갱신합니다.
+
+DV4 테스트·grep 증명
+- 수정한 스크립트만 집중 테스트: 예 `python -B -m unittest scripts.test_agent_vibe_auto_decision -v`, `scripts.test_test_model_policy`, `scripts.test_demo1_tool_placement_scan`, `scripts.test_apikit`, `scripts.test_codex_instruction_governance`, 그리고 `powershell -NoProfile -File scripts\verify_codex_instructions.ps1`. 기본값 변경에 맞는 테스트 케이스(env 미설정=허용, env=0=차단)를 추가합니다.
+- grep 증명: `rg -n -i "prefer free/local|free/local first|prefer_local_ollama_first: true|no paid fanout unless" AGENTS.md .agents .grok .clinerules .windsurf .codex configs\agent-api-spend-guard.yaml docs\AGENT_API_SPEND_GUARD.md` 결과 0건(또는 남은 줄이 전부 PRODUCT_HOLD/ARCHIVE로 분류된 표).
+- 제외 목록 명시: configs/api-routing.yaml, main/**, AGENTS.md:363-365·392 GPU 폴백, .devin/PROMPTS/**.
+
+DV5 보고
+- 아래 보고 형식으로 REPORT.md 작성 후 같은 내용을 회신합니다. lease 해제를 확인합니다.
+
+## HOLD
+- 제품 런타임 라우팅 순서(api-routing.yaml policy.order, application-llm.yaml, DynamicChatModelFactory, main/resources/configs/agent-api-spend-guard.yaml 드리프트) = Codex Plan9 작업입니다. REPORT에 FOR_CODEX 메모만 남겨 주세요.
+- 크레딧 구매, 플랜 변경, Auto-reload, Cline 계정의 BYOK/유료 모델 전환은 하지 않습니다.
+
+## ASK_ONCE (기본값으로 먼저 진행)
+1. `AWX_AGENT_ALLOW_PAID_MODELS` 처리 — 기본값: 미설정 = 허용(기본 ON), `=0` 이면 차단하는 kill switch로 유지(게이트 완전 삭제 아님).
+2. GPU 폴백(AGENTS.md:365·392, .windsurf/rules/demo1-gpu-power-fallback.md, scripts/gpu_power_fallback.py)도 새 순서로 바꿀지 — 기본값: 제품 런타임 폴백으로 보고 순서는 그대로 두고, "paid needs env" 문구만 SSOT 포인터로 교체.
+
+## 절대 금지
+- git push/pull/commit, `git add -A`, reset/checkout/restore/stash/clean, remote 추가·변경(유일한 remote = origin https://github.com/UnlimitedAbandonWare/AbandonWareAi).
+- 전체 테스트 스위트·global clean 실행.
+- .env/.secrets/토큰 열람·출력(이름만 언급), 실제 API 키를 파일에 기록.
+- PROTO_OPEN/admin 하드닝, DB 스키마 변경·데이터셋 삭제, chat.js 수정.
+- 다른 세션의 lease/hunk 수정, 만료 lease 수동 삭제.
+- 다른 채팅에 영향을 주는 전역 설정(사용자 단위 ~\.codex 전역 config 등) 변경 — repo 로컬만.
+- skip-permissions/full-access 모드 권장.
+
+## Acceptance (각 항목 PASS/FAIL/NOT_RUN, 실행 안 한 것은 NOT_RUN)
+- [ ] SSOT(yaml + SKILL.md)에 4단계 순서와 "Codex credits 62,500 (as of 2026-10-03)" 문구가 있습니다(file:line).
+- [ ] 에이전트 규칙에 모순되는 local-first/paid-block 문구가 남지 않았습니다(DV4 grep 출력 + 제외 목록).
+- [ ] 포인터 정렬 완료: AGENTS.md, .grok/rules, .clinerules, 관련 스킬(file:line).
+- [ ] 가드 유지 확인: `[AWX][api-spend]` 로그, 401/403/429 무재시도, 브리프당 ~25회 상한, `production_hard_caps: false`.
+- [ ] 집중 테스트와 verify_codex_instructions.ps1 통과(명령 + exit code).
+- [ ] 제품 파일 무변경: 수정 파일 경로에 대해서만 `git status --porcelain -- <paths>` 결과, main/·api-routing.yaml 변경 없음.
+- [ ] lease 해제 완료(`agent_scope_lease.py who` 결과).
+- [ ] FOR_CODEX 메모 작성.
+
+## 보고 형식
+외부 API: <live 호출 횟수/제공자/401·403·429 원인, 없으면 "호출 0회">
+- ledger: data\agent-handoff\devin-spend-order-<8hex>\
+- 변경 파일: 경로 | 변경 요약 | 줄 수
+- SSOT 위치(file:line)와 4단계 순서 원문
+- Acceptance 표(PASS/FAIL/NOT_RUN + 증거)
+- 테스트: 명령 | exit code
+- grep 증명 결과 + 제외 목록
+- ASK_ONCE 적용 기본값
+- FOR_CODEX: 제품 라우팅 순서·main 사본 드리프트 메모
+- 남은 위험/확인 필요
+
+[ANTI-STOP] 읽음 = 접수, 완료 = Acceptance 전부 PASS입니다. 멈추지 말고 DV0부터 진행해 주세요. 되돌릴 수 있는 결정은 Self-Ask(긍정/부정/반례 → 중립 판정) AUTO가 기본입니다.

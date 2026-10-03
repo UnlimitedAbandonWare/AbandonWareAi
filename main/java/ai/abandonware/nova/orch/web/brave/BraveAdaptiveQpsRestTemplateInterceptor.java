@@ -82,6 +82,7 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
         this.monthlyRemaining = monthlyRemaining;
         this.brave = Objects.requireNonNull(brave);
         this.state = Objects.requireNonNull(state);
+        brave.bindLaneRateLimitState(state);
 
         double cur = safeGetRate(rateLimiter);
         if (cur <= 0d) {
@@ -94,10 +95,11 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
     @Override
     public ClientHttpResponse intercept(org.springframework.http.HttpRequest request, byte[] body,
             ClientHttpRequestExecution execution) throws IOException {
+        String lane = brave.requestKeyLane(request.getHeaders().getFirst("X-Subscription-Token"));
         ClientHttpResponse resp = execution.execute(request, body);
 
         try {
-            onResponse(resp);
+            onResponse(resp, lane);
         } catch (Throwable t) {
             // Fail-soft: never interfere.
             log.debug("[nova][brave-adaptive-qps] interceptor failed (ignored): errorHash={} errorLength={}",
@@ -116,7 +118,10 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
         return msg == null ? 0 : msg.length();
     }
 
-    private void onResponse(ClientHttpResponse resp) throws IOException {
+    private void onResponse(ClientHttpResponse resp, String lane) throws IOException {
+        BraveRateLimitState state = this.state.forLane(lane);
+        AtomicInteger consecutive429 = state.consecutive429();
+        AtomicLong perSecondPenaltyEmaMilli = state.penaltyEmaMilli();
         if (resp == null) {
             return;
         }
@@ -210,14 +215,16 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
         long localMonthRemainingVal = monthRemainingVal;
 
         // (A) Reconcile BraveSearchService's local free-tier cap when present and finite.
-        if (!monthlyUnlimited && monthRemainingVal >= 0L && this.monthlyRemaining != null) {
+        if (!"base".equals(lane) && !"unknown".equals(lane)
+                && !monthlyUnlimited && monthRemainingVal >= 0L && this.monthlyRemaining != null) {
             brave.reconcileProviderRemaining(monthRemainingVal);
             localMonthRemainingVal = Math.max(0L, this.monthlyRemaining.get());
         }
 
         // (A2) If Brave indicates monthly remaining > 0, clear any previous quota-exhausted latch.
         if (!monthlyUnlimited && monthLimit > 0L && localMonthRemainingVal > 0L && !brave.isQuotaExhausted()) {
-            tryClearQuotaLatchIfAny("monthRemaining>0");
+            state.clearQuotaLatch();
+            if (!brave.hasIndependentKeyLanes()) tryClearQuotaLatchIfAny("monthRemaining>0");
         }
 
         // (B) Per-second remaining hit 0 → short cooldown until reset.
@@ -225,7 +232,7 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
             long jitter = Math.max(0L, props.getPerSecondCooldownJitterMs());
             long extra = (jitter == 0L) ? 0L : ThreadLocalRandom.current().nextLong(0L, jitter + 1L);
             long ms = Math.min(props.getMaxCooldownMs(), secResetSec * 1000L + extra);
-            installCooldownUntil(now + ms, "perSecondRemaining=0");
+            installCooldownUntil(now + ms, "perSecondRemaining=0", lane);
         }
 
         // (C) 429 → cooldown. Prefer Retry-After if present, but also apply local exp-backoff to
@@ -258,7 +265,7 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
                 long extra = (jitter == 0L) ? 0L : ThreadLocalRandom.current().nextLong(0L, jitter + 1L);
                 long effectiveDelayMs = Math.min(props.getMaxCooldownMs(), baseMs + extra);
 
-                installCooldownUntil(now + effectiveDelayMs, "http429");
+                installCooldownUntil(now + effectiveDelayMs, "http429", lane);
 
                 try {
                     TraceStore.put("web.brave.cooldown.retryAfterMs", retryAfterMs);
@@ -298,15 +305,14 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
                 // fail-soft
             }
 
-            setQuotaExhaustedTrue();
-            setOperationallyDisabledUntil(resetAtEpochMs, "quota_exhausted");
+            brave.recordLaneQuotaExhausted(lane, resetAtEpochMs);
 
             long remainingMs = Math.max(0L, resetAtEpochMs - now);
 
             // Also apply a short cooldown to reduce near-term repeated probes (cap applies).
             if (remainingMs > 0L) {
                 long ms = Math.min(props.getMaxCooldownMs(), remainingMs);
-                installCooldownUntil(now + ms, "monthRemaining=0");
+                installCooldownUntil(now + ms, "monthRemaining=0", lane);
             }
 
             try {
@@ -320,6 +326,8 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
             trySetWebRateLimited("monthRemaining=0");
         }
 
+        // A late response from an inactive lane must not retune the active lane's limiter.
+        if (brave.hasIndependentKeyLanes() && !lane.equals(brave.selectedKeyLane())) return;
         // (E) Compute monthly-based base target (spread remaining over time-to-reset).
         double monthlyTarget = baseQps;
         boolean monthlyAdaptive = false;
@@ -345,7 +353,7 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
             // Update EMA when we have a signal. Also update with event=0 when we have
             // headers (recovery).
             if (haveSecInfo || is429) {
-                updatePerSecondPenaltyEma(event);
+                updatePerSecondPenaltyEma(event, perSecondPenaltyEmaMilli);
             }
 
             double ema = perSecondPenaltyEmaMilli.get() / 1000.0d;
@@ -398,7 +406,7 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
         }
     }
 
-    private void updatePerSecondPenaltyEma(boolean event) {
+    private void updatePerSecondPenaltyEma(boolean event, AtomicLong perSecondPenaltyEmaMilli) {
         double alpha = props.getPerSecondPenaltyEmaAlpha();
         if (Double.isNaN(alpha) || alpha <= 0d) {
             return;
@@ -445,7 +453,11 @@ public class BraveAdaptiveQpsRestTemplateInterceptor implements ClientHttpReques
         }
     }
 
-    private void installCooldownUntil(long untilEpochMs, String reason) {
+    private void installCooldownUntil(long untilEpochMs, String reason, String lane) {
+        if (brave.hasIndependentKeyLanes() && ("free".equals(lane) || "base".equals(lane))) {
+            brave.recordLaneCooldown(lane, untilEpochMs);
+            return;
+        }
         if (cooldownUntilEpochMs == null) {
             return;
         }

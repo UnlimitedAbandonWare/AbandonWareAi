@@ -1,0 +1,73 @@
+# Agent test model policy (DEMO1-DEVIN-TEST-MODEL-API-POLICY-20261002).
+# Governs ONLY how agent sessions pick a model when testing /chat RAG/chatbot
+# paths. Product defaults (app.ai.ui-default-model, llm.fast.model, routing
+# order) are NOT changed here — they are a Codex HOLD item.
+# Parser note: keep this file to the strict subset that
+# scripts/test_model_policy.py reads — maps, "- item" lists, [inline] lists,
+# plain scalars; no '#' inside quoted values.
+version: "2026-10-02"
+
+dateGate:
+  timezone: "Asia/Seoul"
+  apiFirstUntil: "2026-12-30"      # inclusive through 23:59:59 KST
+  afterMode: "dynamic"             # from 2026-12-31T00:00+09:00 pick local/API by purpose+availability+cost
+
+credit:
+  # Repo SSOT value (configs/agent-api-spend-guard.yaml authorized_credit_budget
+  # / codex_credits_reported). CONFIRMED 2026-10-03: user said
+  # "코덱스 크레딧 6만2천500" -> 62,500. Allocation input, never an observed
+  # balance (observedBalance stays null).
+  reportedGrantCredits: 62500
+  observedBalance: null
+  reportedExpiry: "2026-12-31"     # user-reported, timezone unconfirmed
+
+limits:
+  maxApiGenerationsPerRun: 25      # per directive run; a directive may override
+  sameModelRetryOnAuthOrQuota: 0   # 401/403/429/quota/payment -> next rank once, never retry same model
+
+usageLog: "data/agent-handoff/test-model-policy/usage.jsonl"
+
+# Non-chat catalog entries that must never be resolved as a test target.
+neverSelect:
+  - "chatgpt-oauth:codex-auto-review"
+
+# Catalog id prefixes that mean "remote/API lane"; everything else is local.
+apiPrefixes: ["chatgpt-oauth:", "llmrouter."]
+
+# purpose -> ordered preference (starting point; ordering annotated with the
+# OpenAI rate-card rows in data/agent-handoff/devin-test-model-api-policy-e575d169/OFFICIAL.md)
+purposes:
+  quality:                          # RAG accuracy / evidence / final PASS judgement
+    prefer: ["chatgpt-oauth:gpt-6-astra", "chatgpt-oauth:gpt-5.6-sol", "chatgpt-oauth:gpt-5.5"]
+  regression:                       # repeat runs, post-fix rechecks, multi-send
+    prefer: ["chatgpt-oauth:gpt-5.6-terra", "chatgpt-oauth:gpt-5.6-luna", "chatgpt-oauth:gpt-5.5"]
+  smoke:                            # screen/send works at all
+    prefer: ["chatgpt-oauth:gpt-5.6-luna", "chatgpt-oauth:gpt-5.6-terra"]
+  cross_provider:                   # does another provider work
+    prefer: ["llmrouter.api3"]
+  local_fallback:                   # explicit "test the local path itself" only
+    prefer: ["gemma4:26b", "qwen3.5:9b"]
+  practice_chat:                    # free practice: light talk, tone/flow feel (correction 20261002)
+    prefer: ["chatgpt-oauth:gpt-5.6-luna", "chatgpt-oauth:gpt-5.6-terra"]
+  practice_reasoning:               # free practice: long reasoning, code/analysis questions
+    prefer: ["chatgpt-oauth:gpt-5.6-sol", "chatgpt-oauth:gpt-6-astra"]
+  practice_compare:                 # same prompt on two models; explicit purpose only, never auto
+    prefer: ["chatgpt-oauth:gpt-5.6-sol", "llmrouter.api3"]
+
+# Auto classification for `resolve --purpose auto --prompt-file <f>` and
+# `plan --prompts-file <f>`. Keyword/length heuristics only — never a model
+# call. Decision order (first match wins):
+#   1) evidence keyword hit                    -> quality
+#   2) attachment present                      -> practice_reasoning
+#   3) code marker hit OR len >= longPromptChars -> practice_reasoning
+#   4) otherwise                               -> practice_chat
+# practice_compare is never auto-selected (explicit purpose only).
+autoClassify:
+  longPromptChars: 800
+  evidenceKeywords: ["출처", "근거", "evidence", "citation", "cite", "source", "reference", "자료"]
+  codeMarkers: ["```", "def ", "class ", "import ", "function ", "public static", "select ", "traceback"]
+
+rules:
+  selectableRequired: true          # catalog selectable==true AND status in [configured, installed]
+  noSilentLocalBeforeCutoff: true   # all API candidates down before cutoff -> BLOCKED_API, never quiet local
+  observedModelMustMatch: true      # SILENT_FALLBACK => no PASS verdict from that run

@@ -160,8 +160,8 @@ public class SearchExecutorConfig {
 
     /**
      * Executor for search I/O operations (HybridWebSearchProvider 등에서 사용).
-     * CachedThreadPool을 사용하여 유동적으로 스레드를 생성하고,
-     * 디버깅 편의를 위해 스레드 이름 패턴(search-io-N)을 지정.
+     * Bounded workers and queue; saturation is reported to callers so request
+     * threads never run blocking provider work as an overflow worker.
      */
     
     @Bean(name = "searchIoExecutor", destroyMethod = "shutdown")
@@ -189,7 +189,7 @@ public class SearchExecutorConfig {
                 TimeUnit.SECONDS,
                 q,
                 tf,
-                new ThreadPoolExecutor.CallerRunsPolicy()
+                new ThreadPoolExecutor.AbortPolicy()
         ) {
             @Override
             protected void beforeExecute(Thread t, Runnable r) {

@@ -1,13 +1,13 @@
 ---
 name: demo1-toolchain-auto-select
-description: Use at the start of vibe-coding or verification on demo-1 to detect existing
+description: Use when starting vibe-coding or verification on demo-1 to detect the existing toolchain (build/test/run entries) instead of inventing commands
 ---
 
 # demo1-toolchain-auto-select
 
 ## Project Root
 
-- Default: `C:\AbandonWare\demo-1\demo-1\src`.
+- Default: `<repo>`.
 
 ## Loop (always)
 
@@ -26,7 +26,7 @@ description: Use at the start of vibe-coding or verification on demo-1 to detect
 | Spring runtime | `Start-RAG.bat`, `scripts/start_rag_stack.ps1`, DevWatch |
 | Node BFF | `frontend/package.json` (`lint`, `test`) |
 | Soniox | `main/resources/soniox-sidecar/package.json` (deps; no scripts gate) |
-| Static UI | `main/resources/static/assets/display|interview` (no package.json) |
+| Static UI | `main/resources/static/assets/display|interview` (no package.json) — debug surface, not the primary one (`docs/PRIMARY_SURFACE.md`) |
 | Python helpers | `scripts/requirements-awx-mcp-http.txt`, `tools/conversate-asr/requirements.txt` |
 | Verify scripts | `scripts/smoke_*.ps1`, `verify_*.ps1`, `*_tests.ps1`, `*_tests.cjs` |
 | Model lock | `scripts/check-model-lock.ps1` |

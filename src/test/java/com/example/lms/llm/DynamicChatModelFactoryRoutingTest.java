@@ -49,7 +49,9 @@ class DynamicChatModelFactoryRoutingTest {
                     () -> factory.lcWithTimeout("qwen3:8b", null, null, null, null, 32, 1));
             assertEquals("route_mapping_unconfirmed", failure.reasonCode());
             assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
-            assertNotNull(factory.lcWithTimeout("gemma3:4b", null, null, null, null, 32, 1));
+            LlmGatewayException unknown = assertThrows(LlmGatewayException.class,
+                    () -> factory.lcWithTimeout("gemma3:4b", null, null, null, null, 32, 1));
+            assertEquals("route_unknown", unknown.reasonCode());
         });
     }
 

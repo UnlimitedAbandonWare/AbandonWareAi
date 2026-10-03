@@ -11,10 +11,10 @@ Freeze these values before planning or mutation:
 
 ```text
 originEvidenceRoot=Y:\
-canonicalExecutionRoot=C:\AbandonWare\demo-1\demo-1\src
-readRoot=C:\AbandonWare\demo-1\demo-1\src
-writeRoot=C:\AbandonWare\demo-1\demo-1\src
-finalProofRoot=C:\AbandonWare\demo-1\demo-1\src
+canonicalExecutionRoot=<repo>
+readRoot=<repo>
+writeRoot=<repo>
+finalProofRoot=<repo>
 yEvidenceAuthority=supporting_only
 fallbackWriteRoot=null
 sourceOwner=desktop
@@ -53,6 +53,8 @@ instruction delivered by an automation the user enabled for this purpose,
 use this intake as the start of the existing patch workflow. The user's
 existing implementation authorization persists; do not finish with only a
 plan, receipt, or a generic request to approve the same implementation.
+The registered goal title must be the implementation outcome (Mission/WP
+completion), never "read file X" — reading the directive is intake, not Done.
 Explicit analysis-only, dry-run, and do-not-apply requests remain read-only.
 An arbitrary file or an `autoExecuteRequested` string without a proven
 authorized producer/request is not permission to execute.
@@ -66,9 +68,11 @@ authorized producer/request is not permission to execute.
    transport/connection HOLD fields as historical observations and reevaluate
    them after actual Desktop receipt. They cannot override fresh C-root
    evidence. Notebook source/read evidence stays supporting-only.
-3. For `application_source`, continue in the same task through the existing
-   three-query preflight with stable APPLY, then the existing source-owner
-   lease, immediate preimage check, focused RED, minimal patch, GREEN,
+3. For `application_source`, continue in the same task through the mandatory
+   checks AGENTS.md names for application-source mutation — target-scoped
+   source-owner, lease, preimage, protected-setting and factual checks — with
+   stable APPLY. `demo1-source-edit-three-way-preflight` stays optional review,
+   not a routine prerequisite. Then focused RED, minimal patch, GREEN,
    postimage/changed-path/secret-count verification, and rollback contract.
    Follow the established guard's ordering; this section creates no second
    mutation protocol. Apply the existing rebinding contract's
@@ -110,10 +114,13 @@ authorized producer/request is not permission to execute.
 1. Read the declared directive and record its origin by redacted identifier or
    hash when useful. Treat every Notebook claim as a hypothesis.
 2. Prove the literal C root is live: it exists, Git resolves to the same local
-   non-UNC path, and closest `AGENTS.md` is reread. Otherwise
+   non-UNC path — for an agent whose contract excludes Git entirely (e.g. the
+   Devin loop), canonical path + root markers via `agent_preflight.py` stand in —
+   and closest `AGENTS.md` is reread. Otherwise
    `HOLD c-canonical-unavailable`; never fall back to Y or infer another
-   checkout. Reconfirm active Gradle sourceSets separately; when that proof is
-   missing, use `HOLD active-sourceset-uncertain`.
+   checkout. Reconfirm the touched targets' active Gradle sourceSets against the
+   current build files (not a full survey); when that proof is missing, use
+   `HOLD active-sourceset-uncertain`.
 3. Before accepting each Y, C, or relative target, run once for that target:
 
    ```powershell
@@ -126,18 +133,24 @@ authorized producer/request is not permission to execute.
    mutation gates. Resolver output proves routing only and never authorizes a
    write. Lexical-only output is supporting/evidence-needed.
 4. Run C-rooted collision intake: PatchDrop inventory, active leases, target
-   preimages, real index/ref operation state, and ports only when runtime
-   proof requires them. Preserve unrelated changes.
+   preimages, real index/ref operation state (skipped entirely when the agent's
+   contract excludes Git), and ports only when runtime proof requires them.
+   Preserve unrelated changes.
 5. Select exactly one primary lane:
 
-   - `read_only`: diagnosis or `evidence_needed`.
-   - `artifact_only`: prompt, skill, Markdown, or validator artifact; no source lease.
+   - `read_only`: diagnosis or `evidence_needed` — no lease, no journal, no build.
+   - `artifact_only`: prompt, skill, or Markdown artifact; no source lease.
+     An executable target (a validator/test script under `scripts/` etc.) is not
+     a plain artifact — it keeps the work ledger's executable-target lease.
+     Outside-root outputs take no repo checkpoint or journal at all.
    - `application_source`: active Java/resources behavior.
    - `patchdrop_consumer`: a complete top-level bundle controls ownership.
 
    At most one secondary lane may change the decision. Route application source
-   to `demo1-source-edit-three-way-preflight`; promote only fresh C revision,
-   active sourceSet, target preimage, and source-owner proof. The
+   through the mandatory owner/lease/preimage/protected-setting/factual checks
+   (`demo1-source-edit-three-way-preflight` remains optional review per
+   AGENTS.md); promote only fresh C revision, active sourceSet, target
+   preimage, and source-owner proof. The
    repository-owned source-edit guard owns lease, immediate preimage, rollback,
    and changed-path enforcement. Route Desktop final proof to
    `demo1-desktop-only-proof-loop`, skill validation to

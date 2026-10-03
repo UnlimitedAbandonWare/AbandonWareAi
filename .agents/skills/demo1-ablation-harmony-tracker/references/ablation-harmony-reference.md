@@ -57,7 +57,7 @@ reproducible calculation.
 Use Windows PowerShell from Desktop root:
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Push-Location $Root
 $env:AWX_AGENT_HOST = "desktop"
 $env:AWX_SPLIT_BUILD_OUTPUTS = "1"

@@ -211,7 +211,7 @@ public class DisplayConversateController {
         result.put("embeddingModel",s.metrics().stages().cue().getOrDefault("embeddingModel","not_observed"));
         var audio=asr==null?Map.<String,Object>of():asr.displayDiagnostics(s.audio());
         result.put("audio",safeFields(audio,List.of("provider","transport","model","configuredProvider","configuredCloudModel","requestedEngine","fallbackAllowed","fallbackCount","fallbackReason","modelEvidence","firstPartialMs","finalAfterStopMs","fallbackGapMs","shutdownMs","stopReason","failureReason","processedMs")));
-        result.put("pipeline",pipelineDiagnostics(s.metrics().stages().cue()));
+        result.put("pipeline",pipelineDiagnostics(s.metrics().stages().cue(),true));
         if(novaFocus!=null)try{result.put("focus",novaFocus.diagnostics(b.owner,b.id,s.epoch()));}catch(IllegalArgumentException unavailable){result.put("focus",Map.of("available",false));}
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(result);
     }
@@ -224,6 +224,9 @@ public class DisplayConversateController {
         return safe;
     }
     private static Map<String,Object> pipelineDiagnostics(Map<String,Object> cue){
+        return pipelineDiagnostics(cue,false);
+    }
+    private static Map<String,Object> pipelineDiagnostics(Map<String,Object> cue,boolean includeJevDiagnostics){
         var pipeline=safeFields(cue,List.of("selectedProvider","selectedModel","responseModel","gateProvider","gateModel","decisionSource","gateMs","retrievalMs","compressionMs","hintGenerationMs","totalLatencyMs","status","failureReason","cueDecision","decisionReason","apiAttempts","requestReservedUsd","retrievalEstimatedCostUsd","billedCostUsd","observedInputTokens","observedOutputTokens","observedReasoningTokens","reasoningUsageCoverage","tokenUsageCoverage","usageEstimatedCostUsd","usageCostCoverage","costEvidence","costLimitsEnforced","currency","cacheHit","cachedInputTokens","estimatedCost"));
         if(cue.get("stageCalls") instanceof Map<?,?> counts)
             pipeline.put("stageCalls",safeFields(counts,List.of("cueAdmission","retrieval","finalGeneration","transcriptPostprocess")));
@@ -257,6 +260,12 @@ public class DisplayConversateController {
                 attempts.add(attempt);
             }
             pipeline.put(stage,attempts);
+        }
+        if(includeJevDiagnostics&&cue.get("jevMode") instanceof String jevMode&&!"off".equals(jevMode)){
+            pipeline.putAll(safeFields(cue,List.of("jevMode","jevDecision","jevReasonCode","jevApplied")));
+            Object latency=cue.get("jevLatencyMs");
+            if((latency instanceof Integer||latency instanceof Long)&&((Number)latency).longValue()>=0)
+                pipeline.put("jevLatencyMs",latency);
         }
         return pipeline;
     }
@@ -650,7 +659,7 @@ public class DisplayConversateController {
         status.put("asrUsage",asr==null?Map.of():asr.displayUsage());
         status.put("audio",Map.of("bindingAcceptedAudioMs",b.audioBytes/32,"captureChunks",s.audio().chunks(),"capturePartials",s.audio().partials(),"captureFinals",s.audio().finals(),"captureDuplicates",s.audio().duplicates(),"utteranceDuplicates",s.metrics().duplicates()));
         var cue=s.metrics().stages().cue();
-        status.put("pipeline",pipelineDiagnostics(cue));
+        status.put("pipeline",pipelineDiagnostics(cue,false));
         return status;
     }
     private Binding limited(String owner,int operation){return limited(owner,operation,1);}

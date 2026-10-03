@@ -12,6 +12,8 @@ import shutil
 from pathlib import Path
 import subprocess
 
+from awx_paths import resolve as _awx_resolve
+
 try:
     from scripts.awx_project_secrets import SecretStore, Conflict, environment, plain_path, usable, manual_values_active
     from scripts.awx_resource_inputs import project_inputs
@@ -22,7 +24,7 @@ except ModuleNotFoundError:
 
 def verify_direct_store(root):
     root = plain_path(Path(root))
-    if os.name != 'nt' or os.path.normcase(str(root)) != os.path.normcase(r'C:\AbandonWare\demo-1\demo-1\src'):
+    if os.name != 'nt' or os.path.normcase(str(root)) != os.path.normcase(str(_awx_resolve("repo.root"))):
         raise Conflict('direct-refresh-desktop-root-required')
     for command, expected in [(['git', '--no-optional-locks', 'ls-files', '--error-unmatch', '--', '.secrets/providers.json'], 1),
                               (['git', 'check-ignore', '-q', '--', '.secrets/providers.json'], 0)]:

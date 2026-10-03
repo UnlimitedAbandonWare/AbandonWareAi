@@ -145,7 +145,8 @@ class OperationalQualitySourceContractTest {
 
         int prefetchBlock = source.indexOf("externalCtxProvider.apply(q0)");
         assertTrue(prefetchBlock >= 0, "ChatWorkflow should still have the controller prefetch promotion block");
-        int conditionStart = source.lastIndexOf("if (", prefetchBlock);
+        // The typed tool-evidence branch is nested inside the existing FORCE_LIGHT admission guard.
+        int conditionStart = source.lastIndexOf("if (!preLlmRetrievalBudgetLow", prefetchBlock);
         assertTrue(conditionStart >= 0, "prefetch promotion condition should be locatable");
         String condition = source.substring(conditionStart, prefetchBlock);
         assertTrue(condition.contains("forceLightSearchMode"),

@@ -253,3 +253,5 @@ Keep the report short. The skill exists to reduce patch sprawl, not to create a 
 | Asking for Browser/Computer/Supabase proof by default | Require those only when the changed surface needs them. |
 | Using stale memory or prior reports as authority | Re-check live files and command output. |
 | Declaring no-patch success without proof | State `no_patch_needed` only after current evidence supports it. |
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

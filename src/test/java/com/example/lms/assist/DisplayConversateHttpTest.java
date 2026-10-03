@@ -408,6 +408,22 @@ class DisplayConversateHttpTest {
             var cuePatch=prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,7000L,23000L,180000L));
             assertEquals(7000L,cuePatch.triggerQuietMs());assertEquals(23000L,cuePatch.cueCooldownMs());assertEquals(180000L,cuePatch.forceAfterMs());
             try{prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,601000L));fail("forceAfterMs=601000");}catch(org.springframework.web.server.ResponseStatusException r){assertEquals(400,r.getStatusCode().value());}
+            // 프리셋은 기존 글자/줄 필드만 조합한다 — TTL·큐 주기·과거 맥락은 유지된다.
+            var easy=prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,"READ_EASY"));
+            assertEquals(30,easy.transcriptFontPx());assertEquals(30,easy.hintFontPx());assertEquals(8,easy.transcriptMaxLines());assertEquals(8,easy.hintPageLines());
+            assertEquals(prefs.hintTtlMs(),easy.hintTtlMs());assertEquals(prefs.forceAfterMs(),easy.forceAfterMs());assertEquals(prefs.hintTargetChars(),easy.hintTargetChars());
+            var dense=prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,"DENSE"));
+            assertEquals(22,dense.hintFontPx());assertEquals(13,dense.hintPageLines());assertEquals(8,dense.transcriptMaxLines());
+            assertEquals(26,prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,"DEFAULT")).hintFontPx());
+            var explicitWins=prefs.patch(new LensDisplayPrefs.Patch(24,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,"DENSE"));
+            assertEquals(24,explicitWins.transcriptFontPx());assertEquals(22,explicitWins.hintFontPx());
+            try{prefs.patch(new LensDisplayPrefs.Patch(null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,null,"bogus"));fail("preset=bogus");}catch(org.springframework.web.server.ResponseStatusException r){assertEquals(400,r.getStatusCode().value());}
+            var presetReq=new HashMap<>(conn);presetReq.put("display",Map.of("preset","READ_EASY"));
+            var presetRes=JSON.readTree(c.post("relay/lens-settings",presetReq).body());
+            assertEquals(30,presetRes.at("/testStatus/lensDisplay/transcriptFontPx").asInt());assertEquals(8,presetRes.at("/testStatus/lensDisplay/hintPageLines").asInt());
+            assertEquals(100000,presetRes.at("/testStatus/lensDisplay/hintTtlMs").asLong());
+            var badPreset=new HashMap<>(conn);badPreset.put("display",Map.of("preset","WIDESCREEN"));
+            assertEquals(400,c.post("relay/lens-settings",badPreset).statusCode());
         }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
     }
     @Test void minimalLensLinkOnlySharesItsOwnShortTextWithoutOutputSideEffects() throws Exception {

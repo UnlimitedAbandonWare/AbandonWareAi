@@ -45,6 +45,41 @@ import static org.mockito.Mockito.when;
 
 class HybridRetrieverImplicitConsistencyTest {
 
+    @Test
+    void postfusionCandidateSignalReceivesOriginalContentsAndReturnsItsPermutation() {
+        Content alpha = Content.from("Synthetic alpha evidence");
+        Content beta = Content.from("Synthetic beta counterexample");
+        List<Content> baseline = List.of(alpha, beta);
+        List<Content> reordered = List.of(beta, alpha);
+        RetrievalHandler handler = (query, accumulator) -> accumulator.addAll(baseline);
+        ReciprocalRankFuser fuser = mock(ReciprocalRankFuser.class);
+        when(fuser.fuse(anyList(), org.mockito.ArgumentMatchers.eq(2))).thenReturn(baseline);
+        var signal = mock(com.example.lms.assist.JevCandidateSignal.class);
+        when(signal.rerank(org.mockito.ArgumentMatchers.eq("synthetic query"),
+                org.mockito.ArgumentMatchers.same(baseline))).thenReturn(reordered);
+        HybridRetriever retriever = retriever(mock(AdaptiveScoringService.class),
+                mock(KnowledgeBaseService.class), mock(NeuralPathFormationService.class),
+                mock(QueryTransformer.class), handler);
+        ReflectionTestUtils.setField(retriever, "fuser", fuser);
+        ReflectionTestUtils.setField(retriever, "jevCandidateSignal", signal);
+        ReflectionTestUtils.setField(retriever, "fusionMode", "rrf");
+        ReflectionTestUtils.setField(retriever, "debugSequential", true);
+        ReflectionTestUtils.setField(retriever, "maxParallel", 1);
+        ReflectionTestUtils.setField(retriever, "hybridRequestTimeoutMs", 10_000L);
+        try {
+            List<Content> actual = retriever.retrieveAll(
+                    List.of("synthetic query"), 2, "synthetic-session", Map.of());
+            verify(fuser).fuse(anyList(), org.mockito.ArgumentMatchers.eq(2));
+            verify(signal).rerank("synthetic query", baseline);
+            org.junit.jupiter.api.Assertions.assertSame(reordered, actual);
+            org.junit.jupiter.api.Assertions.assertSame(beta, actual.get(0));
+            org.junit.jupiter.api.Assertions.assertSame(alpha, actual.get(1));
+        } finally {
+            retriever.shutdownRetrievalExecutor();
+            com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
+        }
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

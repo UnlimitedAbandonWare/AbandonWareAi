@@ -80,9 +80,13 @@ class ChatRunClusterHttpTest {
         try {
             assertTrue(connected.await(2,TimeUnit.SECONDS));first.dispose();Thread.sleep(100);
             assertTrue(a.isRunning(202L));assertEquals(1,stopped.getCount());
-            long start=System.nanoTime();second.dispose();assertTrue(stopped.await(2,TimeUnit.SECONDS));
-            System.out.println("B4_REMOTE_CANCEL_HANDLER_OBSERVED_MS="+TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-start));
-            until(()->a.isCancelled(202L) && internal.isDisposed());
+            second.dispose();assertFalse(stopped.await(200,TimeUnit.MILLISECONDS));
+            assertTrue(a.isRunning(202L));assertFalse(internal.isDisposed());
+            assertEquals(run.clientToken(),a.currentRunToken(202L).orElseThrow());
+            a.emit(run,ServerSentEvent.builder(ChatStreamEvent.token("continued fixture")).build());
+            assertTrue(a.markDone(run));until(internal::isDisposed);
+            var resumed=a.attachInteractiveExact(202L,run.clientToken()).orElseThrow().collectList().block(Duration.ofSeconds(2));
+            assertNotNull(resumed);assertEquals(2,resumed.stream().filter(e->e.data()!=null).count());
         } finally {first.dispose();second.dispose();internal.dispose();}
     }
     @Test @Order(3) void completedReplayRetainsOldTokenAndFinalAckWhileCurrentPointerMovesToOtherNode() {
@@ -114,10 +118,10 @@ class ChatRunClusterHttpTest {
             assertThrows(IllegalArgumentException.class,()->new ChatRunCluster(source,"node-a","node-a="+peer,KEY));
         assertThrows(IllegalArgumentException.class,()->new ChatRunCluster(source,"node-a","node-a=https://example.test","short"));
     }
-    @Test @Order(6) void leaseLossCancelsExactRunAndCannotStartOrCommitAgain() {
+    @Test @Order(6) void elapsedLeaseDoesNotCancelWorkerButFencesNewCallsAndCommits() {
         var run=a.beginOrJoin(205L).context();var stop=new AtomicInteger();run.registerCancellationHandle(stop::incrementAndGet);
         new org.springframework.jdbc.core.JdbcTemplate(source).update("update awx_chat_run_owners set lease_until=TIMESTAMP '2000-01-01 00:00:00' where run_token=?",run.clientToken());
-        a.renewOwnerLeases();assertEquals(1,stop.get());assertFalse(run.admitCall(()->fail("late inference")));
+        a.renewOwnerLeases();assertEquals(0,stop.get());assertFalse(run.isCancellationRequested());assertFalse(run.admitCall(()->fail("late inference")));
         assertFalse(run.tryBeginTranscriptCommit());assertFalse(run.markPersisted());
         assertEquals(503,assertThrows(ResponseStatusException.class,()->b.beginOrJoin(205L)).getStatusCode().value());
         assertEquals(503,assertThrows(ResponseStatusException.class,()->b.attachInteractiveExact(205L,run.clientToken())).getStatusCode().value());
@@ -144,7 +148,7 @@ class ChatRunClusterHttpTest {
             until(()->a.isCancelled(208L));
         } finally {stream.dispose();relay.close();}
     }
-    @Test @Order(9) void directoryOutageFailsClosedForNewWorkAndStopsExistingLocalRun() {
+    @Test @Order(9) void directoryOutageFencesNewWorkAndRetainsExistingLocalRun() {
         var failed=new AtomicBoolean();
         DataSource isolated=new AbstractDataSource(){
             @Override public java.sql.Connection getConnection() throws java.sql.SQLException {if(failed.get())throw new java.sql.SQLException("synthetic_unavailable");return source.getConnection();}
@@ -154,12 +158,15 @@ class ChatRunClusterHttpTest {
         var registry=new ChatRunRegistry();registry.replayCapacity=16;registry.setCluster(cluster);
         try {
             var run=registry.beginOrJoin(209L).context();var count=new AtomicInteger();run.registerCancellationHandle(count::incrementAndGet);
-            failed.set(true);registry.renewOwnerLeases();assertEquals(1,count.get());assertTrue(run.isCancellationRequested());
+            failed.set(true);registry.renewOwnerLeases();assertEquals(0,count.get());assertFalse(run.isCancellationRequested());
             assertEquals(503,assertThrows(ResponseStatusException.class,()->registry.beginOrJoin(210L)).getStatusCode().value());
             assertFalse(run.admitCall(()->fail("outage starts inference")));
+            failed.set(false);registry.renewOwnerLeases();
+            var admitted=new AtomicInteger();assertTrue(run.admitCall(admitted::incrementAndGet));
+            assertEquals(1,admitted.get());assertEquals(0,count.get());assertFalse(run.isCancellationRequested());
         } finally {failed.set(false);registry.shutdown();cluster.close();}
     }
-    @Test @Order(100) void relayHttpServerLossClosesUpstreamViewerAndCancelsOwner() throws Exception {
+    @Test @Order(100) void relayHttpServerLossDetachesViewerAndOwnerCanCompleteSameRun() throws Exception {
         var run=a.beginOrJoin(206L).context();var stop=new CountDownLatch(1);run.registerCancellationHandle(stop::countDown);
         a.emit(run,ServerSentEvent.builder(ChatStreamEvent.token("fixture")).build());
         var request=HttpRequest.newBuilder(URI.create("http://127.0.0.1:"+portB+"/fixture/viewer?session=206&token="+run.clientToken())).GET().build();
@@ -167,8 +174,13 @@ class ChatRunClusterHttpTest {
         try(var body=response.body()) {
             assertTrue(body.readNBytes(5).length>0);assertTrue(a.isRunning(206L));
             nodeB.close();nodeB=null;
-            assertTrue(stop.await(2,TimeUnit.SECONDS),"relay server shutdown must disconnect its owner subscription");
-            assertTrue(a.isCancelled(206L));
+            assertFalse(stop.await(200,TimeUnit.MILLISECONDS),"relay shutdown must not cancel the owner worker");
+            assertTrue(a.isRunning(206L));assertFalse(run.isCancellationRequested());
+            assertEquals(run.clientToken(),a.currentRunToken(206L).orElseThrow());
+            a.emit(run,ServerSentEvent.builder(ChatStreamEvent.token("completed after relay loss")).build());
+            assertTrue(a.markDone(run));
+            var resumed=a.attachInteractiveExact(206L,run.clientToken()).orElseThrow().collectList().block(Duration.ofSeconds(2));
+            assertNotNull(resumed);assertEquals(2,resumed.stream().filter(e->e.data()!=null).count());
         }
     }
     @Configuration(proxyBeanMethods=false)

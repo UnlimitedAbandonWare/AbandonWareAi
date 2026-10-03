@@ -8,9 +8,11 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
+import java.nio.channels.WritableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
@@ -159,7 +161,20 @@ public class UawDatasetWriter {
                 StandardOpenOption.WRITE,
                 StandardOpenOption.APPEND);
              FileLock ignored = channel.lock()) {
-            channel.write(ByteBuffer.wrap(bytes));
+            writeFully(channel, ByteBuffer.wrap(bytes));
+        }
+    }
+
+    static void writeFully(WritableByteChannel channel, ByteBuffer buffer) throws IOException {
+        int stalledWrites = 0;
+        while (buffer.hasRemaining()) {
+            int written = channel.write(buffer);
+            if (written < 0 || (written == 0 && ++stalledWrites >= 16)) {
+                throw new IOException("dataset append made no progress");
+            }
+            if (written > 0) {
+                stalledWrites = 0;
+            }
         }
     }
 

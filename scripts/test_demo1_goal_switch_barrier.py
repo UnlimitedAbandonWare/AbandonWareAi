@@ -301,6 +301,93 @@ class RejectComplete(unittest.TestCase):
             "verified: unittest 14/14 pass, exit 0, evidence recorded")
         self.assertEqual(0, code, out)
 
+    def test_goal_file_read_claim_ko_rejected(self):
+        # 실측 재발 사례: goal-objective 읽기를 등록 목표 완료로 주장
+        code, out = self._reject(
+            "지정한 goal-objective.md를 읽었습니다. "
+            "이번에 등록된 목표인 목표 파일 읽기는 완료했습니다.")
+        self.assertEqual(5, code, out)
+        self.assertTrue(out["rejected"])
+
+    def test_read_goal_objective_en_rejected(self):
+        code, out = self._reject("Done: I read the goal-objective.md file.")
+        self.assertEqual(5, code, out)
+        self.assertIn("read-goal-done", out["matched"])
+
+    def test_reading_the_goal_rejected(self):
+        code, out = self._reject("Reading the goal complete.")
+        self.assertEqual(5, code, out)
+        self.assertIn("read-goal-done", out["matched"])
+
+    def test_registered_goal_read_claim_ko_rejected(self):
+        code, out = self._reject("등록된 목표를 읽는 작업이 완료되었습니다.")
+        self.assertEqual(5, code, out)
+        self.assertIn("registered-goal-read-done", out["matched"])
+
+    def test_goal_file_read_bare_title_rejected(self):
+        code, out = self._reject("목표 파일 읽기")
+        self.assertEqual(5, code, out)
+        self.assertIn("read-goal-done", out["matched"])
+
+    def test_intake_only_done_rejected(self):
+        code, out = self._reject("intake-only: read goal file, done")
+        self.assertEqual(5, code, out)
+        self.assertIn("intake-only-done", out["matched"])
+
+    def test_docs_only_checked_ko_rejected(self):
+        code, out = self._reject("문서만 확인했습니다.")
+        self.assertEqual(5, code, out)
+        self.assertIn("intake-only-done", out["matched"])
+
+    def test_real_implementation_acceptance_passes(self):
+        code, out = self._reject(
+            "acceptance: WP1 web.search flag default OFF; "
+            "ToolRegistry matches manifest")
+        self.assertEqual(0, code, out)
+        self.assertFalse(out["rejected"])
+
+    def test_implementation_with_test_evidence_passes(self):
+        code, out = self._reject(
+            "implemented WP1 barrier patterns; unittest 33/33 pass, exit 0")
+        self.assertEqual(0, code, out)
+
+    def test_instructional_phrase_with_concrete_evidence_accepted(self):
+        # WP4: 지시 어휘가 섞인 완료 보고도 exit 0/테스트 수치 증거가 있으면 수용
+        code, out = self._reject(
+            "Read AGENTS.md before continuing; implemented WP2 fail-soft, "
+            "gradle tests 6/6 pass, exit 0")
+        self.assertEqual(0, code, out)
+        self.assertFalse(out["rejected"])
+        self.assertEqual("instructional-with-evidence", out["reason"])
+        self.assertIn("before-continuing", out["matched"])
+        self.assertIn("exit-zero", out["evidence"])
+        self.assertTrue(out["evidenceAccepted"])
+
+    def test_goal_read_claim_with_evidence_accepted(self):
+        # goal 파일 언급 + 실제 구현·검증 증거가 있으면 어휘 매칭만으로 거부하지 않음
+        code, out = self._reject(
+            "Read the goal file, patched scripts/demo1_vibe_skill_router.py, "
+            "unittest 52/52 pass exit 0")
+        self.assertEqual(0, code, out)
+        self.assertFalse(out["rejected"])
+        self.assertIn("read-goal-done", out["matched"])
+        self.assertTrue(out["evidenceAccepted"])
+
+    def test_instructional_phrase_without_evidence_still_rejected(self):
+        code, out = self._reject(
+            "Read the spec before proceeding with the patch")
+        self.assertEqual(5, code, out)
+        self.assertTrue(out["rejected"])
+        self.assertEqual("instructional-not-acceptance", out["reason"])
+        self.assertEqual([], out["evidence"])
+
+    def test_pure_tool_preamble_with_numeric_text_still_rejected(self):
+        # 명령어 한 줄은 증거 유무와 무관하게 항상 reject
+        code, out = self._reject(
+            "python -B scripts/test_demo1_goal_switch_barrier.py")
+        self.assertEqual(5, code, out)
+        self.assertIn("tool-preamble", out["matched"])
+
 
 if __name__ == "__main__":
     unittest.main()

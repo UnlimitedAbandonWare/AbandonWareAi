@@ -102,9 +102,9 @@ class AutolearnRagRetrainOrchestratorTest {
         }
 
         @Override
-        public int ingestNewSamples(Path jsonlPath, String datasetName, PreemptionToken token) {
+        public IngestOutcome ingestNewSamplesDetailed(Path jsonlPath, String datasetName, PreemptionToken token) {
             calls++;
-            return 7;
+            return new IngestOutcome(7, 7, 0, 0L, 0, "", "", true, true);
         }
     }
 }

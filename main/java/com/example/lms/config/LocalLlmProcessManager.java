@@ -45,6 +45,7 @@ import java.util.Objects;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
@@ -65,6 +66,7 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
     private static final long OWNED_PROCESS_FORCED_STOP_MS = 1_000L;
     private static final Pattern CUDA_VISIBLE_DEVICE_UUID = Pattern.compile(
             "GPU-[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}");
+    private static final Pattern MODEL_TAG = Pattern.compile("[a-zA-Z0-9][a-zA-Z0-9._:\\-/]{0,127}");
     private static final Pattern MEMORY_FAILURE_SIGNAL = Pattern.compile(
             "\\b(?:insufficient[_ ]memory|model requires more system memory|out of memory)\\b");
     private static final Pattern NEGATED_MEMORY_PREFIX = Pattern.compile("\\b(?:not|no)(?:\\s+an?)?\\s*$");
@@ -121,6 +123,9 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
     private volatile boolean gpuAllocationObserved;
     private volatile String externalRoleStatus = "not_observed";
     private final AtomicReference<String> observedProcessFailure = new AtomicReference<>();
+    private final AtomicBoolean installPullInFlight = new AtomicBoolean();
+    private final AtomicReference<Map<String, Object>> lastInstallPull = new AtomicReference<>(
+            Map.of("status", "never_requested"));
 
     public enum State {
         DISABLED, PROBING, STARTING, SERVER_READY, MODEL_WARMING, READY, DEGRADED, COOLDOWN, STOPPED
@@ -196,6 +201,87 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
 
     @Value("${local-llm.warmup.timeout-ms:120000}")
     private long warmupTimeoutMs = 120_000L;
+
+    @Value("${local-llm.install.pull-timeout-ms:1800000}")
+    private long installPullTimeoutMs = 1_800_000L;
+
+    private final Map<String, CompletableFuture<Boolean>> selectedModelLoads = new LinkedHashMap<>();
+
+    /** Explicit selection may preload an existing server even when autostart is off. */
+    public synchronized CompletableFuture<Boolean> requestModelWarmup(String modelTag, String baseUrl) {
+        return requestModelWarmup(modelTag, baseUrl, work -> { work.run(); return true; });
+    }
+
+    public synchronized CompletableFuture<Boolean> requestModelWarmup(String modelTag, String baseUrl,
+            java.util.function.Predicate<Runnable> dispatchAdmission) {
+        String model = trimToNull(modelTag);
+        if (!enabled || !warmupEnabled || stopping || model == null
+                || !MODEL_TAG.matcher(model).matches() || model.contains("..")
+                || !com.example.lms.llm.ModelCapabilities.isLocalChatModelId(model)
+                || !LocalLlmGatewaySecurity.isLoopbackBaseUrl(baseUrl)) return null;
+        try {
+            LlmRouterProperties routes = env == null ? null
+                    : Binder.get(env).bind("llmrouter", LlmRouterProperties.class).orElse(null);
+            if (LocalLlmGatewaySecurity.routePolicyFailure(routes, model, model, baseUrl) != null
+                    || !isAvailable(baseUrl)) return null;
+        } catch (RuntimeException unavailable) { return null; }
+        String key = resolveServiceUrl(baseUrl) + "/" + model;
+        CompletableFuture<Boolean> existing = selectedModelLoads.get(key);
+        if (existing != null) return existing;
+        // Bound selected loads independently from the lifecycle/recovery worker.
+        if (selectedModelLoads.size() >= 2) return null;
+        CompletableFuture<Boolean> load = new CompletableFuture<>();
+        selectedModelLoads.put(key, load);
+        try { startupRuntime.executeWarmup(() -> {
+            boolean ready = false;
+            try {
+                if (!warmupRouteAvailable(model, baseUrl)) return;
+                URI service = URI.create(resolveServiceUrl(baseUrl));
+                String endpoint = service.getScheme() + "://" + service.getHost() + ":" + service.getPort();
+                if (containsModel(startupRuntime.getJson(endpoint + "/api/ps", 750), model)) {
+                    ready = true;
+                } else if (containsModel(startupRuntime.getJson(endpoint + "/api/tags", 750), model)) {
+                    log.info("[AWX][ollama][selected-warmup] status=started modelHash={} endpointHash={}",
+                            SafeRedactor.hashValue(model), SafeRedactor.hashValue(endpoint));
+                    Map<String, Object> body = new LinkedHashMap<>();
+                    body.put("model", model);
+                    body.put("messages", List.of());
+                    body.put("stream", false);
+                    body.put("keep_alive", hasText(warmupKeepAlive) ? warmupKeepAlive : "5m");
+                    java.util.concurrent.atomic.AtomicBoolean accepted = new java.util.concurrent.atomic.AtomicBoolean();
+                    dispatchAdmission.test(() -> {
+                        if (!warmupRouteAvailable(model, baseUrl)) return;
+                        URI current = URI.create(resolveServiceUrl(baseUrl));
+                        if (!endpoint.equals(current.getScheme() + "://" + current.getHost() + ":" + current.getPort())) return;
+                        try {
+                            JsonNode response = startupRuntime.postJson(endpoint + "/api/chat", body, warmupTimeoutMs);
+                            accepted.set(response != null && !response.has("error") && response.path("done").asBoolean());
+                        } catch (IOException unavailable) { /* best effort; never pull or retry */ }
+                    });
+                    ready = accepted.get();
+                    log.info("[AWX][ollama][selected-warmup] status={} modelHash={} endpointHash={}",
+                            ready ? "ready" : "failed", SafeRedactor.hashValue(model), SafeRedactor.hashValue(endpoint));
+                }
+            } catch (Exception unavailable) {
+                log.debug("[AWX][ollama][selected-warmup] status=failed errorType={}",
+                        unavailable.getClass().getSimpleName());
+            } finally {
+                load.complete(ready);
+                synchronized (LocalLlmProcessManager.this) { selectedModelLoads.remove(key, load); }
+            }
+        }); } catch (RejectedExecutionException stopped) {
+            load.complete(false);
+            selectedModelLoads.remove(key, load);
+        }
+        return load;
+    }
+
+    private boolean warmupRouteAvailable(String model, String baseUrl) {
+        if (!enabled || !warmupEnabled || stopping || !isAvailable(baseUrl)) return false;
+        LlmRouterProperties routes = env == null ? null
+                : Binder.get(env).bind("llmrouter", LlmRouterProperties.class).orElse(null);
+        return LocalLlmGatewaySecurity.routePolicyFailure(routes, model, model, baseUrl) == null;
+    }
 
     public LocalLlmProcessManager() {
         this.startupRuntime = new SystemStartupRuntime();
@@ -455,6 +541,10 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
     public void stop() {
         stopping = true;
         running.set(false);
+        synchronized (this) {
+            selectedModelLoads.values().forEach(load -> load.complete(false));
+            selectedModelLoads.clear();
+        }
         startupRuntime.close();
         synchronized (ownershipLock) {
             terminateOwnedProcess("lifecycle_stop");
@@ -637,6 +727,17 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
 
         Map<String, String> environment = new LinkedHashMap<>();
         environment.put("OLLAMA_HOST", normalizeOllamaHostForEnv(ollamaHost));
+        for (String name : List.of("OLLAMA_NUM_PARALLEL", "OLLAMA_MAX_LOADED_MODELS", "OLLAMA_CONTEXT_LENGTH")) {
+            String value = trimToNull(envString(name, null));
+            if (value == null) continue;
+            try {
+                if (Integer.parseInt(value) <= 0) throw new NumberFormatException();
+            } catch (NumberFormatException invalid) {
+                throw new IllegalArgumentException("invalid_ollama_runtime_control:" + name);
+            }
+            // No defaults: retain operator values and normal ProcessBuilder inheritance.
+            environment.put(name, value);
+        }
         String cudaDevice = normalizeCudaVisibleDevice(cudaVisibleDevice);
         if (cudaDevice != null) {
             environment.put("CUDA_VISIBLE_DEVICES", cudaDevice);
@@ -1253,6 +1354,101 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
         fallbackCount.incrementAndGet();
         fallbackUsed = true;
         TraceStore.put("localLlm.router.fallback", reason);
+    }
+
+    /**
+     * Web-install seam: pull one model tag through the managed Ollama endpoint.
+     * Runs on a dedicated daemon thread guarded by {@link #installPullInFlight}
+     * so the single-threaded lifecycle executor stays free for recovery work.
+     * Result is metadata only; the model tag never reaches the logs.
+     */
+    public Map<String, Object> requestModelPull(String modelTag) {
+        String model = trimToNull(modelTag);
+        if (model == null || !MODEL_TAG.matcher(model).matches() || model.contains("..")) {
+            return installResult("rejected", "invalid_model_tag", model);
+        }
+        if (!enabled) {
+            return installResult("rejected", "local_llm_disabled", model);
+        }
+        if (stopping) {
+            return installResult("rejected", "manager_stopping", model);
+        }
+        if (!isServiceRunning()) {
+            return installResult("rejected", "ollama_unavailable", model);
+        }
+        if (!installPullInFlight.compareAndSet(false, true)) {
+            return installResult("already_running", "pull_in_flight", model);
+        }
+        Thread worker = new Thread(() -> runInstallPull(model), "ollama-model-pull");
+        worker.setDaemon(true);
+        worker.start();
+        return installResult("accepted", "", model);
+    }
+
+    /** Last pull outcome plus in-flight flag; metadata only. */
+    public Map<String, Object> installPullStatus() {
+        Map<String, Object> result = new LinkedHashMap<>(lastInstallPull.get());
+        result.put("inFlight", installPullInFlight.get());
+        return Map.copyOf(result);
+    }
+
+    private void runInstallPull(String model) {
+        try {
+            boolean present;
+            try {
+                present = containsModel(getJson("/api/tags", boundedMillis(healthCheckAttemptTimeout, 2000)), model);
+            } catch (IOException tagsFailure) {
+                publishInstallResult("failed", "inventory_unavailable", model);
+                return;
+            }
+            if (present) {
+                publishInstallResult("installed", "already_present", model);
+                return;
+            }
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("model", model);
+            body.put("stream", false);
+            try {
+                postJson("/api/pull", body, installPullTimeoutMs);
+            } catch (IOException pullFailure) {
+                publishInstallResult("failed", classifyFailure(pullFailure), model);
+                return;
+            }
+            boolean verified;
+            try {
+                verified = containsModel(getJson("/api/tags", boundedMillis(healthCheckAttemptTimeout, 2000)), model);
+            } catch (IOException verifyFailure) {
+                publishInstallResult("failed", "verify_unavailable", model);
+                return;
+            }
+            publishInstallResult(verified ? "installed" : "failed", verified ? "" : "verify_missing", model);
+        } finally {
+            installPullInFlight.set(false);
+        }
+    }
+
+    private void publishInstallResult(String status, String reason, String model) {
+        lastInstallPull.set(installResult(status, reason, model));
+        log.info("[AWX][ollama][install] status={} reason={} modelHash={} modelLength={}",
+                status, SafeRedactor.traceLabelOrFallback(reason, "none"),
+                model == null ? "" : SafeRedactor.hashValue(model),
+                model == null ? 0 : model.length());
+    }
+
+    private Map<String, Object> installResult(String status, String reason, String model) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("status", status);
+        if (reason != null && !reason.isBlank()) {
+            result.put("reason", reason);
+        }
+        if (model != null && MODEL_TAG.matcher(model).matches()) {
+            result.put("model", model);
+            result.put("modelHash", SafeRedactor.hashValue(model));
+            result.put("modelLength", model.length());
+        }
+        result.put("port", effectiveOllamaPort());
+        result.put("atEpochMs", startupRuntime.nowMillis());
+        return result;
     }
 
     private static Map<String, java.util.concurrent.atomic.AtomicLong> recoveryCounters() {
@@ -1911,6 +2107,7 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
         default Set<String> serverGpuUuids(long pid, int timeoutMs) { return Set.of(); }
         default void onFailure(java.util.function.Consumer<String> listener) { }
         default void execute(Runnable work) { work.run(); }
+        default void executeWarmup(Runnable work) { execute(work); }
         default void schedule(Runnable work, long delayMs) { }
         default void close() { }
         default JsonNode getJson(String url, int timeoutMs) throws IOException { return requestJson(url, null, timeoutMs); }
@@ -2013,6 +2210,11 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
             thread.setDaemon(true);
             return thread;
         });
+        private final java.util.concurrent.ExecutorService warmupExecutor = Executors.newSingleThreadExecutor(work -> {
+            Thread thread = new Thread(work, "ollama-selected-warmup");
+            thread.setDaemon(true);
+            return thread;
+        });
         private final Deque<String> recentReasons = new ArrayDeque<>();
         private final ProcessStarter processStarter;
         private final OwnedProcessFactory ownedProcessFactory;
@@ -2024,12 +2226,15 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
         }
 
         @Override
+        public void executeWarmup(Runnable work) { warmupExecutor.execute(work); }
+
+        @Override
         public void schedule(Runnable work, long delayMs) {
             try { executor.schedule(work, delayMs, TimeUnit.MILLISECONDS); } catch (RejectedExecutionException stopped) { }
         }
 
         @Override
-        public void close() { executor.shutdownNow(); }
+        public void close() { warmupExecutor.shutdownNow(); executor.shutdownNow(); }
 
         SystemStartupRuntime() {
             this(ProcessBuilder::start,

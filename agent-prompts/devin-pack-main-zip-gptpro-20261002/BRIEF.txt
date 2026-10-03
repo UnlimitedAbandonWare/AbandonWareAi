@@ -1,0 +1,101 @@
+[ANTI-STOP] 본 지시서는 읽기 전용 분석에 그치지 않고 WP1~WP3 구현 및 검증까지 완료한 뒤 보고를 출력하고 정상 종료해야 한다. 중간 중단 금지.
+@objective-executor
+[DEVIN 지시서] main 소스 GPT Pro 전용 zip 패키징 스크립트 및 런처 BAT 제작 — 2026-10-02 18:55 KST
+파일 ID: PASTE_DEVIN_PACK_MAIN_ZIP_GPTPRO_20261002
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+# 0. 한 줄 목표
+BAT 실행 한 번으로 C:\AbandonWare\demo-1\demo-1\src\main 소스를 GPT Pro 웹 업로드용 zip 파일로 압축하여 C:\Users\nninn\OneDrive\Desktop\zipHome에 자동 적재하는 사용자 전용 스크립트와 런처 BAT를 제작·검증한다.
+
+# 1. 사실 (2026-10-02 18:50~18:55 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 대상 디렉토리: C:\AbandonWare\demo-1\demo-1\src\main (총 2,418개 파일, 약 21.4MB, .java 2,192개, resources 226개).
+- 출력 디렉토리: C:\Users\nninn\OneDrive\Desktop\zipHome (실제 로컬 존재 확인 완료, Test-Path = True).
+- 본 도구는 사용자(nninn)의 개인용 웹(GPT Pro) 코드 공유 편의 도구이며, 스프링 부트 서버나 프로덕션 빌드 로직과 무관한 순수 로컬 보조 스크립트다.
+- 제품 소스(main/java, main/resources)는 절대 수정하지 않으며 오직 scripts/ 아래 유틸리티와 루트의 BAT 파일만 생성한다.
+
+## 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+| --- | --- | --- | --- |
+| scripts/pack_main_for_gptpro.ps1 | 신규 | - | 생성 |
+| Pack-Main-For-GptPro.bat | 신규 | - | 생성 |
+| main/java | 17.8MB | - | 읽기 전용 (수정 금지) |
+| main/resources | 3.56MB | - | 읽기 전용 (수정 금지) |
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 금지 핵심: git push, git add -A, 비밀값/토큰 출력, AbandonWare3 참조 오염, PROTO_OPEN 완화 금지.
+
+# 3. 작업 항목 (WP1~WP3)
+### WP1 [DEVIN] GPT Pro 최적화 압축 파워셸 스크립트 작성 (`scripts/pack_main_for_gptpro.ps1`)
+- 증거: scripts/pack_main_for_gptpro.ps1 신규
+- 대상 및 로직:
+  - 기본 소스 경로: `C:\AbandonWare\demo-1\demo-1\src\main`
+  - 기본 출력 경로: `C:\Users\nninn\OneDrive\Desktop\zipHome` (폴더 없으면 자동 생성)
+  - 제외 필터(Exclude): `__patch_drop__`, 임시 파일(`*.tmp`, `*.bak`), 캐시(`Thumbs.db`, `.DS_Store`), 바이너리(`*.class`, `*.jar`) 제외하여 웹 업로드 용량 최소화.
+  - 파일명 규칙:
+    1) 타임스탬프 파일: `demo1_main_src_yyyyMMdd_HHmmss.zip` (이력 보관용)
+    2) 최신 고정 파일: `demo1_main_latest.zip` (웹 업로드 창에 바로 집어넣기 편하게 생성)
+  - .NET `System.IO.Compression` 또는 `Compress-Archive`로 10초 이내 압축.
+  - 콘솔 브리핑: 압축된 파일 수, 원본 용량, 최종 zip 용량, 저장 위치 출력.
+  - 탐색기 연동: `-NoOpen` 스위치가 없으면 `explorer.exe /select,"<생성된zip경로>"` 실행하여 파일 즉시 하이라이트.
+- RED 검사: `Test-Path scripts/pack_main_for_gptpro.ps1` -> False
+- GREEN: `Test-Path scripts/pack_main_for_gptpro.ps1` -> True
+- 완료 조건: 파워셸 스크립트가 오류 없이 로드되고 파라미터(-SourcePath, -OutputDir, -NoOpen)를 정상 수신함.
+
+### WP2 [DEVIN] 루트 원클릭 실행 런처 배치 파일 작성 (`Pack-Main-For-GptPro.bat`)
+- 증거: Pack-Main-For-GptPro.bat 신규
+- 대상 및 로직:
+  - 루트에서 더블 클릭이나 명령창에서 즉시 실행 가능한 BAT.
+  - `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\pack_main_for_gptpro.ps1" %*` 호출.
+  - 에러 발생 시 콘솔이 닫히지 않고 확인 가능하게 에러 레벨 제어 (`if %ERRORLEVEL% NEQ 0 pause`).
+- RED 검사: `Test-Path Pack-Main-For-GptPro.bat` -> False
+- GREEN: `Test-Path Pack-Main-For-GptPro.bat` -> True
+- 완료 조건: 루트 BAT 파일이 생성되고 파워셸 스크립트를 정상 실행함.
+
+### WP3 [DEVIN] 실제 1회 실행 검증 및 산출물 크기 확인
+- 증거: C:\Users\nninn\OneDrive\Desktop\zipHome 내 생성된 zip 파일
+- 검증 동작:
+  - `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\pack_main_for_gptpro.ps1 -NoOpen` 1회 실행.
+  - `C:\Users\nninn\OneDrive\Desktop\zipHome\demo1_main_latest.zip` 생성 확인.
+  - zip 파일 크기가 10MB 이하(예상 3~5MB)이며 손상 없이 열리는지 검증.
+- RED 검사: 실행 전 최신 zip 미생성 상태
+- GREEN: 실행 후 exit code 0 및 zip 파일 존재 + 크기 확인
+- 완료 조건: zipHome에 zip 파일이 생성되고 2,000개 이상의 유효 소스가 패키징됨.
+
+## 검증 명령 블록
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\pack_main_for_gptpro.ps1 -NoOpen; "exit=$LASTEXITCODE"
+powershell.exe -NoProfile -Command "Get-Item 'C:\Users\nninn\OneDrive\Desktop\zipHome\demo1_main_latest.zip' | Select-Object Name, Length, LastWriteTime"; "exit=$LASTEXITCODE"
+
+## lease · journal 절차
+- 신규 도구 스크립트 작성 작업이므로 기존 제품 소스 lease 충돌 없음.
+- `python -B scripts/agent_scope_lease.py check --path scripts/pack_main_for_gptpro.ps1` 확인.
+- journal 열기: `python -B scripts/work_journal.py open --agent devin --task pack-main-zip-gptpro --scope scripts/pack_main_for_gptpro.ps1,Pack-Main-For-GptPro.bat`
+
+# 4. HOLD
+- 미지정 외부 경로 업로드 또는 외부 API 호출 시도 시 즉시 HOLD.
+
+# 5. ASK_ONCE
+- 압축 완료 후 윈도우 탐색기 자동 실행 유지 여부 (기본값: 유지).
+
+# 6. 절대 금지
+- `main/java/**`, `main/resources/**` 제품 소스 수정 금지 (읽기만 허용).
+- `git commit`, `git push`, `git add -A` 금지.
+- AbandonWare3 참조 금지, PROTO_OPEN 임의 완화 금지.
+- 외부 유료 API 호출 0. 비밀값 출력 0.
+
+# 7. Acceptance (완료 기준)
+- A-WP1: `scripts/pack_main_for_gptpro.ps1` 필터링 압축 구현 (PASS/NOT_RUN).
+- A-WP2: `Pack-Main-For-GptPro.bat` 에러 제어 구현 (PASS/NOT_RUN).
+- A-WP3: 검증 명령 1회 실행으로 zipHome에 10MB 이하 zip 정상 생성 (PASS/NOT_RUN).
+- 실행하지 못한 항목은 절대로 PASS로 적지 말고 NOT_RUN과 명확한 사유를 기재한다.
+
+# 8. 보고 형식
+보고는 반드시 `외부 API: 없음` 줄로 시작하고 아래 항목을 포함한다.
+- 스크립트 및 BAT 생성 경로와 파일 크기(bytes), sha12
+- 생성된 zip 파일 크기(MB), 소요 시간, 압축된 파일 수
+- 사용자가 `Pack-Main-For-GptPro.bat`를 실행하는 방법 안내
+- 루프 이관: 자가 수정 <= 3회 초과 시 FOR_CODEX 또는 ASK. 종료 상태: DONE_OFFLINE.
+
+[ANTI-STOP] 모든 작업 패키지(WP1~WP3)를 구현 및 검증 완료하고 보고서를 출력한 후 정상 종료하라. 지시서만 확인하고 멈추지 말 것.

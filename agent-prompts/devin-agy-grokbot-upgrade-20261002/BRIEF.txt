@@ -1,0 +1,220 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-agy-cli-entry @demo1-agy-directive-writer @demo1-devin-directive-loop
+
+# Devin — agy(Antigravity CLI)를 "Grok Bot 대타"로 쓸 수 있게 업그레이드
+[Contract: DEMO1-DEVIN-AGY-GROKBOT-UPGRADE-20261002]
+
+[ANTI-STOP] 이 파일을 읽은 것은 intake일 뿐이다. 완료 = 아래 Acceptance가 PASS인 상태다. 계획만 쓰고 멈추지 말고 DV0부터 바로 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다. 질문은 ASK_ONCE 항목만 한다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용). git은 `F:\git\cmd\git.exe`, agy는 `%LOCALAPPDATA%\agy\bin\agy.exe`(PATH에 없음). 장부 파일은 `[IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))`로 쓴다.
+
+## 0) 한 줄 목표
+사용자의 Grok Bot(Grok Bot 앱의 데스크톱 비서) 사용 한도가 거의 바닥이라, agy를 가끔 Grok Bot 역할로 쓰려고 한다. Grok Bot 역할은 한국어 지시서 작성, 에이전트 보고서 판정, "지금 무슨 상황이냐" 설명이다. agy를 실제로 쓸 수 있는 상태로 만들고(로그인·크레딧·git 감시 오류 진단), **현재** Grok Bot의 규칙과 레시피를 agy에 옮기고, 약한 모델(Gemini Flash)로도 형식이 안 무너지게 저장·검사 도구로 받쳐 준다.
+
+## 1) 사실 (Grok Bot이 2026-10-02 14:07~14:12 KST에 PC에서 확인)
+- agy는 `Antigravity CLI 1.2.14`, 모델 `Gemini 3.8 Flash (High)`, 계정 Google AI Pro. 사용자 스크린샷 하단에 `accept-edits · Gemini 3.8 Flash · high · AI: Out of cre…`가 빨간색으로 뜬다.
+- `%USERPROFILE%\.gemini\antigravity-cli\cli.log`(14:06) 기록:
+  - 시작 직후 `You are not logged into Antigravity`, `doRefreshQuota: skipped (not logged in)`, `failed to refresh G1 credits` → 뒤이어 `applyAuthResult: email=…, authMethod=consumer` → `fetchAvailableModels` → `doRefreshQuota: starting reload`. 결국 로그인은 됐지만 **"G1 크레딧"이 없다고 나오는 상태**로 보인다. 기본 한도(AI Pro)까지 막혔는지는 아직 모른다.
+  - `Unable to start git event watcher … core.repositoryformatversion does not support extension: worktreeconfig`. 실제로 레포 `.git/config`가 `core.repositoryformatversion=0`, `extensions.worktreeconfig=true`다(14:11 확인). 그래서 agy의 git 변경 감시가 꺼져 있다.
+- 실행 배치 파일: `Start-Agy-CLI.bat`(3,325 B)는 cwd 고정, JDK/Git/Node PATH 설정, `AWX_AGY_EFFORT=high`, 그리고 **기본으로 `AWX_AGY_YOLO=1` → `--dangerously-skip-permissions`**를 붙인다. `Start-Agy-CLI-Yolo.bat`(1,299 B)도 있다.
+- `~/.gemini/antigravity-cli/settings.json`: `agentMode: accept-edits`. allow에 `command(regex:.*)`, `write_file(/**)`, `write_file(C:/AbandonWare/demo-1/demo-1/src/**)`가 있어서 사실상 다 허용이다. deny는 git commit/push/reset/clean/checkout/stash/add, gradlew, .secrets, apikey, 키 파일, settings.json 자기 수정이다. 결국 "agy는 제품 소스 수정 0(STRICT_ZERO)"이라는 규칙을 아무것도 강제하지 못한다.
+- 이미 있는 agy 자산(09-30 작성, 재사용):
+  - 규칙 `.agents/rules/agy-korean-grokbot-role.md`(5,852 B)
+  - 스킬 `.agents/skills/demo1-agy-cli-entry`, `.agents/skills/demo1-agy-directive-writer`(references: directive-template, durable-facts, grokbot-playbook, idea-burst-rubric)
+  - `docs/AGY_CLI_CAPABILITIES_CHEATSHEET.md`, `scripts/grok_to_agy_memory_bridge.py`(~/.grok = grok.exe 저장소 읽기)
+  - `scripts/agent_signal_digest.py`, `tools/agents/agent.cmd`, `run-agent.mjs`, `doctor.mjs`, `Doctor-Agents.bat`, `src/test/js/agy-runner.test.cjs`
+  - `docs/GROKBOT_DIRECTIVE_PLAYBOOK.md`, `agent-prompts/grokbot-session-primer.md`
+  - 전역 `~/.gemini/GEMINI.md`, 전역 스킬 `awx-agy-operating`
+- **빠진 것**: 이 자산들의 "GrokBot"은 옛 웹 GrokBot과 grok.exe 기준이다. 지금 Grok Bot 앱이 쓰는 규칙은 하나도 없다. 예를 들면 `한 줄:`/`말로: 「…」` 답 형식, Downloads와 `agent-prompts` 이중 저장 + sha12 검증, Devin @skill 첫 줄과 Codex `$` 첫 줄, [ANTI-STOP], 메인 채팅 검증 대상, Clean worktree 꺼짐, Codex 병렬 레인 같은 것들이다. 보고서 판정("끝난거야? 더 할거 있어?")이나 재개 문장 레시피도 없다. 그런데 이게 사용자가 가장 자주 하는 요청이다.
+- HEAD `4150b2822f2c`(14:11).
+
+## 2) Grok Bot 인계 팩 (Grok Bot이 직접 써서 PC에 넣어 둠, 이 작업의 1차 입력)
+위치: `C:\Users\nninn\Downloads\AGY_GROKBOT_HANDOVER_20261002\` (사본: `agent-prompts\devin-agy-grokbot-upgrade-20261002\handover\`)
+| 파일 | 바이트 | sha12 | 내용 |
+|---|---|---|---|
+| HANDOVER.md | 7,377 | 85636aee2695 | 현재 Grok Bot 운영 규칙 전체(말투, 요청 유형별 처리, 저장 흐름, 지시서 형식, 금지, 역할, 비용, 검증 대상, 병렬 현황) |
+| demo1-agent-brief-writer.md | 5,282 | 5d983db409c0 | 지시서 작성 레시피 |
+| demo1-agent-report-review.md | 3,159 | 696949b9ef79 | 보고서 판정·답장 초안·재개 문장 레시피 |
+| demo1-multi-agent-handoff.md | 3,166 | 1fed5fb1693f | 다중 에이전트 인계 레시피 |
+| demo1-top10-the-one-probe.md | 2,185 | 92458244ebb0 | Top10 → 3 → THE ONE 레시피 |
+레포의 옛 문서와 충돌하면 **인계 팩이 최신**이다. 다만 경로·스크립트 이름은 라이브 파일로 다시 확인한다(sha 불일치면 STOP하고 보고).
+
+## 공통 규칙
+- 장부: `data/agent-handoff/devin-agy-grokbot-upgrade-<8hex>/`. 순서는 journal → checkpoint(preimage) → verify다. 수정할 레포 파일은 먼저 `agent_scope_lease.py claim`한다.
+- 수정 허용:
+  - `.agents/skills/demo1-agy-*`(기존 additive + 새 스킬), `.agents/rules/agy-korean-grokbot-role.md`(additive)
+  - `scripts/brief_*.py` 새 파일, `scripts/test_brief_*.py`
+  - 새 `Start-Agy-GrokBot.bat`
+  - `agent-prompts/agy-grokbot-primer.md`, `docs/agent-tooling/` 새 문서, `docs/AGY_CLI_CAPABILITIES_CHEATSHEET.md`(additive)
+  - `.agents/skills-intent-index.yaml`(새 스킬 항목), `agents.md` additive 최대 6줄, `docs/PROJECT_STATUS.md` 1줄
+- **수정 금지**: 제품 Java·frontend·Gradle·properties·chat.js, 기존 `Start-Agy-CLI.bat`/`Start-Agy-CLI-Yolo.bat`(새 배치 파일만 만든다), `~/.grok/**`. `~/.gemini/**`는 ASK_ONCE 승인 전까지 읽기만 한다.
+- `~/.gemini`에서 `oauth`·`token`·`cred`·`auth`·`.db` 파일 내용은 읽지 않고 출력하지 않는다. `cli.log`, `settings.json`(키 값 마스킹), 폴더 목록만 본다.
+- agy 모델 호출(생성)은 사용자 Google 한도를 쓴다. **전체 최대 2회**, 실패(한도·크레딧·401/403/429)면 재시도하지 않는다. `agy models`, `agy --version`, `agy -p "/skills"`, `agy mcp list`, `agy agents`처럼 생성 없는 조회는 자유롭게 써도 된다. `/usage`, `/credits`는 print 모드에서 로컬로 도는지 먼저 cli.log로 확인하고 쓴다.
+- 지금 다른 Codex 채팅이 timeout v2(장부 `codex-chat-timeout-failover-v2-26e76ed3`)를 진행 중이다. 그 파일과 장부, 그리고 Devin 병렬 레인 작업(`devin-codex-parallel-lanes-*`)은 건드리지 않는다.
+- 테스트는 새로 만든 `scripts/test_brief_*.py`와 `node --test src/test/js/agy-runner.test.cjs`만 돌린다.
+
+## DV0 — Preflight (읽기 전용)
+- HEAD, 대상 파일 sha12와 dirty 상태, `who` 요약, `agy --version`, `agy models` 결과(모델 이름만), 인계 팩 5개 sha12가 위 표와 같은지 기록한다.
+
+## DV1 — 로그인·크레딧 진단 ("Out of credits"의 정체)
+- cli.log와 생성 없는 조회로 다음을 판정한다:
+  - (a) 로그인 상태
+  - (b) "G1 크레딧"(추가 구매 크레딧)이 0인지
+  - (c) 기본 AI Pro 한도도 막혔는지, 아니면 G1만 0이고 기본 한도로는 돌아가는지
+  - (d) settings의 `useG1Credits` 같은 설정이 기본 한도 사용을 막는지
+  - (e) 한도가 막혔다면 언제 다시 풀리는지
+- 생성 테스트는 DV1에서 최대 1회만 한다: `agy -p "한 단어로 답해: ok" --mode plan --print-timeout 60s`. 결과 원문(에러 문구)을 그대로 기록한다.
+- 결론을 셋 중 하나로 낸다: `USABLE_BASE_QUOTA` | `BLOCKED_QUOTA(풀리는 시각)` | `BLOCKED_LOGIN`. `BLOCKED_LOGIN`이면 사용자가 직접 로그인해야 하므로 그 단계를 한국어로 적고 이 항목만 멈춘다. 나머지 DV는 계속한다.
+- 설정을 바꾸면 해결되는 경우(예: G1 크레딧 우선 사용 끄기)는 ASK_ONCE #1로 올리고 기본값은 "제안만"이다.
+- 크레딧 구매, 결제 설정 변경, 로그인 대행은 하지 않는다.
+
+## DV2 — git 감시 오류 진단
+- `core.repositoryformatversion=0` + `extensions.worktreeconfig=true` 조합이 agy git watcher를 끈다는 것을 재현 근거(cli.log 줄)로 정리한다. 누가 `worktreeconfig`를 켰는지 추정한다(Codex/Cline worktree 기록 확인, 읽기만).
+- 해결책 후보는 `git config core.repositoryformatversion 1`이다. 이 저장소를 쓰는 모든 에이전트(Codex, Clean, Devin, Grok CLI, IDE)에 영향을 주므로 **적용하지 않는다**. 영향 분석(git 버전, worktree 사용처)만 쓰고 ASK_ONCE #3으로 올린다.
+
+## DV3 — 인계 팩을 agy에 넣기
+- 인계 팩 5개를 `.agents/skills/demo1-agy-directive-writer/references/grokbot-current/`에 복사한다(원본 sha 그대로).
+- `references/durable-facts.md`와 `.agents/rules/agy-korean-grokbot-role.md`를 additive로 갱신한다. "GrokBot" 정의를 셋으로 나눈다:
+  - (1) Grok Bot 앱(현재, 인계 팩 기준)
+  - (2) 옛 웹 GrokBot(primer)
+  - (3) grok.exe(Grok CLI, `~/.grok`)
+  - 앞으로 "Grok Bot 역할" = (1)이다.
+  - 09-30 문장 중 인계 팩과 충돌하는 것(Downloads만 저장, `_R2` 규칙만 있고 agent-prompts 사본 없음, 답 형식 등)에는 `[superseded 2026-10-02 → grokbot-current/HANDOVER.md §n]` 표시만 붙인다. 지우지 않는다.
+- `demo1-agy-directive-writer/SKILL.md` §5~7에 차이만 추가한다: Devin @skill 첫 줄 / Codex `$` 첫 줄, [ANTI-STOP] 위아래, 이중 저장 + sha12, `말로: 「…」` + `한 줄:` 답 형식.
+
+## DV4 — Grok Bot 모드 스킬 (요청 → 레시피 라우터)
+- 새 스킬 `.agents/skills/demo1-agy-grokbot-mode/SKILL.md`를 만든다. 먼저 이름 충돌을 확인한다.
+  - `Use when`: 사용자가 agy에게 Grok Bot처럼 일을 맡길 때. 예: "지시서 써줘", "끝난거야? 더 할거 있어?", "이대로 보내도 돼?", "뭔 상황이냐, 내가 나서야 해?", "멈췄는데 뭐라고 해?", "Top10 찾아봐".
+  - 라우팅 표: 각 요청을 `grokbot-current/` 레시피 하나로 보낸다.
+  - 공통 시작: `agent_signal_digest.py` → 관련 `agent-prompts/` 최신 지시서와 장부 확인 → 판정.
+  - 공통 답 형식: 결론 한 줄 → 근거 2~4줄 → (지시서면) 경로·바이트·sha12 → `말로: 「…」` → `한 줄:`.
+  - 금지: 제품 소스 수정, 에이전트에게 직접 메시지 보내기, 지시서에 비밀값 넣기, skip-permissions 권장.
+- 보고서 판정 레시피는 `demo1-agy-report-review` 스킬로 따로 만든다(레시피 본문 + agy용 확인 명령).
+- `.agents/skills-intent-index.yaml`에 두 스킬의 트리거를 추가한다. `python -B scripts/demo1_vibe_skill_router.py resolve "<예시 6개>"`로 기대한 스킬이 1순위로 나오는지 확인한다.
+
+## DV5 — 지시서 저장·검사 도구 (약한 모델 보정의 핵심)
+- 새 `scripts/brief_save.py`(+ `.ps1` 래퍼):
+  - `save --draft <파일> --agent DEVIN|CODEX|GROK|CLEAN|GPTPRO --topic <kebab> [--date yyyymmdd]`
+  - 하는 일:
+    1. lint 실행
+    2. `C:\Users\nninn\Downloads\PASTE_<AGENT>_<topic>_<date>.txt` 저장(UTF-8 no BOM, 같은 이름이 있으면 `_R2`, `_R3`)
+    3. `agent-prompts\<agent>-<topic>-<date>\BRIEF.txt` 사본 저장
+    4. 두 파일의 바이트·sha12 비교
+    5. 기록부에 추가
+    6. 한국어 보고 3줄 출력(경로, 크기, sha12)
+- `brief_save.py lint <파일> --agent X`:
+  - [ANTI-STOP]이 위아래에 있는지
+  - 필수 섹션 순서(0 한 줄 목표 → 사실 → 공통 규칙 → 항목 → HOLD → ASK_ONCE → 절대 금지 → Acceptance → 보고 형식)
+  - DEVIN이면 첫 줄이 @skill 줄인지, 각 @skill이 `.agents/skills/<name>/SKILL.md`로 실제 있는지, 중복은 없는지
+  - CODEX면 `$` 줄 검사
+  - Project Root 문자열이 있는지
+  - 금지 목록 핵심어(push, add -A, 비밀값, AbandonWare3, PROTO_OPEN)가 있는지
+  - **비밀값 패턴**(키 형태 문자열, `password=`, `sk-` 등)이 없는지
+  - 결과: `PASS` | `WARN(목록)` | `FAIL(목록)`. FAIL이면 저장을 거부한다(`--force`는 없다).
+- 기록부 `data/agent-handoff/brief-registry/briefs.jsonl`:
+  - 한 줄 필드: `atKst`, `author`(grokbot|agy|…), `agent`, `topic`, `downloadsPath`, `repoPath`, `bytes`, `sha12`, `supersedes[]`, `summaryKo`
+  - `brief_save.py list|latest|search <단어>`로 찾는다. Grok Bot과 agy가 서로 무엇을 썼는지 여기서 확인한다.
+  - 처음 한 번은 Downloads의 기존 `PASTE_*.txt` 파일 이름, 크기, sha12, 수정 시각으로 메타데이터만 백필한다(`author: unknown`). 내용은 읽지 않는다.
+
+## DV6 — Grok Bot 모드 실행기와 첫 메시지
+- 새 `Start-Agy-GrokBot.bat`:
+  - `Start-Agy-CLI.bat`와 같은 PATH와 cwd 설정, `--effort high`, `--mode accept-edits`.
+  - **`--dangerously-skip-permissions`는 기본으로 붙이지 않는다**(`AWX_AGY_YOLO=1`일 때만 붙인다).
+  - 첫 메시지로 `agent-prompts/agy-grokbot-primer.md`를 `-i`로 넘긴다.
+  - `-c`와 `--conversation <id>`는 그대로 통과시킨다.
+  - 시작 전에 DV1 결과(마지막 크레딧·한도 판정)를 한 줄 보여 준다. 이건 생성 호출 없이 cli.log나 조회 결과로 만든다.
+- `agent-prompts/agy-grokbot-primer.md`(60줄 이내, 한국어):
+  - "너는 지금 Grok Bot 대타다"
+  - 읽을 순서: HANDOVER.md → demo1-agy-grokbot-mode
+  - 저장은 반드시 `brief_save.py`로
+  - 답 형식
+  - 금지
+  - 모를 때는 `evidence_needed`로 표시하고 추측하지 않는다
+- 기존 배치 파일은 그대로 둔다. 사용자가 원래 쓰던 실행 방식은 바뀌지 않는다.
+
+## DV7 — 권한 좁히기 제안 (적용은 ASK_ONCE #2)
+- agy가 전역 settings 말고 **워크스페이스 단위 설정**(레포 안 `.agents/` 등)을 지원하는지 생성 없는 조회로 확인한다(`builtin:skills/agy-customizations`, `agy -p "/config"`, cheatsheet). 지원하면 Grok Bot 모드 전용 권한을 그쪽에 둔다.
+- 제안 파일 `docs/agent-tooling/agy-grokbot-permissions-proposed.json`을 만든다:
+  - 쓰기 허용: `C:/Users/nninn/Downloads/**`, `src/agent-prompts/**`, `src/data/agent-handoff/**`
+  - 명령 허용: 읽기 명령, `python -B scripts/(brief_save|agent_signal_digest|agent_scope_lease who|check|demo1_vibe_skill_router)…`
+  - 거부: `src/main/**`, `src/test/**`(java), `frontend/**`, gradlew, git 변경 명령, `.secrets`, `~/.grok/**` 쓰기
+  - 기존 `command(regex:.*)` / `write_file(/**)`는 뺀다.
+- 실제 `~/.gemini/antigravity-cli/settings.json`은 승인 전까지 바꾸지 않는다. 승인이 나면 `settings.json.bak-20261002`로 백업한 뒤 바꾸고, 생성 없는 조회로 agy가 여전히 잘 뜨는지 확인한다.
+
+## DV8 — 문서
+- `docs/agent-tooling/agy-as-grokbot-ko.md`(사용자용 한국어 카드, 1~2쪽):
+  - 언제 agy를 쓰고 언제 Grok Bot을 쓰는지. agy는 PC 파일을 직접 읽어서 확인이 빠르다. 대신 Grok Bot 대화 기억은 인계 팩까지만 알고, 사진 첨부는 파일 경로로 줘야 한다.
+  - 시작 방법(`Start-Agy-GrokBot.bat`), 자주 쓰는 말 5개, 크레딧이 바닥났을 때 보이는 문구와 대처, 기록부로 Grok Bot과 이어 쓰는 법.
+- cheatsheet에 Grok Bot 모드 절을 additive로 추가한다.
+
+## DV9 — 테스트
+`scripts/test_brief_save.py`에 최소 다음을 넣는다:
+1. 정상 Devin 지시서 → lint PASS → 두 경로 저장, sha 동일, 기록부 1줄 추가.
+2. 같은 이름이 이미 있으면 `_R2`로 저장(기존 파일 sha 불변).
+3. [ANTI-STOP]이 아래에 없으면 FAIL, 저장 거부.
+4. 없는 @skill이 있으면 FAIL. 중복 @skill은 WARN.
+5. 비밀값 패턴(가짜 키 문자열 fixture)이 있으면 FAIL.
+6. CODEX인데 `$` 줄이 없으면 FAIL.
+7. BOM 없는 UTF-8인지, 한글이 깨지지 않는지(바이트 비교).
+8. 백필은 메타데이터만 쓰는지(Downloads 파일 내용을 읽지 않음, 모의 파일로 확인).
+- 테스트는 임시 폴더를 Downloads 대신 쓰게 `--downloads-dir`/`--repo-root` 옵션으로 격리한다.
+- 회귀: `node --test src/test/js/agy-runner.test.cjs` GREEN, 라우터 resolve 6개 기대대로.
+
+## DV10 — 리허설 (live 생성 최대 1회, DV1과 합쳐 2회 이내)
+- DV1이 `USABLE_BASE_QUOTA`일 때만 한다. 헤드리스로 Grok Bot 모드 리허설을 한 번 돌린다: `tools\agents\agent.cmd agy grokbot <prompt.md> --mode plan`. 입력은 "`agent-prompts\devin-codex-parallel-lanes-20261002\BRIEF.txt`를 보고 사용자가 Devin에게 넣어도 되는지 판정해 줘"다. 판정만 하고 파일은 쓰지 않는다.
+- 결과가 Grok Bot 답 형식(결론 한 줄, 근거, `말로:`, `한 줄:`)을 지키는지 체크리스트로 채점해 장부에 남긴다.
+- 막히면 `NOT_RUN_QUOTA`로 적고 재시도하지 않는다. 그 경우 `brief_save.py lint`를 기존 지시서 3개(아래)에 돌린 결과로 대신한다:
+  - `PASTE_DEVIN_codex-parallel-lanes_20261002.txt`
+  - `PASTE_DEVIN_skill-weakest-upgrade_20261002.txt`
+  - 이 지시서
+
+## HOLD
+- 크레딧 구매, 결제·구독 설정 변경, 로그인 대행(로그인이 필요하면 사용자 단계로 적는다)
+- 기존 `Start-Agy-CLI*.bat` 수정, `~/.grok/**` 쓰기, 전역 `~/.gemini` 파일 쓰기(ASK_ONCE 승인 전)
+- `git config` 변경, 제품 소스, 다른 세션 장부
+- agy 생성 호출 3회 이상, 다른 에이전트에게 메시지 보내기
+
+## ASK_ONCE (답이 없어도 해당 항목만 멈추고 나머지는 계속한다)
+1. DV1에서 설정 하나로 기본 한도를 쓸 수 있다고 나오면, `~/.gemini/antigravity-cli/settings.json`의 그 항목을 백업 후 바꿀까요? 답이 없으면 **제안만**.
+2. DV7 권한 좁히기 제안을 실제로 적용할까요? 워크스페이스 설정이 되면 그쪽에, 안 되면 전역 settings를 백업 후 바꾼다. 답이 없으면 **제안만**.
+3. `git config core.repositoryformatversion 1`로 agy git 감시 오류를 고칠까요? 모든 에이전트에 영향이 있다. 답이 없으면 **보고만**.
+
+## 절대 금지
+- push / pull / commit, `git add -A`, reset --hard / checkout / restore / stash / clean / force-push, git config 변경(ASK_ONCE #3 승인 전)
+- 전체 suite, Gradle, Verify-RAG, 서버 재기동, /chat 전송
+- `.secrets` / `.env` / `~/.gemini`·`~/.grok` 인증 파일과 토큰 읽기·출력, 지시서·문서에 비밀값 넣기
+- AbandonWare3 재추가, PROTO_OPEN / admin 강화
+- 다른 세션 lease·hunk·장부 훼손, timeout v2와 병렬 레인 작업 파일 수정
+- DB 스키마 변경, 데이터셋 삭제, 유료 API, 크레딧 구매
+
+## Acceptance (실행하지 않은 항목은 NOT_RUN + 사유)
+- [ ] AC1 DV1 판정(`USABLE_BASE_QUOTA` | `BLOCKED_QUOTA` | `BLOCKED_LOGIN`) + 근거 cli.log 줄 + 생성 호출 횟수 ≤1. 비밀값 출력 0.
+- [ ] AC2 DV2 원인 확정, 해결책 영향 분석. git config 불변(전후 `.git/config` sha 동일).
+- [ ] AC3 인계 팩 5개가 `references/grokbot-current/`에 sha 그대로 있음. durable-facts와 rule 파일에 additive 갱신과 superseded 표시. preimage 보존.
+- [ ] AC4 새 스킬 `demo1-agy-grokbot-mode`, `demo1-agy-report-review` + intent index. 라우터 resolve 6개 기대대로.
+- [ ] AC5 `brief_save.py` save/lint/list/latest/search, 테스트 1~8 GREEN.
+- [ ] AC6 기록부 생성 + Downloads `PASTE_*` 메타 백필(내용 읽기 0).
+- [ ] AC7 `Start-Agy-GrokBot.bat`(skip-permissions 기본 OFF) + primer. 기존 배치 파일 sha 불변. 생성 없이 `--help` 수준으로 기동 확인.
+- [ ] AC8 권한 제안 파일 + 워크스페이스 설정 지원 여부. 전역 settings 불변(승인 전).
+- [ ] AC9 한국어 사용자 카드 + cheatsheet 추가.
+- [ ] AC10 리허설 결과(또는 NOT_RUN_QUOTA + lint 3건 결과). `agy-runner.test.cjs` GREEN.
+- [ ] AC11 timeout v2와 병렬 레인 관련 파일·장부 sha 불변. `~/.grok` 쓰기 0.
+
+## 보고 형식
+```
+외부 API: agy 생성 <n>회 (Google AI Pro 한도) / 유료 0회 / 실패 원문: <있으면 그대로>
+DEVIN-AGY-GROKBOT-UPGRADE: DONE | PARTIAL | HOLD
+AGY_STATUS: USABLE_BASE_QUOTA | BLOCKED_QUOTA(<풀리는 시각 KST>) | BLOCKED_LOGIN — <한 줄>
+GIT_WATCHER: <원인 한 줄> / 조치: 보고만 | 적용됨
+AUTO_DECISION: …
+FILES_TOUCHED: <파일:줄범위>
+NEW: Start-Agy-GrokBot.bat / brief_save.py 사용 예 한 줄씩
+RED→GREEN: test_brief_save <n/m → m/m>, agy-runner.test.cjs <결과>
+ROUTER: <예시 6개 → 1순위 스킬>
+REHEARSAL: <채점 결과 또는 NOT_RUN_QUOTA + lint 3건>
+AC1~AC11: PASS | FAIL | NOT_RUN(사유)
+사용자 할 일: <로그인 등 사용자만 할 수 있는 단계, 없으면 "없음">
+HOLD / ASK_ONCE / NEXT
+```
+
+[ANTI-STOP] 읽기 = intake. DV0부터 바로 시작한다. 완료의 증거는 AGY_STATUS 판정, `brief_save.py` 테스트 GREEN, Grok Bot 모드 스킬 + 실행기 + 인계 팩 반영이다.

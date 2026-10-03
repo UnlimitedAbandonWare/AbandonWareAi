@@ -38,6 +38,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
@@ -2059,16 +2061,20 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             }
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, 0L, "korean.brave-first"));
-            naverFuture = submitSearchAttempt(() -> {
-                try {
-                    return naverService.searchSnippetsSync(query, callK, naverBlockTimeout);
-                } catch (Exception e) {
-                    traceSuppressed("korean.braveFirst.naverSearchFailure", e);
-                    log.warn("[Hybrid] Naver korean search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
-                    return Collections.emptyList();
-                }
-            });
-            naverLiveCall = true;
+            try {
+                naverFuture = submitSearchAttempt(() -> {
+                    try {
+                        return naverService.searchSnippetsSync(query, callK, naverBlockTimeout);
+                    } catch (Exception e) {
+                        traceSuppressed("korean.braveFirst.naverSearchFailure", e);
+                        log.warn("[Hybrid] Naver korean search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
+                        return Collections.emptyList();
+                    }
+                });
+                naverLiveCall = true;
+            } catch (RejectedExecutionException rejected) {
+                naverSkipReason = "executor_saturated";
+            }
         } else {
             naverSkippedByHedge = true;
             recordNaverSkipped("brave_sufficient", "korean.braveFirst.hedge", 0L);
@@ -2963,11 +2969,17 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             log.warn("[Hybrid] Brave is cooling down ({}ms remaining), skipping Brave trace call",
                     braveService.cooldownRemainingMs());
         } else {
-            braveFuture = submitSearchAttempt(() -> {
-                int braveK = Math.min(Math.max(topK, 5), 20);
-                return braveService.searchWithMeta(braveQuery, braveK);
-            });
-            braveLiveCall = true;
+            try {
+                braveFuture = submitSearchAttempt(() -> {
+                    int braveK = Math.min(Math.max(topK, 5), 20);
+                    return braveService.searchWithMeta(braveQuery, braveK);
+                });
+                braveLiveCall = true;
+            } catch (RejectedExecutionException rejected) {
+                recordBraveSkipped("executor_saturated", "korean.braveFirst.trace", 0L);
+                braveFuture = CompletableFuture.completedFuture(
+                        braveCacheOnlyMeta(braveQuery, Math.min(Math.max(topK, 5), 20), "executor_saturated"));
+            }
         }
 
         BraveSearchResult braveMetaEarly = null;
@@ -3001,6 +3013,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         }
 
         Future<NaverSearchService.SearchResult> naverFuture = null;
+        boolean naverLiveCall = false;
         boolean naverSkippedByHedge = false;
         if (skipNaver) {
             log.warn("[Hybrid] NightmareBreaker OPEN for Naver, skipping Naver trace call");
@@ -3024,18 +3037,25 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             final java.time.Duration naverBlockTimeout = java.time.Duration.ofMillis(
                     resolveNaverBlockTimeoutMs(deadlineNs, 0L, "korean-trace.brave-first"));
 
-            naverFuture = submitSearchAttempt(() -> {
-                try {
-                    NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, callK,
-                            naverBlockTimeout);
-                    return (result != null) ? result
-                            : new NaverSearchService.SearchResult(Collections.emptyList(), null);
-                } catch (Exception e) {
-                    // Trace is quality-aiding. Treat failures as debug noise.
-                    log.debug("[Hybrid] Naver korean-trace search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
-                    return new NaverSearchService.SearchResult(Collections.emptyList(), null);
-                }
-            });
+            try {
+                naverFuture = submitSearchAttempt(() -> {
+                    try {
+                        NaverSearchService.SearchResult result = naverService.searchWithTraceSync(query, callK,
+                                naverBlockTimeout);
+                        return (result != null) ? result
+                                : new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                    } catch (Exception e) {
+                        // Trace is quality-aiding. Treat failures as debug noise.
+                        log.debug("[Hybrid] Naver korean-trace search failed errorHash={} errorLength={}", SafeRedactor.hashValue(e.getMessage()), e.getMessage() == null ? 0 : e.getMessage().length());
+                        return new NaverSearchService.SearchResult(Collections.emptyList(), null);
+                    }
+                });
+                naverLiveCall = true;
+            } catch (RejectedExecutionException rejected) {
+                recordNaverSkipped("executor_saturated", "korean.braveFirst.trace", 0L);
+                naverFuture = CompletableFuture.completedFuture(
+                        naverCacheOnlyTraceResult(query, callK, "executor_saturated"));
+            }
         } else {
             naverSkippedByHedge = true;
             recordNaverSkipped("brave_sufficient", "korean.braveFirst.trace.hedge", 0L);
@@ -3176,7 +3196,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         log.info("[Hybrid] Korean parallel trace merged: brave={}, naver={}, merged={}",
                 brave.size(), naverCount, merged.size());
 
-        recordSoakWebMetrics(naverFuture != null && !naverSkippedByHedge, merged, naver.snippets());
+        recordSoakWebMetrics(naverLiveCall && !naverSkippedByHedge, merged, naver.snippets());
 
         return new NaverSearchService.SearchResult(merged, trace);
     }
@@ -3290,11 +3310,17 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             log.warn("[Hybrid] Brave is cooling down ({}ms remaining), skipping Brave trace call",
                     braveService.cooldownRemainingMs());
         } else if (!naverEarlyEnoughToSkipBrave) {
-            braveFuture = submitSearchAttempt(() -> {
-                int braveK = Math.min(Math.max(topK, 5), 20);
-                return braveService.searchWithMeta(braveQuery, braveK);
-            });
-            braveLiveCall = true;
+            try {
+                braveFuture = submitSearchAttempt(() -> {
+                    int braveK = Math.min(Math.max(topK, 5), 20);
+                    return braveService.searchWithMeta(braveQuery, braveK);
+                });
+                braveLiveCall = true;
+            } catch (RejectedExecutionException rejected) {
+                recordBraveSkipped("executor_saturated", "korean.naverFirst.trace", 0L);
+                braveFuture = CompletableFuture.completedFuture(
+                        braveCacheOnlyMeta(braveQuery, Math.min(Math.max(topK, 5), 20), "executor_saturated"));
+            }
         } else {
             braveSkippedByHedge = true;
         }

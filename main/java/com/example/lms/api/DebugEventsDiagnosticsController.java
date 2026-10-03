@@ -5,6 +5,9 @@ import com.example.lms.debug.DebugEventStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -14,6 +17,8 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -90,6 +95,55 @@ public class DebugEventsDiagnosticsController {
         return store.list(limit);
     }
 
+    public record EventPage(List<DebugEvent> items, String nextCursor, boolean hasMore, String cursorStatus) {}
+
+    @GetMapping(value = "/events/page", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<EventPage> page(
+            @RequestParam(name = "limit", defaultValue = "80") int limit,
+            @RequestParam(name = "requestIdHash", required = false) String requestIdHash,
+            @RequestParam(name = "traceIdHash", required = false) String traceIdHash,
+            @RequestParam(name = "cursor", required = false) String cursor) {
+        String requestHash = exactHash(requestIdHash);
+        String traceHash = exactHash(traceIdHash);
+        String afterId = decodeCursor(cursor, requestHash, traceHash);
+        DebugEventStore.EventPage page = store.page(requestHash, traceHash, afterId, limit);
+        String next = page.nextId() == null ? null : encodeCursor(page.nextId(), requestHash, traceHash);
+        EventPage body = new EventPage(page.items(), next, page.hasMore(), page.cursorStatus());
+        return ResponseEntity.status("evicted".equals(page.cursorStatus()) ? HttpStatus.GONE : HttpStatus.OK).body(body);
+    }
+
+    private static String exactHash(String value) {
+        if (value == null || value.isEmpty()) return null;
+        if (!value.matches("hash:[0-9a-f]{12}")) throw invalidCursor();
+        return value;
+    }
+
+    private static String encodeCursor(String id, String requestHash, String traceHash) {
+        String value = "v1\n" + id + "\n" + Objects.toString(requestHash, "") + "\n" + Objects.toString(traceHash, "");
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String decodeCursor(String cursor, String requestHash, String traceHash) {
+        if (cursor == null) return null;
+        if (cursor.length() > 512 || !cursor.matches("[A-Za-z0-9_-]+")) throw invalidCursor();
+        try {
+            String value = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            String[] parts = value.split("\n", -1);
+            if (parts.length != 4 || !"v1".equals(parts[0])
+                    || !parts[1].matches("[0-9a-f]{1,16}-[0-9a-f]{1,16}")
+                    || !Objects.toString(requestHash, "").equals(parts[2])
+                    || !Objects.toString(traceHash, "").equals(parts[3])
+                    || !encodeCursor(parts[1], requestHash, traceHash).equals(cursor)) throw invalidCursor();
+            return parts[1];
+        } catch (IllegalArgumentException ex) {
+            throw invalidCursor();
+        }
+    }
+
+    private static ResponseStatusException invalidCursor() {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST, "invalid_event_page");
+    }
+
     @GetMapping(value = "/events/{id}", produces = MediaType.APPLICATION_JSON_VALUE)
     public DebugEvent get(@PathVariable("id") String id) {
         return store.get(id);
@@ -134,13 +188,16 @@ public class DebugEventsDiagnosticsController {
 
         final FutureTask<Void> task = new FutureTask<>(() -> {
             // If reconnecting, best-effort resume from last id (if still in ring).
+            String resumeGap = null;
             try {
                 if (lastEventId != null && !lastEventId.isBlank()) {
                     DebugEvent last = store.get(lastEventId.trim());
                     session.resumeFrom(last);
+                    if (last == null) resumeGap = "cursor_not_retained";
                 }
             } catch (Throwable ignore) {
                 traceSuppressed("stream.resume", ignore);
+                resumeGap = "resume_lookup_unavailable";
             }
 
             long lastHeartbeatAt = System.currentTimeMillis();
@@ -162,6 +219,8 @@ public class DebugEventsDiagnosticsController {
                 // Initial backlog (oldest -> newest)
                 if (session.isOpen()) {
                     List<DebugEvent> initial = safeList(initialLimit);
+                    if (resumeGap != null) session.sendGap(resumeGap, initial.size());
+                    else if (session.boundaryMissing(initial)) session.sendGap("replay_window_exceeded", initial.size());
                     Collections.reverse(initial);
                     session.sendEvents(initial, "stream.initial");
                 }
@@ -257,6 +316,7 @@ public class DebugEventsDiagnosticsController {
         private final AtomicReference<FutureTask<Void>> taskRef = new AtomicReference<>();
         // Worker-confined progress belongs to this connection, alongside its task and emitter.
         private final Cursor cursor = new Cursor();
+        private String lastGapBoundary;
 
         private StreamSession(SseEmitter emitter) {
             this.emitter = Objects.requireNonNull(emitter, "emitter");
@@ -269,6 +329,9 @@ public class DebugEventsDiagnosticsController {
         }
 
         private List<DebugEvent> newEvents(List<DebugEvent> snapshot) {
+            if (boundaryMissing(snapshot) && !Objects.equals(lastGapBoundary, cursor.lastId)) {
+                sendGap("replay_window_exceeded", snapshot.size());
+            }
             List<DebugEvent> events = new ArrayList<>();
             for (DebugEvent event : snapshot) {
                 if (event == null || event.id() == null) continue;
@@ -278,6 +341,23 @@ public class DebugEventsDiagnosticsController {
             }
             Collections.reverse(events);
             return events;
+        }
+
+        private boolean boundaryMissing(List<DebugEvent> snapshot) {
+            return cursor.lastId != null && snapshot.stream()
+                    .noneMatch(event -> event != null && cursor.lastId.equals(event.id()));
+        }
+
+        private void sendGap(String reason, int availableWindow) {
+            if (!isOpen()) return;
+            lastGapBoundary = cursor.lastId;
+            try {
+                emitter.send(SseEmitter.event().name("gap").data(Map.of(
+                        "reason", reason, "availableWindow", availableWindow, "historyComplete", false)));
+            } catch (IOException failure) {
+                traceSuppressed("stream.gap", failure);
+                stopFromWorker();
+            }
         }
 
         private void sendEvents(List<DebugEvent> events, String stage) {

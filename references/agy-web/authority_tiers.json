@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "updated": "2026-10-02",
+  "match": "suffix",
+  "defaultTier": "T4",
+  "tiers": {
+    "T1": [
+      "openai.com", "help.openai.com", "platform.openai.com",
+      "learn.chatgpt.com", "chatgpt.com", "antigravity.google",
+      "ai.google.dev", "cloud.google.com", "support.google.com",
+      "docs.anthropic.com", "cursor.com", "docs.devin.ai",
+      "docs.cline.bot", "docs.spring.io", "spring.io", "gradle.org",
+      "docs.gradle.org", "docs.langchain4j.dev", "ollama.com",
+      "nextjs.org", "nodejs.org", "python.org", "docs.python.org",
+      "openjdk.org", "docs.oracle.com", "learn.microsoft.com",
+      "developer.mozilla.org", "law.go.kr", "gov.kr"
+    ],
+    "T2": [
+      "github.com", "huggingface.co", "arxiv.org", "w3.org",
+      "ietf.org", "stackoverflow.com"
+    ],
+    "T3": [
+      "theverge.com", "techcrunch.com", "reuters.com", "zdnet.co.kr",
+      "etnews.com", "datacamp.com"
+    ],
+    "T4": [
+      "medium.com", "tistory.com", "velog.io", "blog.naver.com",
+      "brunch.co.kr", "reddit.com"
+    ]
+  },
+  "weights": {"T1": 1.0, "T2": 0.8, "T3": 0.6, "T4": 0.3},
+  "notes": {
+    "openai.com": "OpenAI 공식 — dot·Codex 정책/가격 1차 근거",
+    "help.openai.com": "OpenAI 공식 도움말 — 사용량·한도 문구 원문",
+    "platform.openai.com": "OpenAI 개발자 문서",
+    "learn.chatgpt.com": "OpenAI 공식 학습/도움말 사이트 (docs/dots)",
+    "chatgpt.com": "ChatGPT 공식",
+    "antigravity.google": "Antigravity 공식",
+    "ai.google.dev": "Google AI/Gemini 공식 개발자 문서",
+    "cloud.google.com": "Google Cloud 공식 문서",
+    "support.google.com": "Google 공식 지원",
+    "docs.anthropic.com": "Anthropic 공식 문서",
+    "cursor.com": "Cursor 공식",
+    "docs.devin.ai": "Devin 공식 문서",
+    "docs.cline.bot": "Cline 공식 문서",
+    "docs.spring.io": "Spring 공식 레퍼런스",
+    "spring.io": "Spring 공식(가이드/블로그)",
+    "gradle.org": "Gradle 공식",
+    "docs.gradle.org": "Gradle 공식 문서",
+    "docs.langchain4j.dev": "LangChain4j 공식 문서",
+    "ollama.com": "Ollama 공식(모델 카드/문서)",
+    "nextjs.org": "Next.js 공식 문서",
+    "nodejs.org": "Node.js 공식 문서",
+    "python.org": "Python 공식",
+    "docs.python.org": "Python 공식 문서",
+    "openjdk.org": "OpenJDK 공식",
+    "docs.oracle.com": "Oracle Java 공식 문서",
+    "learn.microsoft.com": "Microsoft Learn 공식",
+    "developer.mozilla.org": "MDN — 웹 표준 사실상 1차 문서",
+    "law.go.kr": "국가법령정보센터 — 법령 원문",
+    "gov.kr": "정부 공식",
+    "github.com": "공식 org의 릴리스/이슈/문서 — 임의 개인 저장소는 T4 판단",
+    "huggingface.co": "공식 모델 카드 — 임의 사용자 페이지는 T4 판단",
+    "arxiv.org": "논문 프리프린트 원문",
+    "w3.org": "W3C 표준 원문",
+    "ietf.org": "IETF RFC 원문",
+    "stackoverflow.com": "대량 검증된 Q&A — 답변 채택·득표 수 확인 필요",
+    "theverge.com": "주요 기술 언론",
+    "techcrunch.com": "주요 기술 언론",
+    "reuters.com": "통신사 — 보도 원문",
+    "zdnet.co.kr": "국내 주요 IT 언론",
+    "etnews.com": "국내 주요 IT 언론",
+    "datacamp.com": "기술 교육 미디어 — 튜토리얼 2차 근거",
+    "medium.com": "개인 블로그 플랫폼",
+    "tistory.com": "개인 블로그 플랫폼",
+    "velog.io": "개인 블로그 플랫폼",
+    "blog.naver.com": "개인 블로그 플랫폼",
+    "brunch.co.kr": "개인 블로그 플랫폼",
+    "reddit.com": "커뮤니티 — 루머·체감 후기 섞임",
+    "defaultTier": "목록에 없는 도메인은 전부 T4(0.3) — suffix 매칭으로 판정"
+  }
+}

@@ -137,7 +137,7 @@ Check these pairs first for the attached Dynamic RAG design family:
 Use only available commands.
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Push-Location $Root
 Get-Location
 $indexOp = (Test-Path ".git\MERGE_HEAD") -or (Test-Path ".git\CHERRY_PICK_HEAD") -or (Test-Path ".git\rebase-merge") -or (Test-Path ".git\rebase-apply")

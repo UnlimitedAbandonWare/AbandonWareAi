@@ -90,10 +90,14 @@ public class NovaFocusService implements AutoCloseable {
     public NovaFocusHistoryService.Settings settings(String owner,String assistId,long epoch){
         var s=owned(owner,assistId,epoch);return history.settings(owner,s.channel);
     }
-    public record LocalStore(String cacheScope,long settingsVersion,NovaFocusSettings settings){}
+    /** jev reports the server-owned decision-signal mode; clients display it, never set it. */
+    public record LocalStore(String cacheScope,long settingsVersion,NovaFocusSettings settings,Map<String,Object> jev){
+        public LocalStore(String cacheScope,long settingsVersion,NovaFocusSettings settings){this(cacheScope,settingsVersion,settings,Map.of());}
+    }
     public LocalStore localStore(String owner,String assistId,long epoch){
         var s=owned(owner,assistId,epoch);var value=history.settings(owner,s.channel);
-        return new LocalStore(NovaFocusHistoryService.digest("local-cache:"+NovaFocusHistoryService.scope(owner,s.channel)),value.settingsVersion(),value.settings());
+        var jev=jevAdvisor==null?Map.<String,Object>of("mode","off","configured",false,"reason","jev_unavailable","callsAllowed",false):jevAdvisor.status();
+        return new LocalStore(NovaFocusHistoryService.digest("local-cache:"+NovaFocusHistoryService.scope(owner,s.channel)),value.settingsVersion(),value.settings(),jev);
     }
     public boolean inputAccepted(String owner,String assistId,long epoch,String request,String text){
         var s=owned(owner,assistId,epoch);NovaFocusState.validateManualInput(request,text);
@@ -104,8 +108,8 @@ public class NovaFocusService implements AutoCloseable {
         synchronized(s){
             var stored=history.settings(owner,s.channel,expected,value);
             boolean disabled=s.state.settings.enabled()&&!stored.settings().enabled();
-            boolean consentChanged=s.state.settings.recallEnabled()!=stored.settings().recallEnabled()
-                ||s.state.settings.rememberFactsEnabled()!=stored.settings().rememberFactsEnabled();
+            boolean consentChanged=s.state.settings.effectiveRecallEnabled()!=stored.settings().effectiveRecallEnabled()
+                ||s.state.settings.effectiveRememberFactsEnabled()!=stored.settings().effectiveRememberFactsEnabled();
             boolean recentDisabled=s.state.settings.recentContextOrDefault().enabled()&&!stored.settings().recentContextOrDefault().enabled();
             s.state.configure(stored.settings(),clock.millis());s.settingsVersion=stored.settingsVersion();
             if(disabled||consentChanged){cancel(s,disabled?"focus_disabled":"memory_consent_changed");clearTranscript(s);}

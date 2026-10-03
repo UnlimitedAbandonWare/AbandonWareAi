@@ -46,8 +46,8 @@ public class PageController {
 
     @Value("${demo.interview.enabled:false}")
     private boolean interviewDemo;
-    @Value("${public.request-budget.max-time-budget-ms:240000}")
-    private long chatRequestBudgetMs = 240_000L;
+    @Value("${public.request-budget.max-time-budget-ms:300000}")
+    private long chatRequestBudgetMs = 300_000L;
 
     private final ModelEntityRepository  modelRepo;
     private final CurrentModelRepository currentRepo;
@@ -55,6 +55,9 @@ public class PageController {
 
     @Autowired(required = false)
     private ModelRuntimeHealthTracker modelRuntimeHealthTracker;
+
+    @Autowired(required = false)
+    private com.example.lms.llm.DynamicChatModelFactory dynamicChatModelFactory;
 
 	    /**
 	     * UI ?リ옇???嶺뚮ㅄ維??嶺??????춯?????ルㅎ臾멩뤆?.
@@ -327,10 +330,15 @@ public class PageController {
                          @RequestParam(value = "surface", required = false) String surface) {
         if (interviewDemo) return "forward:/assets/interview/index.html";
         prepareModelData(model);
+        Object selected = model.getAttribute("currentModel");
+        if (dynamicChatModelFactory != null && selected instanceof String modelId)
+            dynamicChatModelFactory.requestModelWarmup(modelId);
         if (auth != null && auth.isAuthenticated()) {
             model.addAttribute("username", auth.getName());
         }
         model.addAttribute("chatDiagnosticsEnabled", isAdmin(auth));
+        model.addAttribute("chatTraceDockShell", true);
+        model.addAttribute("chatDiagnosticsReadAllowed", isAdmin(auth));
         model.addAttribute("chatSurface", normalizeChatSurface(surface));
         model.addAttribute("chatRequestBudgetMs", chatRequestBudgetMs);
         return "chat-ui";

@@ -17,7 +17,7 @@
 
 ## 2. 절대 규칙
 
-- Desktop canonical root는 `C:\AbandonWare\demo-1\demo-1\src`이다.
+- Desktop canonical root는 `<repo>`이다.
 - Notebook과 Mac mini는 Desktop canonical source를 직접 수정하지 않는다.
 - 현재 source, `AGENTS.md`, 기존 skill/prompt, Gradle sourceSet, 실제 명령
   출력 순서로 증거를 읽는다.
@@ -39,7 +39,7 @@
 ### 3.1 Desktop preflight
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Set-Location $Root
 Get-Location
 $indexOp = (Test-Path ".git\MERGE_HEAD") -or (Test-Path ".git\CHERRY_PICK_HEAD") -or (Test-Path ".git\rebase-merge") -or (Test-Path ".git\rebase-apply")

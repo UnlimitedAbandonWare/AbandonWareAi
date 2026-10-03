@@ -160,7 +160,11 @@ public class AttachmentController {
     }
 
     private AttachmentOwnerIdentity currentOwnerIdentity(Authentication authentication) {
-        String username = authenticatedUsername(authentication);
+        // Match /chat's UserDetails actor: operational string principals grant
+        // authority but do not name the account owning a new conversation.
+        String username = authentication != null
+                && authentication.getPrincipal() instanceof org.springframework.security.core.userdetails.UserDetails
+                ? authenticatedUsername(authentication) : null;
         if (username != null) {
             return AttachmentOwnerIdentity.forAdministrator(username);
         }

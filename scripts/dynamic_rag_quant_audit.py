@@ -481,7 +481,7 @@ class AuditInputs:
     git_status_input: Path
     harmony_input: Path
     test_tree_input: Path
-    dup_fqcn_input: Path
+    dup_fqcn_input: Path | None
     closure_wave_registry: Path
     git_skip_worktree_input: Path | None = None
     candidate_cap: int = DEFAULT_CANDIDATE_CAP
@@ -1681,6 +1681,27 @@ def _validate_duplicate_input(payload: dict[str, Any]) -> dict[str, Any]:
     return normalized_payload
 
 
+def _retired_duplicate_fqcn_payload() -> dict[str, Any]:
+    """Zero-collision payload used when the :app exclusion generator no longer
+    runs (java_clean holds no compiled sources)."""
+    payload: dict[str, Any] = {
+        "schemaVersion": DUP_FQCN_SCHEMA,
+        "status": "current",
+        "generatedAt": "1970-01-01T00:00:00Z",
+        "mode": "retired",
+        "filter": "none",
+        "action": "none",
+        "duplicateFqcnSourceCollisionCount": 0,
+        "duplicateFqcnGeneratedExcludeCount": 0,
+        "duplicateFqcnHardExcludeCount": 0,
+        "duplicateFqcnPackagedActiveCount": 0,
+        "duplicateFqcnActiveCount": 0,
+        "collisions": [],
+    }
+    payload["semanticHash"] = _duplicate_semantic_hash(payload)
+    return payload
+
+
 def _scan_active_java(
     root: Path,
     active_roots: Sequence[str],
@@ -2501,12 +2522,18 @@ def build_audit(inputs: AuditInputs, now: datetime) -> AuditBundle:
 
     harmony_payload = load_required_input(Path(inputs.harmony_input), now)
     test_tree_payload = load_required_input(Path(inputs.test_tree_input), now)
-    duplicate_payload = load_required_input(
-        Path(inputs.dup_fqcn_input), now, require_freshness=False
-    )
+    if inputs.dup_fqcn_input is None:
+        # :app no longer compiles java_clean; the duplicate-FQCN exclusion
+        # machinery was retired, so the evidence input is a synthesized
+        # zero-collision payload rather than a generated file.
+        duplicates = _retired_duplicate_fqcn_payload()
+    else:
+        duplicate_payload = load_required_input(
+            Path(inputs.dup_fqcn_input), now, require_freshness=False
+        )
+        duplicates = _validate_duplicate_input(duplicate_payload)
     harmony = _validate_harmony_input(harmony_payload)
     test_tree = _validate_test_tree_input(test_tree_payload)
-    duplicates = _validate_duplicate_input(duplicate_payload)
 
     source_set_hash = _source_set_configuration_hash()
     baseline_id = _compute_baseline_id(
@@ -5209,7 +5236,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--git-skip-worktree-input", required=True)
     parser.add_argument("--harmony-input", required=True)
     parser.add_argument("--test-tree-input", required=True)
-    parser.add_argument("--dup-fqcn-input", required=True)
+    parser.add_argument("--dup-fqcn-input", default=None)
     parser.add_argument("--closure-wave-registry", required=True)
     parser.add_argument("--metrics-output", required=True)
     parser.add_argument("--baseline-output", required=True)
@@ -5232,7 +5259,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             git_skip_worktree_input=_argument_path(root, args.git_skip_worktree_input),
             harmony_input=_argument_path(root, args.harmony_input),
             test_tree_input=_argument_path(root, args.test_tree_input),
-            dup_fqcn_input=_argument_path(root, args.dup_fqcn_input),
+            dup_fqcn_input=(
+                _argument_path(root, args.dup_fqcn_input)
+                if args.dup_fqcn_input
+                else None
+            ),
             closure_wave_registry=_fixed_registry_argument_path(
                 root,
                 args.closure_wave_registry,

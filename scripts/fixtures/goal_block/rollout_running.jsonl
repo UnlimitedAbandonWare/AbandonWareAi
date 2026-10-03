@@ -1,0 +1,3 @@
+{"timestamp":"2026-10-03T04:00:00.000Z","type":"session_meta","payload":{"id":"fixture-running","cwd":"C:\\AbandonWare\\demo-1\\demo-1\\src","source":"vscode"}}
+{"timestamp":"2026-10-03T04:00:30.000Z","type":"event_msg","payload":{"type":"user_message","message":"OAuth Content-Type 수정 진행"}}
+{"timestamp":"2026-10-03T07:40:00.000Z","type":"event_msg","payload":{"type":"agent_message","message":"작업 진행 중입니다."}}

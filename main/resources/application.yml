@@ -24,7 +24,9 @@ server:
 
 public:
   request-budget:
-    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:120000}
+    # max-time-budget-ms lives ONLY in application-llm.yaml (single source; env
+    # PUBLIC_REQUEST_MAX_TIME_BUDGET_MS still wins). Do not redeclare it here —
+    # a same-document key after spring.config.import overrides the import.
     body-read:
       workers: ${PUBLIC_REQUEST_BODY_READ_WORKERS:4}
       queue-capacity: ${PUBLIC_REQUEST_BODY_READ_QUEUE_CAPACITY:32}

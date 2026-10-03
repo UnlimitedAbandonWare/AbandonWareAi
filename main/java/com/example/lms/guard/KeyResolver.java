@@ -1,16 +1,22 @@
 package com.example.lms.guard;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.debug.DebugEventLevel;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugProbeType;
 import com.example.lms.search.TraceStore;
 import com.example.lms.routing.ApiRoutingDebug;
 import com.example.lms.service.search.NaverCredentialBridge;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Compatibility facade for the central provider credential resolver.
@@ -25,10 +31,17 @@ public class KeyResolver {
 
     private final Environment env;
     private final ProviderCredentialResolver providerCredentialResolver;
+    private final ObjectProvider<DebugEventStore> debugEventStoreProvider;
 
     public KeyResolver(Environment env) {
+        this(env, null);
+    }
+
+    @Autowired
+    public KeyResolver(Environment env, ObjectProvider<DebugEventStore> debugEventStoreProvider) {
         this.env = env;
         this.providerCredentialResolver = new ProviderCredentialResolver(env);
+        this.debugEventStoreProvider = debugEventStoreProvider;
     }
 
     /**
@@ -48,10 +61,9 @@ public class KeyResolver {
     public ProviderCredentialResolver.Resolution resolveOpenAiCredential() {
         ProviderCredentialResolver.Resolution resolution =
                 providerCredentialResolver.resolve(ProviderCredentialResolver.Provider.OPENAI);
-        ApiRoutingDebug.decision(
+        emitCredentialResolved(
                 "llm",
                 "openai",
-                "n/a",
                 "openai.api",
                 resolution != null && resolution.enabled() && ApiRoutingDebug.keyPresent(resolution.valueOrNull()),
                 resolution == null || resolution.sourceName() == null || resolution.sourceName().isBlank()
@@ -82,10 +94,9 @@ public class KeyResolver {
     public ProviderCredentialResolver.Resolution resolveLocalLlmCredential() {
         ProviderCredentialResolver.Resolution resolution =
                 providerCredentialResolver.resolve(ProviderCredentialResolver.Provider.LOCAL_LLM);
-        ApiRoutingDebug.decision(
+        emitCredentialResolved(
                 "llm",
                 "local",
-                "n/a",
                 "llm.local",
                 resolution != null && resolution.enabled() && ApiRoutingDebug.keyPresent(resolution.valueOrNull()),
                 resolution == null || resolution.sourceName() == null || resolution.sourceName().isBlank()
@@ -115,10 +126,9 @@ public class KeyResolver {
                 "Groq",
                 externalSrc("llm.groq.api-key", env.getProperty("llm.groq.api-key")),
                 externalSrc("GROQ_API_KEY", env.getProperty("GROQ_API_KEY")));
-        ApiRoutingDebug.decision(
+        emitCredentialResolved(
                 "llm",
                 "groq",
-                "n/a",
                 "api.groq.com",
                 ApiRoutingDebug.keyPresent(key),
                 ApiRoutingDebug.keyPresent(env.getProperty("llm.groq.api-key")) ? "llm.groq.api-key" : "GROQ_API_KEY");
@@ -188,6 +198,43 @@ public class KeyResolver {
             TraceStore.put("naver.credential.keyResolver.failureClass", "key_resolver_unavailable");
             traceNaverCredentialResolution("none", false, false, 0, "key_resolver_unavailable");
             return "";
+        }
+    }
+
+    /**
+     * Credential resolution is a lookup fact, not a route decision: it proves
+     * neither eligibility, selection, attempt, nor response. Emits a
+     * secret-safe {@code api.credential.resolved} event; fail-soft when the
+     * store is absent.
+     */
+    private void emitCredentialResolved(
+            String purpose,
+            String provider,
+            String endpointClass,
+            boolean keyPresent,
+            String keySource) {
+        ApiRoutingDebug.credential(purpose, provider, endpointClass, keyPresent, keySource);
+        try {
+            DebugEventStore store = debugEventStoreProvider == null ? null : debugEventStoreProvider.getIfAvailable();
+            if (store == null) {
+                return;
+            }
+            Map<String, Object> data = new LinkedHashMap<>();
+            data.put("purpose", purpose);
+            data.put("provider", provider);
+            data.put("endpointClass", endpointClass);
+            data.put("keyPresent", keyPresent);
+            data.put("keySource", keySource);
+            store.emit(
+                    DebugProbeType.MODEL_GUARD,
+                    DebugEventLevel.INFO,
+                    "api.credential.resolved." + (provider == null ? "unknown" : provider),
+                    "[AWX][api-route] credential resolved (lookup only)",
+                    "api.credential.resolved",
+                    data,
+                    null);
+        } catch (RuntimeException ex) {
+            TraceStore.put("keyResolver.debugEvent.suppressed.stage", "credential.emit");
         }
     }
 

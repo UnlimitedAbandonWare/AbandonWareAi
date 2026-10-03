@@ -36,27 +36,46 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
                 2_500,10_000,180_000);
     }
 
-    /** Null patch fields keep the current value; out-of-range values fail by field name. */
+    /** Null patch fields keep the current value; out-of-range values fail by field name.
+        A preset composes the font/line fields first, then explicit fields still win. */
     public LensDisplayPrefs patch(Patch p){
         if(p==null)return this;
+        LensDisplayPrefs base=p.preset()==null||p.preset().isBlank()?this:preset(p.preset());
         return new LensDisplayPrefs(
-                pick(p.transcriptFontPx(),transcriptFontPx,MIN_FONT,MAX_FONT,"transcriptFontPx"),
-                pick(p.hintFontPx(),hintFontPx,MIN_FONT,MAX_FONT,"hintFontPx"),
-                pick(p.transcriptMaxLines(),transcriptMaxLines,MIN_TRANSCRIPT_LINES,MAX_TRANSCRIPT_LINES,"transcriptMaxLines"),
-                pick(p.hintPageLines(),hintPageLines,MIN_HINT_PAGE_LINES,MAX_HINT_PAGE_LINES,"hintPageLines"),
-                pick(p.transcriptTtlMs(),transcriptTtlMs,MIN_TTL_MS,MAX_TTL_MS,"transcriptTtlMs"),
-                pick(p.hintTtlMs(),hintTtlMs,MIN_TTL_MS,MAX_TTL_MS,"hintTtlMs"),
-                pickAuto(p.autoPageMs(),autoPageMs),
-                pick(p.hintTargetChars(),hintTargetChars,MIN_TARGET_CHARS,MAX_TARGET_CHARS,"hintTargetChars"),
-                pick(p.historyEnabled(),historyEnabled),
-                pickZeroOr(p.historyWindowMs(),historyWindowMs,MIN_HISTORY_WINDOW_MS,MAX_HISTORY_WINDOW_MS,"historyWindowMs"),
-                pickZeroOr(p.historyMaxChars(),historyMaxChars,MIN_HISTORY_CHARS,MAX_HISTORY_CHARS,"historyMaxChars"),
-                pickZeroOr(p.historyMaxTokens(),historyMaxTokens,MIN_HISTORY_TOKENS,MAX_HISTORY_TOKENS,"historyMaxTokens"),
-                pick(p.topicResetEnabled(),topicResetEnabled),
-                pick(p.triggerQuietMs(),triggerQuietMs,MIN_TRIGGER_QUIET_MS,MAX_TRIGGER_QUIET_MS,"triggerQuietMs"),
-                pick(p.cueCooldownMs(),cueCooldownMs,MIN_CUE_COOLDOWN_MS,MAX_CUE_COOLDOWN_MS,"cueCooldownMs"),
-                pick(p.forceAfterMs(),forceAfterMs,MIN_FORCE_AFTER_MS,MAX_FORCE_AFTER_MS,"forceAfterMs"));
+                pick(p.transcriptFontPx(),base.transcriptFontPx,MIN_FONT,MAX_FONT,"transcriptFontPx"),
+                pick(p.hintFontPx(),base.hintFontPx,MIN_FONT,MAX_FONT,"hintFontPx"),
+                pick(p.transcriptMaxLines(),base.transcriptMaxLines,MIN_TRANSCRIPT_LINES,MAX_TRANSCRIPT_LINES,"transcriptMaxLines"),
+                pick(p.hintPageLines(),base.hintPageLines,MIN_HINT_PAGE_LINES,MAX_HINT_PAGE_LINES,"hintPageLines"),
+                pick(p.transcriptTtlMs(),base.transcriptTtlMs,MIN_TTL_MS,MAX_TTL_MS,"transcriptTtlMs"),
+                pick(p.hintTtlMs(),base.hintTtlMs,MIN_TTL_MS,MAX_TTL_MS,"hintTtlMs"),
+                pickAuto(p.autoPageMs(),base.autoPageMs),
+                pick(p.hintTargetChars(),base.hintTargetChars,MIN_TARGET_CHARS,MAX_TARGET_CHARS,"hintTargetChars"),
+                pick(p.historyEnabled(),base.historyEnabled),
+                pickZeroOr(p.historyWindowMs(),base.historyWindowMs,MIN_HISTORY_WINDOW_MS,MAX_HISTORY_WINDOW_MS,"historyWindowMs"),
+                pickZeroOr(p.historyMaxChars(),base.historyMaxChars,MIN_HISTORY_CHARS,MAX_HISTORY_CHARS,"historyMaxChars"),
+                pickZeroOr(p.historyMaxTokens(),base.historyMaxTokens,MIN_HISTORY_TOKENS,MAX_HISTORY_TOKENS,"historyMaxTokens"),
+                pick(p.topicResetEnabled(),base.topicResetEnabled),
+                pick(p.triggerQuietMs(),base.triggerQuietMs,MIN_TRIGGER_QUIET_MS,MAX_TRIGGER_QUIET_MS,"triggerQuietMs"),
+                pick(p.cueCooldownMs(),base.cueCooldownMs,MIN_CUE_COOLDOWN_MS,MAX_CUE_COOLDOWN_MS,"cueCooldownMs"),
+                pick(p.forceAfterMs(),base.forceAfterMs,MIN_FORCE_AFTER_MS,MAX_FORCE_AFTER_MS,"forceAfterMs"));
     }
+    /** Write-only selector: presets compose only existing font/line fields — TTLs, cue cycle and history stay. */
+    private LensDisplayPrefs preset(String name){
+        Preset selected;
+        try{selected=Preset.valueOf(name.strip().toUpperCase(Locale.ROOT));}
+        catch(RuntimeException bad){throw ConversateSessionService.error(org.springframework.http.HttpStatus.BAD_REQUEST,"invalid_lens_settings:preset");}
+        return switch(selected){
+            case DEFAULT->withDisplay(26,26,4,11);
+            case READ_EASY->withDisplay(30,30,8,8);
+            case DENSE->withDisplay(22,22,8,13);
+        };
+    }
+    private LensDisplayPrefs withDisplay(int transcriptFont,int hintFont,int transcriptLines,int hintLines){
+        return new LensDisplayPrefs(transcriptFont,hintFont,transcriptLines,hintLines,
+            transcriptTtlMs,hintTtlMs,autoPageMs,hintTargetChars,historyEnabled,historyWindowMs,historyMaxChars,historyMaxTokens,
+            topicResetEnabled,triggerQuietMs,cueCooldownMs,forceAfterMs);
+    }
+    public enum Preset { DEFAULT,READ_EASY,DENSE }
     private static int pick(Integer value,int current,int min,int max,String field){
         if(value==null)return current;
         if(value<min||value>max)throw ConversateSessionService.error(org.springframework.http.HttpStatus.BAD_REQUEST,"invalid_lens_settings:"+field);
@@ -102,5 +121,16 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
                         Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,
                         Boolean historyEnabled,Long historyWindowMs,Integer historyMaxChars,Integer historyMaxTokens,
                         Boolean topicResetEnabled,
-                        Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs){}
+                        Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs,String preset){
+        /** 16-field form keeps older callers and JSON payloads valid. */
+        public Patch(Integer transcriptFontPx,Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
+                     Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,
+                     Boolean historyEnabled,Long historyWindowMs,Integer historyMaxChars,Integer historyMaxTokens,
+                     Boolean topicResetEnabled,
+                     Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs){
+            this(transcriptFontPx,hintFontPx,transcriptMaxLines,hintPageLines,transcriptTtlMs,hintTtlMs,autoPageMs,
+                hintTargetChars,historyEnabled,historyWindowMs,historyMaxChars,historyMaxTokens,topicResetEnabled,
+                triggerQuietMs,cueCooldownMs,forceAfterMs,null);
+        }
+    }
 }

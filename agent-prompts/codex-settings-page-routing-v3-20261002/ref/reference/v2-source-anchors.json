@@ -1,0 +1,522 @@
+[
+  {
+    "id": "E01",
+    "archive": "FIND_X.zip",
+    "path": "main/resources/static/js/chat.js",
+    "start_line": 6622,
+    "end_line": 6627,
+    "file_sha256": "4225d94475241421ee69d522864e09eef39f6b15995ef88c98fca010b669c2d3",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "auto는 llmrouter.auto, strictModelSelection은 preferred/auto와 구분된다."
+  },
+  {
+    "id": "E02",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/api/ChatRequestSettingsMerger.java",
+    "start_line": 27,
+    "end_line": 44,
+    "file_sha256": "461b156dcd1acf3261b78d5764033c6bfd516ee16fe454faa73931ffb25c4290",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "요청의 명시 모델을 먼저 쓰고 없을 때 OPENAI_MODEL 기본값을 사용한다."
+  },
+  {
+    "id": "E03",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+    "start_line": 1348,
+    "end_line": 1372,
+    "file_sha256": "8c92f544692f57bd0603ec11807d3bd6e3eaa30072219ad81f79c62572b65da4",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "정확 선택 범위와 검증된 owner를 설정하고 카탈로그 선택 가능성을 확인한다."
+  },
+  {
+    "id": "E04",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+    "start_line": 2979,
+    "end_line": 2990,
+    "file_sha256": "8c92f544692f57bd0603ec11807d3bd6e3eaa30072219ad81f79c62572b65da4",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "메인 결정을 토큰 예산 투영 전에 바인딩한다."
+  },
+  {
+    "id": "E05",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/PolicyBasedModelRouter.java",
+    "start_line": 44,
+    "end_line": 100,
+    "file_sha256": "98d380182333682f50d55c1dfa0b3057a607dd86d643c5883f45a74aafad45cd",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "현재 ModelRouter의 Primary 구현이며 설정 필드와 bounded cache가 존재한다."
+  },
+  {
+    "id": "E06",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/PolicyBasedModelRouter.java",
+    "start_line": 243,
+    "end_line": 270,
+    "file_sha256": "98d380182333682f50d55c1dfa0b3057a607dd86d643c5883f45a74aafad45cd",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "정확 선택, 복잡 요청 OAuth, 일반 라우팅 순으로 메인 경로를 결정한다."
+  },
+  {
+    "id": "E07",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/PolicyBasedModelRouter.java",
+    "start_line": 448,
+    "end_line": 470,
+    "file_sha256": "98d380182333682f50d55c1dfa0b3057a607dd86d643c5883f45a74aafad45cd",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "클라이언트 캐시 키는 모델·tier·token·timeout·temperature 중심이다."
+  },
+  {
+    "id": "E08",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/PolicyBasedModelRouter.java",
+    "start_line": 527,
+    "end_line": 546,
+    "file_sha256": "98d380182333682f50d55c1dfa0b3057a607dd86d643c5883f45a74aafad45cd",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "정확 선택은 임의 폴백을 숨기지 않는 별도 생성 경로다."
+  },
+  {
+    "id": "E09",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/RouterPolicy.java",
+    "start_line": 32,
+    "end_line": 93,
+    "file_sha256": "c4e5311fbbb8031f13f65a375da0c852e88eb3ff02525ab91b6bf12d48e3afde",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "복잡 요청 판단과 승격 관련 파라미터가 구분되어 있다."
+  },
+  {
+    "id": "E10",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/RouterPolicy.java",
+    "start_line": 120,
+    "end_line": 153,
+    "file_sha256": "c4e5311fbbb8031f13f65a375da0c852e88eb3ff02525ab91b6bf12d48e3afde",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "승격은 출력 예산·불확실성 등 조건을 사용하며 복잡도 자체와 동일하지 않다."
+  },
+  {
+    "id": "E11",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/RequestedModelSelection.java",
+    "start_line": 12,
+    "end_line": 43,
+    "file_sha256": "bf0709f9118749f87a1466c70edcc6f80aac5e950779d618931ac49cee9b8661",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "메인 결정과 정확 선택 정보는 기존 내부 컨텍스트에 있고 결정의 재바인딩을 거부한다."
+  },
+  {
+    "id": "E12",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/gateway/LlmRouteDecision.java",
+    "start_line": 1,
+    "end_line": 15,
+    "file_sha256": "50a589a1c9075251ad090b09a899120823fc7645d9be26619475116108106a1c",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 메인 라우팅 결정 레코드를 재사용한다."
+  },
+  {
+    "id": "E13",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/config/SelfAskProperties.java",
+    "start_line": 18,
+    "end_line": 61,
+    "file_sha256": "28a4354735ae70405e33f2f7b46c054dba4340a2ef96d08b78550ccfd00cb961",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "BQ/ER/RC 별 model/provider/timeout/temperature 설정이 있다."
+  },
+  {
+    "id": "E14",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/rag/SelfAskPlanner.java",
+    "start_line": 319,
+    "end_line": 369,
+    "file_sha256": "500c33a0645907a604a40e2d89faea32ed05980f2bc4a50ca1dc1132f6e878eb",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "lane 모델 생성과 RC 로컬 대체 경로가 실제 호출 코드에 있다."
+  },
+  {
+    "id": "E15",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/rag/SelfAskPlanner.java",
+    "start_line": 457,
+    "end_line": 510,
+    "file_sha256": "500c33a0645907a604a40e2d89faea32ed05980f2bc4a50ca1dc1132f6e878eb",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "각 lane은 설정된 model/provider와 기본 경로를 소비한다."
+  },
+  {
+    "id": "E16",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/config/LlmRouterProperties.java",
+    "start_line": 92,
+    "end_line": 148,
+    "file_sha256": "4391607af49caa2125c67404940f4d980e7e10bdac36fcad559f3666337c864b",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "등록 경로에는 fallbackKey/deviceFallbackKey/응답 모델 검증 요구 등이 있다."
+  },
+  {
+    "id": "E17",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/router/LlmRouterBandit.java",
+    "start_line": 182,
+    "end_line": 235,
+    "file_sha256": "7f94c2b90ccef9a8441afd08c1451bafa6c73647c74fa1fb3bf48b40b2d2a757",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "자동 후보를 enabled·weight·eligibility·cooldown으로 선별한다."
+  },
+  {
+    "id": "E18",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/router/LlmRouterBandit.java",
+    "start_line": 242,
+    "end_line": 281,
+    "file_sha256": "7f94c2b90ccef9a8441afd08c1451bafa6c73647c74fa1fb3bf48b40b2d2a757",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "비용 tier를 선별한 뒤 UCB 보상·탐색과 작은 weight prior를 사용한다."
+  },
+  {
+    "id": "E19",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/router/LlmRouterBandit.java",
+    "start_line": 471,
+    "end_line": 488,
+    "file_sha256": "7f94c2b90ccef9a8441afd08c1451bafa6c73647c74fa1fb3bf48b40b2d2a757",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "weight 유효성 검사와 선택 trace 기록이 있으므로 live pick은 순수 미리보기가 아니다."
+  },
+  {
+    "id": "E20",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+    "start_line": 363,
+    "end_line": 465,
+    "file_sha256": "4a41278fab8a7b4e21bbfdf9a6cb864e29620f767205ad336757c760402d0281",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "정확 선택 보호, 비가용·적합성·local contention 대체가 여러 분기에 있다."
+  },
+  {
+    "id": "E21",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+    "start_line": 714,
+    "end_line": 747,
+    "file_sha256": "4a41278fab8a7b4e21bbfdf9a6cb864e29620f767205ad336757c760402d0281",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "fallback 체인 뒤에 전체 등록 키가 후보로 추가된다."
+  },
+  {
+    "id": "E22",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+    "start_line": 750,
+    "end_line": 775,
+    "file_sha256": "4a41278fab8a7b4e21bbfdf9a6cb864e29620f767205ad336757c760402d0281",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "대체 후보의 기능 요구와 endpoint/model 식별을 검사한다."
+  },
+  {
+    "id": "E23",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+    "start_line": 2257,
+    "end_line": 2287,
+    "file_sha256": "4a41278fab8a7b4e21bbfdf9a6cb864e29620f767205ad336757c760402d0281",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "응답 modelName을 검증하고 불일치/미검증을 처리한다."
+  },
+  {
+    "id": "E24",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/api/ChatModelCatalogController.java",
+    "start_line": 28,
+    "end_line": 41,
+    "file_sha256": "95775a25b5745b970bf8e52c22ce9ed8c2111d0fbd8c05ce60cc735873d89d91",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 모델 목록과 단일 모델 재확인 API가 있다."
+  },
+  {
+    "id": "E25",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/ChatModelCatalogService.java",
+    "start_line": 18,
+    "end_line": 75,
+    "file_sha256": "86975a428ffb065d4f6b1da15b0860c7721f5899364174335244c0c0b5cbafc9",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "Choice는 route id/modelId/status 등을 분리하고 OAuth 목록은 owner별로 합성한다."
+  },
+  {
+    "id": "E26",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/ChatModelCatalogService.java",
+    "start_line": 120,
+    "end_line": 158,
+    "file_sha256": "86975a428ffb065d4f6b1da15b0860c7721f5899364174335244c0c0b5cbafc9",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "카탈로그 실패와 등록 원격 경로의 선택 상태를 구분한다."
+  },
+  {
+    "id": "E27",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/api/SettingsController.java",
+    "start_line": 26,
+    "end_line": 85,
+    "file_sha256": "b323806847beaed014bf6dff5498a23341a620d68930ccdcb87930b4c22c3b79",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 범용 설정 API는 허용 키만 조회/저장한다."
+  },
+  {
+    "id": "E28",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/domain/ConfigurationSetting.java",
+    "start_line": 12,
+    "end_line": 34,
+    "file_sha256": "467706ac520c755fd808739001b6c08e62a58587f1ca3ab2452b722f29afe743",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 엔티티에는 문자열 기본키와 LONGTEXT 값이 있어 JSON 행 저장 설계가 가능하다."
+  },
+  {
+    "id": "E29",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/SettingsService.java",
+    "start_line": 133,
+    "end_line": 170,
+    "file_sha256": "80a1462748c863341f29efd411d9b21730cba037ac421336e437bd6d20986340",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 설정 조회는 캐시를 사용하며 저장 자체로 모든 구성 빈이 갱신되지 않는다."
+  },
+  {
+    "id": "E30",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/security/AdminTokenGuardFilter.java",
+    "start_line": 29,
+    "end_line": 38,
+    "file_sha256": "4ac3655e9cfbdb12d2dc4db9c0990ad25e25c56ea6a7deb1c27a5aa850891764",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 필터는 /api/settings 하위 경로를 포함한다."
+  },
+  {
+    "id": "E31",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/security/AdminTokenGuardInterceptor.java",
+    "start_line": 94,
+    "end_line": 128,
+    "file_sha256": "5282fe2fa12c4fdf7dd08148923b81fb3fa06802b285c7a382eb3915395d6d77",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "PROTO_OPEN과 관리자 세션을 인정하며 미설정 토큰의 비엄격 환경을 따로 처리한다."
+  },
+  {
+    "id": "E32",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/config/AppSecurityConfig.java",
+    "start_line": 149,
+    "end_line": 155,
+    "file_sha256": "afba451076ece6f0f81094d86837f1ca6c5819821ee580e6baff1a81f46df50d",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "settings GET은 permitAll, POST는 ADMIN 규칙이다."
+  },
+  {
+    "id": "E33",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/config/AppSecurityConfig.java",
+    "start_line": 180,
+    "end_line": 203,
+    "file_sha256": "afba451076ece6f0f81094d86837f1ca6c5819821ee580e6baff1a81f46df50d",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "일반 공개 경로 목록에는 /settings가 없다."
+  },
+  {
+    "id": "E34",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/config/AppSecurityConfig.java",
+    "start_line": 231,
+    "end_line": 249,
+    "file_sha256": "afba451076ece6f0f81094d86837f1ca6c5819821ee580e6baff1a81f46df50d",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 settings 하위 CSRF 예외 및 AdminTokenGuardFilter 등록을 그대로 유지한다."
+  },
+  {
+    "id": "E35",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/chat/ChatRunRegistry.java",
+    "start_line": 113,
+    "end_line": 167,
+    "file_sha256": "c3cd8687bf6a3e067d14caab2ec7528ce1a7d147e30ff1cb7bd33c1402253385",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "실행의 권한 lease와 상태가 기존 Run에 저장된다."
+  },
+  {
+    "id": "E36",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/chat/ChatRunRegistry.java",
+    "start_line": 1215,
+    "end_line": 1235,
+    "file_sha256": "c3cd8687bf6a3e067d14caab2ec7528ce1a7d147e30ff1cb7bd33c1402253385",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "같은 Run에 대해 실행 Context 객체가 재생성되므로 스냅숏은 Run에 귀속되어야 한다."
+  },
+  {
+    "id": "E37",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/chat/ChatRunExecutionContext.java",
+    "start_line": 204,
+    "end_line": 251,
+    "file_sha256": "9ff0f1d875cadb88565cc8ad90fcd501c3dad1c209f51875b4d81c5144364075",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 실행 컨텍스트는 범위 바인딩과 종료 시 복원 계약을 갖는다."
+  },
+  {
+    "id": "E38",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/api/ChatApiController.java",
+    "start_line": 5047,
+    "end_line": 5086,
+    "file_sha256": "eb63cf2eef0b63e1c9ed946741cee84a775818ed2e025fb9933f305ae5fa03c1",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "세션 접근과 상세 trace 조회는 기존 owner/admin 조건으로 제한한다."
+  },
+  {
+    "id": "E39",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+    "start_line": 4308,
+    "end_line": 4325,
+    "file_sha256": "8c92f544692f57bd0603ec11807d3bd6e3eaa30072219ad81f79c62572b65da4",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "modelUsed는 성공 모델 또는 router 이름에서 유도될 수 있다."
+  },
+  {
+    "id": "E40",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/gateway/LlmGatewayBreadcrumbPublisher.java",
+    "start_line": 104,
+    "end_line": 148,
+    "file_sha256": "b3296367699c2969503ed19dc774f591138fd64a8eb3dd8aecc9de3b89938283",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 gateway debug 필드는 allowlist로 출력된다."
+  },
+  {
+    "id": "E41",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/ChatGptOAuthRegistration.java",
+    "start_line": 23,
+    "end_line": 28,
+    "file_sha256": "e14d3cdbcfbde9d279c27ac98421fcd069f9980da3aa014ad1ecb5384822896a",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "OAuth 경로와 과금 출처 이름이 기존 API key 경로와 다르다."
+  },
+  {
+    "id": "E42",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/ChatGptOAuthRegistration.java",
+    "start_line": 49,
+    "end_line": 106,
+    "file_sha256": "e14d3cdbcfbde9d279c27ac98421fcd069f9980da3aa014ad1ecb5384822896a",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "owner 및 자동 main 조건과 benefit 관측이 별개다."
+  },
+  {
+    "id": "E43",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/routing/ApiRoutingPolicySnapshot.java",
+    "start_line": 35,
+    "end_line": 74,
+    "file_sha256": "d8aaecfd4355d0674fb15e048f24b7965238d7b7a39eea1241c5310ba82285f0",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "라우팅 정책은 구성 문서를 읽어 스냅숏으로 보관한다."
+  },
+  {
+    "id": "E44",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/service/routing/plan/RoutingPlanService.java",
+    "start_line": 16,
+    "end_line": 82,
+    "file_sha256": "2b9a468aa5fa0edb2da310c2ec9d940c12ba5a7debc6e50dc70e0d89a9acc4bd",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "이 서비스는 검색 질의 계획이며 모델별 배정 계획과 동일하지 않다."
+  },
+  {
+    "id": "E45",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/api/DesktopRouterStatusBridgeController.java",
+    "start_line": 25,
+    "end_line": 70,
+    "file_sha256": "c9832b865fafa03b80f81e143db7ebe21838019fdad5bb50846cd4b35025d685",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "router/status는 조건부 활성 경로이며 실제 health/diagnostics 호출이 포함된다."
+  },
+  {
+    "id": "E46",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/assist/JevCandidateSignal.java",
+    "start_line": 34,
+    "end_line": 94,
+    "file_sha256": "08cb3150993e926883c8277fa46222b09920444f63e781896d7fe1961bb4e8c5",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "Jev 후보 평가는 동의·예산·후보 수 제한 아래 선별 신호로 사용된다."
+  },
+  {
+    "id": "E47",
+    "archive": "FIND_X.zip",
+    "path": "main/resources/application-llm.yaml",
+    "start_line": 493,
+    "end_line": 561,
+    "file_sha256": "fdb95613acea43ea3513a7b18e873c24c613dd3abb21b13d295a5b5ab1677789",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "llmrouter 경로별 enabled/weight/fallbackOnly/model 설정 예시가 존재한다."
+  },
+  {
+    "id": "E48",
+    "archive": "FIND_X.zip",
+    "path": "main/resources/application-llm.yaml",
+    "start_line": 580,
+    "end_line": 605,
+    "file_sha256": "fdb95613acea43ea3513a7b18e873c24c613dd3abb21b13d295a5b5ab1677789",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "judge/coder/vision 등록과 weight=0의 자동 선택 의미를 분리해야 한다."
+  },
+  {
+    "id": "E49",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/router/LlmRouterContext.java",
+    "start_line": 1,
+    "end_line": 30,
+    "file_sha256": "98b7e1a392d83f64e4aed290297c0988a779fbfa0d5c77d44be790f9456c4526",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "last-route ThreadLocal은 최종 사용 모델이나 비동기 역할별 실행 기록의 원장이 아니다."
+  },
+  {
+    "id": "E50",
+    "archive": "FIND_X.zip",
+    "path": "main/resources/configs/api-routing.yaml",
+    "start_line": 174,
+    "end_line": 176,
+    "file_sha256": "4546f0f5f615c87fcd825916bfc71e92b869c8d4f96fb9cbd33174090286e29c",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 debug.fields 명칭은 제한된 allowlist다."
+  },
+  {
+    "id": "E51",
+    "archive": "FIND_X.zip",
+    "path": "main/java/com/example/lms/llm/DynamicChatModelFactory.java",
+    "start_line": 230,
+    "end_line": 301,
+    "file_sha256": "6825c6c6863ffdb07b4d1e468ad81e9f69cca0def5b62040c4a7c35dc6924af0",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "기존 5/7/8개 경유와 observedContext 9개 인자 생성 경로가 존재한다."
+  },
+  {
+    "id": "E52",
+    "archive": "FIND_X.zip",
+    "path": "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java",
+    "start_line": 2308,
+    "end_line": 2389,
+    "file_sha256": "4a41278fab8a7b4e21bbfdf9a6cb864e29620f767205ad336757c760402d0281",
+    "evidence_grade": "DIRECT_STATIC",
+    "claim": "현재 CallArgs.parse는 5/7/8 인자 형태를 해석한다. 새로운 typed 인자는 별도 연결 검증이 필요하다."
+  }
+]

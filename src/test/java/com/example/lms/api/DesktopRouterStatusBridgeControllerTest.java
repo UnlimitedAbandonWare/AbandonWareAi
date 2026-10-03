@@ -5,6 +5,11 @@ import org.springframework.http.converter.json.MappingJackson2HttpMessageConvert
 import org.springframework.mock.env.MockEnvironment;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.lang.reflect.Method;
+import java.util.Locale;
+
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -68,6 +73,32 @@ class DesktopRouterStatusBridgeControllerTest {
         assertFalse(body.contains(ownerToken));
         assertFalse(body.contains("Authorization"));
         assertFalse(body.contains("api_key"));
+    }
+
+    @Test
+    void endpointIdentityRenderingIsIndependentOfDefaultLocale() throws Exception {
+        Method endpointHostPort = DesktopRouterStatusBridgeController.class
+                .getDeclaredMethod("endpointHostPort", String.class);
+        Method redactedUrl = DesktopRouterStatusBridgeController.class
+                .getDeclaredMethod("redactedUrl", String.class);
+        endpointHostPort.setAccessible(true);
+        redactedUrl.setAccessible(true);
+
+        String input = "http://DESKTOP-GPU.INTERNAL:11434/v1";
+        String renderedHostPort;
+        String renderedUrl;
+        Locale previous = Locale.getDefault();
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"));
+            renderedHostPort = (String) endpointHostPort.invoke(null, input);
+            renderedUrl = (String) redactedUrl.invoke(null, input);
+        } finally {
+            Locale.setDefault(previous);
+        }
+
+        assertAll(
+                () -> assertEquals("desktop-gpu.internal:11434", renderedHostPort),
+                () -> assertEquals("http://desktop-gpu.internal:11434/v1", renderedUrl));
     }
 
     private MockMvc mockMvc(MockEnvironment env) {

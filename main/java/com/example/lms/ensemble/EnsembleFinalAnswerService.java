@@ -19,6 +19,15 @@ import java.util.concurrent.CancellationException;
 @RequiredArgsConstructor
 public class EnsembleFinalAnswerService {
 
+    public PreparedContextPacket prepareContext(PromptContext context,PreparedContextPacket originals,
+            boolean serverApproved,Runnable sourceCheck){
+        if(!serverApproved||context==null||!context.conversationFrame().allowsOptionalRefinement()){
+            TraceStore.put("contextPrepareStatus","SKIPPED");TraceStore.put("contextPrepareReason","approval_or_conversation");
+            return originals;
+        }
+        return samplingOrchestrator.prepareContext(originals,sourceCheck);
+    }
+
     private static final long SCORE_PRECISION = 1_000_000L;
     private static final long NO_FORCED_WINNER_GAP_UNITS = 50_000L;
     private static final String REFINER_SAMPLING_ATTEMPTED = "ensemble.refiner.samplingAttempted";

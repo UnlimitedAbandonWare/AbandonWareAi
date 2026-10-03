@@ -1,0 +1,4 @@
+[PLUGIN-ROLES]
+모든 Codex 작업(goal 파일·PASTE 지시서 포함)에 `$demo1-codex-plugin-roles` v2가 자동 적용된다. 우선순위: 현재 로컬 소스 > AGENTS.md·goal/PASTE 지시서 > 스킬 > 플러그인 결과(보조 증거). 플러그인은 전부 켜지 말고 작업 타입이 필요로 하는 lane만 쓰고, 나머지는 NOT_USED.
+최종 보고서 맨 위에 `외부 API:` 한 줄(없으면 `외부 API: 없음`)과 `PLUGIN_USAGE:` 블록을 반드시 둔다: 플러그인당 `- 이름: USED(이유)|NOT_USED|NOT_RUN(이유)|UNAVAILABLE(이유)`, GLM은 `GLM=USED(n/3, marker ok)` 또는 `GLM=SESSION_UNAVAILABLE(이유)`.
+검사: python -B scripts/codex_plugin_usage_lint.py --report <보고서>  (0=OK, 2=형식 누락, 3=비밀 의심, 4=입력 없음)

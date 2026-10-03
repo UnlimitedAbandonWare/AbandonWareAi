@@ -4,8 +4,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
@@ -25,14 +23,10 @@ public class ModelBasedQueryComplexityClassifier implements QueryComplexityClass
 
     @PostConstruct
     void init() {
-        if (modelPath == null || modelPath.isBlank()) {
-            modelUnavailable = true;
-            return;
-        }
-        if (!Files.isRegularFile(Path.of(modelPath))) {
-            modelUnavailable = true;
-            log.info("[AWX][rag][query-complexity] model disabled reason=model_path_missing");
-        }
+        // This implementation has no inference session. A file is not a loaded model.
+        modelUnavailable = true;
+        if (modelPath != null && !modelPath.isBlank())
+            log.info("[AWX][rag][query-complexity] model disabled reason=inference_not_implemented");
     }
 
     @Override
@@ -55,16 +49,12 @@ public class ModelBasedQueryComplexityClassifier implements QueryComplexityClass
         if (hasMultipleClauses) score++;
         if (lower.contains("compare") || lower.contains("analyze") || lower.contains("explain")) score++;
         if (modelUnavailable) {
-            log.debug("[ModelBasedQueryComplexityClassifier] fail-soft stage={}", "classify.predict");
-            log.debug("[ModelBasedQueryComplexityClassifier] fail-soft stage={}", "translator.processInput");
+            log.debug("[AWX][rag][query-complexity] reason=heuristic_only");
         }
 
         if (score >= 3) {
             return QueryComplexityGate.Level.COMPLEX;
         }
-        if (score >= 1 || modelUnavailable) {
-            return QueryComplexityGate.Level.AMBIGUOUS;
-        }
-        return QueryComplexityGate.Level.SIMPLE;
+        return QueryComplexityGate.Level.AMBIGUOUS;
     }
 }

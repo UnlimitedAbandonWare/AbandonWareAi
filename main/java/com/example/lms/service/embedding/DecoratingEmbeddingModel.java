@@ -79,66 +79,84 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
         if (textSegments == null || textSegments.isEmpty()) {
             return Response.from(List.of());
         }
+        long batchDeadlineNanos = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(batchWaitMillis());
+        String expectedIdentity = cacheIdentity();
         List<Embedding> out = new ArrayList<>(java.util.Collections.nCopies(textSegments.size(), null));
+        java.util.Map<String, TextSegment> unique = new java.util.LinkedHashMap<>();
+        java.util.Map<String, List<Integer>> positions = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < textSegments.size(); i++) {
+            TextSegment segment = textSegments.get(i);
+            if (segment == null) { out.set(i, Embedding.from(new float[0])); continue; }
+            String key = cacheKeyFor(segment);
+            unique.putIfAbsent(key, segment);
+            positions.computeIfAbsent(key, ignored -> new ArrayList<>()).add(i);
+        }
+        var claims = cache.reserveBatch(unique.keySet(), remainingBatchMillis(batchDeadlineNanos));
         List<TextSegment> misses = new ArrayList<>();
         List<String> missKeys = new ArrayList<>();
-        List<Integer> missPositions = new ArrayList<>();
-
+        List<EmbeddingCache.Reservation> owners = new ArrayList<>();
         boolean dbg = isDbgSearch();
-        for (int i = 0; i < textSegments.size(); i++) {
-            TextSegment ts = textSegments.get(i);
-            if (ts == null) {
-                out.set(i, Embedding.from(new float[0]));
-                continue;
-            }
-            String key = cacheKeyFor(ts);
-            AtomicBoolean computed = new AtomicBoolean(false);
-            float[] cached = cache.getOrCompute(key, () -> {
-                computed.set(true);
-                return new float[0];
-            }, ttl);
-            if (!computed.get() && cached != null && cached.length > 0) {
-                out.set(i, Embedding.from(cached));
-                if (dbg) {
-                    inc("embed.cache.hit");
-                    inc("embed.batch.cache.hit");
+        try {
+            for (var entry : unique.entrySet()) {
+                var claim = claims.get(entry.getKey());
+                if (claim.state() == EmbeddingCache.ReservationState.OWNER) {
+                    misses.add(entry.getValue()); missKeys.add(entry.getKey()); owners.add(claim);
                 }
-                continue;
+                if (dbg) {
+                    inc(claim.state() == EmbeddingCache.ReservationState.HIT ? "embed.cache.hit" : "embed.cache.miss");
+                    inc(claim.state() == EmbeddingCache.ReservationState.HIT ? "embed.batch.cache.hit" : "embed.batch.cache.miss");
+                }
             }
-            misses.add(ts);
-            missKeys.add(key);
-            missPositions.add(i);
-            if (dbg) {
-                inc("embed.cache.miss");
-                inc("embed.batch.cache.miss");
+            java.util.Map<String, Embedding> ownedResults = new java.util.HashMap<>();
+            // Complete every owned key before joining another caller's flight.
+            if (!misses.isEmpty() && remainingBatchMillis(batchDeadlineNanos) > 0) {
+                List<Embedding> computed = batchEmbedMisses(misses, missKeys, owners, expectedIdentity, batchDeadlineNanos);
+                for (int i = 0; i < missKeys.size(); i++) {
+                    ownedResults.put(missKeys.get(i), computed.get(i));
+                }
             }
-        }
-
-        if (!misses.isEmpty()) {
-            List<Embedding> computed = batchEmbedMisses(misses, missKeys);
-            for (int i = 0; i < missPositions.size(); i++) {
-                Embedding e = i < computed.size() && computed.get(i) != null
-                        ? computed.get(i)
-                        : Embedding.from(new float[0]);
-                out.set(missPositions.get(i), e);
+            for (var owner : owners) owner.close();
+            for (var entry : positions.entrySet()) {
+                var claim = claims.get(entry.getKey());
+                Embedding own = ownedResults.get(entry.getKey());
+                float[] vector = own == null ? claim.await(remainingBatchMillis(batchDeadlineNanos)) : own.vector();
+                for (int position : entry.getValue()) out.set(position, Embedding.from(vector.clone()));
             }
-        }
-
-        for (int i = 0; i < out.size(); i++) {
-            if (out.get(i) == null) {
-                out.set(i, Embedding.from(new float[0]));
-            }
+        } finally {
+            // Includes provider errors, short fallback and interrupted owners; JOIN close is a no-op.
+            for (var claim : claims.values()) claim.close();
         }
         if (dbg) {
             try {
                 TraceStore.put("embed.batch.size.last", textSegments.size());
+                TraceStore.put("embed.batch.unique.last", unique.size());
                 TraceStore.put("embed.batch.miss.last", misses.size());
             } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("decorator.batchStatsTrace", ignore); log.debug("[Embedding] fail-soft stage={}", "decorator.batchStatsTrace"); }
         }
         return Response.from(out);
     }
 
-    private List<Embedding> batchEmbedMisses(List<TextSegment> misses, List<String> missKeys) {
+    private static long batchWaitMillis() {
+        if (Thread.currentThread().isInterrupted()) return 0L;
+        var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        return budget == null ? 30_000L : Math.min(30_000L, budget.remainingMillis());
+    }
+
+    private static long remainingBatchMillis(long deadlineNanos) {
+        return Math.min(batchWaitMillis(), Math.max(0L,
+                java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadlineNanos - System.nanoTime())));
+    }
+
+    private boolean validVector(float[] vector, boolean failover) {
+        if (vector == null || vector.length == 0) return false;
+        if (!failover && fingerprint != null && fingerprint.dimensions() > 0
+                && vector.length != fingerprint.dimensions()) return false;
+        for (float value : vector) if (!Float.isFinite(value)) return false;
+        return true;
+    }
+
+    private List<Embedding> batchEmbedMisses(List<TextSegment> misses, List<String> missKeys,
+            List<EmbeddingCache.Reservation> owners, String expectedIdentity, long batchDeadlineNanos) {
         boolean dbg = isDbgSearch();
 
         Response<List<Embedding>> response = null;
@@ -164,6 +182,12 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
             List<Embedding> fallback = new ArrayList<>(misses.size());
             int consecutiveUnrecoveredFailures = 0;
             for (int i = 0; i < misses.size(); i++) {
+                if (remainingBatchMillis(batchDeadlineNanos) <= 0) {
+                    while (fallback.size() < misses.size()) fallback.add(Embedding.from(new float[0]));
+                    TraceStore.put("embed.batch.perItemFallback.stopped", true);
+                    TraceStore.put("embed.batch.perItemFallback.remaining", misses.size() - i);
+                    break;
+                }
                 TextSegment ts = misses.get(i);
                 String key = missKeys.get(i);
                 AtomicBoolean singleComputeUnavailable = new AtomicBoolean(false);
@@ -180,7 +204,7 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
                         singleComputeUnavailable.set(true);
                         throw failure;
                     }
-                }, "segment");
+                }, "segment", owners.get(i), expectedIdentity);
                 fallback.add(Embedding.from(vec));
                 if (singleComputeUnavailable.get() && vec.length == 0) {
                     consecutiveUnrecoveredFailures++;
@@ -220,13 +244,12 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
             Embedding e = batch.get(i);
             float[] vector = (e == null || e.vector() == null) ? new float[0] : e.vector();
             String key = missKeys.get(i);
-            if (failoverUsed) {
-                cache.invalidate(key);
-            } else if (vector.length > 0) {
-                final float[] vectorToCache = vector;
-                float[] cached = cache.getOrCompute(key, () -> vectorToCache, ttl);
-                vector = cached == null ? new float[0] : cached;
+            if (!validVector(vector, failoverUsed)) {
+                vector = new float[0];
+                TraceStore.inc("embed.batch.invalidVector.count");
             }
+            boolean cacheable = !failoverUsed && Objects.equals(expectedIdentity, cacheIdentity());
+            vector = owners.get(i).complete(vector, ttl, cacheable);
             out.add(Embedding.from(vector));
         }
 
@@ -256,12 +279,17 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
     }
 
     private float[] getCachedVector(String key, Supplier<Response<Embedding>> compute, String kind) {
+        return getCachedVector(key, compute, kind, null, null);
+    }
+
+    private float[] getCachedVector(String key, Supplier<Response<Embedding>> compute, String kind,
+            EmbeddingCache.Reservation owner, String expectedIdentity) {
         boolean dbg = isDbgSearch();
         AtomicBoolean computed = new AtomicBoolean(false);
         AtomicBoolean failoverUsed = new AtomicBoolean(false);
         AtomicReference<String> failoverStage = new AtomicReference<>("");
 
-        float[] vec = cache.getOrCompute(key, () -> {
+        Supplier<float[]> loader = () -> {
             computed.set(true);
 
             // Clear per-call failover markers so a previous call can't "bleed" into this one.
@@ -304,8 +332,18 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
                     TraceStore.put("embed.vec.len.cur", (v == null ? 0 : v.length));
                 } catch (Exception ignore) { EmbeddingTraceSuppressions.trace("decorator.singleStatsTrace", ignore); log.debug("[Embedding] fail-soft stage={}", "decorator.singleStatsTrace"); }
             }
+            if (owner != null && !validVector(v, failoverUsed.get())) return new float[0];
             return (v == null) ? new float[0] : v;
-        }, ttl);
+        };
+        float[] vec;
+        if (owner == null) {
+            vec = cache.getOrCompute(key, loader, ttl, batchWaitMillis());
+        } else {
+            // Reserved fallback computes directly; never joins its own cache flight.
+            float[] loaded = loader.get();
+            vec = owner.complete(loaded, ttl,
+                    !failoverUsed.get() && Objects.equals(expectedIdentity, cacheIdentity()));
+        }
 
         if (dbg) {
             try {
@@ -319,7 +357,7 @@ public final class DecoratingEmbeddingModel implements EmbeddingModel {
 
         // If this call used a fallback embedder, invalidate the cache entry to avoid mixing dimensions/models.
         if (computed.get() && failoverUsed.get()) {
-            cache.invalidate(key);
+            if (owner == null) cache.invalidate(key);
             if (dbg) {
                 try {
                     inc("embed.cache.invalidate.failover");

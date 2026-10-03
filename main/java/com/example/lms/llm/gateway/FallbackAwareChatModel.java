@@ -25,6 +25,9 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
             "llm.gateway.fallbackAware.routeResolutionFailureCount";
     private static final String ROUTE_RESOLUTION_FAILURE_REASON =
             "route_supplier_runtime_exception";
+    // fallback이 구성된 요청에서 primary에 배정하는 요청 예산 슬라이스 비율(60%).
+    private static final long PRIMARY_SLICE_NUMERATOR = 3L;
+    private static final long PRIMARY_SLICE_DENOMINATOR = 5L;
 
     private final ChatModel primary;
     private final Supplier<ChatModel> fallbackSupplier;
@@ -39,6 +42,12 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
     private final Supplier<ModelRuntimeHealthTracker.RequestAttemptRoute> fallbackRouteSupplier;
     private NextFallbackResolver nextFallbackResolver;
     private int maxFallbackCalls = 1;
+    private boolean apiFirstPolicy;
+
+    public FallbackAwareChatModel withApiFirstPolicy() {
+        this.apiFirstPolicy = true;
+        return this;
+    }
     private java.util.function.BiConsumer<String, String> maskedFallbackReporter = (from, to) -> { };
 
     /** Optional observer: original route stays on record when a fallback serves the user. */
@@ -153,10 +162,35 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
         TraceStore.put("llm.gateway.fallback.started", false);
         // Freeze the retrieval/prompt boundary once, including conversation order and source IDs.
         List<ChatMessage> frozen = List.copyOf(messages);
+        // fallback이 구성된 요청은 primary가 요청 예산 전체를 독식하지 못하게
+        // 진입 시점 잔여 예산의 일부만 primary 슬라이스로 스코프 부여한다.
+        boolean fallbackConfigured = fallbackSupplier != null || fallbackResolver != null || nextFallbackResolver != null;
+        TimeBudget primaryBudget = null;
+        long primarySliceMs = 0L;
+        if (fallbackConfigured && initialBudget != null) {
+            long remainingMs = Math.max(0L, initialBudget.remainingMillis());
+            long sliceMs = (remainingMs * PRIMARY_SLICE_NUMERATOR) / PRIMARY_SLICE_DENOMINATOR;
+            if (sliceMs > 0L && sliceMs < remainingMs) {
+                primarySliceMs = sliceMs;
+                primaryBudget = TimeBudget.untilNanoDeadline(System.nanoTime() + sliceMs * 1_000_000L);
+            }
+        }
+        TraceStore.put("llm.gateway.fallback.timeSliceAllocatedMs", primarySliceMs);
         int primaryAttemptTotalBefore = requestAttemptTotal();
         long primaryStartedNanos = System.nanoTime();
         try {
-            ChatResponse response = invokeModel(primary, frozen, request);
+            ChatResponse response;
+            if (primaryBudget != null) {
+                TimeBudgetContext.set(primaryBudget);
+                try {
+                    response = invokeModel(primary, frozen, request);
+                } finally {
+                    // 슬라이스는 primary 호출 구간에만 적용하고 즉시 부모 예산으로 복원한다.
+                    TimeBudgetContext.set(initialBudget);
+                }
+            } else {
+                response = invokeModel(primary, frozen, request);
+            }
             requireAnswer(response);
             recordAttempt(
                     "primary",
@@ -164,14 +198,18 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
                     LlmFailureClass.NONE,
                     elapsedMs(primaryStartedNanos),
                     primaryAttemptTotalBefore);
-            recordCompletion(primaryKey, 0, elapsedMs(primaryStartedNanos));
+            recordCompletion(response, primaryKey, 0, elapsedMs(primaryStartedNanos));
             return response;
         } catch (RuntimeException ex) {
             LlmResponseTerminalException.rethrowIfPresent(ex);
             if (hasGatewayReason(ex, "failover_exhausted")) throw ex;
             LlmFailureClass failureClass = classifyFailure(ex);
-            boolean sameRequestRetryAllowed = fallbackAllowed(ex, failureClass);
-            boolean fallbackConfigured = fallbackSupplier != null || fallbackResolver != null || nextFallbackResolver != null;
+            // 자체 부여 슬라이스 만료로 발생한 TIMEOUT_SOFT만 재생 가능 목록에 추가한다.
+            boolean primarySliceExhausted = primaryBudget != null && primaryBudget.expired();
+            boolean sameRequestRetryAllowed = fallbackAllowed(ex, failureClass)
+                    || (primarySliceExhausted && failureClass == LlmFailureClass.TIMEOUT_SOFT
+                            && !LlmGatewayFailureClassifier.isCancellation(ex)
+                            && !LlmGatewayFailureClassifier.hasNonReplayableReason(ex));
             recordAttempt(
                     "primary",
                     primaryRoute,
@@ -179,12 +217,27 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
                     elapsedMs(primaryStartedNanos),
                     primaryAttemptTotalBefore);
             TraceStore.put("llm.gateway.fallbackAware.primaryFailure", failureClass.name());
+            if (apiFirstPolicy) TraceStore.put("llm.gateway.fallbackReason",
+                    failureClass == LlmFailureClass.AUTH_MISSING ? "provider_auth_invalid"
+                    : LlmGatewayFailureClassifier.hasQuotaFailure(ex) ? "provider_quota_exhausted"
+                    : failureClass.name().toLowerCase(java.util.Locale.ROOT));
             TraceStore.put("llm.gateway.fallbackAware.sameRequestRetry",
                     fallbackConfigured && sameRequestRetryAllowed);
+            TraceStore.put("llm.gateway.fallbackAware.primarySliceExhausted", primarySliceExhausted);
             if (breadcrumbs != null) {
                 breadcrumbs.publishFailure(primaryKey, failureClass, ex);
             }
             if (!fallbackConfigured || !sameRequestRetryAllowed) {
+                if (fallbackConfigured && !LlmGatewayFailureClassifier.isCancellation(ex)
+                        && !LlmGatewayFailureClassifier.hasNonReplayableReason(ex)
+                        && java.util.Set.of(LlmFailureClass.HEALTH_DOWN, LlmFailureClass.PROVIDER_ERROR,
+                                LlmFailureClass.TIMEOUT_SOFT, LlmFailureClass.STREAM_ERROR,
+                                LlmFailureClass.RESPONSE_MODEL_UNVERIFIED).contains(failureClass)) {
+                    LlmGatewayException uncertain=new LlmGatewayException("Provider execution is unconfirmed",
+                            failureClass,"provider_execution_uncertain");
+                    uncertain.initCause(ex);
+                    throw uncertain;
+                }
                 throw ex;
             }
             Set<String> usedRoutes = new LinkedHashSet<>();
@@ -258,7 +311,7 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
                         elapsedMs(fallbackStartedNanos),
                         fallbackAttemptTotalBefore);
                 TraceStore.put("llm.gateway.fallback.latencyMs", elapsedMs(fallbackStartedNanos));
-                recordCompletion(resolvedFallback.routeKey(), fallbackNumber + 1, elapsedMs(primaryStartedNanos));
+                recordCompletion(response, resolvedFallback.routeKey(), fallbackNumber + 1, elapsedMs(primaryStartedNanos));
                 try { maskedFallbackReporter.accept(primaryKey, resolvedFallback.routeKey()); }
                 catch (RuntimeException ignored) { TraceStore.put("llm.gateway.fallback.maskedReportFailed", true); }
                 return response;
@@ -266,7 +319,7 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
                 LlmResponseTerminalException.rethrowIfPresent(fallbackFailure);
                 if (hasGatewayReason(fallbackFailure, "failover_exhausted")) throw fallbackFailure;
                 if (LlmGatewayFailureClassifier.isCancellation(fallbackFailure)) throw fallbackFailure;
-                if (LlmGatewayFailureClassifier.hasNonReplayableReason(fallbackFailure)) throw fallbackFailure;
+                if (LlmGatewayFailureClassifier.hasNonReplayableReason(fallbackFailure, apiFirstPolicy)) throw fallbackFailure;
                 recordAttempt(
                         "fallback",
                         fallbackRoute,
@@ -331,7 +384,12 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
             throw new LlmGatewayException("Provider returned no answer", LlmFailureClass.PROVIDER_ERROR, "blank_response");
     }
 
-    private static void recordCompletion(String route, int fallbacks, long latencyMs) {
+    private static void recordCompletion(ChatResponse response, String route, int fallbacks, long latencyMs) {
+        var successful = com.example.lms.dto.GenerationObservation.current();
+        Object reason = TraceStore.get("llm.gateway.fallbackReason");
+        if (reason == null && fallbacks > 0) reason = TraceStore.get("llm.gateway.fallbackAware.primaryFailure");
+        com.example.lms.dto.GenerationObservation.capture(response, successful.observedProvider(),
+                successful.routeId(), fallbacks, reason instanceof String s ? s : null).store();
         String label = com.example.lms.trace.SafeRedactor.traceLabelOrFallback(route, "unknown");
         TraceStore.put("llm.gateway.selectedRoute", label);
         TraceStore.put("llm.gateway.latencyMs", latencyMs);
@@ -355,10 +413,15 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
     }
 
     private boolean fallbackAllowed(Throwable failure, LlmFailureClass failureClass) {
-        return sameRequestFallbackAllowed(failure, failureClass)
-                || (nextFallbackResolver != null && failureClass == LlmFailureClass.AUTH_MISSING
-                && !LlmGatewayFailureClassifier.isCancellation(failure)
-                && !LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+        if (apiFirstPolicy) {
+            if (LlmGatewayFailureClassifier.isCancellation(failure)
+                    || LlmGatewayFailureClassifier.hasNonReplayableReason(failure, true)) return false;
+            return java.util.Set.of(LlmFailureClass.AUTH_MISSING, LlmFailureClass.HEALTH_DOWN,
+                    LlmFailureClass.TIMEOUT_SOFT, LlmFailureClass.RATE_LIMIT_COOLDOWN,
+                    LlmFailureClass.SOFT_CIRCUIT_OPEN, LlmFailureClass.GPU_DEVICE_LOST,
+                    LlmFailureClass.VRAM_OOM).contains(failureClass);
+        }
+        return sameRequestFallbackAllowed(failure, failureClass);
     }
 
     private LlmFailureClass classifyFailure(Throwable failure) {
@@ -463,24 +526,13 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
         return Math.max(0L, (System.nanoTime() - startedNanos) / 1_000_000L);
     }
 
-    private static boolean sameRequestFallbackAllowed(
-            Throwable failure,
-            LlmFailureClass failureClass) {
+    private static boolean sameRequestFallbackAllowed(Throwable failure, LlmFailureClass failureClass) {
         if (LlmGatewayFailureClassifier.isCancellation(failure)
-                || LlmGatewayFailureClassifier.hasNonReplayableReason(failure)) {
-            return false;
-        }
-        if (failureClass == LlmFailureClass.STREAM_ERROR) {
-            return hasGatewayReason(failure, "stream_error_before_first_token");
-        }
-        return switch (failureClass) {
-            case HEALTH_DOWN, GPU_DEVICE_LOST, MODEL_MISSING, MODEL_STORE_UNAVAILABLE, VRAM_OOM,
-                    TIMEOUT_SOFT, SOFT_CIRCUIT_OPEN, RATE_LIMIT_COOLDOWN,
-                    PROVIDER_ERROR, RESPONSE_MODEL_UNVERIFIED -> true;
-            case NONE, AUTH_MISSING, BAD_REQUEST, CANCELLED_NEUTRAL,
-                    CONTEXT_TOO_SMALL, EMBEDDING_DIM_MISMATCH,
-                    LOCAL_UNSUPPORTED_MANAGED_RAG, STREAM_ERROR, DISABLED, UNKNOWN -> false;
-        };
+                || LlmGatewayFailureClassifier.hasNonReplayableReason(failure)) return false;
+        // Classified device rejection means the runner could not start generation.
+        // Generic HTTP errors, timeouts and zero tokens still do not prove non-execution.
+        return failureClass == LlmFailureClass.GPU_DEVICE_LOST || failureClass == LlmFailureClass.VRAM_OOM
+                || failureClass == LlmFailureClass.RATE_LIMIT_COOLDOWN && hasGatewayReason(failure,"local_backend_busy");
     }
 
     private static boolean hasGatewayReason(Throwable failure, String expectedReason) {

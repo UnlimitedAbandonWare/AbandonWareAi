@@ -43,13 +43,8 @@ public class TimeBudgetFilter extends OncePerRequestFilter {
         } else {
             TraceStore.put("timeBudget.context.reused", true);
             if (existing.expired()) {
-                TraceStore.put("timeBudget.terminalReason", "request_deadline_exhausted");
-                res.setStatus(HttpServletResponse.SC_REQUEST_TIMEOUT);
-                res.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
-                res.setContentType("application/problem+json");
-                res.getWriter().write(
-                        "{\"status\":408,\"reasonCode\":\"request_deadline_exhausted\"}");
-                return;
+                // Expired execution budget alone does not prove an incomplete body.
+                TraceStore.put("timeBudget.expiredAfterIngress", true);
             }
         }
         try {

@@ -1,0 +1,6 @@
+{
+  "provider": "openai",
+  "expect": "OK",
+  "http_status": 200,
+  "body": {"object": "list", "data": [{"id": "gpt-5-nano", "object": "model"}, {"id": "gpt-4o-mini", "object": "model"}]}
+}

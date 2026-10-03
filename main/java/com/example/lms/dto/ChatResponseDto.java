@@ -22,6 +22,8 @@ public class ChatResponseDto {
     private final SelectionEntropyProjection selectionEntropy;
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private final GenerationTermination generationTermination;
+    @com.fasterxml.jackson.annotation.JsonUnwrapped
+    private final GenerationObservation observation = GenerationObservation.from(com.example.lms.search.TraceStore.getAll());
 
     /** Numeric/categorical receipt only. Provider error messages and request bodies stay private. */
     public record GenerationTermination(String status, String reason, String incompleteReason,

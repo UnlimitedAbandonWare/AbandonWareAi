@@ -1,0 +1,67 @@
+{
+  "schema": "awx.codex-browser-agent-suites.v1",
+  "doc": "Ordered browser test bundles for scripts/codex_browser_agent.js. Generations are capped by configs/agent-test-model-policy.yaml (max 25/run); a suite whose estGenerations exceeds the remaining budget is NOT_RUN, and zero-generation suites always run.",
+  "maxApiGenerationsPerRun": 25,
+  "policyTool": "scripts/test_model_policy.py",
+  "suites": [
+    {
+      "id": "smoke",
+      "title": "practice smoke — 2 policy-planned sends via real chat UI",
+      "tool": "scripts/chat_practice_browser.js",
+      "driver": "browser",
+      "purpose": "auto",
+      "estGenerations": 2,
+      "prompts": [
+        { "text": "안녕, 오늘 점심 뭐 먹을지 하나만 골라줘. 답은 한 문장으로.", "attachment": false },
+        { "text": "세 자연수 a,b,c가 a+b+c=12이고 a<b<c일 때 가능한 (a,b,c) 쌍을 모두 나열해. 한 줄로.", "attachment": false }
+      ],
+      "args": ["--driver", "browser"]
+    },
+    {
+      "id": "golden",
+      "title": "golden RAG C1-C8 against the live loopback chat",
+      "tool": "scripts/chat_rag_golden_browser.js",
+      "purpose": "quality",
+      "estGenerations": 10,
+      "args": ["--purpose", "quality", "--max-sends", "10", "--repeat", "1"]
+    },
+    {
+      "id": "fault",
+      "title": "late-error/cancel fault fixture — synthetic stream, 0 LLM calls",
+      "tool": "scripts/chat_ui_browser_fault_fixture.js",
+      "purpose": "none",
+      "estGenerations": 0,
+      "inProcessDriver": true,
+      "scenarios": ["error-late", "cancel-late"]
+    },
+    {
+      "id": "fullapp",
+      "title": "phase2 full-app browser checks + one regression-purpose send",
+      "tool": "scripts/phase2_full_app_browser_tests.js",
+      "purpose": "regression",
+      "estGenerations": 5,
+      "stdinFixture": true,
+      "needsCredentials": "DEMO1_TEST_USER,DEMO1_TEST_PASS,DEMO1_ADMIN_TOKEN",
+      "args": ["--model-purpose", "regression"]
+    },
+    {
+      "id": "gesture",
+      "title": "auth-model x prompt x gesture matrix (devin F6 tool; runs only when present and its tests pass)",
+      "tool": "scripts/chat_auth_model_matrix_browser.js",
+      "tests": "scripts/chat_auth_model_matrix_browser_tests.js",
+      "purpose": "smoke",
+      "estGenerations": 6,
+      "optionalForeignTool": true,
+      "timeoutMs": 900000,
+      "args": ["--live", "--tier", "smoke", "--max-gen", "6", "--purpose", "smoke"]
+    },
+    {
+      "id": "trace",
+      "title": "trace-dock browser probe — observed model/fallback for the last turn, 0 generations",
+      "tool": "scripts/trace_dock_browser_probe.js",
+      "purpose": "none",
+      "estGenerations": 0,
+      "args": ["--root", ".", "--interval-ms", "500", "--tolerance-ms", "1500", "--max-calls", "4", "--observe-ms", "4000", "--hidden-wait-ms", "1200", "--hidden-max-calls", "2"]
+    }
+  ]
+}

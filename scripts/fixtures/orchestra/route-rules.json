@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "awx.orchestra-route-rules.v1",
+  "note": "User-tunable lane rules for orchestra_route.py. Values are defaults, not locks; edit this file to change routing. Lane names are fixed by awx.orchestra-signal.v1.",
+  "defaults": {
+    "liveCalls": 0,
+    "restarts": 0
+  },
+  "roundtripLimit": 2,
+  "costOrder": ["codex-credit", "external-paid", "free", "ollama-local"],
+  "lanes": {
+    "DEVIN": {
+      "for": "도구·스크립트·규칙·검증·정리·현황판. 제품 소스(main/, app/, frontend/, configs/) 수정 없음.",
+      "nextAgent": "devin",
+      "scopeHints": ["scripts/", "docs/", ".agents/", "agent-prompts/", "var/", "data/agent-handoff/"]
+    },
+    "CODEX_DIRECT": {
+      "for": "제품 소스 수정, 범위가 좁고 근거가 이미 PC에서 확인됨.",
+      "nextAgent": "codex",
+      "productRoots": ["main/", "app/", "frontend/", "configs/", "src/"]
+    },
+    "GPTPRO_THEN_CODEX": {
+      "for": "고점이 높은 일: 아래 highBar 조건이 minSignals개 이상이면 GPT Pro 지시서를 거쳐 Codex로.",
+      "nextAgent": "gptpro",
+      "minSignals": 2,
+      "highBar": [
+        {"id": "broad-surface", "desc": "제품 소스 3개 파일 이상 또는 여러 seam"},
+        {"id": "design-choice", "desc": "설계 선택지가 둘 이상"},
+        {"id": "external-info", "desc": "바깥 최신 정보(공식 문서·버전·가격·정책) 필요"},
+        {"id": "quality-ceiling", "desc": "품질 상한을 올리는 일(정확도·속도·비용 최적값)"},
+        {"id": "prior-attempts", "desc": "이전 시도 2회 이상 실패"}
+      ]
+    },
+    "AGY_RESEARCH": {
+      "for": "사실 확인·최신 정보·비교 조사가 먼저 필요한 질문. 결과는 web-evidence 신호로 회수.",
+      "nextAgent": "agy"
+    },
+    "GROKBOT_AMPLIFY": {
+      "for": "아이디어가 아직 흐릿함 → Grok Bot이 연타로 키움.",
+      "nextAgent": "grokbot"
+    },
+    "AGY_AS_GROKBOT": {
+      "for": "Grok Bot이 없을 때 그 역할을 agy가 서브로 수행(demo1-agy-grokbot-mode).",
+      "nextAgent": "agy"
+    },
+    "ASK_USER": {
+      "for": "되돌릴 수 없는 결정(공개 사용자 비용 변화, 데이터 삭제, 권한 정책)만.",
+      "nextAgent": "user"
+    }
+  },
+  "irreversibleMarkers": [
+    "데이터 삭제", "데이터셋 삭제", "delete data", "drop table",
+    "공개 비용", "공개 사용자 비용", "public cost", "paid default",
+    "권한 정책", "permission policy", "role gate", "스키마 변경", "schema change",
+    "force-push", "reset --hard", "deploy"
+  ],
+  "externalInfoMarkers": [
+    "최신", "latest", "공식 문서", "official docs", "버전", "version",
+    "가격", "pricing", "price", "정책", "policy", "공지", "changelog", "release"
+  ],
+  "qualityCeilingMarkers": [
+    "정확도", "accuracy", "최적", "optimize", "최적값", "latency", "지연",
+    "비용 최소", "cost", "품질 상한", "더 정확", "faster", "성능"
+  ],
+  "vagueIdeaMarkers": [
+    "아이디어", "maybe", "생각", "해볼까", "뭐가 좋을까", "brainstorm", "~하면 어떨까"
+  ],
+  "errorCodeMap": {
+    "401": {"kind": "question", "lane": "ASK_USER", "why": "KEY_INVALID_OR_EXPIRED — 재시도 신호를 만들지 않고 원인을 사용자에게"},
+    "403": {"kind": "question", "lane": "ASK_USER", "why": "PLAN_GATE 또는 FORBIDDEN_REGION_OR_IP — 본문 분류 후 사용자 판단"},
+    "429": {"kind": "question", "lane": "DEVIN", "why": "rate/cost admission — 재시도 없이 원인 분석 도구부터"}
+  },
+  "forbiddenEverywhere": [
+    "push/pull/commit without directive", "git add -A", "reset/checkout/restore/stash/clean",
+    "git remote add/change", "full test suite / Gradle sweep", "server start/restart",
+    "read or print .env/.secrets/tokens", "PROTO_OPEN/admin hardening",
+    "DB schema change / dataset delete", "chat.js edit", "product source edit (non-owner)",
+    "touch foreign leases/hunks/ledgers", "global agent config edit",
+    "skip-permissions/full-access suggestion", "run gptpro_pack.py (user-only)",
+    "paid API / real websearch call", "auto-post to other agent windows/rooms/DM",
+    "native glm_worker", "report mock as live PASS"
+  ]
+}

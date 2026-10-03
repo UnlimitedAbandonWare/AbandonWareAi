@@ -8,3 +8,9 @@
 - goal-objective/첨부 폴더(`%USERPROFILE%\.codex\attachments`, Downloads, ZIP `main/`)는 입력 위치일 뿐 — Project Root는 `C:\AbandonWare\demo-1\demo-1\src` 고정 (자동 생성 세션 포함)
 - 리스·예약에 막히면 우회/복제 계층 없이 중단하고, 막힌 파일+소유자+만료만 보고
 - 종료 시 한 줄 인계 필수: 남은 THE ONE / 막힌 이유(lease 등) / 하지 말 것 / 증명 명령 한 줄
+
+[ANTI-STOP]
+- goal-objective.md / 이 문서 읽기 = intake. Done 조건 아님.
+- 등록 목표 제목에 "읽기/Read …" 쓰지 말 것. Mission/WP AC만 제목.
+- 소스 diff 0 + 테스트 NOT_RUN 으로 complete-stop 호출 금지.
+- 읽기만 끝냈으면 CONTINUE: 다음 WP seam 구현.

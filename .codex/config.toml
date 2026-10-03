@@ -3,3 +3,5 @@
 
 # Shared definitions: shared-runtime.json. Host paths belong in the local Codex config.
 # Bootstrap: python -B scripts/awx_mcp_node_setup.py --register-codex
+# Vercel AI Gateway Jev ZDR rule SSOT: docs/API_ROUTING_SPEC.md "Vercel AI Gateway — Jev"
+# (ZDR default OFF; Hobby plan 403 plan_gate; Pro+ explicit config only).

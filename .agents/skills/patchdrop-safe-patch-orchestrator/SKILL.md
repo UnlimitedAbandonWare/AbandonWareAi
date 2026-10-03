@@ -7,7 +7,7 @@ description: "PROTO-LIGHT: default skip unless user explicitly names this skill 
 
 ## Core Invariant
 
-`C:\AbandonWare\demo-1\demo-1\src` is the Desktop canonical root. Mac mini may read it as evidence, but must not directly edit it through SMB/shared mounts. Mac mini produces a patch bundle; Desktop consumes, applies, and verifies it.
+`<repo>` is the Desktop canonical root. Mac mini may read it as evidence, but must not directly edit it through SMB/shared mounts. Mac mini produces a patch bundle; Desktop consumes, applies, and verifies it.
 
 Use this skill to decide the safe path before touching source or applying PatchDrop artifacts.
 
@@ -30,10 +30,10 @@ Ordinary source-edit follows `AGENTS.md` `DEMO1-GIT-LOCAL-FIRST`: lease +
 preimage, no `git status`/`rev-parse` intake gate. The Git CLI below is only
 for PatchDrop `.patch` apply (`git apply`), not for starting a source session.
 
-Run from `C:\AbandonWare\demo-1\demo-1\src` before PatchDrop apply:
+Run from `<repo>` before PatchDrop apply:
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Push-Location $Root
 Get-Location
 . .\__patch_drop__\source_edit_lease_contract.ps1

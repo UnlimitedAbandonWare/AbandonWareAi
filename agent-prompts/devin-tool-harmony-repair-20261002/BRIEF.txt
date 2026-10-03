@@ -1,0 +1,103 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-tool-placement-scan
+
+# Devin — demo-1 도구 생태계 상호 조화 및 충돌 해소 지시서 (도구 조화 복원)
+[Contract: DEMO1-DEVIN-TOOL-HARMONY-REPAIR-20261002]
+
+[ANTI-STOP] 이 파일을 읽은 것은 intake일 뿐이다. 종료 요건 = DV0~DV5 수정이 반영되고 AC 항목이 전원 PASS인 상태다. 계획만 쓰고 멈추지 말고 DV0부터 바로 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 AUTO_DECISION 줄로 남긴다. 질문은 단일 승인 항목만 한다.
+
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(&& 금지, ; 사용). PATH python 사용. 장부 파일은 [IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))로 기록.
+
+## 0) 한 줄 목표
+도구 간 인자 불일치·지시서 게이트 오판·리스 다회차 재진입 충돌·만료 좀비 리스 방치·콘솔 모지바케 등 5대 조화 결함을 해소해 도구들이 서로 유기적으로 맞물려 돌아가게 한다.
+
+## 1) 사실 (2026-10-02 15:05 KST PC 실측)
+- git HEAD: 4150b2822f2c, Project Root: C:\AbandonWare\demo-1\demo-1\src.
+- 결함 1 (인자 불일치): `demo1_tool_placement_scan.py`가 action choices로 인해 `python -B scripts/demo1_tool_placement_scan.py --root . "<ask>"` 호출 시 `<ask>`를 action으로 파싱해 exit 2 실패.
+- 결함 2 (게이트 오판): `brief_save.py`의 `SECTION_ANCHORS`가 헤더(`^#+`)에 바인딩되지 않아 본문 속 단어 언급을 헤더로 오인해 `section-order: FAIL` 발생, 정상 지시서 저장 차단.
+- 결함 3 (리스 재진입 충돌): `source_edit_session.ps1:265`가 lockDir 존재 시 무조건 exit 7을 내어, 동일 작업이 2회차 이후 스코프 갱신 시 자기 리스에 막혀 `scope claim blocked (exit 7)` 발생 (오늘 3회 관찰).
+- 결함 4 (만료 리스 방치): 5일 전 만료된 `clean-primitive-debug-ai-impl-0926` 리스가 회수되지 않고 `blockingCount: 2`로 방치되나, 안전한 자동 회수 스위프 명령 없음.
+- 결함 5 (모지바케): `grok_to_agy_memory_bridge.py` 등 일부 스크립트가 PowerShell 5.1(CP949) 환경에서 stdout UTF-8 재설정이 없어 한글 출력이 깨짐.
+
+## 공통 규칙
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 제품 Java 소스, Gradle 빌드 파일, application.properties, chat.js 수정 금지.
+- 장부: `data/agent-handoff/devin-tool-harmony-repair-<8hex>/` (journal open → claim → preimage → edit → verify → close).
+- `scripts/brief_save.py`는 `devin-agy-grokbot-upgrade-148ff73e` 리스 종료 후 처리하거나 비겹침 파일부터 진행.
+
+## DV0 — Preflight
+- HEAD(4150b2822f2c), 대상 파일 6개(demo1_tool_placement_scan.py: 480705D16F5C, brief_save.py: A3BDF51F1D21, source_edit_session.ps1: 745AD3E1BD60, agent_scope_lease.py: D10BB71C5DEB, lease_conflict_autoflow.py: 49F57847667A, grok_to_agy_memory_bridge.py: DA325B1B4B67) 해시 장부 기록.
+
+## DV1 — demo1_tool_placement_scan.py 인자 유연화 및 단일 진입 조화
+- 파일: `scripts/demo1_tool_placement_scan.py`, `scripts/test_demo1_tool_placement_scan.py`
+- 증거: `demo1_tool_placement_scan.py:511-514`
+- 최소 수정:
+  1) `action`이 `list-triggers`가 아니면 기본 action을 `scan`으로 두고 첫 위치 인자를 `ask`로 인식.
+  2) `python -B scripts/demo1_tool_placement_scan.py --root . "도구 조화"` 및 `python -B scripts/demo1_tool_placement_scan.py "도구 조화"` 모두 exit 0 정상 반환.
+- 테스트: `scripts/test_demo1_tool_placement_scan.py`에 단일 인자 호출 테스트 추가.
+
+## DV2 — brief_save.py 섹션 앵커 헤더 바인딩 및 게이트 데드락 해소
+- 파일: `scripts/brief_save.py`, `scripts/test_brief_save.py`
+- 증거: `brief_save.py:40-50`
+- 최소 수정:
+  1) `SECTION_ANCHORS` 정규식을 마크다운 헤더 `^\s*#{1,6}\s*`에 바인딩하여 본문 속 단어 언급이 섹션으로 오인되지 않게 수정.
+  2) Project Root 확인 시 `Set-Location C:\AbandonWare\demo-1\demo-1\src` 형식도 충족 인정.
+- 테스트: `python -B scripts/brief_save.py lint agent-prompts/devin-codex-parallel-lanes-20261002/BRIEF.txt --agent DEVIN` 실행 시 PASS 확인.
+
+## DV3 — source_edit_session.ps1 & agent_scope_lease.py 동일 소유자 리스 재진입 허용
+- 파일: `__patch_drop__/source_edit_session.ps1`, `scripts/agent_scope_lease.py`, `scripts/test_agent_scope_lease.py`
+- 증거: `__patch_drop__/source_edit_session.ps1:265-267`, `scripts/agent_scope_lease.py:510-529`
+- 최소 수정:
+  1) `source_edit_session.ps1 -Action begin`에서 `$lockDir`가 존재하더라도 기존 락의 `ownerTaskId` 또는 `ownerHash`가 일치하면 충돌(exit 7) 대신 스코프 갱신으로 처리하고 exit 0 반환.
+  2) `agent_scope_lease.py claim`에서 동일 topic 재호출 시 기존 점유를 정상 연장.
+- 테스트: `test_agent_scope_lease.py`에 동일 소유자 다회차 re-claim 성공 테스트 추가.
+
+## DV4 — lease_conflict_autoflow.py 만료 좀비 리스 안전 스위프
+- 파일: `scripts/lease_conflict_autoflow.py`, `scripts/test_lease_conflict_autoflow.py`
+- 증거: `scripts/lease_conflict_autoflow.py`
+- 최소 수정: `lease_conflict_autoflow.py`에 `sweep-stale` 서브커맨드를 추가해 TTL 24시간 초과 및 소유자 부재 리스를 격리/회수하고 live lease는 보존.
+- 테스트: `test_lease_conflict_autoflow.py`에 만료 리스 스위프 검증 테스트 추가.
+
+## DV5 — grok_to_agy_memory_bridge.py 콘솔 출력 UTF-8 표준화
+- 파일: `scripts/grok_to_agy_memory_bridge.py`
+- 증거: `scripts/grok_to_agy_memory_bridge.py:1`
+- 최소 수정: 상단에 `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` 적용.
+- 테스트: `python -B scripts/grok_to_agy_memory_bridge.py prompts` 실행 시 한글 정상 출력 확인.
+
+## HOLD
+- 제품 Java 소스, Gradle 빌드 파일, application.properties, chat.js
+- 활성 상태인 다른 에이전트의 live lease 강제 회수
+- Git commit / push / add -A 및 형상 변경
+
+## ASK_ONCE
+1. `lease_conflict_autoflow.py sweep-stale` 시 만료 기준 시간을 기본 24시간으로 둘지 12시간으로 둘지. 답이 없으면 기본값 **24시간**.
+
+## 절대 금지
+- push / pull / commit, git add -A, reset --hard / checkout / restore / stash / clean / force-push
+- 전체 테스트 suite, 전역 clean, Gradle 빌드 변경
+- .secrets / .env / credentials 등 비밀값 읽기 및 출력
+- AbandonWare3 원격지 추가, PROTO_OPEN / admin 임의 강화
+- 제품 Java 소스 변경
+
+## Acceptance (종료 확인)
+- [ ] AC1: `demo1_tool_placement_scan.py`가 `scan` 키워드 없이 `--root . "<ask>"`로 호출되어도 exit 0 반환.
+- [ ] AC2: `brief_save.py`가 본문 단어 언급에 오판하지 않고 헤더 앵커로 정확히 검증하며, 기존 실패 지시서 lint가 PASS됨.
+- [ ] AC3: 동일 세션의 다회차 claim 호출 시 자기 리스에 막히지 않고 정상 연장됨.
+- [ ] AC4: `lease_conflict_autoflow.py sweep-stale`로 만료 리스가 안전하게 정리되고 live lease는 보존됨.
+- [ ] AC5: `grok_to_agy_memory_bridge.py`의 한글 출력이 깨짐 없이 정상 표시됨.
+- [ ] AC6: 단위 테스트 4개 파일 전원 GREEN 통과.
+- [ ] AC7: 제품 Java 소스 및 Gradle 수정 0건, 비밀값 유출 0건.
+
+## 보고 형식
+```
+외부 API: 없음 (유료 0회)
+DEVIN-TOOL-HARMONY-REPAIR: DONE | PARTIAL | HOLD
+FILES_TOUCHED: <수정된 파일 및 줄 번호>
+TEST_RESULTS: <테스트 실행 결과 x/x GREEN>
+SWEEP_RESULT: <회수된 stale 리스 수 및 보존된 live 리스 수>
+AC1~AC7: PASS | FAIL | NOT_RUN(사유)
+HOLD / ASK_ONCE / NEXT
+```
+
+[ANTI-STOP] 읽기는 intake일 뿐이다. 완료 = AC1~AC7 전원 PASS 상태다. 즉시 DV0부터 시작한다.

@@ -7,12 +7,20 @@
 $ErrorActionPreference = 'Continue'
 $Root = if ($PSScriptRoot) {
   (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+} elseif ($env:AWX_ROOT) {
+  $env:AWX_ROOT
 } else {
-  'C:\AbandonWare\demo-1\demo-1\src'
+  try {
+    . (Join-Path (Get-Location) 'scripts\AwxPaths.ps1')
+    Resolve-AwxPath -Key 'repo.root'
+  } catch { (Get-Location).Path }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $Root 'AGENTS.md'))) {
-  $cand = 'C:\AbandonWare\demo-1\demo-1\src'
-  if (Test-Path -LiteralPath (Join-Path $cand 'AGENTS.md')) { $Root = $cand }
+  $cand = if ($env:AWX_ROOT) { $env:AWX_ROOT } else { $null }
+  if (-not $cand -and $PSScriptRoot) {
+    try { . (Join-Path $PSScriptRoot 'AwxPaths.ps1'); $cand = Resolve-AwxPath -Key 'repo.root' } catch {}
+  }
+  if ($cand -and (Test-Path -LiteralPath (Join-Path $cand 'AGENTS.md'))) { $Root = $cand }
 }
 
 $Allowed = @(

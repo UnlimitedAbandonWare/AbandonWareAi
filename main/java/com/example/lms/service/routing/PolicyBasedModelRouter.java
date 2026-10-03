@@ -18,7 +18,9 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
-import java.util.concurrent.ConcurrentHashMap;
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
+import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -60,6 +62,8 @@ public class PolicyBasedModelRouter implements ModelRouter {
     private int highTimeoutSeconds;
     @Value("${llm.requested-model.timeout-seconds:180}")
     private int requestedModelTimeoutSeconds;
+    @Value("${chat.run.max-duration-seconds:600}")
+    private int chatRunMaxDurationSeconds;
 
     @Value("${llm.chat.temperature:0.3}")
     private double defaultTemperature;
@@ -74,7 +78,23 @@ public class PolicyBasedModelRouter implements ModelRouter {
     @Value("${llm.high.model:}")
     private String highConfiguredModel;
 
-    private final ConcurrentHashMap<String, ChatModel> requestedCache = new ConcurrentHashMap<>();
+    @Value("${llmrouter.api-first.enabled:${LLMROUTER_API_FIRST:false}}")
+    private boolean apiFirstEnabled;
+
+    @Value("${chat.loadout.enabled:false}")
+    private boolean loadoutEnabled;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.prompt.pose.ModelLoadoutResolver loadoutResolver;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.llm.spec.ModelSpecRegistry loadoutSpecs;
+
+    // Bean recreation on the existing Spring restart boundary drops old configured clients.
+    // Live configuration revisions have no event producer in the current factory contract.
+    private final Cache<String, ChatModel> requestedCache = Caffeine.newBuilder()
+            .maximumSize(256)
+            .expireAfterAccess(Duration.ofMinutes(30))
+            .recordStats()
+            .build();
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DebugEventStore debugEventStore;
@@ -117,6 +137,7 @@ public class PolicyBasedModelRouter implements ModelRouter {
                 ev.put("reason", "intent=REWRITE");
                 emitRouterPipelineEvent("rewrite", ev, "ok");
             } catch (Throwable ignore) { TraceStore.put("ml.router.suppressed.rewriteTrace", true); ModelRouterTraceSuppressions.trace("rewrite.trace", ignore); }
+            rememberLoadoutRouteRole(com.example.lms.routing.RoutingProfile.Role.MAIN_FAST);
             return fastModel;
         }
 
@@ -188,6 +209,7 @@ public class PolicyBasedModelRouter implements ModelRouter {
                             TraceStore.put("ml.router.selectedHash", SafeRedactor.hashValue(fastName));
                             TraceStore.put("ml.router.selectedLength", lengthOf(fastName));
                         } catch (Throwable ignore) { TraceStore.put("ml.router.suppressed.promoteFallbackFastTrace", true); ModelRouterTraceSuppressions.trace("promoteFallback.fastTrace", ignore); }
+                        rememberLoadoutRouteRole(com.example.lms.routing.RoutingProfile.Role.MAIN_FAST);
                         return fastModel;
                     }
                 }
@@ -215,6 +237,7 @@ public class PolicyBasedModelRouter implements ModelRouter {
                 ev.put("intent", String.valueOf(sig.intent()));
                 emitRouterPipelineEvent("promote", ev, "ok");
             } catch (Throwable ignore) { TraceStore.put("ml.router.suppressed.promoteTrace", true); ModelRouterTraceSuppressions.trace("promote.trace", ignore); }
+            rememberLoadoutRouteRole(com.example.lms.routing.RoutingProfile.Role.MAIN_HIGH);
             return highModel;
         }
 
@@ -230,6 +253,136 @@ public class PolicyBasedModelRouter implements ModelRouter {
             emitRouterPipelineEvent("default", ev, "ok");
         } catch (Throwable ignore) { TraceStore.put("ml.router.suppressed.defaultTrace", true); ModelRouterTraceSuppressions.trace("default.trace", ignore); }
         return defaultModel;
+    }
+
+    private void rememberLoadoutRouteRole(com.example.lms.routing.RoutingProfile.Role role) {
+        if (loadoutEnabled) TraceStore.put("internal.loadout.mainRouteRole", role);
+    }
+
+    @Override
+    public ChatModel routeMain(String intent, String riskLevel, String verbosityHint,
+            Integer targetMaxTokens, String requestedModel, String query, boolean toolsRequired) {
+        ChatModel selected;
+        String selectedKey;
+        String reason = "existing_main";
+        var mainRole = com.example.lms.routing.RoutingProfile.Role.MAIN_DEFAULT;
+        if (com.example.lms.llm.RequestedModelSelection.matches(requestedModel)) {
+            if (toolsRequired && com.example.lms.llm.ChatGptOAuthRegistration.isRoute(requestedModel))
+                throw new com.example.lms.llm.ModelSelectionException("responses_tools_unsupported");
+            selected = exactRequestedModel(requestedModel, targetMaxTokens);
+            selectedKey = requestedModel;
+            reason = "explicit_main";
+        } else {
+            String oauth = !apiFirstEnabled && !toolsRequired && policy != null && policy.complexMainRequest(query, intent)
+                    && factory != null ? factory.automaticMainRoute() : null;
+            if (oauth != null && factory.canServeQuietly(oauth)) {
+                selected = exactRequestedModel(oauth, targetMaxTokens);
+                selectedKey = oauth;
+                reason = "complex_main_oauth";
+            } else {
+                rememberLoadoutRouteRole(com.example.lms.routing.RoutingProfile.Role.MAIN_DEFAULT);
+                selected = route(intent, riskLevel, verbosityHint, targetMaxTokens, requestedModel);
+                selectedKey = resolveModelName(selected);
+                var role = loadoutEnabled && TraceStore.get("internal.loadout.mainRouteRole")
+                        instanceof com.example.lms.routing.RoutingProfile.Role chosenRole ? chosenRole
+                        : selected == fastModel && fastModel != defaultModel
+                        ? com.example.lms.routing.RoutingProfile.Role.MAIN_FAST
+                        : selected == highModel && highModel != defaultModel
+                        ? com.example.lms.routing.RoutingProfile.Role.MAIN_HIGH
+                        : com.example.lms.routing.RoutingProfile.Role.MAIN_DEFAULT;
+                mainRole = role;
+                var invocation = com.example.lms.routing.RoutingInvocation.current(role);
+                if (invocation.isPresent()) {
+                    if (factory == null) throw new IllegalStateException("routing_factory_unavailable");
+                    var bound = invocation.get();
+                    selectedKey = bound.binding().primary().target();
+                    int roleTimeout = role == com.example.lms.routing.RoutingProfile.Role.MAIN_FAST ? fastTimeoutSeconds
+                            : role == com.example.lms.routing.RoutingProfile.Role.MAIN_HIGH ? highTimeoutSeconds : timeoutSeconds;
+                    double roleTemperature = role == com.example.lms.routing.RoutingProfile.Role.MAIN_FAST ? fastTemperature
+                            : role == com.example.lms.routing.RoutingProfile.Role.MAIN_HIGH ? highTemperature : defaultTemperature;
+                    selected = factory.lcWithTimeout(selectedKey,roleTemperature,null,null,null,
+                            targetMaxTokens == null || targetMaxTokens <= 0 ? 1024 : targetMaxTokens,
+                            roleTimeout,0,null,bound);
+                    reason = "role_main";
+                } else if (apiFirstEnabled) {
+                    if (factory == null) throw new IllegalStateException("routing_factory_unavailable");
+                    selectedKey = "llmrouter.auto";
+                    selected = factory.lcWithTimeout(selectedKey, defaultTemperature, null, null, null,
+                            targetMaxTokens == null || targetMaxTokens <= 0 ? 1024 : targetMaxTokens,
+                            timeoutSeconds, 0);
+                    reason = "api_first_main";
+                }
+            }
+        }
+        com.example.lms.llm.RequestedModelSelection.rememberMainDecision(
+                new com.example.lms.llm.gateway.LlmRouteDecision(requestedModel, selectedKey,
+                        null, null, false, reason, targetMaxTokens == null || targetMaxTokens <= 0 ? 1024 : targetMaxTokens));
+        if (loadoutEnabled) com.example.lms.llm.RequestedModelSelection.rememberMainRole(mainRole);
+        return selected;
+    }
+
+    @Override
+    public com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout selectLoadout(
+            com.example.lms.prompt.pose.ModelLoadoutResolver.Request request, ChatModel selected) {
+        if (!loadoutEnabled) return null;
+        var decision = com.example.lms.llm.RequestedModelSelection.mainDecision();
+        var role = com.example.lms.llm.RequestedModelSelection.mainRole();
+        if (decision == null || role == null || request == null || request.role() != role
+                || loadoutResolver == null || loadoutSpecs == null) return heldLoadout("MISSING_LOADOUT_CONTEXT");
+        var invocation = com.example.lms.routing.RoutingInvocation.current(role);
+        var candidate = invocation.flatMap(i -> i.candidate(decision.selectedKey())).orElse(null);
+        var identity = DynamicChatModelFactory.configuredModelIdentity(selected);
+        if (identity == null || identity.provider() == null || identity.endpointKind() == null
+                || identity.adapterVersion() == null || identity.endpointHash() == null)
+            return heldLoadout("RUNTIME_IDENTITY_UNVERIFIED");
+        String model = candidate == null ? decision.selectedKey() : candidate.modelId();
+        if (!model.equals(identity.modelId()) || (candidate != null
+                && (!identity.provider().equalsIgnoreCase(candidate.provider())
+                || !identity.endpointHash().equals(candidate.endpointIdentityHash()))))
+            return heldLoadout("RUNTIME_IDENTITY_MISMATCH");
+        var profile = loadoutProfile(model, identity);
+        if (profile == null) return heldLoadout("MODEL_PROFILE_UNVERIFIED");
+        var resolved = resolveForProfile(request, profile);
+        if (!resolved.eligible()) return resolved;
+        // Lazy fallback clients have no construction identity yet. Do not build them
+        // for equipment or reuse a primary-only prompt on an unverified fallback.
+        if (invocation.isPresent() && invocation.get().binding().maxExtraFallbackCalls() > 0) {
+            if (!invocation.get().fallbackCandidates().isEmpty()) return heldLoadout("FALLBACK_RUNTIME_UNVERIFIED");
+        }
+        return resolved;
+    }
+
+    private com.example.lms.llm.spec.ModelRoleProfile loadoutProfile(String model,
+            DynamicChatModelFactory.ConfiguredModelIdentity identity) {
+        if (model == null) return null;
+        var matches = loadoutSpecs.snapshots().stream().filter(s -> model.equals(s.model())
+                && identity.provider().equalsIgnoreCase(s.provider())).toList();
+        if (matches.size() != 1) return null;
+        var snapshot = matches.get(0);
+        if (snapshot.observedAt() == null || snapshot.observedAt().isBefore(java.time.Instant.now().minusSeconds(86400))) return null;
+        try {
+            var profile = snapshot.roleProfile();
+            return profile != null && snapshot.model().equals(profile.modelKey().modelId())
+                    && snapshot.provider().equalsIgnoreCase(profile.modelKey().provider())
+                    && identity.endpointKind().equals(profile.modelKey().endpointKind())
+                    && identity.adapterVersion().equals(profile.modelKey().adapterVersion())
+                    && identity.endpointHash().equals(snapshot.metadata().get("verifiedEndpointIdentityHash")) ? profile : null;
+        } catch (IllegalArgumentException invalidProfile) { return null; }
+    }
+
+    private com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout resolveForProfile(
+            com.example.lms.prompt.pose.ModelLoadoutResolver.Request request,
+            com.example.lms.llm.spec.ModelRoleProfile profile) {
+        Integer context = profile.capabilities().contextTokens();
+        int remaining = context == null ? 0 : Math.min(context, request.remainingTokens());
+        return loadoutResolver.resolve(new com.example.lms.prompt.pose.ModelLoadoutResolver.Request(
+                request.role(), request.features(), request.requiredCapabilities(), request.toolApproved(),
+                request.corpusAllowed(), request.inputTokens(), request.outputTokens(), remaining), profile);
+    }
+
+    private static com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout heldLoadout(String reason) {
+        return new com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout("safe-default", "1", java.util.List.of(),
+                "CURRENT", java.util.List.of(), "existing", java.util.Map.of(), java.util.List.of(reason), false);
     }
 
     @Override
@@ -414,7 +567,8 @@ public class PolicyBasedModelRouter implements ModelRouter {
             case HIGH -> highTimeoutSeconds;
             default -> timeoutSeconds;
         };
-        int timeout = RequestedModelTimeoutPolicy.timeoutSeconds(req, req, tierTimeout, requestedModelTimeoutSeconds);
+        int timeout = RequestedModelTimeoutPolicy.timeoutSeconds(req, req, tierTimeout, requestedModelTimeoutSeconds,
+                chatRunMaxDurationSeconds);
         double temp = switch (tier) {
             case FAST -> fastTemperature;
             case HIGH -> highTemperature;
@@ -422,13 +576,14 @@ public class PolicyBasedModelRouter implements ModelRouter {
         };
 
         String key = String.format(java.util.Locale.ROOT, "%s|%s|%d|%d|%.3f", req, tier.name(), maxTok, timeout, temp);
-        ChatModel cached = requestedCache.get(key);
+        ChatModel cached = requestedCache.getIfPresent(key);
         if (cached != null) {
             return cached;
         }
 
         try {
-            ChatModel built = factory.lcWithTimeout(req, temp, null, maxTok, timeout);
+            ChatModel built = requestedCache.get(key, ignored -> java.util.Objects.requireNonNull(
+                    factory.lcWithTimeout(req, temp, null, maxTok, timeout)));
             try {
                 TraceStore.put("ml.router.requestedModelHash", SafeRedactor.hashValue(req));
                 TraceStore.put("ml.router.requestedModelLength", lengthOf(req));
@@ -437,8 +592,7 @@ public class PolicyBasedModelRouter implements ModelRouter {
                 TraceStore.put("ml.router.selectedLength", lengthOf(req));
             } catch (Throwable ignore) { TraceStore.put("ml.router.suppressed.requestedAppliedTrace", true); ModelRouterTraceSuppressions.trace("requestedApplied.trace", ignore); }
 
-            ChatModel prev = requestedCache.putIfAbsent(key, built);
-            return (prev != null) ? prev : built;
+            return built;
         } catch (Exception e) {
             log.warn("[Router] failed to build requested modelHash={} modelLength={} tier={} errorHash={} errorLength={}",
                     SafeRedactor.hashValue(req), lengthOf(req), tier,
@@ -496,15 +650,30 @@ public class PolicyBasedModelRouter implements ModelRouter {
         }
         try {
             int timeout = RequestedModelTimeoutPolicy.timeoutSeconds(
-                    requested, requested, timeoutSeconds, requestedModelTimeoutSeconds);
+                    requested, requested, timeoutSeconds, requestedModelTimeoutSeconds,
+                    chatRunMaxDurationSeconds);
+            int outputLimit = maxTokens == null || maxTokens <= 0 ? 1024 : maxTokens;
+            if (requested.startsWith("chatgpt-oauth:")) org.slf4j.LoggerFactory.getLogger(PolicyBasedModelRouter.class).info(
+                    "[plan9-oauth-phase] phase=router count=1 requestHash={} atEpochMs={}",
+                    SafeRedactor.hashValueOrPreserve(org.slf4j.MDC.get("x-request-id")), System.currentTimeMillis());
             ChatModel selected = factory.lcWithTimeout(requested, defaultTemperature, null, null, null,
-                    maxTokens == null || maxTokens <= 0 ? 1024 : maxTokens, timeout, 0);
+                    outputLimit, timeout, 0);
             if (selected == null) throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
+            com.example.lms.llm.RequestedModelSelection.rememberOutputLimit(requested, outputLimit);
             TraceStore.put("ml.router.requestedModel.applied", true);
             TraceStore.put("ml.router.requestedModelHash", SafeRedactor.hashValue(requested));
             return selected;
         } catch (RuntimeException failure) {
-            throw com.example.lms.llm.ModelSelectionException.failure(failure);
+            var classified = com.example.lms.llm.ModelSelectionException.failure(failure);
+            // Construction has no backend invocation. Preserve explicit/typed reasons,
+            // including wrapped selection exceptions, but name an unknown build failure accurately.
+            Throwable cause = failure;
+            for (int depth = 0; cause != null && depth < 20; depth++, cause = cause.getCause()) {
+                if (cause == classified) throw classified;
+                if (cause.getCause() == cause) break;
+            }
+            throw "backend_unavailable".equals(classified.code())
+                    ? new com.example.lms.llm.ModelSelectionException("model_unavailable") : classified;
         }
     }
 

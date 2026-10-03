@@ -1,0 +1,176 @@
+# GPT Pro 요청서 — "사용자 설정을 기본값으로 만들 때의 최적해"를 찾아 Codex 소스 수정 지시서를 써 달라 (2026-10-03)
+
+너는 demo-1(AbandonWare AI 채팅) 소스를 분석해서 **Codex 에이전트에게 줄 소스 수정 지시서**를 쓰는 역할이다.
+지시서를 받은 Codex 는 다음 순서로 일한다.
+① 로컬 서버(http://127.0.0.1:18180)를 브라우저로 열고 /settings 와 /chat 의 설정값을 직접 바꿔 가며 실험한다.
+② 실험 결과로 최적의 기본값과 "사용자 설정 → 기본값" 반영 방식을 정한다.
+③ 그 결과를 소스에 반영한다.
+너는 첨부한 소스·문서를 근거로 무엇을, 어떤 순서로, 어떤 기준으로 실험하고 고칠지를 설계해 지시서로 써라.
+
+첨부: demo-1 소스 압축본(Pack-GPTPro 의 core 또는 main 프로필 zip), docs\PROJECT_STATUS.md, docs\API_ROUTING_SPEC.md,
+data\agent-handoff\codex-plan9-api-first-routing-3da4fc89\REPORT.md(최근 API 우선 라우팅 작업 결과)
+(첨부에 없는 파일은 추측하지 말고, 지시서 안에서 "Codex 가 먼저 확인할 것"으로 적어라.)
+
+====================================================================
+1. 목표 (사용자 말 그대로 + 풀이)
+====================================================================
+사용자 원문: "브라우저 키면서 셋팅값 만지면서 최적의 해를 짜고, 유저의 셋팅을 디폴트로 만들 때 최적의 해를 내서 소스 수정."
+풀이하면 아래 두 가지다.
+(1) 사용자가 설정 화면에서 고른 값이 이후 채팅의 기본값으로 일관되게 적용되게 한다.
+    대상: 모델·모델 선택 모드·RAG·웹검색·답변 정책·temperature 등.
+    적용 범위: 새 탭, 새 세션, 서버 재시작 뒤에도 같아야 하고, 기본값으로 되돌리기도 있어야 한다.
+(2) 사용자가 아무것도 고르지 않았을 때의 "공장 기본값"을 브라우저 실험으로 정한다.
+    기준: 품질·속도·비용·안정성. 정한 값은 한 곳(SSOT, 단일 출처)에서만 정의되게 한다.
+
+====================================================================
+2. 이미 확인된 소스 사실 (Grok Bot, 2026-10-03 07:3x KST, 사용자 PC 에서 직접 확인)
+====================================================================
+저장 계층이 여러 개고 기본값이 서로 다르다. 이것이 핵심 문제다.
+
+[브라우저 저장]
+- main\resources\static\js\chat-settings-bridge.js
+  · STORAGE_KEY = 'awx.settings.v1.preferences' (localStorage)
+  · 키: model / useRag / modelSelectionMode('preferred'|'strict'|'auto') 등, 검증 로직 :39-40
+- main\resources\static\js\model-strategy.js
+  · localStorage "model.active" / "model.strategy" (:15-21)
+  · Plan9 작업에서 하드코딩 모델 ID 를 제거하고 /api/chat/models 의 서버 기본값을 쓰도록 바뀌었다.
+- 설정 화면 settings.html 의 섹션: browser-settings(local-model, local-reset), role-routing(routing-root), execution-settings(capability-view, pipeline-view), server-status(server-values)
+  · JS: settings-page.js, settings-routing.js
+
+[서버 전역 저장 — 사용자별이 아님]
+- SettingsService: ConfigurationSetting 테이블의 Key-Value
+  · 키: SYSTEM_PROMPT, TEMPERATURE, TOP_P, FREQUENCY_PENALTY, PRESENCE_PENALTY, OPENAI_MODEL, FINE_TUNED_MODEL
+  · @Value 기본값: model=${openai.api.model.default:${llm.chat-model:gemma4:26b}}, temperature=${…:${llm.chat.temperature:0.3}}, top-p 1.0, penalty 0.0
+- SettingsController(/api/settings GET/POST): SettingsExposurePolicy.publicKeys() 에 있는 키만 노출·저장한다.
+  · 확인된 공개 키: chat.defaults.useWebSearch, chat.ragAnswerPolicy
+- RoutingSettingsService: KEY "CHAT_ROUTING_PROFILE_V1", revision+hash 낙관적 잠금(/api/settings/routing)
+- ModelSettingsController(/api/settings 하위), PageController /model-settings(+/save)
+
+[서버 사용자별 저장]
+- UserPreferenceProfile 엔티티: owner_key(unique) + JSON. 현재 채팅 기본값 경로에서 쓰이는지는 미확인 → Codex 가 확인할 것
+
+[요청 시 병합]
+- ChatRequestSettingsMerger
+  · temperature: ui → cfg(TEMPERATURE) → 하드코딩 0.3
+  · topP: ui → cfg → 1.0
+  · model: ui → cfg(OPENAI_MODEL) → ModelCapabilities.DEFAULT_LOCAL_CHAT_MODEL = "gemma4:26b"
+  · useRag: ui → defaultUseRag
+  · useWebSearch: ui → cfg "chat.defaults.useWebSearch"(기본 "false")
+  · ragAnswerPolicy: ui → cfg "chat.ragAnswerPolicy"(기본 "adaptive")
+  · 그 밖에 maxTokens, searchMode, webTopK, precisionTopK, memoryMode, useVerification 등은 ui 값을 그대로 쓴다(서버 기본값 없음).
+  · trackChange 로 바뀐 값을 dirty 맵에 기록한다(:80-83) → 요청값이 전역 설정에 다시 저장되는지 확인 필요
+
+[기본값 충돌(같은 항목, 다른 값)]
+- temperature: application.properties:12 llm.chat.temperature=0.2 / SettingsService 기본 0.3 / Merger 하드코딩 0.3
+- top-p: SettingsService 1.0, Merger 1.0 / application.properties:360 fallback.top-p=0.7 / application.yml:861 top-p 0.5
+- 모델:
+  · application.properties:657,661 = gemma4:26b
+  · :664 app.ai.ui-default-model = ${llm.fast.model:qwen3.5:9b}
+  · Merger 최종 폴백 = gemma4:26b(로컬)
+  · 사용자 방침은 API 우선(클라우드 API 가 주 경로, 로컬 Ollama 는 마지막 폴백)이라 기본값이 방침과 어긋난다.
+- RAG: rag.search.top-k=16, naver.search.rag-top-k=5, rag.critic.retry-*-top-k=8
+
+[최근 상태 — Plan9 REPORT]
+- api-first 라우팅: 플래그 llmrouter.api-first.enabled, yaml 기본값 false, 로컬 검증 서버만 env 로 true
+- ChatGPT OAuth 는 자동 후보에서 제외(직접 선택만)
+- 라이브 V1/V4 는 "실제 응답 모델(observedModel)" 증거가 없어 FAIL. V2 RAG canary FAIL, V3 OAuth timeout.
+  지금 Codex 가 재개 지시서로 runner 관측 개선과 observedModel 투영을 진행 중이다.
+  → 설정 최적화 실험은 이 관측이 되어야 측정할 수 있다. 지시서에 선행 조건으로 넣어라.
+
+====================================================================
+3. 지시서에 반드시 들어가야 할 설계 (네가 근거를 들어 결정할 것)
+====================================================================
+D1 우선순위 체계 한 장
+- 다음 순서가 맞는지 근거를 들어 확정하고, 항목별로 어느 계층까지 존재해야 하는지 표로 정리하라:
+  요청 단발값 > 사용자 저장값(브라우저 / 서버 사용자별) > 관리자 전역값(ConfigurationSetting) > 공장 기본값(SSOT 설정 파일)
+- 브라우저 localStorage 와 서버 UserPreferenceProfile 중 무엇을 원본으로 둘지 결정하라.
+  고려할 것: 로그인 없는 방문자, 공개 사이트, 여러 탭, 서버 재시작.
+- 요청 단발값이 전역 설정을 덮어쓰는 부작용(trackChange/dirty)이 있으면 차단 방안을 넣어라.
+
+D2 공장 기본값 SSOT
+- 기본값을 한 곳에서만 정의한다.
+  예: application-llm.yaml 의 chat.defaults.* 와, 이를 읽는 단일 Defaults 빈(@ConfigurationProperties).
+- Merger 하드코딩(0.3, 1.0, gemma4:26b)과 SettingsService @Value 폴백을 이 빈 하나로 모은다.
+- 모델 기본값 규칙:
+  · API 우선 방침에 맞게 "auto"(서버가 클라우드 A→B→로컬 순서로 고름)를 기본으로 할지 판단한다.
+  · ChatGPT OAuth 는 자동 기본값에 넣지 않는다.
+  · 로컬 모델 이름(gemma4:26b, qwen3.5:9b)이 최종 폴백 외 기본값에 남지 않게 한다.
+- /api/chat/models 의 defaultChoice 와 /settings 화면 기본 표시가 같은 출처를 쓰게 한다.
+
+D3 "사용자 설정 → 기본값" 동작
+- 저장, 적용, 표시 일치, 기본값으로 되돌리기(항목별·전체)를 정의한다.
+- 사용자가 고른 모델이 사라졌거나 쓸 수 없을 때(키 만료, 카탈로그에서 제거)의 처리:
+  · 조용히 다른 모델로 바꾸지 않는다.
+  · 화면에 사유를 표시하고 auto 로 내려갈지 정한다.
+  · strict 선택은 폴백 금지를 유지한다.
+- 버전이 붙은 저장 형식(awx.settings.v1)을 마이그레이션하는 방안: 옛 키(model.active, model.strategy)를 정리한다.
+
+D4 브라우저 실험 설계 (Codex 가 실제로 할 일)
+- 기준선 캡처: 현재 /settings 와 /chat 의 표시값, 서버 /api/settings·/api/settings/routing·/api/chat/models 응답, 첫 응답 시간, observedModel.
+- 실험 매트릭스(조합 수를 줄여라):
+  · 모델 선택 모드(auto / preferred / strict)
+  · temperature(예: 0.2 / 0.3 / 0.5)
+  · top-p(1.0 / 0.9)
+  · useRag(on/off)
+  · useWebSearch(on/off)
+  · ragAnswerPolicy(adaptive / 그 외 지원값)
+  · maxTokens(기본 / 상향)
+  · 질문 세트: 일반 질문, 첨부 RAG canary 질문(V2 와 같은 canary), 최신 정보 질문(웹검색), 짧은 잡담
+- 평가 지표(각각 측정 방법 포함):
+  · 정답·canary 포함 여부
+  · 첫 토큰 시간과 총 시간
+  · observedModel / fallbackCount
+  · 오류율
+  · API 호출 수
+  · 답변 길이 적정성
+- 판정은 Self-Ask(긍정/부정/반례 → 중립 판정)로 하고, 동률이면 비용·속도 우선이다.
+- 설정 지속성 검사: 값 변경 → 새 탭 → 새 세션 → 서버 재시작(1회) → 되돌리기. 각 단계에서 화면·요청 payload·서버 병합 결과가 일치하는지 본다.
+
+D5 테스트
+- Merger 우선순위 단위 테스트(항목별 4계층)
+- Defaults 빈 바인딩 테스트
+- 사용 불가 모델 처리 테스트
+- 브라우저 bridge 마이그레이션 테스트(기존 node 테스트 형식)
+- 집중 테스트만 쓴다(전체 스위트 금지).
+
+====================================================================
+4. 지시서 형식 (이 순서와 규칙을 그대로 지켜라)
+====================================================================
+- 맨 위와 맨 아래에 [ANTI-STOP] 문단: "읽고 계획만 하고 멈추지 마라, Acceptance 전부 판정 전에는 끝내지 마라"
+- 첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+  환경: Windows PowerShell 5.1(`&&` 대신 `;`), git = F:\git\cmd\git.exe, Java 17, Spring Boot 3.3.4, Gradle 8.7, LangChain4j 1.0.1
+- 이어서 다음 순서로 쓴다:
+  0 한 줄 목표 → 1 확인된 사실(file:line) → 공통 규칙(ledger data\agent-handoff\codex-<topic>-<8hex>\, 수정 전 lease, 작업 저널, 수정 허용 목록·변경 금지 목록) → 작업 단계(G0 lease 게이트 → P0 설정 흐름 지도 → WP 들 → 라이브 검증) → HOLD → ASK_ONCE → 절대 금지 → Acceptance(안 돌린 것은 NOT_RUN) → 보고 형식(첫 줄 "외부 API: n/cap회, HTTP 결과")
+- 한도:
+  · 라이브 채팅 전송 최대 25회(실험+검증 합계)
+  · 401/403/429/400 은 재시도하지 않는다
+  · 서버 재시작 최대 2회, 같은 실패 자동 수정 최대 2회
+  · 검증 대상은 로컬 127.0.0.1:18180 만, 공개 사이트 전송 0회
+  · 재시작 시 HTTPS opt-in 상속으로 공개 probe 가 나가지 않게 프로세스 범위에서 끈다
+- 되돌릴 수 있는 로컬 결정은 Self-Ask 로 AUTO 진행한다. ASK_ONCE 는 되돌리기 어려운 것만 둔다.
+  예: 공장 기본값을 API 우선 auto 로 확정하면 공개 방문자 대화도 유료 API 로 나간다.
+- 절대 금지:
+  · push/pull/commit, git add -A, reset/checkout/restore/stash/clean
+  · 전체 테스트 스위트
+  · .env/.secrets/토큰 열람·출력
+  · git remote 추가·변경(유효 remote 는 origin = https://github.com/UnlimitedAbandonWare/AbandonWareAi 하나뿐)
+  · PROTO_OPEN/admin/CSRF 강화(이번 범위 아님)
+  · DB 스키마 변경(UserPreferenceProfile JSON 안 필드 추가는 허용 여부를 근거와 함께 판단), 데이터셋 삭제
+  · chat.js 수정
+  · 다른 세션의 lease·hunk 수정
+  · 전역 Codex 설정 수정, skip-permissions/full-access 모드 권장
+  · native glm_worker 사용(ChatGPT 로그인에서 400 고정. GLM 은 MCP 가 준비됐을 때만, 아니면 GLM 없이 진행)
+- mock 통과는 라이브 PASS 가 아니다. observedModel 이 없으면 모델 관련 판정은 FAIL 로 둔다.
+
+====================================================================
+5. 너(GPT Pro)의 출력
+====================================================================
+A. 분석 요약(1쪽 이내):
+   · 저장 계층 지도(mermaid 다이어그램 가능)
+   · 기본값 충돌 표(항목 / 위치 file:line / 현재값 / 권장값 / 근거)
+   · 가장 위험한 문제 3개
+B. Codex 지시서 본문 1개(위 형식, 복사해서 바로 붙일 수 있게)
+C. 실험 매트릭스 표와 판정 규칙(지시서 안에 포함해도 됨)
+D. 근거가 첨부에 없어 확인이 필요한 항목 목록(Codex 가 G0/P0 에서 확인)
+
+[ANTI-STOP] 분석만 하고 끝내지 말고 B(Codex 지시서 본문)까지 반드시 완성하라.

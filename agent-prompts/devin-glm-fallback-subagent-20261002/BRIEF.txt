@@ -1,0 +1,163 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-codex-tool-router @demo1-codex-assist-subagents @demo1-glm-route-guard
+
+# DEVIN 추가 지시서 — GLM이 실패해도 Codex가 멈추지 않게: 예외 처리 + 대체 서브에이전트 자동 폴백 (2026-10-02 23:0x KST)
+
+[ANTI-STOP] 읽고 계획만 세운 뒤 멈추지 마라. 이 지시서는 이전 GLM 지시서(ledger data\agent-handoff\devin-glm-native-400-f9416581)의 확장이다. 같은 ledger 에 이어 쓰고, E0~E6 을 끝까지 진행한 다음 Acceptance 를 전부 판정하고 보고하라. 되돌릴 수 있는 로컬 결정은 Self-Ask 로 정해 AUTO 로 진행한다.
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용) · git = F:\git\cmd\git.exe · Python 3.11 표준 라이브러리 + tomllib(pip install 금지)
+역할: 제품 소스(main\, src\test\, chat.js, build 파일) 수정 금지. 룰·스킬·서브에이전트 정의·스크립트·검증만.
+
+====================================================================
+0. 한 줄 목표
+====================================================================
+GLM 경로가 어떤 이유로 실패하든 Codex 는 같은 일을 대체 서브에이전트 `assist_glm_fallback` 에게 바로 넘긴다. 실패 원인은 400(ChatGPT 로그인 미지원), MCP BLOCKED_EXTERNAL, 401/403/429, timeout, 비정상 응답 중 무엇이든 해당한다. 이 서브에이전트는 부모 모델을 상속하므로 ChatGPT 로그인에서도 동작한다. 그것마저 안 되면 Codex 가 직접 처리한다. 어느 경우든 멈추거나 같은 경로를 재시도하지 않는다.
+
+====================================================================
+1. 확인된 사실 (Grok Bot, 2026-10-02 22:57 KST)
+====================================================================
+F1 GLM 실패 때문에 Codex Plan9 작업이 멈춘 것은 아니다.
+   Codex 는 GLM HTTP 400 을 받은 뒤 재시도 없이 기본 탐색 에이전트로 넘어갔다. 멈춘 이유는 재시작·자동수정 한도 소진과 V1~V4 라이브 증거 부족이다.
+   다만 폴백이 규칙으로 정해져 있지 않아 매번 Codex 의 즉흥 판단에 기대고 있다. 이것을 고정된 절차로 만드는 것이 이번 목표다.
+F2 저장소 .codex\agents\ 에는 assist_browser_verifier / assist_patch_reviewer / assist_rag_trace_analyst / assist_routing_mapper 가 있다.
+   네 파일 모두 model / model_provider 줄이 없어서 부모 모델을 상속한다. 그래서 ChatGPT 로그인에서도 정상 동작한다. 새 폴백 에이전트도 이 방식을 그대로 따른다.
+F3 전역 C:\Users\nninn\.codex\agents\glm_worker.toml 은 model="zai/glm-5.2", model_provider="vercel" 이다.
+   ChatGPT 로그인 세션에서 spawn 하면 400 이 고정으로 난다.
+F4 이전 지시서의 결과물은 이미 있다: scripts\glm_route_preflight.py, .agents\skills\demo1-glm-route-guard\.
+   glm_agent MCP 는 BLOCKED_EXTERNAL 상태다(AGENT_SUBAGENT_GLM_ENABLED / GLM_EXTERNAL_READY 없음). 사용자는 ASK_ONCE #1 에 A(config.toml glm_agent env 2줄)를 고르라는 안내를 받았다.
+F5 Codex 는 지금 Plan9 재개 작업을 할 수 있다(ledger codex-plan9-api-first-routing-3da4fc89). 그 ledger·lease·세션은 건드리지 마라.
+
+====================================================================
+공통 규칙
+====================================================================
+- ledger: 기존 devin-glm-native-400-f9416581 에 EXT-FALLBACK-20261002.md 를 추가한다. 수정 전 lease 를 잡는다(만료 4h).
+- 수정 허용:
+  · .codex\agents\assist_glm_fallback.toml (신규)
+  · .agents\skills\demo1-glm-route-guard\ (이전 산출물 보강)
+  · scripts\glm_route_preflight.py 와 그 테스트 (보강)
+  · scripts\glm_lane_fallback.py 와 test_glm_lane_fallback.py (신규)
+  · .grok\rules\demo1-glm-route-guard.md (포인터 갱신)
+  · 이전 지시서에서 고친 저장소 스킬 3개의 해당 문장
+- scripts\awx_host_runtime.py 의 glm 런타임은 읽기 전용으로 분석만 한다. 수정이 꼭 필요하면 diff 안을 REPORT 에 적는다.
+- 변경 금지:
+  · main\, src\test\, chat.js, build 파일
+  · 전역 ~/.codex/config.toml, glm_worker.toml, 전역 스킬. ASK_ONCE 로 이미 답을 받았다면 그 답의 범위 안에서만 적용한다.
+  · auth.json, .env, 키 값
+
+====================================================================
+작업
+====================================================================
+E0 재개 게이트
+- 이전 ledger 의 REPORT/EVIDENCE 와 preflight·route-guard 의 현재 상태를 읽는다.
+- 사용자가 ASK_ONCE #1(A) 와 #2 에 답했는지 확인한다. 답이 있으면 그 범위만 적용한다(백업 후 해당 블록/문단만). 답이 없으면 계속 보류한다.
+
+E1 대체 서브에이전트 → .codex\agents\assist_glm_fallback.toml
+- 기존 assist_*.toml 형식을 그대로 따른다. model 과 model_provider 줄은 넣지 않는다(부모 상속). sandbox_mode = "read-only".
+- 역할: glm_worker 가 하던 읽기 전용 보조 작업을 대신한다.
+  · 호출 경로 조사
+  · 파일·라인 근거 수집
+  · 패치 리뷰 의견
+  · 반례 찾기
+- 수정, 실행 중인 서버 조작, 외부 API 호출은 하지 않는다.
+- 출력 형식을 고정한다:
+  · 첫 줄: LANE=glm_fallback; REASON=<원래 GLM 실패 사유 코드>
+  · 그다음: 근거 file:line 목록, 결론, 불확실한 점
+- 지침에 "너는 GLM 의 대체다. GLM 이 다시 되는지 확인하거나 재시도하지 마라"를 명시한다.
+
+E2 폴백 순서를 규칙으로 고정 → demo1-glm-route-guard 보강
+- 순서:
+  L1 glm_agent MCP. preflight 가 MCP_READY 일 때만 쓴다.
+  L2 assist_glm_fallback 서브에이전트(spawn).
+  L3 기존 assist_* 또는 기본 탐색 에이전트. L2 spawn 자체가 실패했을 때만 쓴다.
+  L4 Codex 본인이 직접 처리.
+- native glm_worker spawn 은 어떤 단계에도 넣지 않는다(ChatGPT 로그인에서 400 고정).
+- 다음 단계로 넘어가는 조건(예외 처리 표):
+  · HTTP 400 "not supported when using Codex with a ChatGPT account" → NATIVE_UNSUPPORTED → L2
+  · MCP BLOCKED_EXTERNAL / MCP 미설정 / MCP 서버 기동 실패 → MCP_UNAVAILABLE → L2
+  · 401/403 → AUTH_OR_PLAN(Vercel Hobby 403 plan_gate 포함) → L2, 재시도 없음
+  · 429 → RATE_LIMITED → L2, 재시도 없음
+  · 90초 안에 응답 없음 → TIMEOUT → L2
+  · 빈 응답, 형식 위반, delivery marker 없음 → BAD_OUTPUT → L2
+  · L2 spawn 오류(max_threads 초과 등) → L3. L3 도 실패하면 L4.
+- 원칙:
+  · 같은 단계 재시도 0회
+  · 한 작업에서 GLM 경로(L1) 시도는 최대 1회. 실패하면 그 세션 동안 GLM=SESSION_UNAVAILABLE 로 고정하고 다시 시도하지 않는다.
+  · 폴백 결과는 GLM 결과와 같은 자리에 쓴다. 최종 판단과 수정은 항상 Codex 가 한다.
+  · 보고에는 GLM_LANE=L1|L2|L3|L4 와 REASON 을 남긴다.
+- 이전에 고친 저장소 스킬 3개의 문장도 이 순서를 가리키게 맞춘다(최소 수정).
+
+E3 결정 도구 → scripts\glm_lane_fallback.py (+ test_glm_lane_fallback.py)
+- 입력: preflight 결과 JSON(또는 --auto 로 preflight 를 직접 실행)과, 선택 입력 --last-error "<오류 문자열 또는 HTTP 코드>".
+- 출력: JSON 과 한 줄 요약. 예: next_lane=L2 agent=assist_glm_fallback reason=NATIVE_UNSUPPORTED retry=false session_glm=UNAVAILABLE
+- 종료 코드: L1=0, L2=10, L3=11, L4=12. 오류 분류 표는 E2 표와 같은 것을 코드 상수 하나로 관리한다.
+- 비밀 값은 읽지도 출력하지도 않는다. 외부 호출도 없다(preflight 의 --live-status 는 기본으로 끈다).
+- unittest 는 E2 표의 각 행마다 1건 이상 만든다. 400 문자열, BLOCKED_EXTERNAL, 403 plan_gate, 429, timeout, 빈 출력, spawn 실패를 모두 포함하고, 그 밖에 MCP_READY 로 L1 이 나오는 정상 1건을 둔다.
+- glm_route_preflight.py 에 next_lane 필드를 추가한다(glm_lane_fallback 의 함수를 재사용).
+
+E4 실제 동작 확인 (외부 GLM 호출 0~1회)
+- 현재 PC 에서 python -B scripts\glm_lane_fallback.py --auto 를 실행한다.
+  예상: MCP 가 아직 꺼져 있으면 next_lane=L2. 결과를 EVIDENCE 에 기록한다.
+- 같은 명령에 --last-error 로 F3 의 400 문자열을 주면 L2 / NATIVE_UNSUPPORTED 가 나오는지 확인한다.
+- 사용자가 A 를 적용해 MCP 가 켜졌다면: glm_agent_status 1회만 호출한다(생성 호출 없음). 실패하면 그 결과를 --last-error 로 다시 넣어 L2 가 나오는지 확인한다.
+- assist_glm_fallback.toml 은 TOML 파싱 검증까지만 한다(tomllib). 실제 spawn 은 Codex 세션에서만 가능하므로 이번엔 NOT_RUN 으로 적는다.
+
+E5 Codex 가 바로 쓸 안내
+- REPORT 끝에 Codex 용 3줄을 적는다:
+  ① GLM 보조가 필요하면 먼저 `python -B scripts\glm_lane_fallback.py --auto`
+  ② next_lane=L1 이면 glm_agent MCP, L2 면 assist_glm_fallback spawn, L3/L4 는 표대로
+  ③ GLM 이 실패하면 그 오류를 --last-error 로 넣어 다음 단계를 받고, 같은 단계는 재시도하지 않는다
+- Codex ledger 나 세션에는 직접 쓰지 않는다.
+
+E6 회귀 확인
+- 다음 두 테스트가 통과해야 한다: python -m unittest scripts\test_glm_lane_fallback.py scripts\test_glm_route_preflight.py
+- 스킬 라우터로 "GLM 보조로 조사" 질의를 돌려 demo1-glm-route-guard 가 상위에 나오는지 확인한다.
+- git status --short 로 main\·src\test\ 변경 0, 전역 파일 변경 0(ASK 답 범위 밖)을 확인한다.
+
+====================================================================
+HOLD
+====================================================================
+- Codex 전체를 API 키 로그인으로 전환하는 것(ChatGPT 크레딧 손실)
+- glm-agent-mcp java 프로세스 종료(목록만 기록)
+- awx_host_runtime.py 수정(필요하면 diff 안만)
+
+====================================================================
+ASK_ONCE
+====================================================================
+- 새로 묻는 것은 없다. 이전 #1 과 #2 가 아직 답이 없으면 보고 끝에 그대로 다시 적는다.
+
+====================================================================
+절대 금지
+====================================================================
+- 제품 소스 수정(main\, src\test\, chat.js, build 파일)
+- native glm_worker 를 폴백 단계에 넣는 것, 같은 GLM 경로 재시도, 외부 호출 1회 초과
+- auth.json · .env · .secrets 열람, 키·토큰 값 출력
+- 전역 config/glm_worker.toml/전역 스킬을 ASK 답 없이 수정
+- git push/pull/commit/add -A/reset/checkout/restore/stash/clean, AbandonWare3 재추가
+- Codex Plan9 의 ledger·lease·세션·서버 건드리기, 남의 프로세스 종료
+- 전체 테스트 스위트, Gradle
+- skip-permissions / full-access 모드 권장
+
+====================================================================
+Acceptance (안 돌린 것은 NOT_RUN)
+====================================================================
+B1 assist_glm_fallback.toml: model 줄 없음(부모 상속), read-only, 출력 형식 고정, tomllib 파싱 OK
+B2 demo1-glm-route-guard 에 L1~L4 순서와 예외 처리 표 반영, native glm_worker 없음, 재시도 0 명시
+B3 glm_lane_fallback.py 와 unittest(표 각 행 + 정상 1건) 통과, preflight 에 next_lane 추가
+B4 현재 PC --auto 결과와 400 문자열 입력 결과 기록(L2/NATIVE_UNSUPPORTED)
+B5 실제 spawn 검증은 NOT_RUN 사유와 함께 기록, 외부 호출 ≤ 1
+B6 저장소 스킬 3개와 .grok 포인터가 같은 순서를 가리킴
+B7 Codex 용 3줄 안내
+B8 main\·src\test\ 변경 0, 전역 파일 변경 0(ASK 범위 밖), 비밀 미열람
+
+====================================================================
+보고 형식
+====================================================================
+외부 API: n/1회, 결과(400/401/403/429 이면 근본 원인 맨 위)
+변경 파일: git status --short 중 내 것만 + 요약
+E0~E6 각각 PASS/FAIL/NOT_RUN + 핵심 1줄
+현재 PC 판정: next_lane=… reason=…
+ASK_ONCE 상태(#1, #2)
+Codex 3줄: 「…」
+
+[ANTI-STOP] 멈추지 말고 E0부터 E6까지 진행하라. 막힌 항목은 FAIL/NOT_RUN 으로 적고 넘어가라. B1~B8 판정 전에는 끝내지 마라.

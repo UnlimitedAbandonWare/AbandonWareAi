@@ -21,6 +21,28 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class ChatApiControllerCancelTest {
+    @Test void terminalOriginCancelUsesPersistedOwnerAndExactTokenWithoutStoppedMarker() {
+        var history = mock(ChatHistoryService.class);
+        var runs = mock(ChatRunRegistry.class);
+        var controller = controller(history, mock(ChatService.class), runs);
+        var ownerResolver = mock(com.example.lms.web.ClientOwnerKeyResolver.class);
+        when(ownerResolver.ownerKey()).thenReturn("owner-a");
+        ReflectionTestUtils.setField(controller, "ownerKeyResolver", ownerResolver);
+        var session = new ChatSession("synthetic", "owner-a", "ANON");
+        session.setId(42L);
+        when(history.getSessionWithMessages(42L)).thenReturn(session);
+        var service = mock(com.example.lms.service.understanding.UnderstandingCommitService.class);
+        var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(service);
+        ReflectionTestUtils.setField(controller, "understandingCommits", provider);
+        String owner = com.example.lms.service.AttachmentOwnerIdentity.forAnonymous("owner-a").hash();
+        when(service.cancelRun(owner, 42L, "old-original-run")).thenReturn(true);
+        var admin = new TestingAuthenticationToken("admin", "unused", "ROLE_ADMIN");
+        var response = controller.cancel(42L, null, "old-original-run", admin);
+        org.junit.jupiter.api.Assertions.assertEquals(true, response.getBody().get("cancelled"));
+        verify(service).cancelRun(owner, 42L, "old-original-run");
+        verify(history, never()).appendMessage(42L, "assistant", "Response stopped");
+    }
 
     @Test
     void deleteCancelsSessionFenceBeforeRemovingHistory() {

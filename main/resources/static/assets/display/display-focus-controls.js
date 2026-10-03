@@ -57,6 +57,13 @@
     messages.getusermedia_not_supported='이 브라우저에서 카메라를 사용할 수 없습니다.';
     messages.focus_snapshot_conflict='촬영 결과가 현재 질문과 맞지 않아 폐기했습니다.';
     messages.snapshot_stale='이전 촬영 결과는 사용하지 않았습니다.';
+    // Jev 사유 문구는 전용 표다 — messages.permission_denied는 카메라 권한 문구로 이미 쓰인다.
+    const jevReasonText={auth_invalid:'키 만료·무효 · 키 교체 필요',key_invalid_or_expired:'키 만료·무효 · 키 교체 필요', // jev-vocab: legacy-alias
+      auth_blocked:'인증 차단 · 키 교체 후 서버 재시작 필요',plan_gate:'요금제 제한(Pro 전용 기능 요청) · 기존 판단 사용',
+      permission_denied:'Jev 접근 거부(권한·지역) · 기존 판단 사용',forbidden:'Jev 접근 거부(권한·지역) · 기존 판단 사용', // jev-vocab: legacy-alias
+      budget_skip:'예산 제한(무료 기간·유료 허용·일일 상한) · 호출 안 함',rate_limited:'요청 한도 초과 · 잠시 후 재시도',
+      upstream_error:'Jev 서버 오류 · 기존 판단 사용'};
+    function jevReasonLabel(code){const key=String(code||'');const text=jevReasonText[key];return text?text+' ('+key+')':(key?'대기('+key+')':'대기');}
     function notice(error){const text=messages[error?.message]||'연결과 입력 범위를 확인해 주세요.';$('nf-status').textContent=text;const alert=$('error');if(alert)alert.textContent=text;}
     function modelOptions(rows,selections){
       for(const id of modelInputs){const input=$(id);if(!input)continue;const selected=selections?.[id]??input.value??'';
@@ -92,17 +99,27 @@
       }
       const recent=value.settings.recentContext||{enabled:true,maxAgeSeconds:180,maxUtterances:12,tokenBudget:2000};
       if($('nf-recent-enabled')){ $('nf-recent-enabled').checked=!!recent.enabled;$('nf-recent-age').value=recent.maxAgeSeconds;$('nf-recent-count').value=recent.maxUtterances;$('nf-recent-budget').value=recent.tokenBudget;}
+      const mem=value.settings.memory||{};
+      if($('nf-memory-mode')){$('nf-memory-mode').value=mem.mode??'';$('nf-graph-mode').value=mem.graphMode||'OFF';$('nf-max-evidence').value=mem.maxEvidence??4;$('nf-embed-prefer').value=mem.embeddingPrefer||'LOCAL_THEN_CLOUD';$('nf-web-unknown').value=mem.webOnUnknown==null?'':String(!!mem.webOnUnknown);}
       // Jev 모드는 서버 소유 표시값이다. 저장 응답(settings)에는 없으므로 없으면 이전 표시를 유지한다.
       const jev=value.jev;
       if(jev&&typeof jev==='object'){
         const jevMode=['off','shadow','on'].includes(String(jev.mode).toLowerCase())?String(jev.mode).toLowerCase():'off';
         const jevSelect=$('nf-jev'),jevStatus=$('nf-jev-status');
         if(jevSelect){jevSelect.value=jevMode.toUpperCase();for(const option of jevSelect.options)option.disabled=option.value!==jevSelect.value;jevSelect.disabled=true;}
-        if(jevStatus)jevStatus.textContent=jev.configured!==true?'Jev: JEV_NOT_CONFIGURED · 기존 검색 판단을 사용합니다.'
+        if(jevStatus)jevStatus.textContent=jev.configured!==true?'Jev 키 미설정 · 기존 검색 판단을 사용합니다.'
           :jevMode==='off'?'Jev: OFF · 기존 검색 판단을 사용합니다.'
           :jevMode==='shadow'?'Jev: SHADOW · 판단은 기록에만 남기고 기존 검색 판단을 사용합니다.'
           :jev.callsAllowed===true?'Jev: ON · Jev 판단을 검색 경로에 반영합니다.'
-          :'Jev: ON · '+String(jev.reason||'대기')+' · 기존 검색 판단을 사용합니다.';
+          :'Jev: ON · '+jevReasonLabel(jev.reason)+' · 기존 검색 판단을 사용합니다.';
+        // surface별 표시는 읽기 전용이다. global off·계약 누락은 숨김, 모르는 값은 OFF로 렌더한다.
+        const jevSurfaces=$('nf-jev-surfaces'),jevModes=jev.surfaceModes&&typeof jev.surfaceModes==='object'?jev.surfaceModes:null;
+        if(jevSurfaces){
+          if(jevMode!=='off'&&jevModes){
+            const label=v=>['off','shadow','on'].includes(String(v).toLowerCase())?String(v).toUpperCase():'OFF';
+            jevSurfaces.textContent='답변(Focus): '+label(jevModes.focus)+' · 힌트(Cue): '+label(jevModes.cue);jevSurfaces.hidden=false;
+          }else{jevSurfaces.hidden=true;jevSurfaces.textContent='';}
+        }
       }
       void loadModels();
       $('nf-status').textContent='저장된 설정을 불러왔습니다.';$('nf-save').disabled=false;
@@ -226,6 +243,7 @@
           settings.answerSelection={mode:model?'FIXED':'AUTO',modelId:model||null,routing:{executionTarget:$('nf-answer-target').value,fallbackAllowed:allowed,allowedFallbackIds:allowed?backups:[]}};
         }
         if($('nf-recent-enabled'))settings.recentContext={enabled:$('nf-recent-enabled').checked,maxAgeSeconds:Number($('nf-recent-age').value),maxUtterances:Number($('nf-recent-count').value),tokenBudget:Number($('nf-recent-budget').value)};
+        if($('nf-memory-mode'))settings.memory={mode:$('nf-memory-mode').value||null,graphMode:$('nf-graph-mode').value||'OFF',maxEvidence:Number($('nf-max-evidence').value),embeddingPrefer:$('nf-embed-prefer').value||'LOCAL_THEN_CLOUD',webOnUnknown:$('nf-web-unknown').value===''?null:$('nf-web-unknown').value==='true'};
         // OFF 의도는 서버 저장을 기다리지 않는다: 이 기기의 촬영·업로드를 먼저 중단한다.
         if(snapEnabled&&!wantEnabled){snapshotLocalBlocked=true;cancelCaptureJobs();}
         const value=await client.focusRequest('settings',{settingsVersion:stored.settingsVersion,settings});paintSettings(value);$('nf-status').textContent='설정을 저장했습니다.';

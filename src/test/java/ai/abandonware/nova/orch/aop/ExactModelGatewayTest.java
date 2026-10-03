@@ -39,7 +39,9 @@ class ExactModelGatewayTest {
         assertThrows(ModelSelectionException.class, () -> aspect.aroundLcWithTimeout(call()));
         verify(gateway, never()).evaluate("cloud", backup, "chat");
     }
-    @Test void manualWireUsesExactEndpointAndModel() throws Throwable { wire(false); }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"exact-synthetic-model","replacement-synthetic-model"})
+    void configurableModelUsesSameProtocolAndRoute(String name) throws Throwable { wire(false,name); }
     @Test void manualUpstreamFailureMakesOneAttemptAndNeverCallsBackup() throws Throwable { wire(true); }
     @Test void exactLocalSelectionNeverArmsCloudFallbackViaRouteLocalInference() throws Throwable {
         AtomicInteger backupCalls = new AtomicInteger();
@@ -70,6 +72,9 @@ class ExactModelGatewayTest {
     }
 
     private void wire(boolean fail) throws Throwable {
+        wire(fail,"exact-synthetic-model");
+    }
+    private void wire(boolean fail,String configuredModel) throws Throwable {
         AtomicInteger primaryCalls = new AtomicInteger(), backupCalls = new AtomicInteger();
         AtomicReference<String> wireModel = new AtomicReference<>();
         var primaryServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -78,7 +83,7 @@ class ExactModelGatewayTest {
             primaryCalls.incrementAndGet();
             wireModel.set(new ObjectMapper().readTree(exchange.getRequestBody()).path("model").asText());
             byte[] body = (fail ? "{\"error\":{\"message\":\"synthetic failure\"}}" :
-                    "{\"id\":\"synthetic\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"exact-synthetic-model\","
+                    "{\"id\":\"synthetic\",\"object\":\"chat.completion\",\"created\":1,\"model\":\"" + configuredModel + "\","
                     + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"verified\"},\"finish_reason\":\"stop\"}]}").getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(fail ? 503 : 200, body.length);
@@ -89,14 +94,14 @@ class ExactModelGatewayTest {
         });
         primaryServer.start(); backupServer.start();
         try {
-            var primary = config("exact-synthetic-model", "http://127.0.0.1:" + primaryServer.getAddress().getPort() + "/v1");
+            var primary = config(configuredModel, "http://127.0.0.1:" + primaryServer.getAddress().getPort() + "/v1");
             var backup = config("backup-synthetic-model", "http://127.0.0.1:" + backupServer.getAddress().getPort() + "/v1");
             var aspect = aspect(primary, backup, gateway(primary, backup));
             RequestedModelSelection.begin("llmrouter.primary");
             ChatModel model = (ChatModel) aspect.aroundLcWithTimeout(call());
             if (fail) assertThrows(RuntimeException.class, () -> model.chat("synthetic routing probe"));
             else assertEquals("verified", model.chat("synthetic routing probe"));
-            assertEquals("exact-synthetic-model", wireModel.get());
+            assertEquals(configuredModel, wireModel.get());
             assertEquals(1, primaryCalls.get());
             assertEquals(0, backupCalls.get());
         } finally { primaryServer.stop(0); backupServer.stop(0); }

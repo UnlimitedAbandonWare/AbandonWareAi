@@ -1,0 +1,174 @@
+# Devin PASTE — Debug Events misclassify fix (Groq DEGRADED vs console 200)
+# 작성: 2026-09-27 Asia/Seoul · Grok Bot
+# 목적: Groq 콘솔은 200인데 Admin Debug Events가 rate_limit/DEGRADED/billing evidence needed로
+#       잘못 칠하는 분류·표시를 최소 seam으로 고친다. (diagnose-only 패킷 업그레이드 = source fix)
+# 금지: GroqFreeTierGuard bypass · billing evidence 날조 · paid soak · push · add -A · secrets 출력 ·
+#       AbandonWare3 · 새 라우팅 스택 · fixture wipe
+
+================================================================================
+0) EXTEND / SUPERSEDE
+================================================================================
+이전 `agent-prompts/devin-debug-events-groq-degraded-20260927/` 는 **ASSIST+분류 handoff만**.
+이번 패킷이 **분류 정확도 SOURCE FIX** SSOT. 진단 handoff는 참고만.
+
+| 관련 | 경로 | 관계 |
+|---|---|---|
+| 이전 diagnose | `devin-debug-events-groq-degraded-20260927/` | 대체(fix 범위) |
+| transmit-guard assist | `devin-codex-mxasain-assist-20260927/` | 병행(선택 버그 ≠ health 분류) |
+| Groq evidence TTL | `devin-groq-evidence-ttl-extend-20260927/` | 건드리지 말 것(bypass/날조 금지) |
+| **이번 SSOT** | `agent-prompts/devin-debug-events-misclassify-fix-20260927/` | |
+
+핸드오프:
+`data/agent-handoff/codex-assist/debug-events-misclassify-fix-0927/`
+
+================================================================================
+1) Mission (한 줄)
+================================================================================
+**원격 HTTP 429가 아닌 로컬/추정 실패를 groq rate_limit DEGRADED + billing hint로 칠하지 않게** 하고,
+실제 Groq 200 성공이 나면 consecutive/DEGRADED가 풀리게 한다.
+
+================================================================================
+2) LIVE 증거 (사용자 콘솔 + 소스, 2026-09-27)
+================================================================================
+A) Groq 콘솔 (키 `AbandonWare`, 기본 프로젝트)
+- Logs: 2026-09-27 13:17 KST `openai/gpt-oss-120b` **HTTP 200** (in 1249 / out 160)
+- 붙여넣은 구간 에러 열 `-` · 429 행 없음
+- Keys UI "24h 0 calls / 최근 사용 9/25" 는 로그와 불일치 → **콘솔 집계 지연**으로 취급 (키 죽음 아님)
+
+B) Admin Debug Events (~13:10)
+- Pipeline DEGRADED · `groq/llm` `openai/gpt-oss-120b` signal `rate_limit`
+- consecutive≈12 · cumulative≈57 · hint **billing evidence needed**
+- "API failure before fallback"
+
+C) 소스 근거 (Project Root, 읽기 확인)
+1. UI 힌트는 **카테고리 문자열 매칭**이지 실청구 검증이 아님:
+   `main/resources/templates/debug-events.html` ≈694
+   `category` 가 `/quota|billing|payment|rate_limit/i` 이면 `billing evidence needed` push
+2. 라우터 실패 클래스 → rate_limit **httpStatus=0 · evidence=unconfirmed · SUSPECTED**:
+   `main/java/com/example/lms/debug/ApiFailureRecorder.java` `recordFailureClass`
+   `RATE_LIMIT_COOLDOWN` → `Classification("rate_limit","unconfirmed","SUSPECTED")`
+   호출 시 `recordClassified(provider,model,0,classified)` → **HTTP 없이** rate_limit 행 생성
+3. Pipeline 상태: 같은 파일 aggregate ≈207
+   `consecutive>=2` → **DEGRADED** (최근 실패 streak)
+4. 분류기 문자열/429 휴리스틱:
+   `llm/gateway/LlmGatewayFailureClassifier.java` ≈177–224
+   status==429 또는 메시지에 `rate limit`/`429` → `RATE_LIMIT_COOLDOWN`
+5. 선택 예외에도 rate_limited 코드 존재:
+   `llm/ModelSelectionException.java` (rate_limited / RATE_LIMIT_COOLDOWN 매핑)
+6. 성공 시 streak 리셋 API는 있음: `ApiFailureRecorder.recordSuccess` ≈134–154
+   → **LLM Groq 성공 경로에서 이 키가 항상 호출되는지가 THE GAP** (미확인이면 WP2에서 증명)
+
+해석: 콘솔 200과 UI DEGRADED 동시 = **"무료 RPM 소진" 단독 설명은 약함**. 우선 가설은
+**로컬 preflight/selection/추정 RATE_LIMIT_COOLDOWN이 Debug Events에 rate_limit로 적재 + UI billing 힌트 오해**.
+
+================================================================================
+3) Project Root + 규칙
+================================================================================
+- Project Root: `C:\AbandonWare\demo-1\demo-1\src`
+- Sole remote: `https://github.com/UnlimitedAbandonWare/AbandonWareAi` only (AbandonWare3 discard)
+- Proto-open / Prototype Light 유지. admin harden 금지.
+- Git: soft-auto / selective. push / `add -A` / history rewrite / foreign process kill **금지**.
+- Spend-guard: Groq **실생성 hammer 금지**로 검증하지 말 것. SAFE diagnostics + 단위 테스트/기존 smoke.
+- Preferred git: `F:\git\cmd\git.exe`
+
+SAFE API (확인용):
+- `GET /api/diagnostics/debug/events`
+- `GET /api/diagnostics/debug/fingerprints?limit=120`
+- `GET /api/diagnostics/debug/api-failures`
+응답에서 키/프롬프트/Authorization **출력 금지**.
+
+================================================================================
+4) Self-Ask 5
+================================================================================
+1. 요청 행동? UI/파이프라인이 **실제 원격 429**와 **로컬 추정 실패**를 구분해 보이게.
+2. 현재 증거? 콘솔 200 + `ApiFailureRecorder.recordFailureClass(RATE_LIMIT_COOLDOWN)` httpStatus=0 + HTML category 힌트.
+3. 애매? Groq 13:17 200이 앱 WebClient 경로인지 playground인지 — WP0에서 SAFE 로그만 확인.
+4. 바꾸면 안 되는 것? GroqFreeTierGuard · evidence 파일 날조 · api-routing.yaml 전면 개편 · Meta Display harden.
+5. 최소 seam? `ApiFailureRecorder` 분류 축 + `debug-events.html` 힌트 + (필요 시) LLM 성공→`recordSuccess` 누락 배선.
+
+================================================================================
+5) Work packages WP0–WP4
+================================================================================
+
+### WP0 — 재확인 (SAFE, 소스 최소)
+목표: LIVE api-failures에 groq 행의 **httpStatus / category / evidence / consecutive / lastSuccessAt** 캡처.
+- Allow: diagnostics GET + handoff md (redacted).
+- Forbid: Groq chat hammer.
+- AC:
+  - [ ] groq+gpt-oss-120b 행 스냅샷 또는 "cleared" 명시
+  - [ ] httpStatus가 0/null인지 429인지 **표로** 기록
+  - [ ] `WP0-live-api-failures.md`
+
+### WP1 — 분류 축 분리 (SOURCE FIX, THE ONE)
+목표: **원격 확정 rate limit** vs **로컬/추정**을 카테고리·evidence·confidence로 분리.
+제안(기존 enum/문자열 최소 확장; 이름 고정 말고 동등 의미 OK):
+- 원격 확정: HTTP **429** (또는 provider body code rate_limit_exceeded 등 **응답 근거**) → category `rate_limit`, evidence `http_429`|code, confidence **CONFIRMED**, httpStatus=429
+- 로컬/추정: `RATE_LIMIT_COOLDOWN` / ModelSelection / transmit-guard / 메시지 휴리스틱만 → category **`local_throttle`** 또는 `preflight_reject` (또는 기존 `provider_error`+evidence=`rate_limit_suspected`), confidence **SUSPECTED**, httpStatus=0
+- **금지:** httpStatus=0 인 추정을 UI/파이프라인에서 원격 `rate_limit`와 동일 DEGRADED 가중으로 취급
+- 건드릴 후보:
+  - `ApiFailureRecorder.recordFailureClass` (RATE_LIMIT_COOLDOWN 매핑)
+  - 호출부: `ModelRuntimeHealthTracker` / `ConversateApiCueService` / gateway classifier 결과 전달부
+  - `LlmGatewayFailureClassifier`: 메시지에 "429" 문자열만으로 RATE_LIMIT 확정하지 말 것(가능하면 status 우선)
+- AC:
+  - [ ] 단위 테스트 또는 기존 테스트 확장: httpStatus=0 RATE_LIMIT_COOLDOWN ≠ remote rate_limit DEGRADED 트리거
+  - [ ] 429 경로는 여전히 rate_limit CONFIRMED
+  - [ ] `WP1-classify-split.md` + 변경 파일 목록
+
+### WP2 — 성공 시 streak 리셋 배선
+목표: Groq LLM **실 HTTP 200** 경로에서 `ApiFailureRecorder.recordSuccess("groq", model)` (또는 동일 provider 키)가 호출되는지 증명·수정.
+- 조사: `ApiFailureWebClientConfiguration` filter · `ModelRuntimeHealthTracker` · chat/cue 성공 경로
+- provider 키 정규화(`groq` vs `api3` vs URL host) mismatch로 success가 다른 stateKey에 찍히면 **같은 키로 통일**
+- AC:
+  - [ ] 성공 1회 후(또는 테스트 double) consecutive=0 · state OK (DEGRADED 해제)
+  - [ ] provider/model stateKey 표
+  - [ ] `WP2-success-reset.md`
+
+### WP3 — UI 힌트 정정 (`debug-events.html`)
+목표: `billing evidence needed`를 **실 billing/quota CONFIRMED**에만 붙이거나, rate_limit+unconfirmed에는 다른 문구.
+예:
+- rate_limit + evidence unconfirmed / confidence SUSPECTED → `local or unconfirmed throttle (not billing proof)`
+- quota/billing/payment **CONFIRMED** 또는 evidence 파일 실제 missing일 때만 billing 문구
+- `data/usage/groq-free-plan.json` EXISTS면 "evidence missing"처럼 보이게 하지 말 것 (존재 여부는 이미 이전 패킷에서 EXISTS)
+- AC:
+  - [ ] SUSPECTED rate_limit 행에 billing evidence needed **안 붙음**
+  - [ ] CONFIRMED billing/quota에는 유지 또는 더 정확한 문구
+  - [ ] `WP3-ui-hint.md`
+
+### WP4 — Pipeline DEGRADED 가중 (작게)
+목표: aggregate에서 **SUSPECTED/local_throttle** 은 WARNING 상한 또는 consecutive 가중 ↓; **CONFIRMED remote rate_limit**만 DEGRADED 유지.
+- 위치: `ApiFailureRecorder` state2 계산 ≈207 근처 + Debug Events pipeline rollup이 있으면 동일 규칙
+- AC:
+  - [ ] 로컬 추정만으로 Pipeline DEGRADED 되지 않음 (테스트 또는 LIVE 재확인)
+  - [ ] `WP4-degraded-weight.md`
+
+================================================================================
+6) 검증 / Done
+================================================================================
+Done when:
+1. WP1+WP3 merged (최소) — 로컬 추정이 billing/rate_limit DEGRADED로 오인되지 않음
+2. WP2 증명 — 성공이 streak을 clear
+3. handoff 폴더에 WP*.md + 변경 파일 리스트
+4. Groq 추가 hammer 없이 SAFE diagnostics로 before/after
+5. NOT_RUN 명시 (실 429 재현 등)
+
+Compile: 기존 demo-1 reload 스킬 따르면 됨. ForceRestart는 사용자/운영 중인 RAG와 충돌 시 물어보거나 soft.
+
+================================================================================
+7) Must NOT
+================================================================================
+- GroqFreeTierGuard bypass / evidence JSON 위조·만료 연장으로 "고침" 위장
+- Codex full-force api3 hammer로 검증
+- push / add -A / secrets print
+- Admin login harden / proto-open 끄기
+- Brave/web RATE_LIMIT_LOCAL 전면 리팩터(범위 밖; LLM Debug Events만)
+
+================================================================================
+8) 첫 메시지 형식 (Devin)
+================================================================================
+```
+ACK misclassify-fix
+Root: C:\AbandonWare\demo-1\demo-1\src
+Plan: WP0 live → WP1 classify split → WP2 success reset → WP3 UI hint → WP4 degraded weight
+No Groq hammer / no evidence invent / no push
+Starting WP0
+```

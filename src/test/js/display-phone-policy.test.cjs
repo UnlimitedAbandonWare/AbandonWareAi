@@ -3,8 +3,8 @@ const {mount}=require('../../../main/resources/static/assets/display/display-foc
 const {createClient}=require('../../../main/resources/static/assets/display/display-conversate.js');
 const {createCapture}=require('../../../main/resources/static/assets/display/display-voice.js');
 const flush=()=>new Promise(setImmediate);
-function controlsFixture({fetchImpl}={}){
- const nodes=new Map(),calls=[],gets=[];const node=()=>({value:'',checked:false,disabled:false,textContent:'',children:[],type:'number',removeAttribute(){},replaceChildren(){this.children=[];},append(...v){this.children.push(...v);}});
+function controlsFixture({fetchImpl,jev}={}){
+ const nodes=new Map(),calls=[],gets=[];const node=()=>({value:'',checked:false,disabled:false,textContent:'',children:[],type:'number',removeAttribute(){},replaceChildren(){this.children=[];},append(...v){this.children.push(...v);},get options(){return this.children;}});
  const $=id=>{if(!nodes.has(id))nodes.set(id,node());return nodes.get(id);};
  for(const id of ['nf-enabled','nf-recall','nf-remember','nf-sequential','nf-fade-on','nf-snapshot-enabled','nf-answer-fallback','nf-recent-enabled'])$(id).type='checkbox';
  let settings={enabled:true,recallEnabled:false,rememberFactsEnabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,
@@ -13,7 +13,7 @@ function controlsFixture({fetchImpl}={}){
   recentContext:{enabled:true,maxAgeSeconds:90,maxUtterances:7,tokenBudget:1000}};
  const host={NovaFocus:{receiptSender:()=>()=>{},createProjection:()=>({update(){},visibility(){},dispose(){},isActive:()=>false})},
   async fetch(url){gets.push(url);if(fetchImpl)return fetchImpl(url);return{ok:true,json:async()=>[{id:'fixture-primary',provider:'fixture',selectable:true},{id:'fixture-backup',provider:'fixture',selectable:true},{id:'a'.repeat(129)+'+variant',provider:'fixture',selectable:true},{id:'disabled-fixture',provider:'fixture',selectable:false}]};}};
- const client={async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return{settingsVersion:3,cacheScope:'a'.repeat(64),settings};}};
+ const client={async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return{settingsVersion:3,cacheScope:'a'.repeat(64),settings,jev};}};
  const document={getElementById:$,createElement:node,addEventListener(){},removeEventListener(){}};
  const controls=mount({host,document,client});controls.update({assistId:'synthetic',epoch:1,focusProducer:true,ready:true,connection:'READY'});
  return{$,calls,gets,controls};
@@ -57,7 +57,25 @@ test('capture keeps its selected STT engine through reconnect and adopts edits o
 test('Fold settings expose selection and recent controls with Jev explicitly unavailable',()=>{
  const html=fs.readFileSync('main/resources/static/assets/display/index.html','utf8');
  for(const id of ['nf-answer-target','nf-answer-model','nf-answer-fallback','nf-recent-enabled','nf-recent-age','nf-recent-count','nf-recent-budget','stt-engine','stt-fallback','stt-apply','nf-jev'])assert.ok(html.includes('id="'+id+'"'),id);
- assert.match(html,/JEV_NOT_CONFIGURED/);assert.match(html,/<option value="SHADOW" disabled>/);assert.match(html,/<option value="ON" disabled>/);
+ assert.match(html,/Jev: 확인 중/);assert.match(html,/<option value="SHADOW" disabled>/);assert.match(html,/<option value="ON" disabled>/);
+});
+test('Jev reason status uses its own table and never the camera permission text',async()=>{
+ const cases={auth_invalid:'키 만료·무효',key_invalid_or_expired:'키 만료·무효',auth_blocked:'인증 차단', // jev-vocab: legacy-alias
+  plan_gate:'요금제 제한',permission_denied:'Jev 접근 거부',forbidden:'Jev 접근 거부', // jev-vocab: legacy-alias
+  budget_skip:'예산 제한',rate_limited:'요청 한도 초과',upstream_error:'Jev 서버 오류'};
+ for(const [reason,frag] of Object.entries(cases)){
+  const f=controlsFixture({jev:{configured:true,mode:'on',callsAllowed:false,reason}});
+  try{await flush();await flush();
+   const s=f.$('nf-jev-status').textContent;
+   assert.ok(s.includes(frag),'reason='+reason+' text='+s);
+   assert.ok(s.includes('('+reason+')'),'raw code kept for '+reason+' in '+s);
+   assert.ok(!s.includes('카메라 권한'),'camera text must not leak for '+reason);
+  }finally{f.controls.dispose();}
+ }
+ const wait=controlsFixture({jev:{configured:true,mode:'on',callsAllowed:false,reason:'mystery_code'}});
+ try{await flush();await flush();assert.match(wait.$('nf-jev-status').textContent,/대기\(mystery_code\)/);}finally{wait.controls.dispose();}
+ const unconfigured=controlsFixture({jev:{configured:false,mode:'on'}});
+ try{await flush();await flush();assert.match(unconfigured.$('nf-jev-status').textContent,/Jev 키 미설정 · 기존 검색 판단을 사용합니다/);}finally{unconfigured.controls.dispose();}
 });
 
 
@@ -72,4 +90,39 @@ test('catalog reload fences an earlier delayed response and preserves current se
   assert.equal(f.$('nf-answer-model').value,'fixture-primary');
   assert.ok(!f.$('nf-answer-model').children.some(c=>c.value==='stale-fixture'));
  }finally{for(const resolve of pending)resolve(response('cleanup-fixture'));f.controls.dispose();}
+});
+test('Jev surface line shows focus/cue only while global mode is not off',async()=>{
+ const html=fs.readFileSync('main/resources/static/assets/display/index.html','utf8');
+ assert.ok(html.includes('id="nf-jev-surfaces"'),'index.html must carry nf-jev-surfaces');
+ const f=controlsFixture({jev:{configured:true,mode:'shadow',callsAllowed:false,reason:'budget_skip',surfaceModes:{focus:'shadow',cue:'off',main:'off'}}});
+ try{await flush();await flush();
+  assert.equal(f.$('nf-jev-surfaces').textContent,'답변(Focus): SHADOW · 힌트(Cue): OFF');
+  assert.equal(f.$('nf-jev-surfaces').hidden,false);
+ }finally{f.controls.dispose();}
+});
+test('Jev surface line stays hidden when mode is off or surfaceModes missing',async()=>{
+ for(const jev of [{configured:true,mode:'off',callsAllowed:false,reason:'disabled',surfaceModes:{focus:'off',cue:'off',main:'off'}},
+                   {configured:true,mode:'shadow',callsAllowed:true,reason:'ready'},
+                   undefined]){
+  const f=controlsFixture({jev});
+  try{await flush();await flush();
+   const line=f.$('nf-jev-surfaces');
+   assert.ok(line.hidden===true||line.textContent==='','hidden or empty for '+JSON.stringify(jev));
+  }finally{f.controls.dispose();}
+ }
+});
+test('unknown Jev surface values render OFF and main is never shown',async()=>{
+ const f=controlsFixture({jev:{configured:true,mode:'on',callsAllowed:true,reason:'ready',surfaceModes:{focus:'garbage',cue:'on',main:'on',extra:'shadow'}}});
+ try{await flush();await flush();
+  const line=f.$('nf-jev-surfaces');
+  assert.equal(line.textContent,'답변(Focus): OFF · 힌트(Cue): ON');
+  assert.equal(line.textContent.split('·').length,2);
+  assert.ok(!/MAIN/i.test(line.textContent));
+ }finally{f.controls.dispose();}
+});
+test('Jev surface line writes via textContent only',()=>{
+ const src=fs.readFileSync('main/resources/static/assets/display/display-focus-controls.js','utf8');
+ const idx=src.indexOf('nf-jev-surfaces');
+ assert.ok(idx>=0,'nf-jev-surfaces referenced in display-focus-controls.js');
+ assert.ok(!/innerHTML/.test(src.slice(Math.max(0,idx-400),idx+800)),'no innerHTML near nf-jev-surfaces');
 });

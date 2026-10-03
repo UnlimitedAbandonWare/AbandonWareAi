@@ -34,8 +34,25 @@ public record ChatStreamEvent(
         List<TransformerBlockSignal> transformerBlocks,
         SelectionEntropySignal selectionEntropySignal,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-        ChatResponseDto.GenerationTermination generationTermination
+        ChatResponseDto.GenerationTermination generationTermination,
+        @com.fasterxml.jackson.annotation.JsonUnwrapped GenerationObservation observation
 ) {
+        public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
+                Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
+                ScoreDeltaSignal scoreDelta, PipelineSnapshot pipelineSnapshot, DebugFxSignal debugFxSignal,
+                List<TransformerBlockSignal> transformerBlocks, SelectionEntropySignal selectionEntropySignal,
+                ChatResponseDto.GenerationTermination generationTermination) {
+                this(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId, learningContext,
+                        evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot, debugFxSignal,
+                        transformerBlocks, selectionEntropySignal, generationTermination, null);
+        }
+        public ChatStreamEvent withObservation(Map<String, Object> trace) {
+                return new ChatStreamEvent(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId,
+                        learningContext, evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot,
+                        debugFxSignal, transformerBlocks, selectionEntropySignal, generationTermination,
+                        GenerationObservation.from(trace));
+        }
         public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
                 Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
                 List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
@@ -50,7 +67,7 @@ public record ChatStreamEvent(
                 return new ChatStreamEvent("final", response.getContent(), null, response.getModelUsed(),
                         response.isRagUsed(), response.getSessionId(), null, null,
                         response.getLearningContext(), response.getEvidence(), null, null, null, null,
-                        null, List.of(), null, response.getGenerationTermination());
+                        null, List.of(), null, response.getGenerationTermination(), response.getObservation());
         }
         public ChatStreamEvent(
                 String type,
@@ -149,8 +166,12 @@ public record ChatStreamEvent(
          * Existing clients safely ignore the additive data field.
          */
         public static ChatStreamEvent sessionReady(Long sessionId, String runToken) {
+                return sessionReady(sessionId, runToken, null);
+        }
+
+        public static ChatStreamEvent sessionReady(Long sessionId, String runToken, TraceSignal traceSignal) {
                 return new ChatStreamEvent("session", runToken, null, null, null, sessionId, null, null,
-                        LearningContextMetadata.empty(), List.of(), null, null, null, null, null, List.of());
+                        LearningContextMetadata.empty(), List.of(), null, traceSignal, null, null, null, List.of());
         }
 
         public static ChatStreamEvent done(String modelUsed, boolean ragUsed, Long sessionId) {
@@ -420,8 +441,22 @@ public record ChatStreamEvent(
                 String planWhen,
                 String planWhenPost,
                 Boolean planLateActivation,
-                List<PlanStageSnapshot> planStages
+                List<PlanStageSnapshot> planStages,
+                AgentWebSearchSnapshot agentWebSearch
         ) {
+                public PipelineSnapshot(String planId, String route, String answerMode,
+                                        Long traceTurnId, Integer webCount, Integer vectorCount,
+                                        Integer finalContextCount, Double citationCoverage,
+                                        Double finalSigmoid, String failureClass, String disabledReason,
+                                        String finalContextCountSource, Boolean planWhenPresent,
+                                        String planWhen, String planWhenPost, Boolean planLateActivation,
+                                        List<PlanStageSnapshot> planStages) {
+                        this(planId, route, answerMode, traceTurnId, webCount, vectorCount,
+                                finalContextCount, citationCoverage, finalSigmoid, failureClass,
+                                disabledReason, finalContextCountSource, planWhenPresent, planWhen,
+                                planWhenPost, planLateActivation, planStages, null);
+                }
+
                 public PipelineSnapshot(String planId, String route, String answerMode,
                                         Long traceTurnId, Integer webCount, Integer vectorCount,
                                         Integer finalContextCount, Double citationCoverage,
@@ -449,6 +484,16 @@ public record ChatStreamEvent(
                         planWhen = cleanPlanWhen(planWhen);
                         planWhenPost = cleanPlanWhen(planWhenPost);
                         planStages = planStages == null ? null : List.copyOf(planStages);
+                }
+        }
+
+        /** Request-local outcome only; provider text and evidence never enter this projection. */
+        public record AgentWebSearchSnapshot(String status, String reasonCode, Integer returnedCount) {
+                public AgentWebSearchSnapshot {
+                        status = "OK".equals(status) || "FAIL_SOFT".equals(status) || "SKIPPED".equals(status)
+                                ? status : null;
+                        reasonCode = "OK".equals(status) ? null : cleanReason(reasonCode);
+                        returnedCount = nonNegative(returnedCount);
                 }
         }
 

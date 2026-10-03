@@ -30,6 +30,69 @@ import static org.mockito.ArgumentMatchers.anyString;
 
 class AgentToolOpsConfigContextTest {
 
+    @Test
+    @SuppressWarnings("unchecked")
+    void webSearchIsOffByDefaultEvenWhenGatewayExists() {
+        AtomicInteger calls = new AtomicInteger();
+        contextRunner.withBean(com.abandonware.ai.agent.integrations.WebSearchGateway.class,
+                () -> (query, topK, lang) -> { calls.incrementAndGet(); return List.of(); })
+                .run(context -> {
+                    AgentToolInvoker invoker = context.getBean(AgentToolInvoker.class);
+                    Map<String, Object> row = ((List<Map<String, Object>>) invoker.describeTools().get("tools"))
+                            .stream().filter(tool -> "web.search".equals(tool.get("id"))).findFirst().orElseThrow();
+                    assertThat(row).containsEntry("enabled", false).containsEntry("registered", false)
+                            .containsEntry("disabledReason", "feature_flag_off");
+                    assertThatThrownBy(() -> invoker.invoke("web.search", Map.of("query", "docs"), null, true))
+                            .isInstanceOf(ToolInvocationException.class);
+                    assertThat(calls).hasValue(0);
+                });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void webSearchOptInRegistersListsAndInvokesTheSameTool() {
+        AtomicInteger calls = new AtomicInteger();
+        contextRunner.withPropertyValues("agent.tools.web-search.enabled=true")
+                .withBean(com.abandonware.ai.agent.integrations.WebSearchGateway.class,
+                        () -> (query, topK, lang) -> {
+                            assertThat(query).isEqualTo("synthetic docs");
+                            assertThat(topK).isEqualTo(3);
+                            assertThat(lang).isEqualTo("en");
+                            calls.incrementAndGet();
+                            return List.of();
+                        })
+                .run(context -> {
+                    AgentToolInvoker invoker = context.getBean(AgentToolInvoker.class);
+                    ToolRegistry registry = context.getBean(ToolRegistry.class);
+                    assertThat(registry.get("web.search")).isPresent();
+                    Map<String, Object> row = ((List<Map<String, Object>>) invoker.describeTools().get("tools"))
+                            .stream().filter(tool -> "web.search".equals(tool.get("id"))).findFirst().orElseThrow();
+                    assertThat(row).containsEntry("enabled", true).containsEntry("registered", true);
+                    assertThat(context.getBean(ToolManifestCatalog.class).load().entry("web.search").enabled()).isTrue();
+                    assertThatThrownBy(() -> invoker.invoke("web.search", Map.of("query", "synthetic docs"),
+                            new ToolContext("fixture", null), false)).isInstanceOf(RuntimeException.class);
+                    assertThat(calls).hasValue(0);
+                    assertThat(invoker.invoke("web.search", Map.of("query", "synthetic docs", "topK", 3, "lang", "en"),
+                            new ToolContext("fixture", null), true)).containsEntry("ok", true);
+                    assertThat(calls).hasValue(1);
+                    assertThat(registry.duplicateToolIdCounts()).doesNotContainKey("web.search");
+                });
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void webSearchOptInWithoutGatewayFailsClosedInEffectiveManifest() {
+        contextRunner.withPropertyValues("agent.tools.web-search.enabled=true").run(context -> {
+            assertThat(context).hasNotFailed();
+            AgentToolInvoker invoker = context.getBean(AgentToolInvoker.class);
+            Map<String, Object> row = ((List<Map<String, Object>>) invoker.describeTools().get("tools"))
+                    .stream().filter(tool -> "web.search".equals(tool.get("id"))).findFirst().orElseThrow();
+            assertThat(row).containsEntry("enabled", false).containsEntry("registered", false)
+                    .containsEntry("disabledReason", "registry_missing");
+            assertThat(invoker.webSearchEnabled()).isFalse();
+        });
+    }
+
     @TempDir Path temporaryMemoryRoot;
 
     private final ApplicationContextRunner contextRunner = new ApplicationContextRunner()

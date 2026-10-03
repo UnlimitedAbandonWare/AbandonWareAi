@@ -1361,6 +1361,24 @@ class ChatStreamSignalBuilderTest {
         TraceStore.clear();
     }
 
+    @Test
+    void failSoftNarrowedCountDoesNotReportAnchorDone() throws Exception {
+        Method method = ChatStreamSignalBuilder.class.getDeclaredMethod("anchorStatus", Map.class, boolean.class);
+        method.setAccessible(true);
+        assertEquals("warn", method.invoke(null, Map.of(
+                "overdrive.narrow.failSoft", true,
+                "overdrive.anchor.narrowed.k", 3), true));
+    }
+
+    @Test
+    void successfulNarrowedCountReportsAnchorDone() throws Exception {
+        Method method = ChatStreamSignalBuilder.class.getDeclaredMethod("anchorStatus", Map.class, boolean.class);
+        method.setAccessible(true);
+        assertEquals("done", method.invoke(null, Map.of(
+                "overdrive.narrow.failSoft", false,
+                "overdrive.anchor.narrowed.k", 8), true));
+    }
+
     private static void assertParserCatchNarrowed(String source, String signature) {
         int start = source.indexOf(signature);
         assertNotEquals(-1, start, "missing parser signature: " + signature);

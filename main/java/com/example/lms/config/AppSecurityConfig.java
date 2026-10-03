@@ -149,6 +149,7 @@ public class AppSecurityConfig {
                                 "/model-settings",
                                 "/model-settings/**"
                         ).hasRole("ADMIN")
+                        .requestMatchers(HttpMethod.PATCH, "/api/settings/preferences").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/settings", "/api/settings/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/settings", "/api/settings/**").hasRole("ADMIN")
                         .requestMatchers("/api/router", "/api/router/**").hasRole("ADMIN")

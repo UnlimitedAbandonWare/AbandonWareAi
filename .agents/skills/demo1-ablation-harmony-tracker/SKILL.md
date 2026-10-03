@@ -20,7 +20,7 @@ needed before code changes.
 
 ## Non-Negotiables
 
-- Work from Desktop root `C:\AbandonWare\demo-1\demo-1\src`.
+- Work from Desktop root `<repo>`.
 - Live source and command output outrank prompts, memory, attachments, and
   producer logs.
 - Reconfirm active sourceSets; keep LangChain4j `1.0.1` and the

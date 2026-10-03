@@ -1,0 +1,118 @@
+$demo1-codex-auto-decide $demo1-codex-plugin-roles $demo1-work-ledger $demo1-project-root $agent-scope-lease $regression-check
+
+# Codex — PLAN5 P1: "실패를 성공으로 적는" 핵심 경로 6곳 정직화 (소스 수정)
+[Contract: DEMO1-CODEX-PLAN5-CORE-TRUTH-20261002]
+
+[ANTI-STOP] 이 파일을 읽는 것은 intake일 뿐 완료가 아니다. 완료 = WP1~WP6 구현 + Acceptance 전부 PASS 증거. 읽고 멈추지 말고 WP0부터 바로 진행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정/부정/반례 → 중립 심판)로 AUTO 처리하고 `AUTO_DECISION:` 줄로 남긴다. 질문은 ASK_ONCE 항목에서만 한다.
+
+## 0) 한 줄 목표
+PLAN5(GPT Pro, mfaswain.zip 분석) 중 **라이브 트리에서 실제로 재현되는** "실패·누락인데 EXECUTED/done/ingested로 보고되는" 결함 6개를 최소 패치로 고치고, 항목마다 RED→GREEN 테스트 증거를 남긴다.
+
+## 1) 확인한 사실 (2026-10-02 10:2x KST, 라이브 트리 HEAD 4150b282 기준. ZIP 아님)
+Project Root: `C:\AbandonWare\demo-1\demo-1\src` (git root). 제품 소스 = `main\java`, 테스트 = `src\test\java`.
+
+| ID | 위치 (라이브 file:line) | 현상 | 상태 |
+|---|---|---|---|
+| N01 | `main/java/com/example/lms/plan/PlanExecutionSpec.java:397-405` (case RETRIEVAL) | `stage.bm25="missing_bm25Index"`처럼 의존성 누락 값도 `!"disabled".equals(v)`라서 **EXECUTED**로 표시됨 | 재현 확인(GPT Pro 격리 탐침 contract exit 1, 라이브 코드 동일) |
+| BM25-F | `main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java:4684-4715` `toDocsOrEmpty(Bm25Index…)` + 호출부 `:2897-2907` | `index.search` 예외 → `List.of()` 반환 → 호출부가 `stage.bm25="empty"`로 기록. 실패와 0건이 구분 안 됨 | 확인 |
+| NARROW-Q | `main/java/com/example/lms/service/rag/overdrive/AngerOverdriveNarrower.java:23-24` | `@Autowired` 생성자가 `ObjectProvider<CrossEncoderReranker>`에 `@Qualifier` 없음. `CrossEncoderReranker` 구현이 여럿(`RerankerConfig:31 crossEncoderReranker`, `:58 embeddingCrossEncoderReranker`, BiEncoder, Noop…)이라 `:64 getIfUnique()`가 null → narrow가 원본 그대로 반환 가능. 보조 생성자 `:28`에는 이미 `@Qualifier("crossEncoderReranker")` 있음 | 확인 |
+| NARROW-T | 같은 파일 `traceNarrow :72-86` + `main/java/com/example/lms/api/ChatStreamSignalBuilder.java:577-593 anchorStatus` | 성공 경로에서도 `overdrive.anchor.error`에 reason(`"reranked"`)을 씀. `narrowed.k = outputCount`라 fail-soft(원본 반환)여도 k>0 → `anchorStatus`가 **done** | 확인 |
+| TRACE-B | `main/java/com/example/lms/trace/TraceLogger.java:38,43,47` vs `main/resources/application.properties:684-686` | TraceLogger는 `System.getProperty`만 읽음(sample 기본 1.0). properties의 `lms.trace.sample=0.1`이 런타임에 반영 안 됨. 바인딩 코드 없음 | 확인 |
+| F04 | `main/java/com/example/lms/conversation/archive/ConversationArchiveIngestService.java:67-69` | `vectorStoreService.enqueue(...)` 직후 무조건 `ingestedCount++`. 영수증 API `VectorStoreService.enqueueWithReceipt` (`VectorStoreService.java:295`, 사용례 `TrainRagIngestService.java:425`)가 이미 있음 | 확인 |
+| F06 | `main/java/com/example/lms/api/MetaDisplayDbQueryController.java:178-182 readOnlyConnection()` | `setReadOnly(true)` 예외 시 커넥션 close 없이 누수 | 확인 |
+| F12 | `UnifiedRagOrchestrator.java:3100` | 문자열 리터럴 안에 **raw NUL 바이트**(`listKey + "<NUL>" + stableKey`). rg가 바이너리로 판정해 검색 중단됨 | 확인 |
+
+기존 테스트 파일(확장 대상, 새 테스트 스택 만들지 말 것): `src/test/java/com/example/lms/plan/PlanExecutionSpecTest.java`, `.../service/rag/overdrive/AngerOverdriveNarrowerTest.java`, `.../api/ChatStreamSignalBuilderTest.java`, `.../conversation/archive/ConversationArchiveIngestServiceTest.java`, `.../api/MetaDisplayDbQueryGateTest.java`.
+
+dirty 상태 주의: `PlanExecutionSpec.java`, `ChatStreamSignalBuilder.java`, `UnifiedRagOrchestrator.java`는 이미 **M(미커밋 변경)** 상태다 — 다른 세션(settings-routing-v3 등)의 hunk가 섞여 있다. 그 hunk는 절대 되돌리거나 정리하지 않는다.
+
+## 공통 규칙
+- 패치 전 각 대상 파일의 `git diff --stat`와 sha256 앞 12자를 WP0 장부에 기록. 내 변경은 위 표의 줄 근처로만 한정한다.
+- 테스트는 **focused만**: `.\gradlew.bat test --tests "<FQCN>" --console=plain`. 다중 세션이므로 `$env:AWX_SPLIT_BUILD_OUTPUTS='1'; $env:AWX_BUILD_HOST_ID='codex-plan5'`. 전체 suite, 전역 clean 금지.
+- PowerShell 5.1이다(`&&` 없음, `;` 사용).
+- 동시 작업: Codex의 `codex-runtime-failover-20261002` 브리프(FallbackAwareChatModel / LlmRouterAspect / OllamaNativeChatModel)와 파일이 겹치지 않는다. 그 세 파일은 이 브리프에서 건드리지 않는다. 다른 활성 lease가 내 대상 파일에 있으면 해당 WP만 HOLD하고 나머지는 계속한다.
+- 증거: 각 WP의 RED(패치 전 실패) → GREEN(패치 후 통과)을 JUnit XML(`build*/test-results/test/TEST-*.xml`)로 남긴다. 가능하면 `agent-prompts\codex-plan5-core-truth-20261002\ref\verify_test_evidence.py`로 `--require-case <classname#name>` 검사를 돌려 `EVIDENCE_ACCEPTED`를 받는다(XML 경로·시작/종료 ns·exit 기록).
+- 외부 API 호출 없음(유료 0회). 스모크는 로컬 Ollama 경로만.
+
+## WP0 — Preflight (5분)
+- root/HEAD(`4150b282` 또는 그 이후) 확인, `git status --short`로 위 8개 파일 상태 기록, lease 확인.
+- `chat.js` sha 앞 8자(`4225d944` 기대)와 `chat.settings.routing.enabled=false`(application.properties) 기록 → 끝날 때 동일해야 함.
+- 출력: `WP0-preflight.md`.
+
+## WP1 — N01: PlanExecutionSpec RETRIEVAL 상태 정직화
+- 규칙: 값이 `missing_` 로 시작 → `SKIPPED_DEPENDENCY`(evidence key, reason=값). `failed`/`failed:` 로 시작 → `FAILED`. `empty` / `ok:N` → `EXECUTED`(호출은 됐음). `disabled` → 지금처럼 무시. 키 4개 중 하나라도 EXECUTED면 EXECUTED 우선, 아니면 FAILED > SKIPPED_DEPENDENCY > DECLARED 순.
+- 테스트(PlanExecutionSpecTest에 추가): missingBm25 → SKIPPED_DEPENDENCY / bm25 empty → EXECUTED / web ok + bm25 missing → EXECUTED / bm25 failed → FAILED / 마커 없음 → DECLARED 유지.
+- 기존 enum(`FAILED`, `SKIPPED_DEPENDENCY` 이미 있음) 재사용. enum 추가 금지.
+
+## WP2 — BM25 실패 vs 0건 구분
+- `toDocsOrEmpty(Bm25Index…)`가 실패를 호출부에 알리게 최소 변경(예: 실패 플래그를 담는 작은 결과값, 또는 BM25 전용 오버로드). 호출부 `:2903-2907`에서 실패면 `dbg.put("stage.bm25","failed:" + 안전한 예외 타입명)` + `RequestTrace.emit("leg.bm25","result","state=failed")`, 정상 0건만 `empty`.
+- 다른 `toDocsOrEmpty` 오버로드(vector/selfask)와 반환 타입은 바꾸지 않는다. snippet 채우기(F09)는 범위 밖.
+- 테스트: 예외를 던지는 Bm25Index 대역으로 `stage.bm25` 가 `failed:`로 시작하고 `empty`가 아님을 확인. 정상 0건은 `empty` 유지. 테스트가 오케스트레이터 전체 기동을 요구해 너무 무거우면 패키지-프라이빗 헬퍼로 분리해 단위 테스트(AUTO_DECISION 기록).
+
+## WP3 — Narrower 연결 + done 오표시
+- `:24` 생성자 파라미터에 `@Qualifier("crossEncoderReranker")` 추가(보조 생성자와 일치). `resolveReranker`는 그대로 두되 null이면 trace에 `reranker.source="unavailable"`.
+- `traceNarrow`: 성공일 때 `overdrive.anchor.error`는 빈 값(또는 미기록), fail-soft일 때만 reason. `overdrive.anchor.narrowed.k`는 **실제로 줄였을 때만** outputCount, fail-soft면 0.
+- `ChatStreamSignalBuilder.anchorStatus`: `overdrive.narrow.failSoft == true`이면 narrowed.k로 `done` 판정하지 않음 → `warn`. 기존 done 조건(activated/triggered 등)은 유지.
+- 테스트: AngerOverdriveNarrowerTest(성공 시 error 빈 값, fail-soft 시 k=0·error 있음), ChatStreamSignalBuilderTest(fail-soft meta → `warn`, 정상 narrow → `done`). Spring 컨텍스트 주입 테스트는 무거우면 생략하고 리플렉션으로 `@Qualifier` 존재만 검사해도 된다.
+
+## WP4 — TraceLogger ↔ lms.trace.* 바인딩
+- 기존 static 필드는 유지. 작은 `@Component`(또는 기존 trace 설정 클래스가 있으면 거기)에서 기동 시 Spring `Environment`의 `lms.trace.enabled/sample/preview`를 TraceLogger에 적용.
+- 우선순위: JVM `-D` system property > Spring property > 기존 기본값. system property가 있으면 덮어쓰지 않는다.
+- 새 property 이름 만들지 말 것. 테스트: Environment에 sample=0.1 → TraceLogger.sample==0.1, system property 있으면 그 값 유지. 테스트 후 static 값 원복.
+
+## WP5 — Archive 영수증 + DB 커넥션 누수
+- F04: `ConversationArchiveIngestService:67-69`를 `enqueueWithReceipt` 기반으로 바꾸고 영수증이 수락일 때만 `ingestedCount++`, 아니면 별도 카운트(예: `rejectedCount`)와 trace. `selectedCount/promotedCount` 의미는 유지(수락 건수). 영수증 클래스 필드는 `TrainRagIngestService:425` 사용례를 따른다.
+- F06: `readOnlyConnection()`에서 `setReadOnly` 예외 시 `c.close()` 후 재throw(suppressed 보존).
+- 테스트: ConversationArchiveIngestServiceTest(거절 영수증 → ingestedCount 증가 안 함), MetaDisplayDbQueryGateTest 또는 신규 소형 테스트(setReadOnly 실패 → close 호출).
+
+## WP6 — NUL 바이트 제거 (동작 동일)
+- `UnifiedRagOrchestrator.java:3100`의 raw NUL 문자를 Java 이스케이프 `"\u0000"`로 바꾼다(런타임 문자열 동일). 그 줄 외 바이트 변경 금지.
+- 확인: `rg --no-messages -c 'seenInList' <file>`가 바이너리 경고 없이 동작, `javac` 컴파일(=focused 테스트 빌드) 통과.
+
+## WP7 — 회귀·스모크·정리
+- focused: 위 5개 테스트 클래스 + `ai.abandonware.nova.orch.aop.LlmRouterRuntimeDeviceFailoverTest`는 **실행만 하고 결과 기록**(이 브리프 범위 밖, 실패해도 손대지 않음).
+- `Verify-RAG.bat -Json` exit 0.
+- 로컬 `http://127.0.0.1:18180/chat` 200, 로컬 /chat 스모크 1회(`[codex-test]` 접두, Ollama 경로만) → 응답 trace에서 `stage.bm25`와 anchor 상태가 거짓 done/EXECUTED가 아닌지 관찰(없으면 NOT_RUN 사유 기록).
+- 임시 파일 정리(내가 만든 것만). `chat.js` sha·routing flag 불변 확인.
+
+## HOLD (이번엔 하지 않음 — 보고서에 "HOLD: 이유" 한 줄씩)
+- F01 meta-display proto-open 기본값, F02 `/api/chat/models/install` 공개 차단, F03 DB 조회 readOnly 강제: PROTO_OPEN 유지 정책·admin 강화 금지와 충돌. → ASK_ONCE에만 기록.
+- F05 TLS property, F07 COUNT 제한, F08 중복 컬럼명, F09 BM25 기본 ON/snippet, F10 BM25 성능, F11 ApiSpendAttribution StandardEnvironment(라우팅 정책 영역 — 별도 브리프), F13 대형 클래스 분할, R01~R03.
+- UAW A/B(모델 검증·기본 모델 저장소 이원화 — settings v3 직후라 별도 브리프), C(RuleBreakContext 전파 — WebMvcConfig 재등록 금지), D(중복 키 9개), E/F.
+- API-first / Ollama idle 라우팅(PLAN5 5라운드, Devin 영역), Java 지원 도구 카드(4라운드, 문서·도구).
+- Plan executor 신설, BM25 기본 활성화, 새 스택/병렬 서비스.
+
+## ASK_ONCE (한 번만, 보고서 맨 끝에 질문으로)
+- Q1: F02 `POST /api/chat/models/install`(Ollama pull + 클라우드 라우트 등록)이 공개 사이트(kro.kr, PROTO_OPEN ON)에서 열려 있는 것이 의도인가? → 답이 오기 전엔 코드 변경 없음.
+
+## 절대 금지
+push/pull/commit · `git add -A` · reset --hard / checkout / restore / stash / force-push · 전체 test suite · 전역 clean · `.secrets`/`.env` 읽기·비밀값 출력 · AbandonWare3 재추가 · PROTO_OPEN/admin 강화 · 다른 세션 lease·hunk·staging 훼손 · DB 스키마 변경 · 데이터셋 삭제 · `chat.js` 수정 · 유료 API 호출 · 위 표 밖 리팩터링.
+
+## Acceptance (전부 PASS여야 완료. 안 돌린 건 NOT_RUN)
+- [ ] AC1 N01: PlanExecutionSpecTest 신규 5케이스 RED→GREEN, missing→SKIPPED_DEPENDENCY, empty→EXECUTED.
+- [ ] AC2 BM25: 실패 시 `stage.bm25`가 `failed:*`, 0건은 `empty` — 테스트 GREEN.
+- [ ] AC3 Narrower: `@Qualifier("crossEncoderReranker")` 존재, 성공 시 anchor.error 빈 값, fail-soft 시 narrowed.k=0.
+- [ ] AC4 anchorStatus: fail-soft meta → `warn`(done 아님), 정상 → `done` 테스트 GREEN.
+- [ ] AC5 TraceLogger: properties 값 반영 + system property 우선 테스트 GREEN.
+- [ ] AC6 F04 거절 영수증 미집계, F06 close 호출 테스트 GREEN.
+- [ ] AC7 F12: 3100줄 NUL 제거, rg 바이너리 경고 없음, 컴파일 OK.
+- [ ] AC8 focused 테스트 전부 GREEN(실행 클래스·건수 명시), Verify-RAG exit 0.
+- [ ] AC9 `chat.js` sha `4225d944…` 불변, routing flag false 불변, 다른 세션 hunk 보존(패치 전후 diff 비교).
+- [ ] AC10 JUnit XML 증거 경로 + (가능 시) `EVIDENCE_ACCEPTED` JSON.
+
+## 보고 형식
+```
+외부 API: 없음 (유료 0회)            ← 맨 위 고정
+CODEX-PLAN5-CORE-TRUTH: DONE | PARTIAL | HOLD
+AUTO_DECISION: <결정> — <근거> (여러 줄)
+PLUGIN_USAGE: <사용한 플러그인/도구와 이유>
+FILES_TOUCHED: <파일:줄범위>
+WP별: WPn  RED <테스트#케이스 exit>  →  GREEN <exit>  증거=<xml 경로>
+AC1~AC10: PASS | FAIL | NOT_RUN(사유)
+HOLD: <항목: 이유>
+ASK_ONCE: Q1 …
+NEXT: <다음에 할 1~3개>
+```
+장부: `data/agent-handoff/codex-autonomy/codex-plan5-core-truth-<8hex>/` (기존 work-ledger 형식).
+
+[ANTI-STOP] 읽기 = intake. WP0부터 지금 시작하고, Done은 구현 + RED→GREEN 증거 + Acceptance PASS다. 막히면 해당 WP만 HOLD로 적고 다음 WP로 넘어간다.

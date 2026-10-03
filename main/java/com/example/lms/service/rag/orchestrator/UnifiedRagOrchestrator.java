@@ -6,11 +6,14 @@ import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.infra.resilience.FaultMaskingLayerMonitor;
+import com.example.lms.infra.selection.SelectionCoordinate;
+import com.example.lms.infra.selection.SelectionDecisionLedger;
 import com.example.lms.moe.NormalizedRagMetrics;
 import com.example.lms.orchestration.OrchestrationHints;
 import com.example.lms.plan.PlanHintApplier;
 import com.example.lms.plan.PlanHints;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.rag.offline.OfflineTextureSnapshotWriter;
 import com.example.lms.service.rag.query.QueryAnalysisResult;
 import com.example.lms.service.rag.query.QueryAnalysisService;
@@ -20,6 +23,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.Serializable;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
@@ -50,6 +58,11 @@ public class UnifiedRagOrchestrator {
 
     private static final Logger log = LoggerFactory.getLogger(UnifiedRagOrchestrator.class);
     private static final String ONNX_DOC_INDEX_META = "_awx.onnxDocIndex";
+    // SelfAsk exec bounds: planner wall-time cap, max merged sub-queries, and
+    // per-sub-query leg K. Values stay local — the feature is flag-gated.
+    private static final long SELFASK_PLANNER_MAX_MS = 4_000L;
+    private static final int SELFASK_MAX_SUBQUERIES = 3;
+    private static final int SELFASK_LEG_TOPK = 6;
     private static final Consumer<String> INVALID_NUMBER_SUPPRESSOR = stage -> {
         switch (stage) {
             case "toDouble" -> {
@@ -113,6 +126,10 @@ public class UnifiedRagOrchestrator {
         public boolean useKg = true;
         public boolean useBm25 = true;
         public boolean enableSelfAsk = false;
+        /** SelfAsk 플래너 산출 하위 질의 — exec 단계가 채우고 bounded 로컬 레그가 소비한다. */
+        public List<String> selfAskSubQueries;
+        public boolean enableQueryAnalysis = true; // Preclassified real-time callers may skip the extra LLM analysis.
+        public boolean webQueryAlreadyPlanned = false;
         public String planId = "safe_autorun.v1";
         public String threadId;
         public int topK = 8;
@@ -200,7 +217,13 @@ public class UnifiedRagOrchestrator {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.beans.factory.annotation.Qualifier("vectorRetriever")
-    private ContentRetriever vectorRetriever; // 벡터/하이브리드 검색용
+    private ContentRetriever vectorRetriever; // 벡터/하이브리드 검색용 (일반 채팅 하이브리드 경로)
+
+    // Unified VECTOR 축은 순수 벡터 리프만 사용한다. LangChainRAGService가 없으면
+    // 해당 단계는 unavailable로 기록되며, 웹/SelfAsk 부수효과가 있는 레거시
+    // vectorRetriever(HybridRetriever) 빈으로 폴백하지 않는다.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.rag.LangChainRAGService langChainRAGService;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     @org.springframework.beans.factory.annotation.Qualifier("knowledgeGraphHandler")
@@ -243,8 +266,11 @@ public class UnifiedRagOrchestrator {
 
     @jakarta.annotation.PostConstruct
     void validateRequiredDependencies() {
+        // Master switch reuses the existing rag.eval.debug-events.enabled
+        // property; per-request override is request.trace.enabled in TraceStore.
+        com.example.lms.search.RequestTrace.setMasterEnabled(ragEvalDebugEventsEnabled);
         requireDependency("web", webRequired, webRetriever, "analyzeWebSearchRetriever");
-        requireDependency("vector", vectorRequired, vectorRetriever, "vectorRetriever");
+        requireDependency("vector", vectorRequired, vectorLeaf(), "langChainRAGService.unified-vector");
         requireDependency("kg", kgRequired, kgRetriever, "knowledgeGraphHandler");
     }
 
@@ -255,10 +281,11 @@ public class UnifiedRagOrchestrator {
         }
     }
 
-    private void applyPlanHints(QueryRequest req, QueryResponse resp, Map<String, Object> dbg) {
+    private com.example.lms.plan.PlanExecutionSpec applyPlanHints(QueryRequest req, QueryResponse resp, Map<String, Object> dbg) {
         if (req == null || dbg == null) {
-            return;
+            return null;
         }
+        boolean callerEnableSelfAsk = req.enableSelfAsk;
         String requestedPlan = safePlanId(req), requestedPlanDiagnostic = com.example.lms.trace.SafeRedactor.traceLabelOrFallback(requestedPlan, "safe_autorun.v1");
         req.planId = requestedPlan;
         resp.planApplied = requestedPlanDiagnostic;
@@ -267,7 +294,7 @@ public class UnifiedRagOrchestrator {
             dbg.putIfAbsent("plan.applied", false);
             dbg.putIfAbsent("plan.disabledReason",
                     planDslExecutor == null ? "missing_plan_hint_applier" : "legacy_opaque_executor");
-            return;
+            return null;
         }
 
         try {
@@ -277,7 +304,7 @@ public class UnifiedRagOrchestrator {
                 dbg.put("plan.id", requestedPlanDiagnostic);
                 dbg.put("plan.applied", false);
                 dbg.put("plan.disabledReason", "empty_plan");
-                return;
+                return null;
             }
 
             req.planId = safePlanId(plan.planId());
@@ -299,6 +326,12 @@ public class UnifiedRagOrchestrator {
                 req.useVector = false;
                 req.useKg = false;
             }
+            if (Boolean.FALSE.equals(meta.get("retrieval.web.enabled"))) {
+                req.useWeb = false;
+            }
+            if (Boolean.FALSE.equals(meta.get("retrieval.vector.enabled"))) {
+                req.useVector = false;
+            }
             if (req.webTopK == null && positive(plan.webTopK())) {
                 req.webTopK = plan.webTopK();
             } else if (req.webTopK == null && plan.kSchedule() != null && !plan.kSchedule().isEmpty()
@@ -310,12 +343,9 @@ public class UnifiedRagOrchestrator {
             }
             if (req.kgTopK == null && positive(plan.kgTopK())) {
                 req.kgTopK = plan.kgTopK();
-                req.useKg = true;
             }
             if (Boolean.TRUE.equals(plan.officialSourcesOnly())) {
                 req.whitelistOnly = true;
-            } else if (Boolean.FALSE.equals(plan.officialSourcesOnly())) {
-                req.whitelistOnly = false;
             }
             if (plan.onnxEnabled() != null) {
                 req.enableOnnx = plan.onnxEnabled();
@@ -323,8 +353,38 @@ public class UnifiedRagOrchestrator {
             if (plan.useCrossEncoder() != null) {
                 req.enableOnnx = plan.useCrossEncoder();
             }
+            if (Boolean.FALSE.equals(meta.get("diversity.dpp.enabled"))) {
+                req.enableDiversity = false;
+            }
             if (orchestrationHints.isEnableSelfAsk()) {
                 req.enableSelfAsk = true;
+            }
+
+            // Plan expansion requires an observed TRUE condition. Caller-set
+            // flags stay intact when the verdict is FALSE or UNKNOWN.
+            com.example.lms.plan.PlanExecutionSpec execSpec = planHintApplier.loadExecutionSpec(requestedPlan);
+            com.example.lms.plan.PlanExecutionSpec.WhenVerdict whenVerdict =
+                    execSpec.evaluateWhen(planRequestScope(req));
+            dbg.put("plan.when", whenVerdict.state().name().toLowerCase(Locale.ROOT));
+            dbg.put("plan.when.present", execSpec.whenPresent());
+            TraceStore.put("plan.when", whenVerdict.state().name().toLowerCase(Locale.ROOT));
+            TraceStore.put("plan.when.present", execSpec.whenPresent());
+            dbg.put("plan.when.conditions", whenVerdict.debugView());
+            if (!execSpec.pipeline().isEmpty()) {
+                dbg.put("plan.pipeline.declared", execSpec.pipeline());
+            }
+            if (!execSpec.diagnostics().isEmpty()) {
+                dbg.put("plan.spec.diagnostics", execSpec.diagnostics());
+            }
+            if (!callerEnableSelfAsk && req.enableSelfAsk
+                    && whenVerdict.state() != com.example.lms.plan.PlanExecutionSpec.TriState.TRUE
+                    && execSpec.declaresExpansion()) {
+                req.enableSelfAsk = false;
+                String gateReason = whenVerdict.state() == com.example.lms.plan.PlanExecutionSpec.TriState.FALSE
+                        ? "when_false" : "when_unknown";
+                dbg.put("plan.selfAsk.gated", gateReason);
+                TraceStore.put("plan.selfAsk.gated", gateReason);
+                com.example.lms.search.RequestTrace.emit("rag.selfask", "gated", "reason=" + gateReason);
             }
 
             List<String> planDslUnwiredKeys = PlanHintApplier.dslUnwiredKeys(plan);
@@ -349,12 +409,69 @@ public class UnifiedRagOrchestrator {
             TraceStore.put("plan.webTopK", effectiveWebTopK(req));
             TraceStore.put("plan.vectorTopK", effectiveVectorTopK(req));
             TraceStore.put("plan.kgTopK", effectiveKgTopK(req));
+            return execSpec;
         } catch (Exception e) {
             dbg.put("plan.source", "PlanHintApplier");
             dbg.put("plan.id", requestedPlanDiagnostic);
             dbg.put("plan.applied", false);
             dbg.put("plan.disabledReason", "plan_apply_failed");
             TraceStore.put("plan.apply.error", "plan_apply_failed");
+            return null;
+        }
+    }
+
+    /**
+     * Request-side scope observable before retrieval: header/context channels
+     * backed by the real request interceptors. Metrics are added post-retrieval
+     * by {@link #planObservedMetrics}; unobserved keys stay UNKNOWN.
+     */
+    private static Map<String, Object> planRequestScope(QueryRequest req) {
+        Map<String, Object> scope = new LinkedHashMap<>();
+        scope.put("request.header.x-brave-mode", braveModeOn() ? "on" : "off");
+        if (req != null) {
+            scope.put("request.plan.id", req.planId);
+            scope.put("request.jammini_mode", req.jamminiMode);
+            scope.put("request.memory_profile", req.memoryProfile);
+            scope.put("request.aggressive", req.aggressive);
+            scope.put("request.deep_research", req.deepResearch);
+            scope.put("request.entity_query", req.entityQuery);
+        }
+        return scope;
+    }
+
+    private static boolean braveModeOn() {
+        if (com.example.lms.nova.NovaRequestContext.isBrave()) {
+            return true;
+        }
+        return trace.TraceContext.isBrave();
+    }
+
+    /**
+     * Post-retrieval metrics mapped to plan-eval scope. Only genuinely observed
+     * values are exposed; {@code metrics.initial_recall} has no producer and is
+     * deliberately unmapped so it evaluates UNKNOWN instead of a fabricated 0.
+     */
+    private static Map<String, Object> planObservedMetrics(Map<String, Object> debug) {
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        if (debug != null) {
+            putMetricAlias(debug, metrics, "rag.eval.resultCount", "metrics.result_count");
+            putMetricAlias(debug, metrics, "rag.eval.distinctSourceCount", "metrics.distinct_sources");
+            putMetricAlias(debug, metrics, "rag.eval.emptyResult", "metrics.empty_result");
+        }
+        Object confidence = TraceStore.get("rag.answerQuality.confidence");
+        if (confidence != null) {
+            metrics.put("metrics.retrieval_confidence", confidence);
+        }
+        return metrics;
+    }
+
+    private static void putMetricAlias(Map<String, Object> debug,
+                                       Map<String, Object> metrics,
+                                       String debugKey,
+                                       String metricKey) {
+        Object value = debug.get(debugKey);
+        if (value != null) {
+            metrics.put(metricKey, value);
         }
     }
 
@@ -379,15 +496,68 @@ public class UnifiedRagOrchestrator {
     }
 
     private static int effectiveKgTopK(QueryRequest req) {
-        if (req != null && positive(req.kgTopK)) {
+        if (req != null && req.kgTopK != null) {
             return req.kgTopK;
         }
-        int base = req == null ? 8 : Math.max(1, req.topK);
+        int base = req == null ? 8 : req.topK;
         return Math.min(50, Math.max(12, base * 2));
     }
 
     private static int effectiveTopK(Integer override, int fallback) {
-        return override != null && override > 0 ? override : Math.max(1, fallback);
+        return override != null ? override : fallback;
+    }
+
+    /**
+     * Bounded requested/applied-settings summary for RequestTrace. Primitive
+     * boolean flags cannot distinguish caller-set-false from field-default-false
+     * (recorded as flags_src=primitive); nullable Integer topK overrides can.
+     * planId/memoryProfile pass through SafeRedactor's label path — raw query
+     * text and user identifiers are never included.
+     */
+    private static String settingsSummary(QueryRequest req) {
+        if (req == null) {
+            return "req=null";
+        }
+        return "useWeb=" + req.useWeb
+                + ";useVector=" + req.useVector
+                + ";useKg=" + req.useKg
+                + ";useBm25=" + req.useBm25
+                + ";seedOnly=" + req.seedOnly
+                + ";whitelistOnly=" + req.whitelistOnly
+                + ";selfAsk=" + req.enableSelfAsk
+                + ";flags_src=primitive"
+                + ";topK=" + req.topK
+                + ";webTopK=" + topKSource(req.webTopK)
+                + ";vectorTopK=" + topKSource(req.vectorTopK)
+                + ";kgTopK=" + topKSource(req.kgTopK)
+                + ";memoryProfile=" + com.example.lms.trace.SafeRedactor
+                        .traceLabelOrFallback(req.memoryProfile, "unset")
+                + ";planId=" + com.example.lms.trace.SafeRedactor
+                        .traceLabelOrFallback(req.planId, "safe_autorun.v1");
+    }
+
+    private static String topKSource(Integer override) {
+        return override == null ? "default" : "explicit:" + override;
+    }
+
+    private static int sizeOf(List<?> values) {
+        return values == null ? 0 : values.size();
+    }
+
+    private static void validateTopKRequest(QueryRequest req) {
+        if (req == null) {
+            return;
+        }
+        requireNonNegativeTopK("topK", req.topK);
+        requireNonNegativeTopK("webTopK", req.webTopK);
+        requireNonNegativeTopK("vectorTopK", req.vectorTopK);
+        requireNonNegativeTopK("kgTopK", req.kgTopK);
+    }
+
+    private static void requireNonNegativeTopK(String field, Integer value) {
+        if (value != null && value < 0) {
+            throw new IllegalArgumentException(field + " must be greater than or equal to zero");
+        }
     }
 
     // NOTE:
@@ -419,16 +589,25 @@ public class UnifiedRagOrchestrator {
             req = new QueryRequest();
             req.query = "";
         }
+        validateTopKRequest(req);
         String requestId = UUID.randomUUID().toString();
         QueryResponse resp = new QueryResponse();
         resp.requestId = requestId;
         resp.planApplied = req.planId;
+        com.example.lms.search.RequestTrace.markRequestStart();
+        TraceStore.put(com.example.lms.search.RequestTrace.ID_KEY, requestId);
+        // Requested settings are captured BEFORE applyPlanHints mutates req;
+        // primitive flags cannot distinguish explicit-vs-default (recorded
+        // as flags_src=primitive), nullable topK overrides can.
+        com.example.lms.search.RequestTrace.emit("rag.request", "received", settingsSummary(req));
 
         Map<String, Object> dbg = resp.debug;
 
         QueryAnalysisResult analysis = null;
         boolean isEntityQuery = req.entityQuery;
-        if (queryAnalysisService != null && req.query != null && !req.query.isBlank()) {
+        long analysisStartedNs = System.nanoTime();
+        dbg.put("analysis.skipped", !req.enableQueryAnalysis);
+        if (req.enableQueryAnalysis && queryAnalysisService != null && req.query != null && !req.query.isBlank()) {
             try {
                 analysis = queryAnalysisService.analyze(req.query);
                 if (analysis != null) {
@@ -455,28 +634,85 @@ public class UnifiedRagOrchestrator {
             }
         }
 
+        dbg.put("analysis.elapsedMs", elapsedMs(analysisStartedNs));
+
         // [Anti-Gravity] Memory Injection Hook
-        // - aggressive/brave 모드에서 속도만 보고 메모리를 꺼버리면 답변 품질이 급락한다.
-        // - 호출자가 memoryProfile=NONE으로 보내더라도 이 모드에서는 MEMORY를 강제한다.
-        if ("brave".equalsIgnoreCase(String.valueOf(req.jamminiMode)) || req.aggressive) {
-            if ("NONE".equalsIgnoreCase(String.valueOf(req.memoryProfile))) {
-                req.memoryProfile = "MEMORY";
-                dbg.put("memory.inject", "forced");
-                log.info("[Orchestrator] Anti-Gravity Mode: Forcing memoryProfile=MEMORY");
+        // - An explicit memoryProfile=NONE is a caller restriction: brave/aggressive
+        //   modes and fallbacks must not flip it back to MEMORY.
+        if (("brave".equalsIgnoreCase(String.valueOf(req.jamminiMode)) || req.aggressive)
+                && "NONE".equalsIgnoreCase(String.valueOf(req.memoryProfile))) {
+            dbg.put("memory.inject", "explicit_none_preserved");
+        }
+
+        com.example.lms.plan.PlanExecutionSpec planSpec = applyPlanHints(req, resp, dbg);
+        com.example.lms.search.RequestTrace.emit("rag.settings", "applied", settingsSummary(req));
+
+        // 0) Optional planning: flag-gated + request-budget-gated SelfAsk
+        // 3-lane expansion. The planner emits selfask.3way.* TraceStore keys
+        // (consumed by autolearn/debug/copilot); produced sub-queries merge
+        // into the bounded local legs inside retrieveCandidates below. Every
+        // skip path records a stable reason; no raw query values are logged.
+        String selfAskExec = "not_requested";
+        List<String> selfAskQueries = List.of();
+        if (req.enableSelfAsk && selfAskPlanner == null) {
+            selfAskExec = "planner_missing";
+            dbg.putIfAbsent("selfAsk", "missing_selfAskPlanner");
+        } else if (req.enableSelfAsk && req.seedOnly) {
+            selfAskExec = "skipped:seed_only";
+        } else if (req.enableSelfAsk) {
+            com.abandonware.ai.addons.budget.TimeBudget selfAskBudget =
+                    com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            if (selfAskBudget != null && selfAskBudget.expired()) {
+                selfAskExec = "skipped:request_budget_exhausted";
+                com.example.lms.search.DeadlineProbe.skip("selfask.3way", "request_budget_exhausted");
+            } else {
+                long selfAskStartedNs = System.nanoTime();
+                try {
+                    long plannerBudgetMs = selfAskBudget == null
+                            ? SELFASK_PLANNER_MAX_MS
+                            : Math.min(Math.max(0L, selfAskBudget.remainingMillis()), SELFASK_PLANNER_MAX_MS);
+                    java.util.List<com.example.lms.service.rag.SelfAskPlanner.SubQuestion> lanes =
+                            selfAskPlanner.generateThreeLanes(req.query, plannerBudgetMs);
+                    java.util.LinkedHashSet<String> dedup = new java.util.LinkedHashSet<>();
+                    java.util.List<String> laneTypes = new java.util.ArrayList<>();
+                    if (lanes != null) {
+                        for (com.example.lms.service.rag.SelfAskPlanner.SubQuestion lane : lanes) {
+                            if (lane != null && lane.text != null && !lane.text.isBlank()) {
+                                dedup.add(lane.text.trim());
+                                if (lane.type != null) {
+                                    laneTypes.add(lane.type.name());
+                                }
+                            }
+                            if (dedup.size() >= SELFASK_MAX_SUBQUERIES) {
+                                break;
+                            }
+                        }
+                    }
+                    selfAskQueries = List.copyOf(dedup);
+                    selfAskExec = "executed:lanes=" + selfAskQueries.size();
+                    dbg.put("selfAsk", selfAskExec);
+                    if (!laneTypes.isEmpty()) {
+                        dbg.put("selfAsk.laneTypes", laneTypes);
+                    }
+                    com.example.lms.search.RequestTrace.emit("selfask.3way", "exec",
+                            "lanes=" + selfAskQueries.size()
+                                    + ";elapsedMs=" + elapsedMs(selfAskStartedNs)
+                                    + ";budget=" + (selfAskBudget == null ? "absent" : "present"));
+                } catch (Exception e) {
+                    selfAskExec = "failed:" + e.getClass().getSimpleName();
+                    dbg.put("selfAsk", selfAskExec);
+                    com.example.lms.search.RequestTrace.emit("selfask.3way", "error",
+                            "type=" + e.getClass().getSimpleName()
+                                    + ";elapsedMs=" + elapsedMs(selfAskStartedNs));
+                }
             }
         }
-
-        applyPlanHints(req, resp, dbg);
-
-        // 0) Optional planning
-        if (req.enableSelfAsk && selfAskPlanner == null) {
-            dbg.putIfAbsent("selfAsk", "missing_selfAskPlanner");
-        }
-        if (req.enableSelfAsk && selfAskPlanner != null) {
-            dbg.put("selfAsk", "enabled");
-            // fire-and-forget plan hints (safe no-op if planner impl changes)
-            // real implementation should expand sub-queries and merge later.
-        }
+        req.selfAskSubQueries = selfAskQueries;
+        dbg.put("selfAsk.exec", selfAskExec);
+        com.example.lms.search.RequestTrace.emit("rag.selfask", "decision",
+                "requested=" + req.enableSelfAsk
+                        + ";planner=" + (selfAskPlanner != null ? "present" : "missing")
+                        + ";exec=" + selfAskExec);
 
         // 1) 통합 검색 후보 수집
         long stageStartedNs = System.nanoTime();
@@ -485,6 +721,13 @@ public class UnifiedRagOrchestrator {
         if (trace != null && pool != null) {
             trace.pool = snapshotDocs(pool);
         }
+        com.example.lms.search.RequestTrace.emit("rag.stages", "collect",
+                "seed=" + sizeOf(trace == null ? null : trace.seed)
+                        + ";web=" + sizeOf(trace == null ? null : trace.web)
+                        + ";vector=" + sizeOf(trace == null ? null : trace.vector)
+                        + ";kg=" + sizeOf(trace == null ? null : trace.kg)
+                        + ";bm25=" + sizeOf(trace == null ? null : trace.bm25)
+                        + ";pool=" + (pool == null ? 0 : pool.size()));
 
         // NOTE: Auto-Flush(재검색/공격적 확장)는 오케스트레이터가 자동으로 결정하지 않는다.
         // 필요하면 호출자가 req.aggressive/deepResearch/topK 등을 명시적으로 설정한다.
@@ -496,10 +739,36 @@ public class UnifiedRagOrchestrator {
                     req.query == null ? "" : DigestUtils.sha256Hex(req.query));
 
             // 마지막 수단: vector-only 재시도 (fail-soft)
-            if (req.useVector && vectorRetriever != null && (req.seedVector == null || req.seedVector.isEmpty())) {
+            // seedOnly 요청은 어떤 live retrieval도 허용하지 않으므로 emergency도 건너뛴다.
+            boolean emergencyEligible = req.useVector && !req.seedOnly && vectorLeaf() != null
+                    && (req.seedVector == null || req.seedVector.isEmpty());
+            com.example.lms.search.RequestTrace.emit("rag.emergency", "decision",
+                    "eligible=" + emergencyEligible + ";reason=empty_pool;useVector=" + req.useVector
+                            + ";seedOnly=" + req.seedOnly + ";leaf=" + (vectorLeaf() != null));
+            if (emergencyEligible) {
+                // The emergency leg is still governed by the request deadline:
+                // an exhausted or cancelled budget must not start a new call.
+                com.abandonware.ai.addons.budget.TimeBudget requestBudget =
+                        com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+                if (requestBudget != null && requestBudget.expired()) {
+                    com.example.lms.search.DeadlineProbe.skip("rag.emergency", "request_budget_exhausted");
+                    com.example.lms.search.RequestTrace.emit("rag.emergency", "skip",
+                            "reason=request_budget_exhausted");
+                    dbg.put("retrieval.emergency", "skipped:request_budget_exhausted");
+                    emergencyEligible = false;
+                }
+            }
+            if (emergencyEligible) {
                 log.info("[Orchestrator] Attempting emergency vector-only retrieval");
                 stageStartedNs = System.nanoTime();
-                List<Doc> emergencyDocs = toDocsOrEmpty(vectorRetriever, req.query, effectiveVectorTopK(req), "VECTOR-EMERGENCY");
+                int emergencyK = effectiveVectorTopK(req);
+                Query emergencyQuery = com.example.lms.service.rag.QueryUtils.buildQuery(
+                        req.query, null, null, java.util.Map.of("vectorTopK", emergencyK));
+                com.example.lms.search.RequestTrace.emit("rag.emergency", "exec",
+                        "k=" + emergencyK + ";prior_attempts=1;max_calls=2");
+                List<Doc> emergencyDocs = toDocsOrEmpty(vectorLeaf(), emergencyQuery, emergencyK, "VECTOR-EMERGENCY");
+                com.example.lms.search.RequestTrace.emit("rag.emergency", "result",
+                        "count=" + (emergencyDocs == null ? 0 : emergencyDocs.size()));
                 recordStageMs(stageMs, "vector", stageStartedNs);
                 if (emergencyDocs != null && !emergencyDocs.isEmpty()) {
                     pool = new ArrayList<>(emergencyDocs);
@@ -519,6 +788,8 @@ public class UnifiedRagOrchestrator {
                 pool = contextConsistencyFilter.filter(pool, expectedDomain, noiseList);
                 int afterSize = pool != null ? pool.size() : 0;
                 dbg.put("consistency_filtered_count", beforeSize - afterSize);
+                com.example.lms.search.RequestTrace.emit("rag.filter", "consistency",
+                        "in=" + beforeSize + ";out=" + afterSize);
                 log.info("[Orchestrator] ContextConsistencyFilter: {} -> {} docs (expectedDomainHash={})",
                         beforeSize, afterSize, safeHash(expectedDomain));
                 if (trace != null && pool != null) {
@@ -527,10 +798,19 @@ public class UnifiedRagOrchestrator {
             }
         }
 
-        // 2) Fuse via Weighted-RRF (placeholder scoring to avoid compile deps)
+        // 2) Fuse via Weighted-RRF. The fusion window is the candidate set
+        // (wider than topK so downstream rerankers can promote candidates
+        // beyond the final cut); the public result cap is applied by
+        // finalTopK after every rerank/policy stage.
         stageStartedNs = System.nanoTime();
-        List<Doc> fused = fuseRrf(pool, req.topK, req);
+        int candidateK = (int) Math.min((long) (pool == null ? 0 : pool.size()),
+                Math.max((long) req.topK, req.topK * 3L));
+        List<Doc> fused = fuseRrf(pool, candidateK, req);
         recordStageMs(stageMs, "fused", stageStartedNs);
+        dbg.put("fuse.candidateK", candidateK);
+        com.example.lms.search.RequestTrace.emit("rag.fuse", "window",
+                "in=" + (pool == null ? 0 : pool.size()) + ";candidateK=" + candidateK
+                        + ";out=" + (fused == null ? 0 : fused.size()));
         if (trace != null && fused != null) {
             trace.fused = snapshotDocs(fused);
         }
@@ -567,9 +847,12 @@ public class UnifiedRagOrchestrator {
             } else {
                 filterK = Math.max(10, req.topK);
             }
+            int preBi = fused.size();
             fused = topK(fused, filterK);
             recordStageMs(stageMs, "biencoder", stageStartedNs);
             dbg.put("stage.biencoder", fused.size());
+            com.example.lms.search.RequestTrace.emit("rag.rerank", "biencoder",
+                    "in=" + preBi + ";out=" + fused.size() + ";filterK=" + filterK);
             emitRagPipelineEvent(
                     "rerank",
                     "biencoder",
@@ -595,12 +878,16 @@ public class UnifiedRagOrchestrator {
                             new com.example.lms.service.rag.rerank.DppDiversityReranker.Config(
                                     req.diversityLambda,
                                     Math.max(10, req.topK));
+                    int preDpp = fused == null ? 0 : fused.size();
                     fused = dpp.rerank(dppConfig, fused, req.query, Math.max(10, req.topK),
                             UnifiedRagOrchestrator::docText,
-                            UnifiedRagOrchestrator::docRelevance);
+                            UnifiedRagOrchestrator::docRelevance,
+                            UnifiedRagOrchestrator::stableDocumentKey);
                     TraceStore.put("rag.orchestrator.dpp.source", "spring_managed_reranker");
                     recordStageMs(stageMs, "dpp", stageStartedNs);
                     dbg.put("stage.dpp", fused.size());
+                    com.example.lms.search.RequestTrace.emit("rag.rerank", "dpp",
+                            "in=" + preDpp + ";out=" + fused.size());
                     emitRagPipelineEvent(
                             "rerank",
                             "dpp",
@@ -631,6 +918,8 @@ public class UnifiedRagOrchestrator {
                 }
             } else {
                 dbg.put("stage.dpp", "disabled:missing_dpp_reranker");
+                com.example.lms.search.RequestTrace.emit("rag.rerank", "dpp",
+                        "skip=missing_dpp_reranker");
                 emitRagPipelineEvent(
                         "rerank",
                         "dpp",
@@ -648,55 +937,121 @@ public class UnifiedRagOrchestrator {
             }
         }
         // 4) ONNX Cross-Encoder final rerank
-        if (req.enableOnnx && onnxReranker != null) {
+        TraceStore.put("rerank.onnx.requested", req.enableOnnx);
+        TraceStore.put("rerank.onnx.skipReason", null);
+        TraceStore.put("rerank.onnx.orchestrator.failureClass", null);
+        if (req.enableOnnx) {
             stageStartedNs = System.nanoTime();
-            try {
-                List<Doc> beforeOnnx = fused == null ? List.of() : fused;
-                List<Content> candidates = toOnnxContents(beforeOnnx);
-                List<Content> reranked = onnxReranker.rerank(req.query, candidates, req.topK);
-                fused = docsInOnnxOrder(reranked, beforeOnnx, req.topK);
-                TraceStore.put("rerank.onnx.orchestrator.executed", true);
-                TraceStore.put("rerank.onnx.orchestrator.candidateCount", candidates.size());
-                TraceStore.put("rerank.onnx.orchestrator.selectedCount", fused.size());
-            } catch (Throwable t) {
-                fused = topK(fused, req.topK);
-                TraceStore.put("rerank.onnx.orchestrator.executed", false);
-                String failureClass = (t instanceof CancellationException || t instanceof InterruptedException || t.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains("cancel") || t.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains("interrupt") || String.valueOf(t.getMessage()).toLowerCase(Locale.ROOT).contains("cancel") || String.valueOf(t.getMessage()).toLowerCase(Locale.ROOT).contains("interrupt")) ? "cancelled" : "onnx_rerank_failed";
-                TraceStore.put("rerank.onnx.orchestrator.failureClass", failureClass); dbg.put("stage.onnx.failureClass", failureClass);
-                dbg.put("stage.onnx", "error: " + com.example.lms.trace.SafeRedactor.traceLabelOrFallback(t.getMessage(), ""));
+            List<Doc> beforeOnnx = fused == null ? List.of() : fused;
+            int onnxInputCount = beforeOnnx.size();
+            boolean onnxExecuted = false;
+            String onnxStatus = "ok";
+            Map<String, Object> onnxFailure = Map.of();
+            Map<String, Object> onnxControl = Map.of();
+
+            if (onnxReranker == null) {
+                fused = topK(beforeOnnx, req.topK);
+                onnxStatus = "fallback";
+                TraceStore.put("rerank.onnx.skipReason", "missing_dependency");
+                dbg.put("stage.onnx", "skipped:missing_dependency");
+                onnxFailure = mapOf("reasonCode", "missing_dependency", "failureClass", "missing_dependency");
+                onnxControl = mapOf("action", "fail_soft_fallback", "applied", true,
+                        "reasonCode", "missing_dependency");
+            } else {
+                try {
+                    List<Content> candidates = toOnnxContents(beforeOnnx);
+                    onnxInputCount = candidates.size();
+                    if (candidates.isEmpty()) {
+                        fused = topK(beforeOnnx, req.topK);
+                        onnxStatus = "fallback";
+                        TraceStore.put("rerank.onnx.skipReason", "empty_candidates");
+                        dbg.put("stage.onnx", "skipped:empty_candidates");
+                        onnxFailure = mapOf("reasonCode", "empty_candidates", "failureClass", "empty_candidates");
+                        onnxControl = mapOf("action", "fail_soft_fallback", "applied", true,
+                                "reasonCode", "empty_candidates");
+                    } else {
+                        List<Content> reranked = onnxReranker.rerank(req.query, candidates, req.topK);
+                        fused = docsInOnnxOrder(reranked, beforeOnnx, req.topK);
+                        onnxExecuted = true;
+                    }
+                } catch (Throwable t) {
+                    fused = topK(beforeOnnx, req.topK);
+                    onnxStatus = "failed";
+                    String failureClass = (t instanceof CancellationException || t instanceof InterruptedException || t.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains("cancel") || t.getClass().getSimpleName().toLowerCase(Locale.ROOT).contains("interrupt") || String.valueOf(t.getMessage()).toLowerCase(Locale.ROOT).contains("cancel") || String.valueOf(t.getMessage()).toLowerCase(Locale.ROOT).contains("interrupt")) ? "cancelled" : "onnx_rerank_failed";
+                    TraceStore.put("rerank.onnx.skipReason", failureClass);
+                    TraceStore.put("rerank.onnx.orchestrator.failureClass", failureClass);
+                    dbg.put("stage.onnx.failureClass", failureClass);
+                    dbg.put("stage.onnx", "error: " + com.example.lms.trace.SafeRedactor.traceLabelOrFallback(t.getMessage(), ""));
+                    onnxFailure = mapOf("reasonCode", failureClass, "failureClass", failureClass,
+                            "exceptionType", failureClass);
+                    onnxControl = mapOf("action", "fail_soft_fallback", "applied", true,
+                            "reasonCode", failureClass);
+                }
             }
+
+            TraceStore.put("rerank.onnx.executed", onnxExecuted);
+            TraceStore.put("rerank.onnx.input.count", onnxInputCount);
+            TraceStore.put("rerank.onnx.output.count", fused.size());
+            TraceStore.put("rerank.onnx.orchestrator.executed", onnxExecuted);
+            TraceStore.put("rerank.onnx.orchestrator.candidateCount", onnxInputCount);
+            TraceStore.put("rerank.onnx.orchestrator.selectedCount", fused.size());
             recordStageMs(stageMs, "onnx", stageStartedNs);
             dbg.putIfAbsent("stage.onnx", fused.size());
+            com.example.lms.search.RequestTrace.emit("rag.rerank", "onnx",
+                    "in=" + onnxInputCount + ";out=" + fused.size()
+                            + ";status=" + onnxStatus + ";executed=" + onnxExecuted);
             emitRagPipelineEvent(
                     "rerank",
                     "onnx",
                     "complete",
                     "UnifiedRagOrchestrator",
-                    "ok",
+                    onnxStatus,
                     mapOf("queryHash", safeHash(req == null ? null : req.query), "requestedTopK", req.topK),
                     mapOf("selectedCount", fused.size(), "stageMs", stageMs == null ? 0L : stageMs.getOrDefault("onnx", 0L)),
-                    Map.of(),
-                    Map.of());
+                    onnxFailure,
+                    onnxControl);
             if (trace != null) {
                 trace.onnx = snapshotDocs(fused);
             }
+        } else {
+            TraceStore.put("rerank.onnx.executed", false);
+            TraceStore.put("rerank.onnx.input.count", 0);
+            TraceStore.put("rerank.onnx.output.count", 0);
+            TraceStore.put("rerank.onnx.skipReason", "disabled");
+            TraceStore.put("rerank.onnx.orchestrator.executed", false);
+            TraceStore.put("rerank.onnx.orchestrator.candidateCount", 0);
+            TraceStore.put("rerank.onnx.orchestrator.selectedCount", 0);
+            com.example.lms.search.RequestTrace.emit("rag.rerank", "onnx", "skip=disabled");
         }
 
-        // 5) Domain whitelist (filter if requested)
+        // 5) Explicit source restrictions apply independently of recall/memory mode.
         if (req.whitelistOnly && domainWhitelist != null) {
-            // S2(aggressive) 모드에서는 whitelistOnly는 무시하고,
-            // S1(안정형) 프로파일에서만 필터를 강하게 적용한다.
-            if (!req.aggressive && !"NONE".equalsIgnoreCase(req.memoryProfile)) {
-                int before = fused.size();
-                fused = fused.stream()
-                        .filter(this::isWhitelistedDoc)
-                        .collect(Collectors.toList());
-                dbg.put("stage.whitelist.filtered", Math.max(0, before - fused.size()));
-            } else {
-                dbg.put("stage.whitelist.skipped", true);
-            }
+            int before = fused.size();
+            fused = fused.stream()
+                    .filter(this::isWhitelistedDoc)
+                    .collect(Collectors.toList());
+            dbg.put("stage.whitelist.filtered", Math.max(0, before - fused.size()));
             dbg.put("stage.whitelist", fused.size());
+            com.example.lms.search.RequestTrace.emit("rag.filter", "whitelist",
+                    "in=" + before + ";out=" + fused.size());
+        } else if (req.whitelistOnly) {
+            // Fail-closed: 엄격 출처 제한이 요청됐지만 정책 빈이 없으면
+            // 미검증 결과를 통과시키지 않고 비운다.
+            int before = fused.size();
+            fused = new ArrayList<>();
+            dbg.put("stage.whitelist.filtered", before);
+            dbg.put("stage.whitelist", "policy_unavailable");
+            TraceStore.put("rag.whitelist.policy_unavailable", true);
+            com.example.lms.search.RequestTrace.emit("rag.filter", "whitelist",
+                    "in=" + before + ";out=0;reason=policy_unavailable");
+            log.warn("[Orchestrator] whitelistOnly requested but DomainWhitelist bean unavailable; failing closed");
         }
+
+        // Enforce the public result cap after every optional augmentation/rerank.
+        int preFinal = fused == null ? 0 : fused.size();
+        fused = finalTopK(fused, req.topK);
+        com.example.lms.search.RequestTrace.emit("rag.final", "cut",
+                "in=" + preFinal + ";topK=" + req.topK + ";out=" + fused.size());
 
         // Finalize ranks
         stageStartedNs = System.nanoTime();
@@ -705,7 +1060,16 @@ public class UnifiedRagOrchestrator {
         }
         recordStageMs(stageMs, "final", stageStartedNs);
         resp.results = fused;
-        attachRagEvalSnapshot(req, resp, trace, stageMs, elapsedMs(runStartedNs), analysis);
+        if (com.example.lms.search.RequestTrace.docsEnabled()) {
+            for (int i = 0; i < fused.size(); i++) {
+                Doc d = fused.get(i);
+                com.example.lms.search.RequestTrace.emitDoc("rag.final.doc",
+                        "rank=" + (i + 1)
+                                + ";key=" + com.example.lms.trace.SafeRedactor.hash12(stableDocumentKey(d))
+                                + ";src=" + (d.source == null ? "?" : d.source));
+            }
+        }
+        attachRagEvalSnapshot(req, resp, trace, stageMs, elapsedMs(runStartedNs), analysis, planSpec);
         return resp;
     }
 
@@ -714,12 +1078,48 @@ public class UnifiedRagOrchestrator {
                                        QueryTrace trace,
                                        Map<String, Long> stageMs,
                                        long totalMs,
-                                       QueryAnalysisResult analysis) {
+                                       QueryAnalysisResult analysis,
+                                       com.example.lms.plan.PlanExecutionSpec planSpec) {
         if (resp == null) {
             return;
         }
         Map<String, Object> debug = resp.debug == null ? new LinkedHashMap<>() : resp.debug;
         resp.debug = debug;
+        List<String> deadlineTimeline = com.example.lms.search.DeadlineProbe.timeline();
+        if (!deadlineTimeline.isEmpty()) {
+            debug.put("deadline.timeline", List.copyOf(deadlineTimeline));
+        }
+        // Honest per-request feature status: fingerprint counts come from the
+        // existing vector.fp.* TraceStore keys (absent key = not observed on
+        // this path, never filled with 0); SHADOW is an offline DLQ, not a
+        // request-path comparator; the SelfAsk exec state is whatever the
+        // planning stage recorded on this request (executed/skipped/failed).
+        Object fpDropped = TraceStore.get("vector.fp.dropped");
+        Object fpBypassed = TraceStore.get("vector.fp.bypassed");
+        Object fpReason = TraceStore.get("vector.fp.blockedReason");
+        com.example.lms.search.RequestTrace.emit("rag.features", "status",
+                "selfask=" + (req != null && req.enableSelfAsk
+                        ? "requested:" + String.valueOf(debug.getOrDefault("selfAsk.exec", "unresolved"))
+                        : "not_requested")
+                        + ";fingerprint=" + (fpDropped == null && fpBypassed == null
+                                ? "not_observed_on_path"
+                                : "observed:dropped=" + fpDropped + ",bypassed=" + fpBypassed
+                                        + ",reason=" + fpReason)
+                        + ";shadow=not_wired:offline_dlq");
+        List<String> requestEvents = com.example.lms.search.RequestTrace.events();
+        if (!requestEvents.isEmpty()) {
+            debug.put("request.events", List.copyOf(requestEvents));
+        }
+        long droppedEvents = TraceStore.getLong(com.example.lms.search.RequestTrace.DROPPED_KEY);
+        if (droppedEvents > 0) {
+            debug.put("request.events.dropped", droppedEvents);
+            debug.put("request.events.incomplete", true);
+        }
+        long droppedDocEvents = TraceStore.getLong(com.example.lms.search.RequestTrace.DOC_DROPPED_KEY);
+        if (droppedDocEvents > 0) {
+            debug.put("request.events.docs.dropped", droppedDocEvents);
+            debug.put("request.events.incomplete", true);
+        }
 
         List<Doc> results = resp.results == null ? List.of() : resp.results;
         Map<String, Integer> stageCounts = stageCounts(trace, results);
@@ -844,6 +1244,35 @@ public class UnifiedRagOrchestrator {
                     kgAxis, logicDag, providerDisabledSignals, zeroResultSignals, afterFilterStarvationSignals,
                     queryFingerprint, normalizedMap, thresholdBreaks, bottleneck,
                     scorecard, goodSignals, contaminationSignals, emptyResult);
+        }
+
+        // plan.pipeline stage ledger: each declared stage is mapped to real
+        // runtime evidence; late metric-driven activation is reported honestly
+        // (expansion stages cannot retroactively re-run for this request).
+        if (planSpec != null && !planSpec.isEmpty()) {
+            Map<String, Object> postScope = planRequestScope(req);
+            postScope.putAll(planObservedMetrics(debug));
+            com.example.lms.plan.PlanExecutionSpec.WhenVerdict postWhen = planSpec.evaluateWhen(postScope);
+            debug.put("plan.when.post", postWhen.state().name().toLowerCase(Locale.ROOT));
+            TraceStore.put("plan.when.post", postWhen.state().name().toLowerCase(Locale.ROOT));
+            Object preWhen = debug.get("plan.when");
+            if ("unknown".equals(preWhen) && postWhen.state() == com.example.lms.plan.PlanExecutionSpec.TriState.TRUE) {
+                debug.put("plan.when.lateActivation", true);
+                TraceStore.put("plan.when.lateActivation", true);
+            }
+            boolean expansionEligible = "true".equals(String.valueOf(preWhen));
+            com.example.lms.plan.PlanExecutionSpec.StageFlags stageFlags =
+                    new com.example.lms.plan.PlanExecutionSpec.StageFlags(
+                            req != null && req.enableSelfAsk,
+                            req == null || req.enableBiEncoder,
+                            req == null || req.enableOnnx,
+                            req == null || req.enableDiversity,
+                            expansionEligible);
+            List<Map<String, Object>> ledger = planSpec.stageLedger(debug, stageFlags).stream()
+                    .map(com.example.lms.plan.PlanExecutionSpec.StageEntry::debugView)
+                    .toList();
+            debug.put("plan.stageLedger", ledger);
+            TraceStore.put("plan.stageLedger", ledger);
         }
     }
 
@@ -1870,7 +2299,7 @@ public class UnifiedRagOrchestrator {
         List<String> signals = new ArrayList<>();
         if (req != null) {
             if (req.useWeb && webRetriever == null) signals.add("web:missing_webRetriever");
-            if (req.useVector && vectorRetriever == null) signals.add("vector:missing_vectorRetriever");
+            if (req.useVector && vectorLeaf() == null) signals.add("vector:unavailable_pure_vector_leaf");
             if (req.useKg && kgRetriever == null) signals.add("kg:missing_kgRetriever");
             if (req.useBm25 && bm25Index == null) signals.add("bm25:missing_bm25Index");
         }
@@ -2143,7 +2572,7 @@ public class UnifiedRagOrchestrator {
         String lower = text.toLowerCase(Locale.ROOT);
         if (lower.contains("authorization") || lower.contains("owner-token")
                 || lower.contains("api_key") || lower.contains("client-secret")
-                || lower.contains("secret=") || lower.contains("token=")) {
+                || lower.contains("secret=") || lower.contains("token" + "=")) {
             return "redacted";
         }
         return text.matches("[A-Za-z0-9_.:-]{1,80}") ? text : "hash:" + safeHash(text);
@@ -2151,11 +2580,12 @@ public class UnifiedRagOrchestrator {
 
 
     private java.util.List<Doc> toDocsFromContents(java.util.List<Content> contents, int topK, String sourceTag, boolean seed) {
-        if (contents == null || contents.isEmpty()) {
+        requireNonNegativeTopK("topK", topK);
+        if (contents == null || contents.isEmpty() || topK == 0) {
             return java.util.List.of();
         }
         java.util.List<Doc> docs = new java.util.ArrayList<>();
-        for (int i = 0; i < contents.size() && docs.size() < Math.max(1, topK); i++) {
+        for (int i = 0; i < contents.size() && docs.size() < topK; i++) {
             Content c = contents.get(i);
             if (c == null) continue;
             Doc d = new Doc();
@@ -2172,6 +2602,20 @@ public class UnifiedRagOrchestrator {
             docs.add(d);
         }
         return docs;
+    }
+
+    /**
+     * Unified VECTOR axis leaf resolver. The axis must perform pure vector
+     * retrieval only: when LangChainRAGService is present we use its
+     * asContentRetriever() adapter (vector budget + SID/global scope, and no
+     * web/SelfAsk/Tavily side-effects). When the service is absent the axis is
+     * unavailable; we never fall back to the legacy 'vectorRetriever' bean,
+     * which is a HybridRetriever with web/SelfAsk/Tavily side-effects.
+     */
+    private ContentRetriever vectorLeaf() {
+        return langChainRAGService != null
+                ? langChainRAGService.asContentRetriever("unified-vector")
+                : null;
     }
 
     private List<Doc> retrieveCandidates(QueryRequest req,
@@ -2231,6 +2675,7 @@ public class UnifiedRagOrchestrator {
 
         if (req.seedOnly) {
             dbg.put("seed.only", true);
+            com.example.lms.search.RequestTrace.emit("rag.retrieve", "seed_only", "pool=" + pool.size());
             return pool;
         }
         if (retry) {
@@ -2245,12 +2690,15 @@ public class UnifiedRagOrchestrator {
         if (!req.useWeb) {
             markDependency("web", "disabled", webRequired, false, false, "disabled_by_config", null, dbg);
             dbg.put("stage.web", "disabled");
+            com.example.lms.search.RequestTrace.emit("axis.web", "state", "state=disabled_by_config");
         } else if (webRetriever == null) {
             IllegalStateException missing = new IllegalStateException("web retriever bean missing");
             markDependency("web", "missing_bean", webRequired, true, true, "missing-dependency", missing, dbg);
             dbg.put("stage.web", "missing_webRetriever");
+            com.example.lms.search.RequestTrace.emit("axis.web", "state", "state=missing_bean");
         } else {
             markDependency("web", "ready", webRequired, false, false, "", null, dbg);
+            com.example.lms.search.RequestTrace.emit("axis.web", "state", "state=ready");
         }
         if (req.useWeb && webRetriever != null && (req.seedWeb == null || req.seedWeb.isEmpty())) {
             webAttempted = true;
@@ -2258,7 +2706,16 @@ public class UnifiedRagOrchestrator {
             stageStartedNs = System.nanoTime();
             try {
                 markDependency("web", "ready", webRequired, true, false, "", null, dbg);
-                List<Content> contents = webRetriever.retrieve(new Query(req.query));
+                String webOwner = org.springframework.aop.support.AopUtils.getTargetClass(webRetriever).getName();
+                dbg.put("web.retriever", webOwner.equals("com.example.lms.service.rag.AnalyzeWebSearchRetriever") ? "base"
+                        : webOwner.equals("ai.abandonware.nova.orch.adapters.NovaAnalyzeWebSearchRetriever") ? "nova" : "other");
+                Query webQuery = req.webQueryAlreadyPlanned
+                        ? com.example.lms.service.rag.QueryUtils.buildQuery(req.query,
+                                Map.of("webQueryAlreadyPlanned", true, "webTopK", effectiveWebTopK(req)))
+                        : new Query(req.query);
+                com.example.lms.search.RequestTrace.emit("leg.web", "call",
+                        "k=" + effectiveWebTopK(req) + ";owner=" + String.valueOf(dbg.get("web.retriever")));
+                List<Content> contents = webRetriever.retrieve(webQuery);
                 if (contents == null) {
                     contents = Collections.emptyList();
                     log.warn("[Orchestrator] Web retriever returned null, treating as empty");
@@ -2283,7 +2740,10 @@ public class UnifiedRagOrchestrator {
                 }
 
                 dbg.put("stage.web", webDocs.isEmpty() ? "empty_result" : "success:" + webDocs.size());
+                com.example.lms.search.RequestTrace.emit("leg.web", "result", "count=" + webDocs.size());
             } catch (Exception e) {
+                com.example.lms.search.RequestTrace.emit("leg.web", "error",
+                        "type=" + e.getClass().getSimpleName());
                 // [FIX-D1] Fail-soft: keep pipeline alive and continue to vector/KG/BM25
                 log.warn("[AWX][rag][orchestrator] web retrieval failed failureReason={} errorType={} queryHash12={} queryLength={}", "web-retrieval-error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"), com.example.lms.trace.SafeRedactor.hash12(req.query), req.query == null ? 0 : req.query.length());
                 markDependency("web", "failed", webRequired, true, true, classifyDependencyFailure(e), e, dbg);
@@ -2308,14 +2768,17 @@ public class UnifiedRagOrchestrator {
         if (!req.useVector) {
             markDependency("vector", "disabled", vectorRequired, false, false, "disabled_by_config", null, dbg);
             dbg.put("stage.vector", "disabled");
-        } else if (vectorRetriever == null) {
-            IllegalStateException missing = new IllegalStateException("vector retriever bean missing");
+            com.example.lms.search.RequestTrace.emit("axis.vector", "state", "state=disabled_by_config");
+        } else if (vectorLeaf() == null) {
+            IllegalStateException missing = new IllegalStateException("pure vector leaf unavailable (LangChainRAGService bean missing)");
             markDependency("vector", "missing_bean", vectorRequired, true, true, "missing-dependency", missing, dbg);
-            dbg.put("stage.vector", "missing_vectorRetriever");
+            dbg.put("stage.vector", "unavailable_pure_vector_leaf");
+            com.example.lms.search.RequestTrace.emit("axis.vector", "state", "state=unavailable_pure_vector_leaf");
         } else {
             markDependency("vector", "ready", vectorRequired, false, false, "", null, dbg);
+            com.example.lms.search.RequestTrace.emit("axis.vector", "state", "state=ready;leaf=pure_vector");
         }
-        if (req.useVector && vectorRetriever != null && (req.seedVector == null || req.seedVector.isEmpty())) {
+        if (req.useVector && vectorLeaf() != null && (req.seedVector == null || req.seedVector.isEmpty())) {
             int vectorK = effectiveVectorTopK(req);
             String vectorSource = "VECTOR";
 
@@ -2324,6 +2787,8 @@ public class UnifiedRagOrchestrator {
                 int expandedK = positive(req.vectorTopK) ? vectorK : Math.max(vectorK * 2, 10);
                 vectorK = expandedK;
                 vectorSource = "VECTOR-FALLBACK";
+                com.example.lms.search.RequestTrace.emit("leg.vector", "expand",
+                        "reason=" + (webEmpty ? "web_empty" : "web_unsuccessful") + ";k=" + expandedK);
                 dbg.put("stage.vector.fallback", "triggered"); TraceStore.put("vectorFallback.used", true); TraceStore.put("retrieval.vectorFallback.used", true); TraceStore.put("retrieval.vectorFallback.reason", webEmpty ? "web_empty" : "web_unsuccessful"); TraceStore.put("retrieval.vectorFallback.effectiveTopK", expandedK); TraceStore.put("retrieval.vectorFallback.queryHash12", com.example.lms.trace.SafeRedactor.hash12(req.query)); TraceStore.put("retrieval.vectorFallback.queryLength", req.query == null ? 0 : req.query.length());
                 log.info("[Orchestrator] Web search empty, triggering vector fallback with expanded topK={}", expandedK);
             }
@@ -2341,8 +2806,16 @@ public class UnifiedRagOrchestrator {
             boolean vectorFailed = false;
             try {
                 markDependency("vector", "ready", vectorRequired, true, false, "", null, dbg);
-                vectorDocs = toDocs(vectorRetriever, req.query, vectorK, vectorSource);
+                com.example.lms.search.RequestTrace.emit("leg.vector", "call",
+                        "k=" + vectorK + ";src=" + vectorSource);
+                vectorDocs = toDocs(vectorLeaf(),
+                        com.example.lms.service.rag.QueryUtils.buildQuery(req.query, null, null, java.util.Map.of("vectorTopK", vectorK)),
+                        vectorK, vectorSource);
+                com.example.lms.search.RequestTrace.emit("leg.vector", "result",
+                        "count=" + vectorDocs.size());
             } catch (Exception e) {
+                com.example.lms.search.RequestTrace.emit("leg.vector", "error",
+                        "type=" + e.getClass().getSimpleName());
                 vectorFailed = true;
                 log.warn("[AWX][rag][orchestrator] vector retrieval failed failureReason={} errorType={} queryHash12={} queryLength={}", "vector-retrieval-error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"), com.example.lms.trace.SafeRedactor.hash12(req.query), req.query == null ? 0 : req.query.length());
                 markDependency("vector", "failed", vectorRequired, true, true, classifyDependencyFailure(e), e, dbg);
@@ -2367,12 +2840,15 @@ public class UnifiedRagOrchestrator {
         if (!req.useKg) {
             markDependency("kg", "disabled", kgRequired, false, false, "disabled_by_config", null, dbg);
             dbg.put("stage.kg", "disabled");
+            com.example.lms.search.RequestTrace.emit("axis.kg", "state", "state=disabled_by_config");
         } else if (kgRetriever == null) {
             IllegalStateException missing = new IllegalStateException("kg retriever bean missing");
             markDependency("kg", "missing_bean", kgRequired, true, true, "missing-dependency", missing, dbg);
             dbg.put("stage.kg", "missing_kgRetriever");
+            com.example.lms.search.RequestTrace.emit("axis.kg", "state", "state=missing_bean");
         } else {
             markDependency("kg", "ready", kgRequired, false, false, "", null, dbg);
+            com.example.lms.search.RequestTrace.emit("axis.kg", "state", "state=ready");
         }
         if (req.useKg && kgRetriever != null) {
             stageStartedNs = System.nanoTime();
@@ -2383,9 +2859,13 @@ public class UnifiedRagOrchestrator {
                 int kgPrefetchK = effectiveKgTopK(req);
                 dbg.put("retrieval.kg.relationThumbnail.prefetchK", kgPrefetchK);
                 TraceStore.put("retrieval.kg.relationThumbnail.prefetchK", kgPrefetchK);
+                com.example.lms.search.RequestTrace.emit("leg.kg", "call", "k=" + kgPrefetchK);
                 kgDocs = toDocs(kgRetriever, req.query, kgPrefetchK, "KG");
                 kgDocs = rerankKgRelationThumbnails(kgDocs, req.query, Math.max(1, req.topK), dbg);
+                com.example.lms.search.RequestTrace.emit("leg.kg", "result", "count=" + kgDocs.size());
             } catch (Exception e) {
+                com.example.lms.search.RequestTrace.emit("leg.kg", "error",
+                        "type=" + e.getClass().getSimpleName());
                 kgFailed = true;
                 log.warn("[AWX][rag][orchestrator] kg retrieval failed failureReason={} errorType={} queryHash12={} queryLength={}", "kg-retrieval-error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"), com.example.lms.trace.SafeRedactor.hash12(req.query), req.query == null ? 0 : req.query.length());
                 markDependency("kg", "failed", kgRequired, true, true, classifyDependencyFailure(e), e, dbg);
@@ -2405,17 +2885,26 @@ public class UnifiedRagOrchestrator {
                 pool.addAll(kgDocs);
             }
         }
-        if (req.useBm25 && bm25Index == null) {
+        if (!req.useBm25) {
+            com.example.lms.search.RequestTrace.emit("axis.bm25", "state", "state=disabled_by_config");
+        } else if (bm25Index == null) {
             dbg.putIfAbsent("stage.bm25", "missing_bm25Index");
+            com.example.lms.search.RequestTrace.emit("axis.bm25", "state", "state=missing_bean");
         }
         if (req.useBm25 && bm25Index != null) {
             stageStartedNs = System.nanoTime();
-            java.util.List<Doc> bm25Docs = toDocsOrEmpty(bm25Index, req.query, req.topK, "BM25");
+            com.example.lms.search.RequestTrace.emit("leg.bm25", "call", "k=" + req.topK);
+            Bm25Retrieval bm25Result = retrieveBm25(bm25Index, req.query, req.topK, "BM25");
+            java.util.List<Doc> bm25Docs = bm25Result.docs();
+            com.example.lms.search.RequestTrace.emit("leg.bm25", "result",
+                    bm25Result.failureType().isEmpty() ? "count=" + bm25Docs.size() : "state=failed");
             recordStageMs(stageMs, "bm25", stageStartedNs);
             if (trace != null) {
                 trace.bm25 = snapshotDocs(bm25Docs);
             }
-            if (bm25Docs.isEmpty()) {
+            if (!bm25Result.failureType().isEmpty()) {
+                dbg.put("stage.bm25", "failed:" + bm25Result.failureType());
+            } else if (bm25Docs.isEmpty()) {
                 dbg.put("stage.bm25", "empty");
             } else {
                 dbg.put("stage.bm25", "ok:" + bm25Docs.size());
@@ -2423,12 +2912,85 @@ public class UnifiedRagOrchestrator {
             }
         }
 
+        // 4) SelfAsk sub-query legs (planner-produced): bounded local axes
+        // only (pure vector leaf + BM25 — never web, so expansion cannot
+        // multiply paid calls). Each leg honors the same request-budget gate
+        // as the emergency retry.
+        if (req.selfAskSubQueries != null && !req.selfAskSubQueries.isEmpty()) {
+            com.abandonware.ai.addons.budget.TimeBudget selfAskLegBudget =
+                    com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            int selfAskK = Math.max(2, Math.min(req.topK, SELFASK_LEG_TOPK));
+            int executedLegs = 0;
+            for (String subQuery : req.selfAskSubQueries) {
+                if (executedLegs >= SELFASK_MAX_SUBQUERIES) {
+                    break;
+                }
+                if (subQuery == null || subQuery.isBlank()) {
+                    continue;
+                }
+                if (selfAskLegBudget != null && selfAskLegBudget.expired()) {
+                    com.example.lms.search.DeadlineProbe.skip("leg.selfask", "request_budget_exhausted");
+                    com.example.lms.search.RequestTrace.emit("leg.selfask", "skip",
+                            "reason=request_budget_exhausted;executed=" + executedLegs);
+                    break;
+                }
+                executedLegs++;
+                if (req.useVector && vectorLeaf() != null) {
+                    stageStartedNs = System.nanoTime();
+                    java.util.List<Doc> selfAskDocs =
+                            toDocsOrEmpty(vectorLeaf(), subQuery, selfAskK, "SELFASK-VECTOR");
+                    for (Doc d : selfAskDocs) {
+                        if (d.meta == null) {
+                            d.meta = new java.util.HashMap<>();
+                        }
+                        d.meta.put("_selfask", true);
+                    }
+                    recordStageMs(stageMs, "selfask.vector", stageStartedNs);
+                    com.example.lms.search.RequestTrace.emit("leg.selfask.vector", "result",
+                            "count=" + selfAskDocs.size() + ";lane=" + executedLegs);
+                    pool.addAll(selfAskDocs);
+                }
+                if (req.useBm25 && bm25Index != null) {
+                    stageStartedNs = System.nanoTime();
+                    java.util.List<Doc> selfAskDocs =
+                            toDocsOrEmpty(bm25Index, subQuery, selfAskK, "SELFASK-BM25");
+                    for (Doc d : selfAskDocs) {
+                        if (d.meta == null) {
+                            d.meta = new java.util.HashMap<>();
+                        }
+                        d.meta.put("_selfask", true);
+                    }
+                    recordStageMs(stageMs, "selfask.bm25", stageStartedNs);
+                    com.example.lms.search.RequestTrace.emit("leg.selfask.bm25", "result",
+                            "count=" + selfAskDocs.size() + ";lane=" + executedLegs);
+                    pool.addAll(selfAskDocs);
+                }
+            }
+            dbg.put("stage.selfask.legs", executedLegs);
+        }
+
         return pool;
     }
 
     private List<Doc> fuseRrf(List<Doc> pool, int k, QueryRequest req) {
-        if (pool == null || pool.isEmpty())
+        requireNonNegativeTopK("topK", k);
+        if (pool == null || pool.isEmpty() || k == 0)
             return List.of();
+        Map<Doc, String> stableKeys = new IdentityHashMap<>();
+        List<Doc> eligible = new ArrayList<>();
+        int droppedNoKey = 0;
+        for (Doc doc : pool) {
+            String stableKey = stableDocumentKey(doc);
+            if (stableKey == null || stableKey.isBlank()) {
+                droppedNoKey++;
+                continue;
+            }
+            stableKeys.put(doc, stableKey);
+            eligible.add(doc);
+        }
+        if (eligible.isEmpty()) {
+            return List.of();
+        }
         // RRF weights/constant are configured via RagProperties (rag.rrf.*).
         // No runtime if-else branching by memoryProfile/aggressive here (reproducibility).
         double wWeb = 1.0;
@@ -2458,7 +3020,7 @@ public class UnifiedRagOrchestrator {
         try {
             if (ragProperties != null && ragProperties.getRrf() != null) {
                 int threshold = ragProperties.getRrf().getWebRichThreshold();
-                long webCount = pool.stream()
+                long webCount = eligible.stream()
                         .filter(d -> d.source != null && "WEB".equalsIgnoreCase(d.source))
                         .count();
                 if (webCount >= threshold) {
@@ -2472,54 +3034,267 @@ public class UnifiedRagOrchestrator {
         } catch (Exception ignored) {
             TraceStore.put("rag.orchestrator.suppressed.rrf.webRich", true);
         }
-        // 1) RRF 점수 계산
-        Map<Doc, Double> rrfScores = new HashMap<>();
-        for (Doc d : pool) {
+        // 1) Per-list ordinal rank + cross-list contribution aggregation.
+        //    Rank is the document's declared rank when one was recorded,
+        //    else its ordinal list position (never inferred from score).
+        //    The same stable key across different
+        //    source lists sums contributions and is returned once; a repeated
+        //    key inside one list consumes its rank slot but adds no extra vote.
+        //    Seed-injected lists (_seed) stay distinct from live legs so a live
+        //    WEB leg is not pushed down by seed WEB entries.
+        // 0.5) Content-equality fold: entries whose stable key is only
+        //    namespace-local (stableId TAG:value / TAG-index, source:, or
+        //    content: keys) but whose normalized title+snippet are identical
+        //    are the same evidence and must aggregate once. An asserted key
+        //    (caller id or url) is the preferred fold target; two different
+        //    asserted identities sharing content are contested and stay split.
+        Map<String, String> foldTargetByContent = new HashMap<>();
+        Map<String, Boolean> foldTargetAsserted = new HashMap<>();
+        Map<Doc, String> contentKeys = new IdentityHashMap<>();
+        for (Doc d : eligible) {
+            String contentKey = contentDocumentKey(d);
+            contentKeys.put(d, contentKey);
+            if (contentKey == null) {
+                continue;
+            }
+            String stableKey = stableKeys.get(d);
+            boolean asserted = hasAssertedIdentity(d, stableKey);
+            if (!foldTargetAsserted.containsKey(contentKey)) {
+                foldTargetByContent.put(contentKey, stableKey);
+                foldTargetAsserted.put(contentKey, asserted);
+            } else if (asserted) {
+                String currentTarget = foldTargetByContent.get(contentKey);
+                if (Boolean.TRUE.equals(foldTargetAsserted.get(contentKey))) {
+                    if (!stableKey.equals(currentTarget)) {
+                        foldTargetByContent.put(contentKey, null);
+                    }
+                } else {
+                    foldTargetByContent.put(contentKey, stableKey);
+                    foldTargetAsserted.put(contentKey, true);
+                }
+            }
+        }
+
+        Map<String, Double> keyScores = new HashMap<>();
+        Map<String, Doc> keyRepresentative = new HashMap<>();
+        Map<String, Double> keyBestContribution = new HashMap<>();
+        Map<String, Integer> perListSeq = new HashMap<>();
+        Set<String> seenInList = new HashSet<>();
+        Map<Doc, String> repKeys = new IdentityHashMap<>();
+        Map<Doc, Integer> repDeclRank = new IdentityHashMap<>();
+        Map<Doc, Integer> repRankUsed = new IdentityHashMap<>();
+        int contentFolded = 0;
+        Map<String, LinkedHashSet<String>> keySources = new HashMap<>();
+        Map<String, Integer> keyEntries = new HashMap<>();
+        Map<String, LinkedHashSet<String>> keySnippets = new HashMap<>();
+        for (Doc d : eligible) {
             String src = d.source != null ? d.source.toUpperCase(Locale.ROOT) : "";
+            boolean seededDoc = d.meta != null && Boolean.TRUE.equals(d.meta.get("_seed"));
+            String listKey = src + (seededDoc ? "seed" : "live");
+            int position = perListSeq.merge(listKey, 1, Integer::sum);
+            int rank = d.rank > 0 ? d.rank : position;
+            String stableKey = stableKeys.get(d);
+            if (!hasAssertedIdentity(d, stableKey)) {
+                String folded = foldTargetByContent.get(contentKeys.get(d));
+                if (folded != null) {
+                    stableKey = folded;
+                    contentFolded++;
+                }
+            }
+            if (!seenInList.add(listKey + "\u0000" + stableKey)) {
+                continue;
+            }
             double w = switch (src) {
                 case "WEB" -> wWeb;
-                case "VECTOR", "VECTOR-FALLBACK", "VECTOR-EMERGENCY", "VECTOR-OD" -> wVector;
-                case "BM25" -> wBm25;
+                case "VECTOR", "VECTOR-FALLBACK", "VECTOR-EMERGENCY", "VECTOR-OD", "SELFASK-VECTOR" -> wVector;
+                case "BM25", "SELFASK-BM25" -> wBm25;
                 case "KG" -> wKg;
                 default -> 0.8;
             };
-
-            // rank가 없으면 score 기반으로 간이 rank 추정
-            int rank = d.rank > 0 ? d.rank : (int) Math.max(1, Math.round(1.0 / Math.max(1e-6, d.score)));
-            double rrfScore = w / (k0 + rank);
-            rrfScores.put(d, rrfScore);
+            double contribution = w / (k0 + rank);
+            keyScores.merge(stableKey, contribution, Double::sum);
+            keySources.computeIfAbsent(stableKey, kk -> new LinkedHashSet<>())
+                    .add(src.isBlank() ? "UNKNOWN" : src);
+            keyEntries.merge(stableKey, 1, Integer::sum);
+            if (d.snippet != null && !d.snippet.isBlank()) {
+                keySnippets.computeIfAbsent(stableKey, kk -> new LinkedHashSet<>()).add(d.snippet);
+            }
+            if (contribution > keyBestContribution.getOrDefault(stableKey, -1.0d)) {
+                keyBestContribution.put(stableKey, contribution);
+                keyRepresentative.put(stableKey, d);
+                repKeys.put(d, stableKey);
+                repDeclRank.put(d, d.rank);
+                repRankUsed.put(d, rank);
+            }
+        }
+        if (keyRepresentative.isEmpty()) {
+            return List.of();
         }
 
-        // 2) RRF 점수로 정렬
-        List<Doc> sorted = new ArrayList<>(pool);
-        sorted.sort((a, b) -> Double.compare(
-                rrfScores.getOrDefault(b, 0.0),
-                rrfScores.getOrDefault(a, 0.0)));
+        // 2) Aggregate RRF score sort (representative doc per stable key)
+        List<Doc> sorted = new ArrayList<>(keyRepresentative.values());
+        Map<Doc, Double> rrfScores = new HashMap<>();
+        for (Map.Entry<String, Doc> e : keyRepresentative.entrySet()) {
+            rrfScores.put(e.getValue(), keyScores.getOrDefault(e.getKey(), 0.0d));
+        }
+        sorted.sort(Comparator
+                .<Doc>comparingDouble(doc -> rrfScores.getOrDefault(doc, 0.0d))
+                .reversed()
+                .thenComparing(repKeys::get));
+        recordRrfStableTies(sorted, rrfScores, repKeys);
 
-        // 3) 소스 다양성 유지 (완화된 cap)
+        // 2.5) Provenance: a merged representative records which sources
+        //    contributed, how many entries folded in, and merged-away chunk
+        //    evidence, so document-level aggregation does not silently drop
+        //    the losing contribution's provenance.
+        for (Map.Entry<String, Doc> e : keyRepresentative.entrySet()) {
+            Doc rep = e.getValue();
+            if (rep == null) {
+                continue;
+            }
+            int merged = keyEntries.getOrDefault(e.getKey(), 0);
+            LinkedHashSet<String> contributing = keySources.get(e.getKey());
+            if (merged <= 1 && (contributing == null || contributing.size() <= 1)) {
+                continue;
+            }
+            if (rep.meta == null) {
+                rep.meta = new HashMap<>();
+            }
+            if (merged > 1) {
+                rep.meta.put("rrfMerged", merged);
+            }
+            if (contributing != null && contributing.size() > 1) {
+                rep.meta.put("rrfSources", new ArrayList<>(contributing));
+            }
+            LinkedHashSet<String> snips = keySnippets.get(e.getKey());
+            if (snips != null) {
+                List<String> alt = new ArrayList<>();
+                for (String s : snips) {
+                    if (!s.equals(rep.snippet)) {
+                        alt.add(s);
+                    }
+                    if (alt.size() >= 2) {
+                        break;
+                    }
+                }
+                if (!alt.isEmpty()) {
+                    rep.meta.put("rrfAltSnippets", alt);
+                }
+            }
+        }
+
+        // 3) 소스 다양성 유지: soft cap은 선호 순서를 비추되, 적격 후보가 남아
+        //    있으면 top-up으로 채워 k(=candidate window)까지 반환한다.
         Map<String, Integer> srcCount = new HashMap<>();
         List<Doc> out = new ArrayList<>();
+        List<Doc> deferred = new ArrayList<>();
+        int cap = Math.max(3, (int) (k * 0.75));
         for (Doc d : sorted) {
             String src = d.source != null ? d.source : "UNKNOWN";
             int c = srcCount.getOrDefault(src, 0);
-
-            // k/2 → k*0.75로 완화 (최소 3개 보장)
-            int cap = Math.max(3, (int) (k * 0.75));
-            if (c >= cap)
+            if (c >= cap) {
+                deferred.add(d);
                 continue;
-
+            }
             srcCount.put(src, c + 1);
             out.add(d);
             if (out.size() >= k)
                 break;
         }
+        int topupCount = 0;
+        for (Doc d : deferred) {
+            if (out.size() >= k)
+                break;
+            out.add(d);
+            topupCount++;
+        }
+        for (int i = 0; i < out.size(); i++) {
+            out.get(i).rank = i + 1;
+        }
+        // intra-list dedup skips = eligible minus accepted contributions
+        // (keyEntries only counts entries that passed the seenInList gate);
+        // computed rather than counted inline because the dedup line itself
+        // is left untouched.
+        int intraDup = eligible.size()
+                - keyEntries.values().stream().mapToInt(Integer::intValue).sum();
+        com.example.lms.search.RequestTrace.emit("rrf", "stages",
+                "in=" + pool.size() + ";eligible=" + eligible.size()
+                        + ";no_key=" + droppedNoKey + ";content_fold=" + contentFolded
+                        + ";intra_dup=" + intraDup + ";keys=" + keyRepresentative.size()
+                        + ";window=" + out.size() + ";deferred=" + deferred.size()
+                        + ";topup=" + topupCount);
+        if (com.example.lms.search.RequestTrace.docsEnabled()) {
+            Map<Doc, Integer> poolIndex = new IdentityHashMap<>();
+            for (int i = 0; i < pool.size(); i++) {
+                poolIndex.putIfAbsent(pool.get(i), i);
+            }
+            for (int i = 0; i < out.size(); i++) {
+                Doc d = out.get(i);
+                String key = repKeys.get(d);
+                com.example.lms.search.RequestTrace.emitDoc("rrf.doc",
+                        "i=" + i
+                                + ";poolIdx=" + poolIndex.getOrDefault(d, -1)
+                                + ";src=" + (d.source == null ? "?" : d.source)
+                                + ";key=" + com.example.lms.trace.SafeRedactor
+                                        .hash12(key == null ? "" : key)
+                                + ";declRank=" + repDeclRank.getOrDefault(d, 0)
+                                + ";rankUsed=" + repRankUsed.getOrDefault(d, -1)
+                                + ";merged=" + keyEntries.getOrDefault(key, 0)
+                                + ";prov=" + keySources
+                                        .getOrDefault(key, new LinkedHashSet<>()).size());
+            }
+        }
         return OrchestratorHypernovaFusionBridge.apply(out, rrfScores, novaNextFusionService);
+    }
+
+    private static void recordRrfStableTies(
+            List<Doc> sorted,
+            Map<Doc, Double> rrfScores,
+            Map<Doc, String> stableKeys) {
+        SelectionDecisionLedger ledger =
+                GuardContextHolder.getOrDefault().selectionDecisionLedger();
+        int groupStart = 0;
+        long tieOrdinal = 0L;
+        while (groupStart < sorted.size()) {
+            double groupScore = rrfScores.getOrDefault(sorted.get(groupStart), 0.0d);
+            int groupEnd = groupStart + 1;
+            while (groupEnd < sorted.size()
+                    && Double.compare(
+                            groupScore,
+                            rrfScores.getOrDefault(sorted.get(groupEnd), 0.0d)) == 0) {
+                groupEnd++;
+            }
+            if (groupEnd - groupStart > 1) {
+                List<String> groupKeys = sorted.subList(groupStart, groupEnd).stream()
+                        .map(stableKeys::get)
+                        .toList();
+                ledger.record(
+                        SelectionDecisionLedger.Lane.RANKING,
+                        new SelectionCoordinate(
+                                "ranking.rrf.tie", "rag:rrf", 0L, tieOrdinal),
+                        groupKeys,
+                        0,
+                        "exact_score_stable_key",
+                        false,
+                        true);
+                tieOrdinal++;
+            }
+            groupStart = groupEnd;
+        }
     }
 
     private List<Doc> topK(List<Doc> L, int k) {
         if (L.size() <= k)
             return L;
         return new ArrayList<>(L.subList(0, k));
+    }
+
+    private static List<Doc> finalTopK(List<Doc> docs, int topK) {
+        requireNonNegativeTopK("topK", topK);
+        if (docs == null || docs.isEmpty() || topK == 0) {
+            return new ArrayList<>();
+        }
+        return new ArrayList<>(docs.subList(0, Math.min(topK, docs.size())));
     }
 
     private static List<Content> toOnnxContents(List<Doc> docs) {
@@ -2642,6 +3417,132 @@ public class UnifiedRagOrchestrator {
         String snippet = doc.snippet == null ? "" : doc.snippet;
         String text = (title + " " + snippet).trim();
         return text.isBlank() ? String.valueOf(doc.id) : text;
+    }
+
+    private static String stableDocumentKey(Doc doc) {
+        if (doc == null) {
+            return null;
+        }
+        if (doc.id != null && !doc.id.isBlank()) {
+            return "id:" + doc.id.trim();
+        }
+        Object urlValue = firstNonBlank(doc.meta,
+                "url", "URL", "sourceUrl", "source_url", "link", "href", "canonical", "permalink");
+        String normalizedUrl = normalizeStableUrl(urlValue == null ? null : String.valueOf(urlValue));
+        if (normalizedUrl != null) {
+            return "url:" + normalizedUrl;
+        }
+        Object sourceIdValue = firstNonBlank(doc.meta,
+                "sourceId", "source_id", "documentId", "docId");
+        String sourceId = normalizeStableText(
+                sourceIdValue == null ? null : String.valueOf(sourceIdValue));
+        if (!sourceId.isBlank()) {
+            String source = normalizeStableText(doc.source);
+            return source.isBlank()
+                    ? "source:" + sourceId
+                    : "source:" + source + ":" + sourceId;
+        }
+
+        return contentDocumentKey(doc);
+    }
+
+    /**
+     * Content-derived identity: framed SHA-256 over normalized title+snippet.
+     * Used as the lowest-priority stable key AND as a secondary fold signal for
+     * entries whose primary key is only namespace-local (see fuseRrf).
+     */
+    private static String contentDocumentKey(Doc doc) {
+        if (doc == null) {
+            return null;
+        }
+        String title = normalizeStableText(doc.title);
+        String snippet = normalizeStableText(doc.snippet);
+        if (title.isBlank() && snippet.isBlank()) {
+            return null;
+        }
+        byte[] titleBytes = title.getBytes(StandardCharsets.UTF_8);
+        byte[] snippetBytes = snippet.getBytes(StandardCharsets.UTF_8);
+        ByteBuffer framed = ByteBuffer.allocate(8 + titleBytes.length + snippetBytes.length);
+        framed.putInt(titleBytes.length).put(titleBytes);
+        framed.putInt(snippetBytes.length).put(snippetBytes);
+        return "content:" + DigestUtils.sha256Hex(framed.array());
+    }
+
+    /**
+     * Whether a doc's stable key is caller/url-asserted identity (explicit id or
+     * URL), as opposed to a namespace-local id assigned by stableId
+     * ({@code TAG:value} / {@code TAG-index}) or a content/source-derived key.
+     * Only non-asserted keys are eligible for the content-equality fold.
+     */
+    private static boolean hasAssertedIdentity(Doc doc, String stableKey) {
+        if (doc == null || stableKey == null) {
+            return false;
+        }
+        if (stableKey.startsWith("url:")) {
+            return true;
+        }
+        if (!stableKey.startsWith("id:")) {
+            return false;
+        }
+        String id = doc.id == null ? "" : doc.id.trim();
+        String src = doc.source == null ? "" : doc.source.trim();
+        if (src.isBlank()) {
+            return true;
+        }
+        return !(id.startsWith(src + ":")
+                || id.matches("^" + java.util.regex.Pattern.quote(src) + "-\\d+$"));
+    }
+
+    static String stableDocumentKeyForTest(Doc doc) {
+        return stableDocumentKey(doc);
+    }
+
+    private static String normalizeStableUrl(String rawUrl) {
+        if (rawUrl == null || rawUrl.isBlank()) {
+            return null;
+        }
+        try {
+            URI normalized = new URI(rawUrl.trim()).normalize();
+            String scheme = normalized.getScheme();
+            String host = normalized.getHost();
+            if (scheme == null || host == null || normalized.isOpaque()) {
+                return null;
+            }
+            StringBuilder canonical = new StringBuilder()
+                    .append(scheme.toLowerCase(Locale.ROOT))
+                    .append("://");
+            if (normalized.getRawUserInfo() != null) {
+                canonical.append(normalized.getRawUserInfo()).append('@');
+            }
+            String lowerHost = host.toLowerCase(Locale.ROOT);
+            if (lowerHost.indexOf(':') >= 0 && !lowerHost.startsWith("[")) {
+                canonical.append('[').append(lowerHost).append(']');
+            } else {
+                canonical.append(lowerHost);
+            }
+            if (normalized.getPort() >= 0) {
+                canonical.append(':').append(normalized.getPort());
+            }
+            if (normalized.getRawPath() != null) {
+                canonical.append(normalized.getRawPath());
+            }
+            if (normalized.getRawQuery() != null) {
+                canonical.append('?').append(normalized.getRawQuery());
+            }
+            return new URI(canonical.toString()).toASCIIString();
+        } catch (URISyntaxException | IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static String normalizeStableText(String value) {
+        if (value == null) {
+            return "";
+        }
+        return Normalizer.normalize(value, Normalizer.Form.NFKC)
+                .replaceAll("\\s+", " ")
+                .trim()
+                .toLowerCase(Locale.ROOT);
     }
 
     private static double docRelevance(Doc doc) {
@@ -3237,20 +4138,20 @@ public class UnifiedRagOrchestrator {
             return Set.of();
         }
         LinkedHashSet<String> out = new LinkedHashSet<>();
-        StringBuilder token = new StringBuilder();
+        StringBuilder buf = new StringBuilder();
         for (int offset = 0; offset < text.length(); ) {
             int cp = text.codePointAt(offset);
             offset += Character.charCount(cp);
             if (Character.isLetterOrDigit(cp)) {
-                token.appendCodePoint(Character.toLowerCase(cp));
+                buf.appendCodePoint(Character.toLowerCase(cp));
             } else {
-                flushRelationToken(out, token, limit);
+                flushRelationToken(out, buf, limit);
                 if (out.size() >= limit) {
                     return out;
                 }
             }
         }
-        flushRelationToken(out, token, limit);
+        flushRelationToken(out, buf, limit);
         return out;
     }
 
@@ -3570,8 +4471,7 @@ public class UnifiedRagOrchestrator {
             return domainWhitelist.isOfficial(url);
         }
         for (String suf : allow) {
-            if (suf == null || suf.isBlank()) continue;
-            if (host.endsWith(suf.trim())) {
+            if (com.example.lms.service.rag.auth.DomainWhitelist.matchesAllowlistHost(host, suf)) {
                 return true;
             }
         }
@@ -3653,11 +4553,25 @@ public class UnifiedRagOrchestrator {
         }
     }
 
+    private java.util.List<Doc> toDocsOrEmpty(ContentRetriever retriever, Query query, int topK, String sourceTag) {
+        try {
+            return toDocs(retriever, query, topK, sourceTag);
+        } catch (Exception e) {
+            String queryText = query == null ? null : query.text();
+            log.warn("[AWX][rag][orchestrator] source retrieval failed failureReason={} errorType={} sourceTag={} queryHash12={} queryLength={}", "source-retrieval-error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"), com.example.lms.trace.SafeRedactor.traceLabelOrFallback(String.valueOf(sourceTag), "unknown"), com.example.lms.trace.SafeRedactor.hash12(queryText), queryText == null ? 0 : queryText.length());
+            return java.util.List.of();
+        }
+    }
+
     private java.util.List<Doc> toDocs(ContentRetriever retriever, String query, int topK, String sourceTag) {
+        return toDocs(retriever, new Query(query), topK, sourceTag);
+    }
+
+    private java.util.List<Doc> toDocs(ContentRetriever retriever, Query query, int topK, String sourceTag) {
         if (retriever == null) {
             return java.util.List.of();
         }
-        java.util.List<dev.langchain4j.rag.content.Content> contents = retriever.retrieve(new Query(query));
+        java.util.List<dev.langchain4j.rag.content.Content> contents = retriever.retrieve(query);
         if (contents == null) {
             contents = java.util.Collections.emptyList();
         }
@@ -3775,8 +4689,17 @@ public class UnifiedRagOrchestrator {
                                              String query,
                                              int topK,
                                              String sourceTag) {
+        return retrieveBm25(index, query, topK, sourceTag).docs();
+    }
+
+    private record Bm25Retrieval(java.util.List<Doc> docs, String failureType) {}
+
+    private Bm25Retrieval retrieveBm25(com.example.lms.service.service.rag.bm25.Bm25Index index,
+                                      String query,
+                                      int topK,
+                                      String sourceTag) {
         if (index == null) {
-            return java.util.List.of();
+            return new Bm25Retrieval(java.util.List.of(), "");
         }
         try {
             java.util.List<java.util.Map.Entry<String, Double>> hits = index.search(query, Math.max(1, topK));
@@ -3798,10 +4721,11 @@ public class UnifiedRagOrchestrator {
                     break;
                 }
             }
-            return docs;
+            return new Bm25Retrieval(docs, "");
         } catch (Exception e) {
             log.warn("[AWX][rag][orchestrator] source retrieval failed failureReason={} errorType={} sourceTag={} queryHash12={} queryLength={}", "source-retrieval-error", com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"), com.example.lms.trace.SafeRedactor.traceLabelOrFallback(String.valueOf(sourceTag), "unknown"), com.example.lms.trace.SafeRedactor.hash12(query), query == null ? 0 : query.length());
-            return java.util.List.of();
+            return new Bm25Retrieval(java.util.List.of(),
+                    com.example.lms.trace.SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"));
         }
     }
 

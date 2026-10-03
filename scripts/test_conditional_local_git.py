@@ -11,10 +11,13 @@ from functools import partial
 # Windows may hold a finished fixture directory briefly; functional assertions still fail normally.
 FixtureDirectory = partial(tempfile.TemporaryDirectory, ignore_cleanup_errors=True)
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "scripts" / "conditional_local_git.py"
+sys.path.insert(0, str(ROOT / "scripts"))
+import conditional_local_git as gate  # noqa: E402
 
 
 def run_tool(*args: str, env: dict | None = None) -> subprocess.CompletedProcess[str]:
@@ -207,9 +210,9 @@ class ConditionalLocalGitTests(unittest.TestCase):
             self.assertEqual(payload["missingBlobPaths"], ["staged.txt"])
             self.assertEqual(payload["blockedPaths"], [])
 
-    def test_scan_hard_fails_on_discarded_or_mismatched_origin(self) -> None:
+    def test_scan_hard_fails_on_extra_or_mismatched_remote(self) -> None:
         for url, reason in (
-            ("https://github.com/UnlimitedAbandonWare/AbandonWare3", "forbidden-remote"),
+            ("https://github.com/UnlimitedAbandonWare/OldRepo", "origin-mismatch"),
             ("https://example.com/other/repo.git", "origin-mismatch"),
         ):
             with self.subTest(url=url), FixtureDirectory() as tmp:
@@ -225,7 +228,7 @@ class ConditionalLocalGitTests(unittest.TestCase):
                 self.assertTrue(payload["originMismatch"])
                 self.assertNotIn(url, proc.stdout)
 
-    def test_scan_hard_fails_when_non_origin_remote_names_discarded_upstream(self) -> None:
+    def test_scan_hard_fails_when_non_origin_remote_present(self) -> None:
         with FixtureDirectory() as tmp:
             repo = self.make_repo(Path(tmp))
             (repo / "a.txt").write_text("a\n", encoding="utf-8")
@@ -233,7 +236,7 @@ class ConditionalLocalGitTests(unittest.TestCase):
             git(repo, "remote", "add", "origin",
                 "https://github.com/UnlimitedAbandonWare/AbandonWareAi")
             git(repo, "remote", "add", "backup",
-                "https://github.com/UnlimitedAbandonWare/AbandonWare3.git")
+                "https://github.com/UnlimitedAbandonWare/OldRepo.git")
             proc = run_tool("scan", "--repo", str(repo))
             payload = json.loads(proc.stdout)
             self.assertEqual(proc.returncode, 2, proc.stdout)
@@ -241,13 +244,15 @@ class ConditionalLocalGitTests(unittest.TestCase):
             self.assertTrue(payload["forbiddenRemote"])
             self.assertFalse(payload["originMismatch"])
 
-    def test_commit_paths_hard_fail_while_discarded_remote_present(self) -> None:
+    def test_commit_paths_hard_fail_while_extra_remote_present(self) -> None:
         with FixtureDirectory() as tmp:
             repo = self.make_repo(Path(tmp))
             (repo / "owned.txt").write_text("owned\n", encoding="utf-8")
             git(repo, "add", "--", "owned.txt")
             git(repo, "remote", "add", "origin",
-                "https://github.com/UnlimitedAbandonWare/AbandonWare3.git")
+                "https://github.com/UnlimitedAbandonWare/AbandonWareAi")
+            git(repo, "remote", "add", "backup",
+                "https://github.com/UnlimitedAbandonWare/OldRepo.git")
             message = repo / "msg.txt"
             message.write_text("Reason: x\nVerify: y\nConstraint: z\n", encoding="utf-8")
             for extra in ([], ["--preserve-foreign-staged"]):
@@ -359,7 +364,14 @@ class ConditionalLocalGitTests(unittest.TestCase):
                 head = self.capture(repo, "rev-parse", "HEAD")
                 rejected = self.selected(repo, message, name)
                 self.assertNotEqual(0, rejected.returncode)
-                self.assertEqual("selected-staged-scan-failed", json.loads(rejected.stdout)["reason"])
+                payload = json.loads(rejected.stdout)
+                self.assertEqual("selected-staged-scan-failed", payload["reason"])
+                # W2: 불투명 실패 대신 guard reason/findings(경로 해시만)가 실려야 한다.
+                self.assertIn("scanReason", payload)
+                self.assertTrue(payload["scanFindings"])
+                self.assertTrue(all(set(f) == {"pathHash", "rule"}
+                                    for f in payload["scanFindings"]))
+                self.assertNotIn("Q" * 30, rejected.stdout)
                 self.assertEqual(before, (repo / ".git/index").read_bytes())
                 self.assertEqual(head, self.capture(repo, "rev-parse", "HEAD"))
 
@@ -505,6 +517,78 @@ class ConditionalLocalGitTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertEqual(payload["action"], "absent")
             self.assertEqual(payload["reason"], "no-lock")
+
+    def test_lock_subcommand_reclaims_self_orphaned_marker_lock(self) -> None:
+        # 자가 marker lock: writers=0 + index 안정이면 0-byte가 아니어도 move-aside.
+        with FixtureDirectory() as tmp:
+            repo, git_dir = self.lock_repo(Path(tmp))
+            lock = git_dir / "index.lock"
+            lock.write_bytes(b"conditional-local-git:" + b"0" * 32)
+            index_before = (git_dir / "index").read_bytes()
+            backup_dir = Path(tmp) / "bak"
+            proc = run_tool("lock", "--repo", str(repo), "--backup-dir", str(backup_dir))
+            payload = json.loads(proc.stdout)
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            self.assertEqual(payload["action"], "moved")
+            self.assertEqual(payload["reason"], "self-orphaned-marker-lock-archived")
+            self.assertFalse(lock.exists())
+            self.assertEqual(1, len(list(backup_dir.glob("index.lock.bak-*"))))
+            self.assertEqual(index_before, (git_dir / "index").read_bytes())
+
+    def test_marker_lock_preserved_when_git_writer_active(self) -> None:
+        with FixtureDirectory() as tmp:
+            repo, git_dir = self.lock_repo(Path(tmp))
+            lock = git_dir / "index.lock"
+            body = b"conditional-local-git:" + b"1" * 32
+            lock.write_bytes(body)
+            with mock.patch.object(gate, "git_writers", return_value=1):
+                result = gate.clear_stale_lock(repo, 0.0, Path(tmp) / "bak")
+            self.assertEqual(result["action"], "preserved")
+            self.assertEqual(result["reason"], "git-writer-active")
+            self.assertEqual(lock.read_bytes(), body)
+
+    def test_marker_lock_preserved_when_index_changes_in_settle_window(self) -> None:
+        with FixtureDirectory() as tmp:
+            repo, git_dir = self.lock_repo(Path(tmp))
+            lock = git_dir / "index.lock"
+            lock.write_bytes(b"conditional-local-git:" + b"2" * 32)
+            samples = iter(["h0", "h1"])
+            with mock.patch.object(gate, "git_writers", return_value=0), \
+                    mock.patch.object(gate, "MARKER_LOCK_SETTLE_SECONDS", 0), \
+                    mock.patch.object(gate, "index_sha256",
+                                      side_effect=lambda _d: next(samples, "h1")):
+                result = gate.clear_stale_lock(repo, 0.0, Path(tmp) / "bak")
+            self.assertEqual(result["action"], "preserved")
+            self.assertEqual(result["reason"], "index-changed")
+            self.assertTrue(lock.exists())
+
+    def test_selected_commit_failure_reports_error_type_and_detail(self):
+        with FixtureDirectory() as tmp:
+            repo, message = self.selected_fixture(Path(tmp))
+            real_git = gate.git
+
+            def flaky(repo_arg, args):
+                if args[:2] == ["rev-parse", "--verify"]:
+                    raise subprocess.TimeoutExpired(cmd="git", timeout=30)
+                return real_git(repo_arg, args)
+
+            with mock.patch.object(gate, "git", side_effect=flaky):
+                result = gate.commit_selected(repo, message, ["owned.txt"])
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["reason"], "selected-commit-failed")
+            self.assertEqual(result["errorType"], "TimeoutExpired")
+            self.assertTrue(result["errorDetail"])
+
+    def test_add_rejects_pycache_and_compiled_artifacts(self) -> None:
+        for path in ("scripts/__pycache__/x.cpython-311.pyc",
+                     "tools/__pycache__/miner.pyc",
+                     "scripts/dump.pyc",
+                     "build/gen/Token.class"):
+            with self.subTest(path=path):
+                proc = run_tool("check", "--", "git", "add", "--", path)
+                payload = json.loads(proc.stdout)
+                self.assertEqual(payload["verdict"], "forbid")
+                self.assertEqual(payload["reason"], "forbidden-path")
 
     def test_live_canonical_repo_is_not_a_fixture(self) -> None:
         proc = run_tool("check", "--", "git", "add", "--", ".secrets/providers.json")

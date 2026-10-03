@@ -7,3 +7,6 @@ Judgment procedures: `.agents/skills/positive-negative-neutral-judge`.
 Paste prompts: `.devin/PROMPTS/`.
 Vibe-Max-Agency: `Vibe-Max-Agency.bat -Check|-Apply` applies only the AGENTS.md `DEMO1-VIBE-MAX-AGENCY` read-path ignore exceptions + local `agent.db-context` enablement; forced lease release stays forbidden.
 Mutable spec: before coding against API/model/Display/routing/port values, re-read the SSOT per `$demo1-mutable-spec-policy` (AGENTS.md `DEMO1-MUTABLE-SPEC-POLICY`, `docs/MUTABLE_SPEC_POLICY.md`); only hard constraints are constants.
+Primary surface: main `/chat` chat-ui is the product surface; interview/display static assets are a local debug screen — SSOT `docs/PRIMARY_SURFACE.md`.
+Session/run ownership: `.windsurf/rules/demo1-session-ownership.md` — anonymous = `ownerKey` cookie only (never IP); admin exception = main-mode + real-admin only (proto-open ambient principal is owner-scoped).
+Settings-routing guard: `.windsurf/rules/demo1-settings-routing-guard.md` + `$demo1-settings-routing-assist` — Devin verifies Codex's `/settings` work via `scripts/settings_routing_guard.py` (G1–G8), `settings_test_matrix_check.py`, `settings_page_probe.py`; read-only, never edits `main/`.

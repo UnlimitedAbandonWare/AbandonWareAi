@@ -63,18 +63,28 @@ public class ChatRequestDto {
          */
         private String model;
         /** Exact manual selection: fail visibly instead of changing provider/model. */
-        private boolean strictModelSelection;
+        private Boolean strictModelSelection;
+        public boolean isStrictModelSelection() { return Boolean.TRUE.equals(strictModelSelection); }
+        private String modelSelectionMode;
+        @JsonIgnore @Setter(AccessLevel.NONE)
+        private transient ChatSettingsSnapshot chatSettingsSnapshot;
+        public record ChatSettingsSnapshot(java.util.Map<String, Object> user,
+                java.util.Map<String, Object> admin, java.util.Map<String, Object> request) {}
+        public void bindChatSettingsSnapshot(ChatSettingsSnapshot snapshot) {
+                if (chatSettingsSnapshot != null) throw new IllegalStateException("settings_already_bound");
+                chatSettingsSnapshot = java.util.Objects.requireNonNull(snapshot);
+        }
+        /** Request preference only; server plan, master flag, scope and shared budget must approve. */
+        private boolean contextPreparationRequested;
+        @JsonIgnore
+        private transient Runnable contextSourceCheck;
 
         private Double temperature;
-        @Builder.Default
         @JsonProperty("top_p")
-        private Double topP = 1.0;
-        @Builder.Default
-        private Double frequencyPenalty = 0.0;
-        @Builder.Default
-        private Double presencePenalty = 0.0;
-        @Builder.Default
-        private Integer maxTokens = 2048;
+        private Double topP;
+        private Double frequencyPenalty;
+        private Double presencePenalty;
+        private Integer maxTokens;
 
         /* ────────── ③ 서비스 스위치 ────────── */
         private Long sessionId; // nullable
@@ -217,8 +227,18 @@ public class ChatRequestDto {
          * com.example.lms.gptsearch.dto.SearchMode} for mode definitions.
          */
         @JsonProperty("searchMode")
-        @Builder.Default
-        private com.example.lms.gptsearch.dto.SearchMode searchMode = com.example.lms.gptsearch.dto.SearchMode.AUTO;
+        @Getter(AccessLevel.NONE)
+        private com.example.lms.gptsearch.dto.SearchMode searchMode;
+
+        public com.example.lms.gptsearch.dto.SearchMode getSearchMode() {
+                return searchMode == null ? com.example.lms.gptsearch.dto.SearchMode.AUTO : searchMode;
+        }
+
+        /** Keep omission distinct from an explicit AUTO without exposing a nullable effective mode. */
+        @JsonIgnore
+        public boolean isSearchModeExplicit() {
+                return searchMode != null;
+        }
 
         /**
          * Optional list of preferred web search providers. When null or empty the
@@ -355,6 +375,17 @@ public class ChatRequestDto {
 
         /** Optional list of attachment IDs associated with this message */
         private java.util.List<String> attachmentIds;
+        /** Explicit consent for this request's used attachments; omitted means no graph collection. */
+        private Boolean attachmentGraphConsent;
+        @JsonIgnore @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)
+        private transient java.util.List<com.example.lms.service.rag.graph.KgChunk.SourceRef> usedAttachmentSources;
+        @JsonIgnore
+        public java.util.List<com.example.lms.service.rag.graph.KgChunk.SourceRef> getUsedAttachmentSources(){
+                return usedAttachmentSources==null?java.util.List.of():usedAttachmentSources;
+        }
+        public void bindUsedAttachmentSources(java.util.List<com.example.lms.service.rag.graph.KgChunk.SourceRef> sources){
+                usedAttachmentSources=java.util.List.copyOf(sources);
+        }
 
         /**
          * Server-bound identity used only to authorize attachment document reads.
@@ -364,6 +395,26 @@ public class ChatRequestDto {
         @Getter(AccessLevel.NONE)
         @Setter(AccessLevel.NONE)
         private transient AttachmentOwnerIdentity attachmentOwnerIdentity;
+
+        @JsonIgnore @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)
+        private transient String verifiedRequestOwnerHash;
+        @JsonIgnore public String getVerifiedRequestOwnerHash() { return verifiedRequestOwnerHash; }
+        public void bindVerifiedRequestOwner(AttachmentOwnerIdentity identity) {
+                String hash=Objects.requireNonNull(identity).hash();
+                if (verifiedRequestOwnerHash != null && !verifiedRequestOwnerHash.equals(hash))
+                        throw new IllegalStateException("request_owner_already_bound");
+                verifiedRequestOwnerHash=hash;
+        }
+
+        @JsonIgnore @Getter(AccessLevel.NONE) @Setter(AccessLevel.NONE)
+        private transient com.example.lms.llm.gateway.LlmRouteDecision mainRouteDecision;
+        @JsonIgnore
+        public com.example.lms.llm.gateway.LlmRouteDecision getMainRouteDecision() { return mainRouteDecision; }
+        public void bindMainRouteDecision(com.example.lms.llm.gateway.LlmRouteDecision decision) {
+                if (mainRouteDecision != null && !mainRouteDecision.equals(decision))
+                        throw new IllegalStateException("main_route_already_bound");
+                mainRouteDecision = Objects.requireNonNull(decision);
+        }
 
         @JsonIgnore
         public AttachmentOwnerIdentity getAttachmentOwnerIdentity() {

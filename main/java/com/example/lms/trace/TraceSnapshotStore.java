@@ -189,7 +189,7 @@ public class TraceSnapshotStore {
             Integer status,
             Throwable error
     ) {
-        return captureInternal(reason, method, path, status, error, null, null);
+        return captureInternal(reason, method, path, status, error, null, null, true);
     }
 
     /** Capture a snapshot with an explicit trace map and/or pre-rendered HTML. */
@@ -202,7 +202,14 @@ public class TraceSnapshotStore {
             Map<String, Object> traceOverride,
             String htmlOverride
     ) {
-        return captureInternal(reason, method, path, status, error, traceOverride, htmlOverride);
+        return captureInternal(reason, method, path, status, error, traceOverride, htmlOverride, true);
+    }
+
+    /** Explicit lazy view: keep the same capture/redaction policy without HTML allocation. */
+    public String captureCustom(
+            String reason, String method, String path, Integer status, Throwable error,
+            Map<String, Object> traceOverride, String htmlOverride, boolean renderHtml) {
+        return captureInternal(reason, method, path, status, error, traceOverride, htmlOverride, renderHtml);
     }
 
     private String captureInternal(
@@ -212,7 +219,8 @@ public class TraceSnapshotStore {
             Integer status,
             Throwable error,
             Map<String, Object> traceOverride,
-            String htmlOverride
+            String htmlOverride,
+            boolean renderHtml
     ) {
         if (!enabled) {
             traceCaptureSkipped(reason, "disabled");
@@ -287,7 +295,7 @@ public class TraceSnapshotStore {
             // Optional: store an HTML diagnostics view (useful for web-based inspection).
             String html = null;
             boolean htmlTruncated = false;
-            if (htmlOverride != null && !htmlOverride.isBlank()) {
+            if (renderHtml && htmlOverride != null && !htmlOverride.isBlank()) {
                 String trimmedOverride = htmlOverride.trim();
                 boolean trustedGeneratedHtml =
                         (trimmedOverride.startsWith("<!doctype html><html data-trace-redacted=\"1\"")
@@ -306,7 +314,7 @@ public class TraceSnapshotStore {
                                 + htmlEscape(String.valueOf(SafeRedactor.diagnosticValue("query", htmlOverride, 2000)))
                                 + "</pre>";
                 html = wrapHtmlIfNeeded(overrideHtml, id, tsIso, sid, traceId, requestId, snapshotReason, safe(method), snapshotPath, status, err);
-            } else if (htmlEnabled) {
+            } else if (renderHtml && htmlEnabled) {
                 try {
                     html = buildHtmlSnapshot(id, tsIso, sid, traceId, requestId, snapshotReason, safe(method), snapshotPath, status, err, mdc, trace);
                 } catch (Throwable ignore) {

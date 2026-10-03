@@ -1,3 +1,12 @@
+---
+name: demo1-lease-conflict-autoflow
+description: >-
+  Use when overlapping source-edit leases block a task: classify each blocking
+  lease as live / stale / orphan, auto-reclaim stale ones, continue free
+  targets, and leave one standard release request per conflict fingerprint —
+  live leases are never force-released.
+---
+
 # demo1 Lease Conflict Autoflow
 
 Overlapping source-edit leases must not stall a task into repeated
@@ -99,3 +108,12 @@ fixtures cover: expired unknown-owner lease → reclaim quarantines it and
 the target frees (begin→abnormal-exit→stale→reclaim→edit repro),
 live lease and live-heartbeat lease never reclaimed, grace-window hold,
 orphan flag gating, once-only prompt, and lease bytes preserved.
+
+## Parallel-lane preflight (additive)
+
+Before the first edit on a goal that other chats may share, run
+`python -B scripts/codex_parallel_preflight.py --root . --goal-key <key>
+--scope <paths> --agent <name> --json` — it reports `FOREIGN_CLAIM_OVERLAP`
+with `blockingClaims` + `freeScope`, and `STALE_CLAIM` candidates as a
+dry-run only (reclaim stays with this flow's `reclaim`). See
+`.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.

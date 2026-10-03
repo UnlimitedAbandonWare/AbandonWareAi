@@ -1,0 +1,224 @@
+[
+  {
+    "id": "U01",
+    "uaw_lines": "1720-1742",
+    "design_intent": "경량 준비와 고성능 최종 생성의 역할 분담",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S01",
+      "S41",
+      "S42"
+    ],
+    "decision": "기존 여섯 역할 배정을 구현하며 Jev는 별도 신호 카드로 표시. 신규 심판 모델 호출을 자동 추가하지 않음."
+  },
+  {
+    "id": "U02",
+    "uaw_lines": "1834-1839;2586-2589",
+    "design_intent": "정제 근거를 PromptContext에서 PromptBuilder로 인계",
+    "classification": "DONE",
+    "current_evidence": [
+      "S17",
+      "S18",
+      "S19",
+      "S21"
+    ],
+    "decision": "기존 문맥·프롬프트 경로 재사용. 설정 화면은 역할과 실제 인계 결과를 투영."
+  },
+  {
+    "id": "U03",
+    "uaw_lines": "838-927;3686-3703",
+    "design_intent": "Plan 힌트·선언형 실행에 관한 상반된 설명",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S09",
+      "S10",
+      "S11",
+      "S12",
+      "S13",
+      "S14",
+      "S15",
+      "S27"
+    ],
+    "decision": "when 제한 소비와 ledger를 보존. broad 실행기 신설도, 기존 조건 평가 삭제도 하지 않음."
+  },
+  {
+    "id": "U04",
+    "uaw_lines": "646-729",
+    "design_intent": "FailurePattern/Zero100 imports 추가 지시",
+    "classification": "DONE",
+    "current_evidence": [
+      "S34"
+    ],
+    "decision": "이미 import 행 존재. 재추가 금지. 운영 빈 활성은 NOT_RUN."
+  },
+  {
+    "id": "U05",
+    "uaw_lines": "731-836",
+    "design_intent": "RuleBreak 생산자 등록 지시",
+    "classification": "DONE",
+    "current_evidence": [
+      "S33"
+    ],
+    "decision": "조건부 등록 코드 존재. 재등록 금지. 실제 빈 생성·요청 전파는 별도 검증."
+  },
+  {
+    "id": "U06",
+    "uaw_lines": "1810-1839;2187-2208",
+    "design_intent": "조건부 확장과 앵커 응축",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S02",
+      "S03",
+      "S10",
+      "S15",
+      "S26"
+    ],
+    "decision": "확장 허용과 모델 배정을 분리. role target 저장만으로 확장을 켜지 않음."
+  },
+  {
+    "id": "U07",
+    "uaw_lines": "3373-3382;3551-3556",
+    "design_intent": "동적 K 분배",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S24",
+      "S25",
+      "S26"
+    ],
+    "decision": "현재 확인한 적용은 burst 제한. 나머지 suggested 값은 추천으로 표시하고 서버 전체 K 제어로 포장하지 않음."
+  },
+  {
+    "id": "U08",
+    "uaw_lines": "2407-2416;3635-3642",
+    "design_intent": "Bi-Encoder·DPP·ONNX 정제",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S28",
+      "S29"
+    ],
+    "decision": "canonical 호출을 재사용. 파일·빈·요청 조건·실행을 각각 표시."
+  },
+  {
+    "id": "U09",
+    "uaw_lines": "3267-3285",
+    "design_intent": "Matrix 기반 문맥 분량·기여도",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S30",
+      "S31",
+      "S17"
+    ],
+    "decision": "동명이인 구현 구분. 호출 증거 없는 UI 가중치 편집이나 Display 줄 수와의 혼합 금지."
+  },
+  {
+    "id": "U10",
+    "uaw_lines": "3115-3209",
+    "design_intent": "ArtPlate 진화와 상태 개선",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S32"
+    ],
+    "decision": "proposeWithSse·AtomicReference 존재. 과거 패치 반복 금지, 설정 미리보기에서 decide/propose 호출 금지."
+  },
+  {
+    "id": "U11",
+    "uaw_lines": "2913-2928;2806-2832",
+    "design_intent": "요청 전체 예산과 취소 신호",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S02",
+      "S03",
+      "S08",
+      "S26",
+      "S36"
+    ],
+    "decision": "기존 Run·기한·취소 계약 유지. 미리보기 실호출 0, 늦은 결과 저장 금지."
+  },
+  {
+    "id": "U12",
+    "uaw_lines": "1940-1945;3454-3502",
+    "design_intent": "결정 신호의 제어·관측 이중 활용",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S16",
+      "S22",
+      "S23",
+      "S44"
+    ],
+    "decision": "기존 실제 관측을 typed view로 연결. 가상 성공 확률이나 새 로그 서버를 만들지 않음."
+  },
+  {
+    "id": "U13",
+    "uaw_lines": "2151-2167;1108-1184",
+    "design_intent": "대화 응답과 학습 수용 기준 구분",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S38",
+      "S36"
+    ],
+    "decision": "학습 필터·동의·저장 결과와 응답 품질을 분리. 전역 0.90 승격 금지."
+  },
+  {
+    "id": "U14",
+    "uaw_lines": "3024-3042",
+    "design_intent": "기억·벡터·관계 근거 조합",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S35",
+      "S36",
+      "S37",
+      "S19"
+    ],
+    "decision": "기억 삭제·동의·owner 계약 유지. 새 전역 그래프/기억 서비스 추가하지 않음."
+  },
+  {
+    "id": "U15",
+    "uaw_lines": "2067-2101;2378-2393",
+    "design_intent": "비대칭 GPU·임베딩 역할 분리",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S37",
+      "S41"
+    ],
+    "decision": "논리 endpoint 배정과 실제 GPU를 구분. GPU·차원 드롭다운은 추가하지 않음."
+  },
+  {
+    "id": "U16",
+    "uaw_lines": "2019-2052",
+    "design_intent": "버전 순수성과 프로토콜 어댑터 재사용",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S39",
+      "S40",
+      "S41"
+    ],
+    "decision": "기존 factory와 선택기를 유지. 실제 dependency graph는 로컬 확인 필요."
+  },
+  {
+    "id": "U17",
+    "uaw_lines": "2445-2489",
+    "design_intent": "무음 실패 드러내기와 장애 복구",
+    "classification": "PARTIAL",
+    "current_evidence": [
+      "S07",
+      "S08",
+      "S22",
+      "S29",
+      "S36"
+    ],
+    "decision": "권한·예산·의존성·시간초과를 별도 이유로 표시. 프로세스 강제 종료나 새 생성 요청을 기본 복구로 추가하지 않음."
+  },
+  {
+    "id": "U18",
+    "uaw_lines": "3041-3042;3584-3587",
+    "design_intent": "기존 코드 수정 제로라는 설명",
+    "classification": "CONFLICT",
+    "current_evidence": [
+      "S01",
+      "S18",
+      "S41",
+      "S42"
+    ],
+    "decision": "현 요청의 최소 consumer 수정 원칙을 유지. 수정 제로를 위해 중복 라우터를 만들지 않음."
+  }
+]

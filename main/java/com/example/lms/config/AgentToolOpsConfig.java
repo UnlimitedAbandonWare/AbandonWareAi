@@ -8,6 +8,8 @@ import com.abandonware.ai.agent.contract.ToolManifestCatalog;
 import com.abandonware.ai.agent.integrations.HybridRetriever;
 import com.abandonware.ai.agent.policy.ToolPolicyEnforcer;
 import com.abandonware.ai.agent.tool.AgentTool;
+import com.abandonware.ai.agent.integrations.WebSearchGateway;
+import com.abandonware.ai.agent.tool.impl.WebSearchTool;
 import com.abandonware.ai.agent.tool.AgentToolArtifactWriter;
 import com.abandonware.ai.agent.tool.AgentToolInvoker;
 import com.abandonware.ai.agent.tool.ToolRegistry;
@@ -55,8 +57,8 @@ public class AgentToolOpsConfig {
 
     @Bean
     @ConditionalOnMissingBean
-    public ToolManifestCatalog toolManifestCatalog() {
-        return new ToolManifestCatalog();
+    public ToolManifestCatalog toolManifestCatalog(Environment environment, ObjectProvider<ToolRegistry> registry) {
+        return new ToolManifestCatalog(environment, registry::getIfAvailable);
     }
 
     @Bean
@@ -92,8 +94,22 @@ public class AgentToolOpsConfig {
     }
 
     @Bean
-    public SmartInitializingSingleton agentToolRegistryInitializer(ToolRegistry registry, ObjectProvider<AgentTool> tools) {
-        return () -> tools.orderedStream().forEach(registry::register);
+    public SmartInitializingSingleton agentToolRegistryInitializer(ToolRegistry registry, ObjectProvider<AgentTool> tools,
+                                                                   ToolManifestCatalog catalog,
+                                                                   ObjectProvider<WebSearchGateway> webSearch) {
+        return () -> {
+            tools.orderedStream()
+                    .filter(tool -> !"web.search".equals(tool.id()) || catalog.webSearchEnabled())
+                    .forEach(registry::register);
+            // Resolve after singleton assembly: conditional component-scan order
+            // must not decide whether the default application's tool is available.
+            if (catalog.webSearchEnabled() && registry.get("web.search").isEmpty()) {
+                WebSearchGateway gateway = webSearch.getIfAvailable();
+                if (gateway != null) {
+                    registry.register(new WebSearchTool(gateway));
+                }
+            }
+        };
     }
 
     @Bean
@@ -135,8 +151,9 @@ public class AgentToolOpsConfig {
     }
 
     @Bean
-    public ConfigInspectTool configInspectTool(Environment environment) {
-        return new ConfigInspectTool(environment);
+    public ConfigInspectTool configInspectTool(Environment environment,
+                                               ObjectProvider<com.example.lms.trace.TraceSnapshotStore> snapshots) {
+        return new ConfigInspectTool(environment, snapshots);
     }
 
     @Bean
@@ -146,8 +163,8 @@ public class AgentToolOpsConfig {
     }
 
     @Bean
-    public TraceSnapshotTool traceSnapshotTool() {
-        return new TraceSnapshotTool();
+    public TraceSnapshotTool traceSnapshotTool(ObjectProvider<com.example.lms.trace.TraceSnapshotStore> snapshots) {
+        return new TraceSnapshotTool(snapshots);
     }
 
     @Bean

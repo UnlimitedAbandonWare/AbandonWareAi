@@ -1,0 +1,96 @@
+# Codex — [보충] /chat 자가점검은 API 모델 기준으로 한다 (로컬 Ollama에 매몰 금지)
+[Contract: DEMO1-CODEX-CHAT-RAG-API-FIRST-ADDENDUM-20261002]
+[적용 대상: 지금 진행 중인 DEMO1-CODEX-CHAT-RAG-BROWSER-SELFCHECK-20261002 (장부 data/agent-handoff/codex-chat-rag-browser-selfcheck-63b0c67a). 새 작업이 아니라 같은 작업의 방향 보정이다.]
+
+[ANTI-STOP] 이 보충을 읽은 건 intake일 뿐이다. 지금 하던 C2 첨부 원인 추적을 멈추지 말고, 다음 체크포인트부터 아래 기준을 적용해 끝까지 진행한다. 완료 = 아래 Acceptance PASS. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용).
+
+## 0) 한 줄 목표
+사용자는 실제로 **클라우드 API 모델을 주로 쓴다.** 이 제품의 주류 경로는 API이고, 로컬 Ollama는 "남는 슬롯이 있을 때만 쓰는 마지막 대체"다. 그래서 /chat의 RAG·챗봇 검증 기준 모델을 **API 모델**로 바꾸고, 로컬 전용 문제에는 시간을 쓰지 않는다.
+
+## 1) 사용자 결정 (원래 목표 문서보다 우선)
+- 원래 목표 문서의 "로컬 우선 / 유료 최대 3회"는 **비용 안전장치**였지 제품 방향이 아니었다. 이 보충으로 대체한다.
+- Codex가 앞서 "API 우선 제안은 이번 목표의 로컬 우선 범위와 충돌하니 참고만 한다"고 판단한 부분은 **철회**한다. 이번 실행의 검증 기준은 API다.
+- 단, 라우팅 순서 자체를 API 우선으로 재배선하는 구현(GPT Pro 분석의 WP1~WP3: `api-routing.yaml` 순서, `llm.provider: local`, `DynamicChatModelFactory.isLocalModel()` 교체, `RoutingProfile` 재배선)은 **이번 작업 범위가 아니다.** 다음 지시서에서 따로 한다. 이번에는 "API 모델로 고르면 RAG·챗봇이 제대로 되나"를 증명하고 고치는 데 집중한다.
+
+## 2) 확인된 사실 (Grok Bot이 18:1x에 `GET http://127.0.0.1:18180/api/chat/models`로 확인)
+선택 가능한 원격 모델:
+- `llmrouter.api3`: provider `groq`, modelId `openai/gpt-oss-120b`, status `configured`, selectable `true`
+- `chatgpt-oauth:gpt-5.6-luna` / `gpt-5.6-terra` / `gpt-5.6-sol` / `gpt-5.5` / `gpt-6-astra` / `gpt-reserve`: provider `chatgpt_oauth`, status `configured`, selectable `true`
+  - ChatGPT 계정 크레딧 경로다. 일반 API-key 경로와 같은 것으로 취급하지 않는다(분석서 주의 사항).
+  - `chatgpt-oauth:codex-auto-review`는 채팅 모델이 아니니 쓰지 않는다.
+
+선택 불가(이번에 켜지 않는다):
+- `llmrouter.mistral-medium`, `llmrouter.openai-economy`: `remote_selection_disabled`
+
+로컬: `gemma4:*`, `qwen*` 등 8개, 모두 `installed`.
+
+Codex 진행 상황(사용자가 붙여 준 로그 기준):
+- S-01(OPENAI_MODEL 마스킹)·S-02(설정 화면 카탈로그) 수정, 브라우저와 JS 테스트 28개 GREEN.
+- C2: 첨부 ID 1개와 소유자 바인딩은 있는데, 첨부 서비스가 그 세션에 연결된 문서를 0개로 반환한다. 세션 연결 단계가 원인 후보다.
+- 지금까지 C1·C2는 로컬 `gemma4:26b`로 돌았다.
+
+## 3) 그대로 계속할 것 (모델과 무관한 진짜 결함)
+- **C2 첨부 → 세션 연결 0개 문제:** 모델과 상관없이 RAG를 막는 핵심 결함이다. 하던 대로 원인 하나를 찾아 RED→GREEN으로 고친다. 소유자·세션 보호는 완화하지 않는다.
+- S-01·S-02 수정과 테스트는 유지한다.
+
+## 4) 바꿀 것: 검증 모델 매트릭스
+- **기준 모델 A (주 검증):** `chatgpt-oauth:gpt-5.6-luna`, `gpt-5.6-terra`, `llmrouter.api3` 중 하나를 고른다. 고른 이유를 `AUTO_DECISION:`으로 남긴다(응답 속도, 실패율, 비용 등급). 브라우저의 `chat-model-select`로 고르고, 새 대화에서 쓴다.
+- **보조 모델 B (교차 확인):** A와 provider가 다른 API 모델 하나. 예: A가 chatgpt-oauth면 B는 `llmrouter.api3`(groq).
+- **로컬 (비교용, 선택):** C2 수정이 끝난 뒤 `gemma4:26b`로 C2 한 번만 돌린다. 전송 최대 2회. 실패해도 이번 완료 판정에는 들어가지 않는다.
+- 시나리오 배정:
+  - C1~C8 전부: A로 실행
+  - C2, C3, C4: B로도 1회씩 실행
+  - C8 반복(3회): A로만
+  - C9(/settings): 모델과 무관, 기존대로
+- **C7 강화 (핵심):** 요청 모델이 API인데 관측 모델(trace-dock / 응답 메타)이 로컬로 바뀌었다면, 그건 "조용히 로컬로 떨어지는" 결함이다. 이걸 FAIL로 기록하고 원인을 찾는다. 대체가 일어났으면 대체 사유가 화면이나 trace에 보여야 PASS다.
+
+## 5) 하지 말 것 (로컬 매몰 방지)
+- Ollama 전용 문제(GPU 슬롯, permit, 로컬 타임아웃, gemma 프롬프트 조정, 로컬 모델 기동·autostart)를 고치는 데 시간 쓰기. 로컬에서만 실패하는 건 `LOCAL_ONLY`로 표시하고 NEXT로 넘긴다.
+- 로컬 모델 결과만으로 PASS 선언하기. 이번 PASS는 API 모델 A 기준이다.
+- 라우팅 순서 재배선(WP1~WP3), `api-routing.yaml` / `application-llm.yaml` 우선순위 변경, 비활성 원격 경로(mistral, openai-economy) 켜기.
+- 임베딩·ONNX 경로를 클라우드로 바꾸기. RAG 임베딩은 지금 경로를 그대로 둔다.
+
+## 6) 데모 기본 모델 (허용 범위 안에서만)
+- /chat 첫 화면의 기본 선택 모델이 무엇인지 기록한다.
+- 로컬이 기본이면, **기존 설정 화면(/settings)의 "이 브라우저의 새 대화 기본 모델"** 기능으로 A를 기본으로 바꿔 시연 흐름을 맞춘다. 바꾸기 전 값과 바꾼 후 값을 장부에 적는다.
+- 서버 전역 기본값을 바꿔야만 된다면 ASK_ONCE다. 이유와 되돌리는 법을 적고 그 항목만 멈춘다.
+
+## 7) 비용·호출 상한 (이 보충으로 바뀌는 값)
+- API 생성 호출: 이번 실행 전체에서 **최대 25회**(A 약 15회, B 약 4회, 여유 6회). 자동 재시도도 1회로 센다. 기존 runner의 실제 생성 요청 수 카운터를 그대로 쓴다.
+- 401 / 403 / 429 / 결제·쿼터 오류: 같은 경로에서 재시도 0. 원문을 그대로 보고서 맨 위 `외부 API:`에 적는다. 429는 일시 제한과 쿼터 소진을 구분한다.
+- GLM 경로는 이미 HTTP 400(이 계정에서 지원 안 됨)이 났으니 다시 부르지 않는다.
+- 공개 URL(`abandonwareai.kro.kr`) 전송 0. 로컬 `127.0.0.1:18180`만 쓴다.
+- 서버 재기동은 기존 예산 안에서만 쓴다.
+
+## 공통 규칙 (원래 지시서 그대로)
+- Project Root `C:\AbandonWare\demo-1\demo-1\src`. 장부·lease는 기존 것을 이어서 쓴다.
+- 패치 하나에 원인 하나, RED→GREEN, `chat.js`는 수정하지 않는다(ASK_ONCE).
+- 금지: push / pull / commit, `git add -A`, reset / checkout / restore / stash / clean, 전체 suite, `.env`·`.secrets`·토큰 읽기, AbandonWare3, PROTO_OPEN / admin 강화, 다른 세션 lease·hunk 훼손, DB 스키마 변경, 데이터셋 삭제, 유료 API 반복 호출.
+
+## Acceptance (실행 안 한 항목은 NOT_RUN과 사유)
+- [ ] AA1 C2 세션 연결 원인 1개 수정, RED→GREEN, 소유자·세션 보호 테스트 유지.
+- [ ] AA2 모델 A로 C1~C8 PASS/FAIL 표(답 정확도, 출처 파일명, 모름 처리, 관측 모델).
+- [ ] AA3 모델 B로 C2·C3·C4 교차 결과.
+- [ ] AA4 C7: 요청 API = 관측 API, 또는 대체 시 사유 표시. 조용한 로컬 전환 0건(있으면 FAIL + 원인).
+- [ ] AA5 C8 A 기준 3회 반복 결과.
+- [ ] AA6 데모 기본 모델 전·후 기록(또는 ASK_ONCE).
+- [ ] AA7 API 호출 수·오류 원문, 상한 25회 이하.
+- [ ] AA8 로컬 비교 C2(선택): 결과 또는 NOT_RUN. `LOCAL_ONLY` 목록은 NEXT로.
+
+## 보고 형식 (원래 보고서 앞에 이 블록을 붙인다)
+```
+외부 API: 생성 <n>/25회 (A <n>, B <n>, 로컬 <n>) / 401·403·429 원문: <그대로 또는 없음>
+검증 기준 모델: A=<id> B=<id> (AUTO_DECISION 이유)
+모델 매트릭스:
+| 시나리오 | A | B | 로컬(선택) | 관측 모델 | 비고 |
+C2 세션 연결 원인: <파일:줄, 한 줄 설명> / RED→GREEN: <테스트명>
+조용한 로컬 전환: <0건 / n건 + 원인>
+데모 기본 모델: <전 → 후 / ASK_ONCE>
+LOCAL_ONLY(다음으로): <목록>
+NEXT: API 우선 라우팅 재배선(WP1~WP3)은 별도 지시서
+```
+
+[ANTI-STOP] 읽기 = intake. 지금 하던 C2 추적을 이어가고, 다음 브라우저 실행부터 API 모델 A로 돌린다. 완료 증거는 A 기준 C1~C8 표, B 교차 결과, C7 관측 모델 증거, API 호출 수와 오류 원문이다.

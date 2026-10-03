@@ -1,0 +1,65 @@
+{
+  "tool": "gptpro-pack",
+  "userOnly": true,
+  "comment": "[USER-ONLY] Pack-GPTPro.bat profiles. Agents must not run/modify/auto-invoke unless the user explicitly asks. JSON because the tool uses stdlib only (no yaml dep).",
+  "defaultOut": "C:/Users/nninn/OneDrive/Desktop/zipHome",
+  "maxFileMb": 2.0,
+  "maxZipMb": 64,
+  "allowFiles": [],
+  "profiles": {
+    "main": {
+      "include": ["main/java", "main/resources"]
+    },
+    "core": {
+      "extends": "main",
+      "include": [
+        "build.gradle.kts",
+        "settings.gradle",
+        "settings.gradle.kts",
+        "gradle.properties",
+        "gradle/wrapper/gradle-wrapper.properties",
+        "configs",
+        "frontend/src",
+        "frontend/scripts",
+        "frontend/package.json",
+        "frontend/next.config.mjs",
+        "frontend/jsconfig.json",
+        "agents.md",
+        "README.md",
+        ".env.example",
+        "frontend/.env.example",
+        "docs/PROJECT_STATUS.md",
+        "docs/API_ROUTING_SPEC.md",
+        "docs/architecture"
+      ]
+    },
+    "full": {
+      "extends": "core",
+      "include": [
+        { "path": "scripts", "ext": [".py", ".js", ".ps1", ".bat"] },
+        { "path": "docs", "ext": [".md"] },
+        "src/test"
+      ]
+    },
+    "ctx": {
+      "comment": "core 파일 선택 + GPT Pro 맥락 섹션 (_START_HERE/_RULES/_CURRENT_WORK/_CHANGES/_CODE_MAP/_RUNTIME/_TEST_INDEX). vendor/min JS 기본 제외(매니페스트 기록). --focus/--briefs/--drop-legacy 지원.",
+      "extends": "core",
+      "context": true,
+      "include": []
+    },
+    "brief": {
+      "comment": "ctx + java 골격화(본문 제거, --focus 매칭은 전문 유지). 목표 압축 전 ≤6MB — frontend·static·templates·장문 docs는 제외하고 맥락 섹션에 압축 반영. 기존 프로필 파일 선택 불변.",
+      "extends": "core",
+      "context": true,
+      "skeletonJava": true,
+      "excludePaths": [
+        "frontend/",
+        "main/resources/static/",
+        "main/resources/templates/",
+        "docs/PROJECT_STATUS.md",
+        "docs/architecture/"
+      ],
+      "include": []
+    }
+  }
+}

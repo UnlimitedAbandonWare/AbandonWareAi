@@ -75,10 +75,12 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
 
     @Value("${public.request-budget.max-json-body-bytes:9437184}")
     private int maxJsonBodyBytes = 9 * 1024 * 1024;
-    @Value("${public.request-budget.max-time-budget-ms:240000}")
-    private long maxTimeBudgetMs = 240_000L;
+    @Value("${public.request-budget.max-time-budget-ms:300000}")
+    private long maxTimeBudgetMs = 300_000L;
     @Value("${addons.budget.default-ms:1500}")
     private long defaultTimeBudgetMs = 1_500L;
+    @Value("${chat.run.max-duration-seconds:600}")
+    private long chatRunMaxDurationSeconds = 600L;
     @Value("${public.request-budget.body-read.workers:4}")
     private int bodyReadWorkers = 4;
     @Value("${public.request-budget.body-read.queue-capacity:32}")
@@ -160,6 +162,7 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
         requireConfigured("max-json-body-bytes", maxJsonBodyBytes, 1, 32 * 1024 * 1024);
         requireConfigured("max-time-budget-ms", maxTimeBudgetMs, 1L, 3_600_000L);
         requireConfigured("addons.budget.default-ms", defaultTimeBudgetMs, 1L, 3_600_000L);
+        requireConfigured("chat.run.max-duration-seconds", chatRunMaxDurationSeconds, 1L, 3_600L);
         requireConfigured("body-read.workers", bodyReadWorkers, 1, 64);
         requireConfigured("body-read.queue-capacity", bodyReadQueueCapacity, 1, 1_024);
         requireConfigured("chat.max-message-chars", maxMessageChars, 1, 1_000_000);
@@ -265,10 +268,7 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
                 return;
             }
             long remainingMs = requestBudget.remainingMillis();
-            if (remainingMs <= 0L) {
-                rejectDeadline(response, started);
-                return;
-            }
+            request.setAttribute("public.request.budget.ingressComplete", true);
             TraceStore.put("public.request.budget.bodyBytes", body.length);
             TraceStore.put("public.request.budget.timeBudgetRemainingMs", remainingMs);
             request.setAttribute("chat.admission.bodySha256",
@@ -354,8 +354,10 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
             HttpServletResponse response,
             long started) throws IOException {
         String header = request.getHeader("X-Budget-Ms");
+        // The body-reception policy is independent of accepted-run lifetime.
+        long endpointLimit = maxTimeBudgetMs;
         if (header == null) {
-            long effectiveDefault = Math.min(defaultTimeBudgetMs, maxTimeBudgetMs);
+            long effectiveDefault = Math.min(defaultTimeBudgetMs, endpointLimit);
             TraceStore.put("public.request.budget.timeBudgetMs", effectiveDefault);
             return effectiveDefault;
         }
@@ -374,8 +376,9 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
             rejectHeader(response, "public_time_budget_invalid", started);
             return null;
         }
-        TraceStore.put("public.request.budget.timeBudgetMs", requested);
-        return requested;
+        long admitted = Math.min(requested, endpointLimit);
+        TraceStore.put("public.request.budget.timeBudgetMs", admitted);
+        return admitted;
     }
 
     public void validateChat(ChatRequestDto request) {

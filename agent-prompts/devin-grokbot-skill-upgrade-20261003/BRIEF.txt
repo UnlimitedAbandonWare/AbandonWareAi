@@ -1,0 +1,148 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-agy-directive-writer @demo1-agy-report-review
+# Devin — Grok Bot 업그레이드: 지시서 검사기 고장 2건 + 판정 보조 도구 2종 + agy 인계 팩 동기화
+[Contract: DEMO1-DEVIN-GROKBOT-SKILL-UPGRADE-20261003] 작성: Grok Bot, 2026-10-03 08:1x KST
+
+[ANTI-STOP] 이 글을 읽는 건 intake일 뿐이에요. 끝 = 맨 아래 판정표 A1~A12가 전부 PASS(못 돌린 항목은 NOT_RUN + 사유)일 때예요. 지금 바로 DV0부터 시작하세요. 되돌릴 수 있는 로컬 선택은 Self-Ask(긍정 / 부정 / 반례 → 중립 판정)로 스스로 정하고 AUTO로 진행하세요. AUTO가 Grok Bot과 다른 에이전트의 기본값이에요. 되돌릴 수 없는 것만 9번 섹션에서 한 번 묻습니다.
+
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(명령 연결은 `;`, `&&` 금지) · git = F:\git\cmd\git.exe(이번엔 안 써도 됨 — 증거는 sha12로) · Python 3.11 표준 라이브러리만(`python -B`) · pip/npm 설치 금지 · Project Root = C:\AbandonWare\demo-1\demo-1\src
+비용(사용자 결정 2026-10-03): ① Codex 크레딧(62,500) → ② 외부 유료 API → ③ 무료 등급 → ④ 로컬 Ollama는 마지막. 이 작업은 라이브 API 호출 0회가 기본이고 상한은 25회예요. 401/403/429는 재시도하지 않아요.
+
+## 0. 한 줄 목표
+Grok Bot이 다른 세션에서 반복해서 쓴 판정 패턴 중 레포 쪽 자산이 필요한 것만, 이미 있는 도구를 넓혀서 만들어 주세요(지시서 검사기 고장 2건, 외부 문서 주장 대조 입구, 멈춤 원인 판정, agy 인계 팩 동기화). 효율 낮은 항목과 중복은 표시만 하고 지우지 않아요.
+
+## 1. 사실(확인된 사실) — Grok Bot, 2026-10-03 08:06 KST, PC에서 직접 확인
+- F1. scripts\brief_save.py:40-50 SECTION_ANCHORS, :103 `next(...)` — 섹션 순서를 "처음 나온 줄"로 재요. 맨 위 [ANTI-STOP]에 섹션 이름 단어가 있으면 순서 FAIL이 날 수 있어요(HANDOVER §4는 맨 위에 그 문구를 요구). 오탐 의심 → DV5에서 RED로 확정.
+- F2. scripts\brief_save.py:52 FORBID_KEYWORDS — purge 세션이 08:07 KST에 옛 저장소 이름을 "remote 추가"로 이미 바꿨어요(sha12 BAEF79448815, test_brief_save.py도 08:07 수정). → DV5의 F2 부분은 ALREADY_COVERED 예상, 테스트만 확인.
+- F3. scripts\brief_lint.py:51 SKILL_PATH_RE — 본문의 `.agents\skills\<이름>\SKILL.md` 경로는 실존 검사 대상이에요(없는 스킬 경로를 적으면 FAIL).
+- F4. .agents\skills\demo1-agy-directive-writer\references\grokbot-current\ 미러가 옛 판이에요. 08:09 KST에 purge 세션이 옛 이름 줄만 "remote 추가·변경 금지"로 고쳤고(brief-writer E735DE329FF9, HANDOVER B3E03E626761), 비용 줄은 아직 "free/local 우선, 유료 1–3회"예요. Downloads\AGY_GROKBOT_HANDOVER_20261002\ 최신본(BA9E715AED42 / 3AFEA664A2D9)은 10-03 비용 순서와 "AUTO 기본값" 줄을 담고 있어요(파일당 diff 6줄).
+- F5. scripts\grokbot_skill_catalog.py:25-26, :119-126 — 팩의 *.md(HANDOVER 제외)를 레시피로, HANDOVER 요청 표를 트리거로 읽어요.
+- F6. .agents\skills\demo1-agy-report-review\SKILL.md:16/:42/:51 — A 판정, B 초안 검수, C 재개 문장만 있고 멈춤 원인·선택 카드·이어받기는 없어요.
+- F7. scripts\agent_signal_digest.py:3-13(lease·journal·handoff 요약, 옵션 :289-291). scripts\work_journal.py:34 RESULTS, :144 touch_status_doc → docs\PROJECT_STATUS.md(우회 옵션 --no-status-doc).
+- F8. 주장 대조 도구가 셋: scripts\zip_path_to_sourceset.py:2-8(ZIP 경로·심볼 → 라이브 줄), scripts\p6dbg_claim_drift.py:2, :12-15(P6 앵커 전용), scripts\codex_anchor_map.py:2(R5 OAuth 전용). 문서 하나 → 주장 표의 일반 입구는 없어요.
+- F9. 활성 lease 2건(scripts\agent_scope_lease.py who, 08:0x KST): 토픽이 `-purge-99ef2204`로 끝나는 purge lease(만료 11:58 KST, 30경로: agents.md, docs\project_status.md, scripts\brief_save.py, scripts\test_brief_save.py, grokbot-current의 brief-writer·handover 등), devin-spend-order-cbbd5292(만료 11:01 KST, configs\agent-api-spend-guard.yaml, configs\agent-test-model-policy.yaml 등 19경로).
+- F10. 이미 있음(새로 만들지 않기): brief_lint / brief_round_gate / brief_split_check / brief_save + 기록부 data\agent-handoff\brief-registry\briefs.jsonl(223행), p6dbg_success_mask_scan, selfask_triad, codex_plugin_usage_lint, glm_route_preflight, devin_cwd_doctor.ps1, 스킬 demo1-codex-parallel-lanes · demo1-codex-auto-decide · demo1-codex-assist-subagents · demo1-test-model-policy(SKILL.md:14-18 = 12/30 날짜 스위치).
+- F11. 폐기 표시 관례: .agents\skills\api-cost-routing\SKILL.md 처럼 frontmatter `redirect: <SSOT>` + `deprecated: true`.
+- F12. AGENTS.md:290 "단계당 primary 하나" 규칙 — 첫 줄은 사용자 지정 세트라 두고, 작업은 DV마다 primary 하나로 해요.
+- F13. scripts\glm_lane_fallback.py 없음 — agent-prompts\devin-glm-fallback-subagent-20261002\BRIEF.txt 몫이라 손대지 않아요.
+
+## 2. 공통 규칙
+- 장부: data\agent-handoff\devin-grokbot-upgrade-<8hex>\ (새 uuid 앞 8자). `python -B scripts\work_journal.py open|note|close`. 파일은 `[IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))`.
+- lease 먼저: 고치기 전 `python -B scripts\agent_scope_lease.py check` → `claim` → `verify`, 길어지면 `heartbeat`, 끝나면 `done`(:689-761). 만료된 lease 회수는 `python -B scripts\lease_conflict_autoflow.py`로만 해요. 살아 있는 남의 lease 파일은 건드리지 말고 장부에 FOR_PEER_<파일>.md 제안을 남긴 뒤 다음 DV로(BLOCKED_LEASE는 정당한 종료). F9 lease는 만료 뒤 who로 다시 확인.
+- baseline: 고칠 파일과 변경 금지 파일의 sha12를 DV0에서 기록하고, 마지막에 다시 비교해요.
+- 테스트: 자산마다 focused 하나 `python -B -m unittest scripts.test_<x> -v`. 전체 suite는 돌리지 않아요.
+- 옛 저장소 이름은 새 코드·테스트·문서·보고서에 적지 않아요("옛 저장소 이름"이라고만).
+- 수정 허용: scripts\external_claim_triage.py(새), scripts\test_external_claim_triage.py(새), scripts\agent_signal_digest.py, scripts\test_agent_signal_digest.py, (대안) scripts\agent_stall_triage.py + scripts\test_agent_stall_triage.py(새), .agents\skills\demo1-agy-report-review\SKILL.md, .agents\skills\demo1-agy-directive-writer\SKILL.md(포인터 3줄 이내), .agents\skills-intent-index.yaml(트리거 몇 줄), 그리고 lease가 풀린 뒤에만: scripts\brief_save.py, scripts\test_brief_save.py, grokbot-current\*, AGENTS.md(포인터 4줄 이내). DV8에서 중복으로 확정된 스킬의 SKILL.md frontmatter. 장부 폴더.
+- 변경 금지: main\ 전체, src\test\ 제품 테스트, build.gradle* / settings.gradle* / gradlew*, chat.js·chat-ui.html, configs\*, .codex\ 와 ~\.codex\ 와 모든 전역·사용자 설정, Downloads의 인계 팩 원본(읽기만), agent-prompts\의 과거 지시서, docs\PROJECT_STATUS.md(lease 중).
+
+## DV0 — 준비
+1) cwd, `python -B scripts\agent_scope_lease.py who`(Z → KST), `python -B scripts\agent_signal_digest.py`.
+2) baseline sha12: 수정 허용 파일 + F4 파일 4개 + chat.js + AGENTS.md.
+3) F2·F4의 현재 상태를 다시 확인해요. 이미 끝난 부분은 ALREADY_COVERED로 건너뛰어요.
+
+## DV1 — 매핑 표 확인
+아래 표의 자리를 Test-Path로 확인해 장부 MAP.md에 붙여요(없으면 "새로 만듦/확인 필요").
+
+| 세션 패턴 | 판정 | 자리 |
+|---|---|---|
+| 외부 문서(GPT Pro·PLAN·P6) 주장 대조, 넣은 것/뺀 것 | Grok Bot 스킬 + DEVIN | demo1-external-plan-triage / DV2 |
+| Codex 옆 조수 지시서(도구 메뉴·파일 분리·시점) | Grok Bot 스킬 | demo1-companion-assist-brief / DV6 미러 |
+| 멈춤 원인·선택 카드·이어받기 | Grok Bot 스킬 + DEVIN | demo1-agent-live-triage / DV3 / DV4 |
+| 에이전트 설정 고장 진단(조용한 폴백, 백업·추가만) | Grok Bot 스킬 | demo1-agent-config-repair-brief(도구는 기존) |
+| 지시서 검사·저장·기록부 | 기존 + 수정 | DV5 brief_save.py |
+| Grok Bot 레시피 agy 공유 | 기존 + 동기화 | DV6 grokbot-current |
+| 패치 품질 판정(수 대조·RED→GREEN·약화 0·테스트 주입이 설정 꺼짐을 가림) | MERGE | DV4 §D 한 줄 |
+| 무료 API 한도 점검 | MERGE | Grok Bot 박스 스킬(레포 작업 없음) |
+| 테스트 모델 API 우선 · 플러그인 역할 · Self-Ask 3축 · AUTO 기본 답 · 라운드 카드 · 병렬 레인 | 이미 있음 | F10 |
+| 크레딧 장부 예약→전송→정산 · 오래 유지/자주 변경 분리 | DROP(제품 설계) | Codex·Plan 몫, demo1-mutable-spec-policy |
+| agy·점 대타 · 면접 페이지 흡수 · GPT Pro zip · 옛 저장소 정리 | DROP(일회성·진행 중) | 각 장부 |
+
+## DV2 — 외부 문서 주장 대조 입구 (새 파일)
+scripts\external_claim_triage.py를 만들어요. 읽기 전용, --out-json / --out-md에만 써요.
+- 입력: `--doc <md|txt>`(여러 개 가능), `--root .`
+- 주장 뽑기: `경로:줄`, `파일.java:줄`, `Class.method`, "P0/P1/F01" 같은 항목 줄.
+- 위치 찾기: zip_path_to_sourceset.py(P6 앵커 형식이면 p6dbg_claim_drift.py)를 import 재사용, 두 파일은 고치지 않음. import가 안 맞으면 subprocess로 그 JSON을 받아요(AUTO).
+- 태그: LIVE_FOUND / MOVED / MISSING + 정책 태그 HOLD_POLICY(PROTO_OPEN, admin, permitAll, CSRF 강화), COST_GATE(유료 호출, 크레딧), REVIEW(나머지).
+- 출력: 주장 | 태그 | 라이브 file:line | 정책 태그 | 근거. 비밀값 형태는 가려요.
+- 테스트(임시 폴더 가짜 트리) 6개 이상: 줄 이동, 파일 없음, 정책 태그, 한글 UTF-8, 비밀값 가림, CLI 종료 코드.
+- 실제 확인 1회: agent-prompts\codex-plan5-core-truth-20261002\BRIEF.txt에 돌려서 표를 장부에 남겨요.
+
+## DV3 — 멈춤 원인 판정
+scripts\agent_signal_digest.py에 `--stall <taskId 또는 장부 폴더>` 옵션을 넣어요. 구조가 맞지 않으면 digest의 수집 함수를 import하는 얇은 scripts\agent_stall_triage.py로 대신해요(Self-Ask AUTO, 둘 중 하나만).
+- 결과: DONE / BUDGET_EXHAUSTED / WAITING_QUESTION / PERMISSION_BOUNDARY / DUPLICATE_SESSION / IDLE_STALE / RUNNING / UNKNOWN + 근거(마지막 이벤트 KST, result, 겹치는 lease, 한도·대기·승인 단어). 읽기 전용·0원, 애매하면 UNKNOWN.
+- 테스트: 결과마다 가짜 journal 하나씩 8개 이상 + 기존 scripts.test_agent_signal_digest GREEN 유지.
+
+## DV4 — agy 보고서 판정에 §D 추가
+.agents\skills\demo1-agy-report-review\SKILL.md 맨 끝 "금지" 앞에 `## D. 멈춤·선택 카드·이어받기`를 25줄 이내로 넣어요.
+- 명령: DV3 판정기 한 줄.
+- 원인 → 행동: DONE(다음 라운드는 새 세션) · BUDGET_EXHAUSTED(새 한도 재개 지시서) · PERMISSION_BOUNDARY(한 줄 허락/거절) · DUPLICATE_SESSION(주인 하나, 나머지 검증만) · 기준 폴더 다름(워크트리·홈 cwd → 원본 src 새 세션) · 받는 이 틀림(정정 지시서) · 약한 증거(로컬 작은 모델·mock → API 재확인) · 대신 보낸 "승인"(사용자 승인 아님).
+- 선택 카드: 가장 좁고 되돌릴 수 있는 쪽(서버 블록 하나 > 사용자 환경변수), 검증 전 기본값 false 유지, 실행 안 됐다고 증명된 실패만 다음 경로로.
+- 이어받기: 앞 에이전트가 멈춤을 답하고 journal 한 줄을 남긴 뒤에만.
+- 패치 품질: 테스트 수 = 결과 파일, RED→GREEN, 기대값 약화 0, 테스트 안 주입으로 통과했으면 실제 설정 경로도 확인.
+- .agents\skills\demo1-agy-directive-writer\SKILL.md §3에 "주장 표는 `python -B scripts\external_claim_triage.py --doc <파일>`로 먼저 뽑는다" 포인터 한 줄.
+
+## DV5 — 지시서 검사기 고장 2건 (purge lease가 풀린 뒤)
+- RED 먼저: 맨 위 [ANTI-STOP] 문단에 섹션 이름 단어가 들어간 지시서 본보기로 test_brief_save.py에 실패 테스트를 추가해요. 지금 FAIL(section-order)인지 확인해요.
+- 고치기: 순서는 제목 줄(#) 또는 [ANTI-STOP] 문단 밖 첫 등장만 봐요. 제목 누락은 여전히 FAIL.
+- F2: 이미 "remote 추가"로 바뀌었으면 ALREADY_COVERED, 아니면 바꾸고 테스트 추가. 덤: @줄과 본문 SKILL.md 경로 참조를 합쳐 세는 skill-duplicate WARN(:119-134) 오탐도 같은 방식으로 RED → GREEN.
+- `python -B -m unittest scripts.test_brief_save -v` GREEN, `python -B -m unittest scripts.test_brief_lint -v` GREEN.
+- lease가 안 풀리면 FOR_PEER_brief_save.md에 diff 제안 + BLOCKED_LEASE.
+
+## DV6 — agy 인계 팩 동기화 (purge lease가 풀린 뒤)
+- 백업: 지금 grokbot-current\* → 장부\backup\.
+- 복사: Downloads\AGY_GROKBOT_HANDOVER_20261002\의 최신 .md(.bak 제외)를 미러로. 레포 쪽 파일 이름 대소문자는 그대로 둬요.
+- 새 레시피 4개(demo1-external-plan-triage / demo1-companion-assist-brief / demo1-agent-live-triage / demo1-agent-config-repair-brief .md)는 그 폴더에 있을 때만 복사, 없으면 NOT_RUN("사용자 저장 전"). 지어내지 않기.
+- 옛 저장소 이름 줄은 미러의 "remote 추가·변경 금지" 문구를 그대로 유지(Downloads 원본은 안 바꿈). 동기화 뒤 원본과의 차이가 그 줄들뿐인지 diff 확인.
+- `python -B scripts\grokbot_skill_catalog.py list`(4개 이상)와 `match "멈췄는데 뭐라고 해"` 결과를 장부에.
+
+## DV7 — 포인터와 라우팅
+- AGENTS.md:460-463 DEMO1-GROKBOT-ROLE 블록 안에만 4줄 이내(external_claim_triage.py, 멈춤 판정 명령, 미러 위치). purge lease 중이면 FOR_PEER_AGENTS.md.
+- .agents\skills-intent-index.yaml: agy-report-review 의도에 "멈췄는데", "뭐 선택해", "이어받아도 돼", agy-directive-writer 의도에 "첨부 정제", "GPT Pro 주장 대조" 트리거를 더해요.
+- 전후 비교: `python -B scripts\demo1_vibe_skill_router.py resolve "<문장>"` 6문장 표를 장부에.
+
+## DV8 — DROP/MERGE 표시 (지우지 않기)
+- 후보: demo1-stepwise-ask-report(vs demo1-vibe-selfask-judge-auto / demo1-codex-auto-decide), demo1-prompt-directive-integrator(vs demo1-agy-directive-writer).
+- 중복 확정 기준(셋 다 만족): 같은 트리거 · SSOT가 모든 단계를 덮음 · skills-intent-index와 AGENTS.md에서 primary로 쓰이지 않음. 만족하면 F11 관례로 frontmatter 표시 + 포인터만, 본문은 유지해요. 아니면 KEEP + 이유 한 줄.
+- codex_anchor_map.py는 고치지 않아요(R5 전용). 일반 입구는 external_claim_triage.py라고 장부에만 적어요.
+
+## DV9 — 보고
+장부에 REPORT.md를 쓰고 journal을 닫아요. docs\PROJECT_STATUS.md가 아직 lease 중이면 `work_journal.py close --no-status-doc`로 닫고 상태 행은 장부에만 써요.
+
+## 8. HOLD
+GLM 폴백 도구(F13 지시서 몫) · 제품 크레딧 장부와 무료 API 제품 수정(Codex 몫) · configs\* 비용 순서(spend-order 세션 몫) · 옛 저장소 정리 본작업(purge 세션 몫) · AGENTS.md:290과 고정 @줄 세트의 정책 충돌(기록만) · 전역 ~\.codex, agy 설정 변경.
+
+## 9. ASK_ONCE (다른 에이전트 판정에 영향 주는 2건만, 마지막 보고에서 한 번 — 답 전에는 기본값)
+1. brief_save.py 섹션 순서 검사를 "제목 줄 또는 ANTI-STOP 밖 첫 등장"으로 바꾸면 기존 지시서 일부가 FAIL → PASS로 바뀌어요. 유지할까요? 기본값: 유지(제목 누락 FAIL은 그대로).
+2. DV8에서 중복으로 확정된 레포 스킬에 deprecated 표시를 남겨 둘까요? 기본값: 남김(frontmatter + 포인터만, 삭제 없음).
+
+## 10. 절대 금지
+push / pull / commit · `git add -A` · reset / checkout / restore / stash / clean · remote 추가·변경 · 전체 테스트 suite · 전역 clean · .env / .secrets / 토큰 읽기·출력 · PROTO_OPEN 변경·admin 강화 · 다른 세션의 lease·hunk·장부·staging 건드리기 · DB 스키마 변경·데이터셋 삭제 · chat.js 수정 · 다른 채팅에 영향을 주는 전역·사용자 설정 변경(레포 안에서만) · skip-permissions / full-access 권장 · 파일에 실제 키 넣기 · 제품 소스(main\, src\test\ 제품 테스트, 빌드 파일) 수정 · 유료 API 반복 호출.
+
+## 11. Acceptance (PASS / FAIL / NOT_RUN + 사유)
+- A1. DV0 baseline sha12 표와 lease 상태(KST)가 장부에 있음.
+- A2. external_claim_triage.py: 읽기 전용, `python -B -m unittest scripts.test_external_claim_triage -v` 6개 이상 GREEN.
+- A3. PLAN5 지시서 실행 표가 장부에 있음, 비밀값 0.
+- A4. 멈춤 판정 테스트 8개 이상 GREEN + scripts.test_agent_signal_digest GREEN.
+- A5. §D 25줄 이내, frontmatter 그대로, directive-writer 포인터 1줄.
+- A6. brief_save 오탐 RED → GREEN, test_brief_save·test_brief_lint GREEN(또는 BLOCKED_LEASE + FOR_PEER 제안).
+- A7. FORBID 키워드 수정, 이번에 바꾼 파일에서 옛 저장소 이름 0건.
+- A8. 미러 sha12 표, 원본 대비 차이 = 치환뿐, catalog 4개 이상(또는 BLOCKED_LEASE).
+- A9. AGENTS.md 포인터 4줄 이내(또는 FOR_PEER), 라우터 6문장 전후 표.
+- A10. DROP/MERGE 표시 표, 지운 파일 0, deprecated는 F11 관례만.
+- A11. 변경 금지 파일 sha12 그대로, 이번에 바꾼 파일은 전부 수정 허용 목록 안.
+- A12. 외부 API 0회(또는 25회 이내 기록), push/commit/add 0, REPORT.md 있음.
+
+## 12. 보고 형식
+```
+외부 API: <0회 | n회(이유)>
+DEVIN-GROKBOT-SKILL-UPGRADE: DONE | PARTIAL | BLOCKED_LEASE
+장부: data\agent-handoff\devin-grokbot-upgrade-<8hex>\
+FILES_TOUCHED: <경로 + sha12 전후>
+A1~A12: <표>
+AUTO_DECISION: <Self-Ask로 정한 것 한 줄씩>
+FOR_PEER: <남긴 제안 파일>
+NOT_RUN: <항목 + 사유>
+질문(9번): <답이 필요한 것만>
+```
+
+[ANTI-STOP] 읽기만 하고 멈추면 완료가 아니에요. A1~A12가 전부 PASS(또는 사유 있는 NOT_RUN / BLOCKED_LEASE)일 때만 끝이에요. 지금 DV0부터 시작하세요. 되돌릴 수 있는 선택은 Self-Ask로 AUTO 진행하고, 되돌릴 수 없는 것만 9번에서 한 번 물어요.

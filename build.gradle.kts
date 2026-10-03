@@ -168,19 +168,26 @@ tasks.register("checkSourceSetHygiene") {
             throw GradleException("Active sourceSet roots missing: " + missing.joinToString(", "))
         }
         val retainedSources = linkedMapOf<String, List<String>>()
-        val owners = listOf(Triple("root", project, "main"), Triple("app", project("app"), "src/main"))
+        val owners = listOf(
+            Triple("root", project, "main"),
+            // :app is an empty module; java_clean/resources stay as retained
+            // (empty) directories but no source set may point at them.
+            Triple("app", project("app"), "src/main"),
+        )
         for ((ownerName, owner, prefix) in owners) {
             val main = owner.extensions.getByType<org.gradle.api.tasks.SourceSetContainer>().getByName("main")
-            fun verifyOwner(kind: String, roots: Set<java.io.File>, expected: java.io.File) {
+            fun verifyOwner(kind: String, roots: Set<java.io.File>, expected: Set<java.io.File>) {
                 val absentJavaPluginDefault = if (ownerName == "root") owner.file("src/main/$kind") else null
                 val configured = roots.filterNot { it == absentJavaPluginDefault && !it.exists() }
                     .map { it.canonicalFile }.toSet()
-                if (configured != setOf(expected.canonicalFile)) {
+                if (configured != expected.map { it.canonicalFile }.toSet()) {
                     throw GradleException("Active sourceSet owner mismatch: owner=$ownerName type=$kind")
                 }
             }
-            verifyOwner("java", main.java.srcDirs, owner.file("$prefix/${if (ownerName == "app") "java_clean" else "java"}"))
-            verifyOwner("resources", main.resources.srcDirs, owner.file("$prefix/resources"))
+            verifyOwner("java", main.java.srcDirs,
+                if (ownerName == "app") emptySet() else setOf(owner.file("$prefix/java")))
+            verifyOwner("resources", main.resources.srcDirs,
+                if (ownerName == "app") emptySet() else setOf(owner.file("$prefix/resources")))
             // Use the compiler's retained input after existing SourceSet/JavaCompile exclusions.
             retainedSources[ownerName] = owner.tasks.named<JavaCompile>("compileJava").get().source.files
                 .map { relativePath(it).replace('\\', '/') }.sorted()
@@ -542,14 +549,6 @@ val structuralRepairWaveFourFixedInputs = files(
         ".superpowers/sdd/structural-repair-waves/wave-0004/repair-progress.jsonl"
     ),
 )
-val appDupFqcnEvidence =
-    project(":app").layout.buildDirectory.file("reports/dup-fqcn-evidence.json")
-
-project(":app").tasks.matching { it.name == "generateDupFqcnExcludes" }.configureEach {
-    dependsOn(captureStructuralAuditGitState)
-    outputs.upToDateWhen { false }
-}
-
 tasks.register<Exec>("dynamicRagQuantAudit") {
     description = "Generates the linked structural baseline, debt ledger, and quantitative metrics."
     group = "verification"
@@ -557,7 +556,6 @@ tasks.register<Exec>("dynamicRagQuantAudit") {
         captureStructuralAuditGitState,
         "harmonyPressureReport",
         "testTreeContaminationReport",
-        ":app:generateDupFqcnExcludes",
     )
     inputs.dir(layout.projectDirectory.dir("main/java"))
     inputs.dir(layout.projectDirectory.dir("app/src/main/java_clean"))
@@ -571,7 +569,6 @@ tasks.register<Exec>("dynamicRagQuantAudit") {
     )
     inputs.file(layout.projectDirectory.file("verification/dynamic-rag-harmony-pressure-metrics.json"))
     inputs.file(layout.projectDirectory.file("verification/test-tree-contamination-metrics.json"))
-    inputs.file(appDupFqcnEvidence)
     inputs.file(structuralRepairWaveRegistry)
         .withPathSensitivity(org.gradle.api.tasks.PathSensitivity.RELATIVE)
     inputs.file(structuralRepairWaveOneJournal)
@@ -623,8 +620,6 @@ tasks.register<Exec>("dynamicRagQuantAudit") {
         "verification/dynamic-rag-harmony-pressure-metrics.json",
         "--test-tree-input",
         "verification/test-tree-contamination-metrics.json",
-        "--dup-fqcn-input",
-        appDupFqcnEvidence.get().asFile.absolutePath,
         "--closure-wave-registry",
         "verification/structural-repair-waves/registry.json",
         "--metrics-output",
@@ -792,7 +787,9 @@ sourceSets {
             srcDirs("src/test/java")
         }
         resources {
-            srcDirs("src/test/resources")
+            // srcDirs() adds a tree; the java plugin already defaults to this
+            // dir, so setSrcDirs prevents a duplicate copy stream entry.
+            setSrcDirs(listOf("src/test/resources"))
         }
     }
 }

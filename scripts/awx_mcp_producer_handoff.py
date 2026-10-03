@@ -20,9 +20,15 @@ import time
 from pathlib import Path
 from typing import Any
 
+try:
+    from awx_paths import resolve as _awx_resolve
+except ImportError:  # producer-kit copy without the registry
+    def _awx_resolve(_key, **kw):
+        return Path(__file__).resolve().parents[1]
+
 
 SCHEMA_VERSION = "awx.mcp.producer_handoff.v1"
-DESKTOP_CANONICAL = Path("C:/AbandonWare/demo-1/demo-1/src")
+DESKTOP_CANONICAL = Path(_awx_resolve("repo.root"))
 SAFE_AUDIT_FIELDS = (
     "requestId",
     "sessionId",

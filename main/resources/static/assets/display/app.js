@@ -199,6 +199,13 @@
   if($('ld-apply')){
     $('ld-apply').onclick=act(async()=>{const patch=readLensPatch();await client.lensSettings(patch,false);saveSetting('lensDisplay',{...(settings.lensDisplay||{}),...patch});});
     $('ld-reset').onclick=act(async()=>{await client.lensSettings(null,true);saveSetting('lensDisplay',undefined);lensPrefsSeen=false;});
+    if($('ld-preset-apply'))$('ld-preset-apply').onclick=act(async()=>{
+      const preset=$('ld-preset')?.value;if(!preset)return;
+      const res=await client.lensSettings({preset},false);
+      const applied=res?.testStatus?.lensDisplay;
+      if(applied&&typeof applied==='object'){fillLensInputs(applied);saveSetting('lensDisplay',applied);}
+      else saveSetting('lensDisplay',{preset});
+    });
   }
   if($('hc-apply')){
     $('hc-apply').onclick=act(async()=>{const patch=readContextPatch();await client.lensSettings(patch,false);saveSetting('lensDisplay',{...(settings.lensDisplay||{}),...patch});});

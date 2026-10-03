@@ -50,7 +50,7 @@ path as a candidate merely because its name contains `directive`.
 
 ```yaml
 schemaVersion: demo1.notebook-directive-inventory.v1
-canonicalExecutionRoot: C:\AbandonWare\demo-1\demo-1\src
+canonicalExecutionRoot: <repo>
 candidateRoots:
   - data/agent-handoff/notebook
   - __patch_drop__/notebook
@@ -118,7 +118,7 @@ C-root evidence; never make a past Notebook PASS claim sufficient evidence.
 ```yaml
 contractVersion: demo1.notebook-directive-consolidation.v1
 programId: awx-desktop-notebook-consolidated-source-20260806
-canonicalExecutionRoot: C:\AbandonWare\demo-1\demo-1\src
+canonicalExecutionRoot: <repo>
 sourceOwner: desktop
 activeSourceSets:
   - main/java

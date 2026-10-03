@@ -2,7 +2,7 @@
 
 Use this contract after `demo1-desktop-canonical-goal-intake` receives an exact
 implementation SourceDirective or a Notebook/SMB directive. Its fixed Desktop root is
-`C:\AbandonWare\demo-1\demo-1\src`; no fallback write root exists.
+`<repo>`; no fallback write root exists.
 
 ## Target Routing
 
@@ -12,7 +12,7 @@ Accept each declared target in one form only:
 | --- | --- | --- |
 | Repo-relative | `main/java/...` beneath the fixed root | Normalize to `targetRel`. |
 | Exact Y descendant | `Y:\main\java\...` | Normalize lexically; it remains supporting-only until live C validation. |
-| Exact fixed C descendant | `C:\AbandonWare\demo-1\demo-1\src\main\java\...` | Normalize and live-validate beneath the fixed root. |
+| Exact fixed C descendant | `<repo>\main\java\...` | Normalize and live-validate beneath the fixed root. |
 
 Reject an empty/root-only target, UNC path, foreign drive, alternate C root,
 parent traversal, ADS, or any path outside the fixed root. Invoke the resolver
@@ -58,15 +58,15 @@ unobserved value.
 status: COMPLETE | HOLD | EVIDENCE_NEEDED
 contractVersion: demo1.c-canonical-goal-intake.v1
 originEvidenceRoot: Y:\ | null # null when no Notebook-origin evidence exists
-canonicalExecutionRoot: C:\AbandonWare\demo-1\demo-1\src
-readRoot: C:\AbandonWare\demo-1\demo-1\src
-writeRoot: C:\AbandonWare\demo-1\demo-1\src
-finalProofRoot: C:\AbandonWare\demo-1\demo-1\src
+canonicalExecutionRoot: <repo>
+readRoot: <repo>
+writeRoot: <repo>
+finalProofRoot: <repo>
 yEvidenceAuthority: supporting_only
 fallbackWriteRoot: null
 primaryLane: read_only | artifact_only | application_source | patchdrop_consumer
 sourceOwner: desktop
-provenRoot: evidence_needed | C:\AbandonWare\demo-1\demo-1\src
+provenRoot: evidence_needed | <repo>
 cRoot:
   available: true | false | evidence_needed
   gitTopLevelMatch: true | false | evidence_needed
@@ -95,7 +95,7 @@ directiveRebinding:
       exists: true | false
       reparseRisk: true | false
 verification:
-  cwd: C:\AbandonWare\demo-1\demo-1\src
+  cwd: <repo>
   result: PASS | FAIL | NOT_RUN
   commands: []
 externalLanes:
@@ -110,7 +110,7 @@ Notebook claims are supporting-only. Set `provenRoot=evidence_needed` until
 the literal C root, revision, active sourceSet, and target preimage are all
 live-proved. After live C proof, promote only `provenRoot` to the fixed C root;
 never promote another absolute root or infer Y/C identity. Run C-root
-verification with cwd `C:\AbandonWare\demo-1\demo-1\src`; keep
+verification with cwd `<repo>`; keep
 `desktopFinalProof=evidence_needed` until every required acceptance proof is
 PASS for the current C postimage. Only then set `desktopFinalProof=verified`;
 a postimage hash or focused GREEN alone is insufficient.

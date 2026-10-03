@@ -230,7 +230,8 @@ public class VectorStoreService {
             long createdAtMs,
             String traceId,
             String requestId,
-            boolean debug
+            boolean debug,
+            java.util.List<ReceiptBinding> receipts
     ) {
     }
 
@@ -281,7 +282,38 @@ public class VectorStoreService {
      * <p>If explicitId is blank, an id is generated from sid+sha256(text).</p>
      */
     public void enqueue(String explicitId, String sessionId, String text, Map<String, Object> extraMeta) {
-        if (text == null || text.isBlank()) return;
+        enqueueWithOutcome(explicitId, sessionId, text, extraMeta);
+    }
+
+    /** Returns an automatic flush/drop outcome, or null while admission remains buffered. */
+    public VectorFlushOutcome enqueueWithOutcome(String explicitId, String sessionId, String text,
+            Map<String, Object> extraMeta) {
+        return enqueueWithOutcome(explicitId, sessionId, text, extraMeta, null);
+    }
+
+    /** Invocation-scoped proof; IDs are enrolled after chunking and routing, before queue admission. */
+    public VectorRecordReceipt enqueueWithReceipt(String explicitId, String sessionId, String text,
+            Map<String, Object> extraMeta) {
+        VectorRecordReceipt receipt = new VectorRecordReceipt();
+        try {
+            VectorFlushOutcome outcome = enqueueWithOutcome(explicitId, sessionId, text, extraMeta, receipt);
+            if (receipt.targets.isEmpty() && outcome != null) receipt.failure = outcome.reasonCode();
+        } catch (VectorQueueCapacityExceededException rejected) {
+            receipt.failure = "queue_capacity";
+        } catch (Exception failure) {
+            receipt.failure = "enqueue_failure";
+        } finally {
+            receipt.closed = true;
+        }
+        return receipt;
+    }
+
+    private VectorFlushOutcome enqueueWithOutcome(String explicitId, String sessionId, String text,
+            Map<String, Object> extraMeta, VectorRecordReceipt receipt) {
+        if (text == null || text.isBlank()) {
+            if (receipt != null) receipt.failure = "source_rejected";
+            return new VectorFlushOutcome(false, 0, pendingSize(), "source_rejected");
+        }
         Map<String, Object> incomingMeta = (extraMeta == null) ? new LinkedHashMap<>() : new LinkedHashMap<>(extraMeta);
 
         VectorPoisonGuard.IngestDecision preChunkDecision = null;
@@ -322,6 +354,8 @@ public class VectorStoreService {
                     ? List.of()
                     : documentChunkingService.split(chunkingText, chunkingMeta);
             if (chunks != null && chunks.size() > 1) {
+                VectorFlushOutcome lastOutcome = null;
+                VectorFlushOutcome firstFailure = null;
                 for (DocumentChunkingService.Chunk chunk : chunks) {
                     Map<String, Object> chunkMeta = new LinkedHashMap<>(chunk.metadata());
                     chunkMeta.put("chunked", "true");
@@ -329,9 +363,13 @@ public class VectorStoreService {
                     String nextId = (chunkId == null || String.valueOf(chunkId).isBlank())
                             ? explicitId
                             : String.valueOf(chunkId);
-                    enqueue(nextId, sessionId, chunk.text(), chunkMeta);
+                    VectorFlushOutcome outcome = enqueueWithOutcome(nextId, sessionId, chunk.text(), chunkMeta, receipt);
+                    if (outcome != null) {
+                        if (!outcome.durable() && firstFailure == null) firstFailure = outcome;
+                        lastOutcome = outcome;
+                    }
                 }
-                return;
+                return firstFailure == null ? lastOutcome : firstFailure;
             }
         }
 
@@ -393,7 +431,8 @@ public class VectorStoreService {
                             VectorStoreTraceSuppressions.trace("ingest.generatedArtifactDrop", traceEx);
                             log.debug("[VectorStore] fail-soft stage={}", "ingest.generatedArtifactDrop");
                         }
-                        return;
+                        if (receipt != null) receipt.failure = "source_rejected";
+                        return new VectorFlushOutcome(false, 0, pendingSize(), "source_rejected");
                     }
                 } else {
                     if (dec.text() != null && !dec.text().isBlank()) {
@@ -652,9 +691,16 @@ public class VectorStoreService {
         boolean dbg0 = truthy(MDC.get("dbgSearch"));
 
         long createdAtMs = System.currentTimeMillis();
+        var bindings = new java.util.concurrent.CopyOnWriteArrayList<ReceiptBinding>();
+        if (receipt != null) {
+            ReceiptTarget target = new ReceiptTarget(id,
+                    embeddingStore instanceof com.example.lms.service.vector.UpstashVectorStoreAdapter upstash ? upstash.namespace() : "not_observed", sid, routedToQuarantine ? "quarantine" : shadowed ? "shadow" : "primary");
+            receipt.targets.put(target, "pending");
+            bindings.add(new ReceiptBinding(receipt, target));
+        }
         QueueAdmission admission = admitToQueue(
                 id,
-                new BufferEntry(id, sid, payload, meta, createdAtMs, traceId0, requestId0, dbg0));
+                new BufferEntry(id, sid, payload, meta, createdAtMs, traceId0, requestId0, dbg0, bindings));
         if (!admission.accepted()) {
             recordCapacityRejection(admission);
             throw new VectorQueueCapacityExceededException(admission.capacity());
@@ -715,8 +761,9 @@ public class VectorStoreService {
         }
 
         if (admission.liveSizeAfterAdmission() >= admission.effectiveThreshold()) {
-            flush();
+            return flush();
         }
+        return null;
     }
 
     public int pendingSize() {
@@ -767,6 +814,14 @@ public class VectorStoreService {
         synchronized (queueStateMutex) {
             ConcurrentHashMap<String, BufferEntry> live = queueRef.get();
             if (live.containsKey(id)) {
+                BufferEntry existing = live.get(id);
+                if (java.util.Objects.equals(existing.sessionId(), entry.sessionId())
+                        && java.util.Objects.equals(existing.text(), entry.text())
+                        && java.util.Objects.equals(existing.extraMeta(), entry.extraMeta())) {
+                    existing.receipts().addAll(entry.receipts());
+                } else {
+                    resolveReceipts(entry, "source_rejected");
+                }
                 return new QueueAdmission(
                         true, false, live.size(), threshold, retainedEntryCountLocked(), capacity);
             }
@@ -824,10 +879,83 @@ public class VectorStoreService {
             pendingCount = Math.max(0, pendingCount);
             String normalizedReason = reasonCode == null ? "" : reasonCode.trim();
             reasonCode = switch (normalizedReason) {
-                case "unknown", "backoff", "empty", "complete", "store_failure", "source_rejected" -> normalizedReason;
+                case "unknown", "backoff", "empty", "complete", "store_failure", "source_rejected", "UNKNOWN_COMMIT" -> normalizedReason;
                 default -> "unknown";
             };
         }
+    }
+
+    /** Physical namespace and SID scope are kept distinct. Internal only. */
+    public record ReceiptTarget(String id, String namespace, String sessionScope, String route, String writerId) {
+        public ReceiptTarget(String id, String namespace, String sessionScope, String route) {
+            this(id, namespace, sessionScope, route, "not_observed");
+        }
+        @Override public String toString() { return "ReceiptTarget[route=" + route + "]"; }
+    }
+    private record ReceiptBinding(VectorRecordReceipt receipt, ReceiptTarget target) {}
+
+    public static final class VectorRecordReceipt {
+        private final java.util.concurrent.ConcurrentMap<ReceiptTarget,String> targets = new ConcurrentHashMap<>();
+        private volatile boolean closed;
+        private volatile String failure = "";
+        public boolean durable() {
+            return closed && failure.isEmpty() && !targets.isEmpty()
+                    && targets.values().stream().allMatch("stored"::equals);
+        }
+        public int storedTargetCount() { return (int) targets.values().stream().filter("stored"::equals).count(); }
+        public int quarantinedTargetCount() {
+            return (int) targets.entrySet().stream().filter(e -> "stored".equals(e.getValue()) && "quarantine".equals(e.getKey().route())).count();
+        }
+        public boolean policyExcluded() { return durable() && quarantinedTargetCount() > 0; }
+        public java.util.Map<ReceiptTarget,String> targets() { return java.util.Map.copyOf(targets); }
+        public String reasonCode() {
+            if (targets.containsValue("UNKNOWN_COMMIT")) return "UNKNOWN_COMMIT";
+            if (!failure.isEmpty()) return failure;
+            if (targets.containsValue("source_rejected")) return "source_rejected";
+            if (targets.containsValue("store_failure")) return "store_failure";
+            return durable() ? "complete" : "receipt_pending";
+        }
+        @Override public String toString() { return "VectorRecordReceipt[count=" + targets.size() + ",reason=" + reasonCode() + "]"; }
+    }
+
+    private static void resolveReceipts(BufferEntry entry, String state) {
+        for (ReceiptBinding binding : entry.receipts()) {
+            binding.receipt().targets.computeIfPresent(binding.target(),
+                    (key, old) -> "UNKNOWN_COMMIT".equals(old) || "stored".equals(old) ? old : state);
+        }
+    }
+
+    private void writeBatchWithReceipts(List<String> ids, List<dev.langchain4j.data.embedding.Embedding> embeddings, List<TextSegment> segments,
+            Map<String, BufferEntry> entries) {
+        boolean enrolled = ids.stream().anyMatch(id -> !entries.get(id).receipts().isEmpty());
+        if (!enrolled) {
+            embeddingStore.addAll(ids, embeddings, segments);
+            return;
+        }
+        var targets = com.example.lms.vector.FederatedEmbeddingStore.writeWithReceipt(embeddingStore, ids, embeddings, segments);
+        if (targets == null || ids.stream().anyMatch(id -> targets.stream().noneMatch(t -> id.equals(t.requestedId())))) {
+            throw new RuntimeException(new java.util.concurrent.TimeoutException("primary_write_identity_unconfirmed"));
+        }
+        for (String id : ids) {
+            for (ReceiptBinding binding : entries.get(id).receipts()) {
+                String previous = binding.receipt().targets.get(binding.target());
+                String state = "UNKNOWN_COMMIT".equals(previous) ? previous : "stored";
+                var effective = targets.stream().filter(t -> id.equals(t.requestedId()))
+                        .map(t -> new ReceiptTarget(t.id(), t.namespace(), binding.target().sessionScope(), binding.target().route(), t.writerId())).toList();
+                // Enroll every physical target before removing the provisional logical target.
+                for (ReceiptTarget target : effective) binding.receipt().targets.putIfAbsent(target, "pending");
+                if (!effective.contains(binding.target())) binding.receipt().targets.remove(binding.target());
+                for (ReceiptTarget target : effective) binding.receipt().targets.put(target, state);
+            }
+        }
+    }
+
+    private static boolean commitTimeout(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof java.util.concurrent.TimeoutException || cause instanceof java.net.SocketTimeoutException) return true;
+            if (cause.getCause() == cause) break;
+        }
+        return false;
     }
 
     /**
@@ -922,6 +1050,7 @@ public class VectorStoreService {
 
         java.util.Set<String> okIds = new java.util.HashSet<>();
         java.util.Set<String> rejectedSourceIds = new java.util.HashSet<>();
+        java.util.Set<String> attemptedStoreIds = new java.util.HashSet<>();
 
         try {
             for (Map.Entry<FlushGroupKey, List<Map.Entry<String, BufferEntry>>> grp : groups.entrySet()) {
@@ -1009,27 +1138,50 @@ public class VectorStoreService {
                             List<Map.Entry<String, BufferEntry>> batch = items.subList(i, Math.min(i + batchSize, items.size()));
                             if (batch.stream().anyMatch(en ->
                                     com.example.lms.service.rag.graph.GeneralGraphVectorGate.requiresGate(en.getValue().extraMeta()))) {
+                                List<Map.Entry<String, BufferEntry>> admitted = new ArrayList<>();
+                                List<TextSegment> admittedSegments = new ArrayList<>();
                                 for (var entry : batch) {
                                     BufferEntry queued = entry.getValue();
-                                    String id = entry.getKey();
                                     if (!com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
                                             generalGraphVectorGate, queued.sessionId(), queued.extraMeta(), () -> {})) {
-                                        markSnapshotBatchDurable(rejectedSourceIds, List.of(id));
+                                        resolveReceipts(entry.getValue(), "source_rejected");
+                                        markSnapshotBatchDurable(rejectedSourceIds, List.of(entry.getKey()));
                                         continue;
                                     }
-                                    TextSegment segment = TextSegment.from(queued.text(), buildMeta(queued));
-                                    var response = embeddingModel.embedAll(List.of(segment));
-                                    var embedding = response == null ? null : response.content();
-                                    validateEmbeddingsOrThrow(embedding, List.of(segment));
+                                    admitted.add(entry);
+                                    admittedSegments.add(TextSegment.from(queued.text(), buildMeta(queued)));
+                                }
+                                if (admitted.isEmpty()) continue;
+                                // Calculation is outside every source lock. The same positional batch is
+                                // validated before any write, then each source is rechecked at commit.
+                                var response = embeddingModel.embedAll(admittedSegments);
+                                var embeddings = response == null ? null : response.content();
+                                validateEmbeddingsOrThrow(embeddings, admittedSegments);
+                                for (int j = 0; j < admitted.size();) {
+                                    BufferEntry queued = admitted.get(j).getValue();
+                                    int end = j + 1;
+                                    // Exact metadata equality is deliberately stricter than source identity.
+                                    // Keep contiguous order and never combine different source/owner fences.
+                                    while (end < admitted.size()
+                                            && java.util.Objects.equals(queued.sessionId(), admitted.get(end).getValue().sessionId())
+                                            && java.util.Objects.equals(queued.extraMeta(), admitted.get(end).getValue().extraMeta())) {
+                                        end++;
+                                    }
+                                    List<String> ids = admitted.subList(j, end).stream().map(Map.Entry::getKey).toList();
+                                    var sourceEmbeddings = embeddings.subList(j, end);
+                                    var sourceSegments = admittedSegments.subList(j, end);
                                     boolean written = com.example.lms.service.rag.graph.GeneralGraphVectorGate.commit(
                                             generalGraphVectorGate, queued.sessionId(), queued.extraMeta(),
-                                            () -> embeddingStore.addAll(List.of(id), embedding, List.of(segment)));
+                                            () -> { attemptedStoreIds.addAll(ids); writeBatchWithReceipts(ids, sourceEmbeddings, sourceSegments, snapshotMap); });
                                     if (written) {
-                                        markSnapshotBatchDurable(okIds, List.of(id));
-                                        okInGroup++;
+                                        for (String id : ids) resolveReceipts(snapshotMap.get(id), "stored");
+                                        markSnapshotBatchDurable(okIds, ids);
+                                        okInGroup += ids.size();
                                     } else {
-                                        markSnapshotBatchDurable(rejectedSourceIds, List.of(id));
+                                        for (String id : ids) resolveReceipts(snapshotMap.get(id), "source_rejected");
+                                        markSnapshotBatchDurable(rejectedSourceIds, ids);
                                     }
+                                    j = end;
                                 }
                                 continue;
                             }
@@ -1042,7 +1194,9 @@ public class VectorStoreService {
                             var res = embeddingModel.embedAll(segments);
                             var embeds = (res == null) ? null : res.content();
                             validateEmbeddingsOrThrow(embeds, segments);
-                            embeddingStore.addAll(ids, embeds, segments);
+                            attemptedStoreIds.addAll(ids);
+                            writeBatchWithReceipts(ids, embeds, segments, snapshotMap);
+                            for (String id : ids) resolveReceipts(snapshotMap.get(id), "stored");
                             markSnapshotBatchDurable(okIds, ids);
                             okInGroup += ids.size();
 
@@ -1122,8 +1276,11 @@ public class VectorStoreService {
                     if (e2 == null) continue;
                     String id = e2.getKey();
                     if (id != null && (okIds.contains(id) || rejectedSourceIds.contains(id))) continue;
+                    resolveReceipts(e2.getValue(), attemptedStoreIds.contains(id) && commitTimeout(e) ? "UNKNOWN_COMMIT" : "store_failure");
                     if (q.putIfAbsent(id, e2.getValue()) == null) {
                         restored++;
+                    } else {
+                        resolveReceipts(e2.getValue(), "UNKNOWN_COMMIT");
                     }
                     releaseInFlightLocked(1);
                 }
@@ -1137,7 +1294,8 @@ public class VectorStoreService {
 
             log.warn("[VectorStore] batch insert failed; backoff={}ms; restored={} (queueNow={}) : {}",
                     backoffStepMs, restored, queueNow, e.toString());
-            return new VectorFlushOutcome(false, okIds.size(), pendingSize(), "store_failure");
+            return new VectorFlushOutcome(false, okIds.size(), pendingSize(),
+                    !attemptedStoreIds.isEmpty() && commitTimeout(e) ? "UNKNOWN_COMMIT" : "store_failure");
         }
     }
 

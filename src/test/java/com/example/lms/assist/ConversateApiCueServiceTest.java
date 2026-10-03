@@ -161,7 +161,38 @@ class ConversateApiCueServiceTest {
         var cue=result.stages().cue();
         assertEquals("WEB",cue.get("jevDecision"));assertEquals("ok",cue.get("jevReasonCode"));assertEquals("on",cue.get("jevMode"));
         assertEquals(true,cue.get("jevApplied"));assertEquals("jev",cue.get("decisionSource"));assertEquals("RAG_CUE",cue.get("cueDecision"));
+        assertTrue(cue.get("jevLatencyMs") instanceof Long);
+        assertTrue(((Long)cue.get("jevLatencyMs"))>=0);
         verify(retrieval,times(1)).query(any());advisor.close();
+    }
+    @Test void scopedRagEmptyPreparedMaterialsNeverExpandsToGenericSearch(){
+        route("cheap",1,true);respond(k->"{\"text\":\"범위 안의 자료가 필요합니다.\",\"evidenceIds\":[],\"evidenceInsufficient\":true}");
+        var svc=service();var advisor=mock(JevDecisionAdvisor.class);
+        when(advisor.advise(anyString(),anyString(),anyString())).thenReturn(
+            JevDecisionAdvisor.Advice.of(JevDecisionAdvisor.Verdict.SCOPED_RAG,"on",1));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"jevAdvisor",advisor);
+        var result=svc.answer("공식 조건을 찾아 줘",List.of(),List.of(),false,true);
+        assertNotNull(result.card());verifyNoInteractions(retrieval);
+        assertEquals("EMPTY",result.stages().cue().get("evidenceStatus"));
+    }
+    @Test void recentOnlyNeverStartsRetrievalEvenWithPreparedMaterials(){
+        route("cheap",1,true);respond(k->"{\"text\":\"최근 대화를 기준으로 설명합니다.\",\"evidenceIds\":[]}");
+        var svc=service();var advisor=mock(JevDecisionAdvisor.class);
+        when(advisor.advise(anyString(),anyString(),anyString())).thenReturn(
+            JevDecisionAdvisor.Advice.of(JevDecisionAdvisor.Verdict.RECENT_ONLY,"on",1));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"jevAdvisor",advisor);
+        svc.answer("공식 조건을 찾아 줘",List.of("최근 조건"),List.of(new PreparedMaterialReader.Material("fixture","공식 조건")),false,true);
+        verifyNoInteractions(retrieval);
+    }
+    @Test void webVerdictDoesNotConsumePreparedScopedMaterial(){
+        route("cheap",1,true);respond(k->"{\"text\":\"웹 자료를 확인합니다.\",\"evidenceIds\":[]}");
+        var svc=service();var advisor=mock(JevDecisionAdvisor.class);
+        when(advisor.advise(anyString(),anyString(),anyString())).thenReturn(
+            JevDecisionAdvisor.Advice.of(JevDecisionAdvisor.Verdict.WEB,"on",1));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"jevAdvisor",advisor);
+        svc.answer("공식 조건",List.of(),List.of(new PreparedMaterialReader.Material("fixture","공식 조건은 7일입니다.")),false,true);
+        verify(retrieval).query(any());
+        assertTrue(prompts.stream().noneMatch(p->p.contains("공식 조건은 7일입니다.")));
     }
     @Test void jevShadowKeepsDeterministicPathAndStillObserves()throws Exception{
         route("cheap",1,true);respond(k->"{\"text\":\"측정이 아니라 상태의 성질 때문이에요.\",\"evidenceIds\":[]}");
@@ -172,6 +203,7 @@ class ConversateApiCueServiceTest {
         var cue=result.stages().cue();
         assertEquals("shadow",cue.get("jevMode"));assertEquals("defer",cue.get("jevDecision"));assertEquals("shadow",cue.get("jevReasonCode"));
         assertEquals(false,cue.get("jevApplied"));assertEquals("local_rules",cue.get("decisionSource"));
+        assertFalse(cue.containsKey("jevLatencyMs"),"shadow immediate result has no measured latency");
         assertEquals("FAST",cue.get("hintPath"));verifyNoInteractions(retrieval);
         assertTrue(entered.await(3,java.util.concurrent.TimeUnit.SECONDS));assertEquals(1,count.get());advisor.close();
     }
@@ -816,6 +848,72 @@ class ConversateApiCueServiceTest {
         assertEquals("GENERATION_INVALID_OUTPUT",over.reason());assertNull(over.card());
         @SuppressWarnings("unchecked") var attempts=(List<Map<String,Object>>)over.stages().cue().get("hintAttempts");
         assertEquals("text_limit",attempts.get(0).get("outputValidation"));
+    }
+    @Test void unknownCueTextTriggersOneBoundedWebSupplement(){
+        route("cheap",1,true);
+        respond(k->calls.size()<=1?"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}"
+                :"{\"text\":\"위치와 운동량을 동시에 정밀 측정할 수 없는 원리입니다.\",\"evidenceIds\":[\"e0\"]}");
+        var response=new UnifiedRagOrchestrator.QueryResponse();var doc=new UnifiedRagOrchestrator.Doc();
+        doc.snippet="하이젠베르크 불확정성 원리는 위치와 운동량을 동시에 정밀 측정할 수 없다는 원리입니다.";doc.title="개념 자료";response.results=List.of(doc);
+        when(retrieval.query(any())).thenReturn(response);
+        var result=service().answer("하이젠베르크 불확정성 원리가 뭐야?",List.of(),List.of(),true);
+        assertEquals("API_CUE",result.reason());
+        assertEquals("위치와 운동량을 동시에 정밀 측정할 수 없는 원리입니다.",result.card().text());
+        assertEquals(2,calls.size(),"one generation + one bounded regen after web evidence");
+        verify(retrieval,times(1)).query(any());
+        assertEquals("EXPLICIT_UNKNOWN",result.stages().cue().get("unknownTrigger"));
+        assertEquals("allowed",result.stages().cue().get("unknownWeb"));
+        assertEquals("GROUNDED_UNKNOWN_WEB",result.stages().cue().get("supplementStatus"));
+        assertEquals(List.of("e0"),result.card().sourceIds());
+    }
+    @Test void unknownCueTextWithFeatureDisabledNeverRetrieves(){
+        route("cheap",1,true);env.withProperty("conversate.cue.unknown-web-enabled","false");
+        respond(k->"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}");
+        var result=service().answer("하이젠베르크 불확정성 원리가 뭐야?",List.of(),List.of(),true);
+        assertEquals(1,calls.size());verifyNoInteractions(retrieval);
+        assertEquals("disabled",result.stages().cue().get("unknownWeb"));
+    }
+    @Test void recentOnlyVerdictSuppressesUnknownWebSupplement(){
+        route("cheap",1,true);respond(k->"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}");
+        var count=new AtomicInteger();var svc=service();
+        var advisor=jev("on",req->new JevDecisionAdvisor.EvalResponse(200,JevDecisionAdvisor.Verdict.RECENT_ONLY,null,null),count);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"jevAdvisor",advisor);
+        var result=svc.answer("하이젠베르크 불확정성 원리가 뭐야?",List.of(),List.of(),true);
+        assertEquals("CUE",result.stages().cue().get("cueDecision"));
+        verifyNoInteractions(retrieval);assertEquals(1,calls.size());
+        assertEquals("recent_only_precedence",result.stages().cue().get("unknownWeb"));advisor.close();
+    }
+    @Test void scopedRagBlocksDefaultWebExpansionAndUnknownSupplementWithoutFlag(){
+        route("cheap",1,true);respond(k->"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}");
+        var count=new AtomicInteger();var svc=service();
+        var advisor=jev("on",req->new JevDecisionAdvisor.EvalResponse(200,JevDecisionAdvisor.Verdict.SCOPED_RAG,null,null),count);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"jevAdvisor",advisor);
+        var result=svc.answer("하이젠베르크 불확정성 원리가 뭐야?",List.of(),List.of(),true);
+        var cue=result.stages().cue();
+        assertEquals("RAG_CUE",cue.get("cueDecision"),"SCOPED_RAG verdict still narrows to the scoped path");
+        verifyNoInteractions(retrieval);
+        assertEquals("SCOPED_RAG_PRECEDENCE",cue.get("retrievalSkipped"));
+        assertEquals("scoped_rag_precedence",cue.get("unknownWeb"));
+        assertEquals("CUE_EVIDENCE_INSUFFICIENT",result.reason());
+        // Explicit flag restores the one-shot web seam for the same verdict.
+        reset(router,retrieval);calls.clear();
+        env.withProperty("conversate.cue.scoped-web-enabled","true");
+        respond(k->"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}");
+        when(retrieval.query(any())).thenReturn(new UnifiedRagOrchestrator.QueryResponse());
+        var allowed=svc.answer("하이젠베르크 불확정성 원리가 뭐야?",List.of(),List.of(),true);
+        assertEquals("RAG_CUE",allowed.stages().cue().get("cueDecision"));
+        assertFalse(allowed.stages().cue().containsKey("retrievalSkipped"));
+        verify(retrieval,times(1)).query(any());
+        assertEquals("web_already_attempted",allowed.stages().cue().get("unknownWeb"));
+        advisor.close();
+    }
+    @Test void exhaustedWebAttemptDoesNotChainAnotherSearch(){
+        route("cheap",1,true);
+        respond(k->"{\"text\":\"제공된 자료가 부족하여 답변하기 어렵습니다.\",\"evidenceIds\":[]}");
+        when(retrieval.query(any())).thenReturn(new UnifiedRagOrchestrator.QueryResponse());
+        var result=service().answer("오늘 환율은 얼마야?",List.of(),List.of(),true);
+        verify(retrieval,times(1)).query(any());assertEquals(1,calls.size());
+        assertEquals("web_already_attempted",result.stages().cue().get("unknownWeb"));
     }
 
 }

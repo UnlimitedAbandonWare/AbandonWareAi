@@ -25,6 +25,11 @@ from typing import Any
 
 import awx_mcp_toolbox as toolbox
 import awx_codex_review_adapter as review_adapter
+from awx_paths import resolve as _awx_resolve
+
+
+def _awx_root_fwd() -> str:
+    return str(_awx_resolve("repo.root")).replace("\\", "/")
 
 
 ROOT = Path(__file__).absolute().parents[1]
@@ -43,6 +48,7 @@ HANDLERS = {
     "harmony_scan": toolbox.harmony_scan,
     "agent_db_snapshot": toolbox.agent_db_snapshot,
     "trace_snapshot_probe": toolbox.trace_snapshot_probe,
+    "answer_trace_bundle_read": toolbox.answer_trace_bundle_read,
     "supabase_context_probe": toolbox.supabase_context_probe,
     "supabase_schema_snapshot": toolbox.supabase_schema_snapshot,
     "supabase_schema_snapshot_import": toolbox.supabase_schema_snapshot_import,
@@ -860,7 +866,7 @@ def render_prompt_text(name: str, flow: list[str], optional_flows: list[dict[str
         ]
     elif name == "desktop_final_verifier":
         role = [
-            "Role: Desktop canonical source owner and final verifier for C:/AbandonWare/demo-1/demo-1/src.",
+            f"Role: Desktop canonical source owner and final verifier for {_awx_root_fwd()}.",
             "Desktop-only proof: run the local flow plus Desktop Gradle/source-governance; optional producer proof does not block completion.",
             "External producer proof: explicit handoff only; remains evidence_needed through dispatch/intake/audit, PatchDrop diff/secret/git-apply review, and Desktop Gradle/source-governance before applied.",
         ]

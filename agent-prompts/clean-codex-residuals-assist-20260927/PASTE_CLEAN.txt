@@ -1,0 +1,186 @@
+# Clean (Cline) PASTE — Codex mxasain RESIDUALS 도구 어시스트 + 딱갈이 레일
+# 작성: 2026-09-27 Asia/Seoul · Grok Bot
+# 목적: Codex가 `PASTE_CODEX_mxasain_residuals_continue` (R0–R6)를 **막히지 않고 딱갈이**하게
+#       스크립트·룰·도구·핸드오프·검증 레일만 준비한다. 제품 소스 패치는 Codex 전용.
+# 금지: 제품 Java/JS 핵심 패치 · 벡터 wipe · push · add -A · secrets 출력 · PROTO_OPEN 끄기 ·
+#       admin harden · AbandonWare3 · Groq/api3 hammer로 검증 물량 · Guard/evidence 날조 ·
+#       Devin misclassify Java 이중 패치 · foreign process kill · shared build wipe
+
+================================================================================
+0) PAIR / 역할 분리 (필수)
+================================================================================
+| 역할 | 패킷 / 파일 | 소유 |
+|---|---|---|
+| **제품 잔여 패치 (R1–R5)** | `agent-prompts/codex-mxasain-residuals-continue-20260927/PASTE_CODEX.txt` · Downloads `PASTE_CODEX_mxasain_residuals_continue.txt` | **Codex** |
+| **분류 오인 SOURCE FIX** | `agent-prompts/devin-debug-events-misclassify-fix-20260927/` · `PASTE_DEVIN_debug_events_misclassify_fix.txt` | **Devin** |
+| misclassify VERIFY+UI | `clean-debug-events-misclassify-verify-20260927/` | Clean (별도; 이번과 겹치면 UI만 한쪽) |
+| agent-ops thin | `clean-agent-ops-thin-20260927/` | Clean (병행 OK, 우선순위 낮음) |
+| 이전 Devin Codex assist (full-force) | `devin-codex-mxasain-assist-20260927/` | **참고만** — 이번은 residuals용 Clean 확장 |
+| **이번 SSOT** | `agent-prompts/clean-codex-residuals-assist-20260927/` (이 파일) | **Clean = ASSIST ONLY** |
+
+핸드오프 (Clean 산출):
+`data/agent-handoff/clean-assist/codex-residuals-rails-0927/`
+
+Codex 새 handoff (건드리되 덮어쓰지 말 것 — 레일만 깔기):
+`data/agent-handoff/codex-autonomy/mxasain-residuals-0927/`
+
+판정 SSOT (읽기):
+`docs/diagnostics/mxasain-full-force-20260927.md`
+
+================================================================================
+1) Mission (한 줄)
+================================================================================
+Codex residuals 딱갈이용으로 **기존 BAT/스크립트/룰을 묶고**, 막힘 지점(Verify-RAG partial, 2테스트, snapshot 404, cleanup fixture, git lease, spend-guard, API-03 보조경로 탐침)을 **재사용 가능한 체크리스트·원커맨드·핸드오프 킷**으로 남긴다.
+제품 ChatWorkflow / LlmRouter / ApiFailureRecorder / TraceHtmlBuilder 등 **직접 수정 금지**.
+
+================================================================================
+2) Project Root + 규칙
+================================================================================
+- Root: `C:\AbandonWare\demo-1\demo-1\src`
+- Sole remote: `https://github.com/UnlimitedAbandonWare/AbandonWareAi` only
+- PROTO_OPEN / Prototype Light 유지
+- Git: soft-auto / selective. Preferred `F:\git\cmd\git.exe`
+  - 사용: `scripts/conditional_local_git.py`, `scripts/agent_git_vibe_commit.py`
+  - push / `add -A` / history rewrite / foreign staging wipe / writer kill **금지**
+- Spend-guard: `scripts/agent_api_spend_guard.ps1` + 기존 AWX agent spend 규칙
+  - API-01 재증명 hammer 금지; API-03 증명에 꼭 필요할 때만 api3 **1회**
+  - OpenAI/Mistral 미승인 경로 열지 말 것
+- Checkpoint: `scripts/codex_work_checkpoint.py` (restore는 Codex; Clean은 사용법·SAFE 체크만)
+- 외국 세션 build / `index.lock` / lease 존중. shared build wipe 금지.
+
+================================================================================
+3) Self-Ask 5 (매 WP 시작 전)
+================================================================================
+1. 지금 손이 **제품 main/java·static JS**인가? → YES면 STOP. Codex handoff로.
+2. 로그/킷에 secret·API key·raw prompt가 들어가는가? → YES면 SafeRedactor/마스킹 후만.
+3. Devin이 만질 `ApiFailureRecorder` / `LlmGatewayFailureClassifier` / `debug-events.html` 핵심인가? → SKIP + handoff 한 줄.
+4. Groq/api3를 “검증 물량”으로 두드리려 하는가? → NO. SAFE diagnostics / 기존 증거 인용.
+5. 새 스크립트 왕국인가, **기존 BAT/scripts를 묶는 래퍼·문서**인가? → 후자만.
+
+================================================================================
+4) Codex residuals stuck map → Clean assist
+================================================================================
+| Codex R# | 증상 / 목표 | Clean이 하는 일 (소스 패치 X) |
+|---|---|---|
+| R0 | intake / DONE vs 잔여 | 체크리스트 템플릿 + prior handoff 경로 표 |
+| R1 API-03 | SelfAsk/aux가 api3 삼킴 | **읽기전용** 경로 탐침 노트(파일:line 후보) + LIVE SAFE 로그 수집 순서; 패치는 Codex |
+| R2 | 통합테스트 2실패 | 실패 FQCN 재현 **원커맨드** + baseline vs regression 표 템플릿 |
+| R3 | Verify-RAG partial / DDL128 | `Verify-RAG.bat` 실행 레시피 + noise vs blocker 분류 양식 |
+| R4 | 전역 snapshot 404 | list vs detail 404 재현 체크리스트; answer-trace-bundle 증거 붙이는 법 |
+| R5 | cleanup PS fixture | fixture 준비 실패 재현 명령 + `Safe-Cleanup`/`tools` 쪽 defer 티켓 양식 |
+| R6 | 보고서 | residuals md 골격 파일만 생성(내용 채우기는 Codex) |
+| 공통 | git lock / lease | soft-auto 3줄; kill 금지 |
+| 공통 | spend | hammer 금지 체크리스트 1장 |
+| 공통 | checkpoint false rollback | 스캐너 규칙 경로 목록 + exclude **제안**만 |
+
+================================================================================
+5) Work packages C0–C6 (순서)
+================================================================================
+
+### C0 — Rails inventory (필수, 읽기)
+이미 있는 것만 표로 확인 (없으면 NOT_FOUND, 새로 만들지 말고 대안 적기):
+| 도구 | 경로 | Codex R에 쓸 곳 |
+|---|---|---|
+| Start/Status/Verify RAG | `Start-RAG.bat` `Status-RAG.bat` `Verify-RAG.bat` | R3, LIVE |
+| Debug read | `Read-RAG-Debug.bat` `Debug-RAG.bat` | R1/R4 증거 |
+| Cleanup | `Safe-Cleanup.bat` | R5 |
+| Spend | `scripts/agent_api_spend_guard.ps1` | 전 WP |
+| Checkpoint | `scripts/codex_work_checkpoint.py` | 롤백 방지 |
+| Git soft-auto | `scripts/conditional_local_git.py` `scripts/agent_git_vibe_commit.py` | 공통 |
+| Preflight/work guard | `scripts/agent_preflight.py` `scripts/agent_work_guard.py` | C1 |
+| Codex context | `scripts/codex_context_status.py` `scripts/verify_codex_instructions.ps1` | C1 |
+| Prior assist | `agent-prompts/devin-codex-mxasain-assist-20260927/` | 참고 |
+
+산출: `C0-rails-inventory.md`
+AC: 표 + NOT_FOUND 목록
+
+### C1 — Grind preflight kit (필수)
+Codex가 세션 첫 메시지 전에 돌릴 **한 장 레시피** (`C1-grind-preflight.md`):
+1. `cd` Project Root
+2. git status / foreign staging 보존 안내 (soft-auto)
+3. `Status-RAG` 또는 동등 SAFE health (secret 없이)
+4. spend-guard 체크 (AWX_AGENT_* / paid fanout 금지)
+5. handoff 폴더 생성만: `data/agent-handoff/codex-autonomy/mxasain-residuals-0927/` (비어 있으면 mkdir)
+6. prior 보고서 경로 3줄 복붙
+
+허용: 기존 스크립트를 부르는 **얇은** `tools/` 또는 `scripts/` helper **1개** (예: `scripts/codex_residuals_preflight.ps1`) — 새 기능 제국 금지. 기존 `agent_preflight.py`로 충분하면 **새 파일 만들지 말고** 호출법만 문서화.
+AC: preflight md + (선택) helper 1 · 실행 결과 SAFE 요약
+
+### C2 — R1 API-03 isolation probe pack (필수, 읽기/문서)
+목표: Codex가 패치 seam을 바로 찍게 **보조 경로 지도**만.
+- SelfAsk / rewrite / auxiliary 후보 파일:line 표 (grep 결과 redacted)
+- “사용자 직접 api3” vs “자동/보조” 구분 체크리스트
+- LIVE 증명 순서: 보조 트리거 → routing debug SAFE 필드 → api3 미사용 여부 (hammer 1회 초과 금지)
+- Forbid: catalog/router Java 수정; allowlist 강제 변경
+
+산출: `C2-api03-isolation-probe.md` (+ 선택 `rg` 명령 블록)
+AC: 후보 seam ≥3파일:line 또는 NOT_FOUND+대안; Codex 패치 지시 1문단
+
+### C3 — R2/R3 verify grind rails (필수)
+1. 보고서의 동일 2실패 **이름**을 재실행하는 gradle/테스트 **원커맨드** (프로젝트 기존 방식 재사용)
+2. `Verify-RAG.bat` 실행 → partial/DDL128을 noise vs blocker로 적는 양식
+3. 결과 템플릿: `C3-verify-template.md` (Codex가 R2/R3에 붙일 표)
+
+Forbid: H2 스키마 대공사 / 데이터 wipe / 실패 테스트 기껏적 skip 강제
+AC: 원커맨드 2개(테스트+Verify) + 양식; 한 번 실행해 stdout 요약(비밀 없이) 또는 NOT_RUN 사유
+
+### C4 — R4 snapshot 404 + R5 cleanup fixture (권장)
+- R4: 소유 세션 detail OK vs 전역 latest 404 재현 체크리스트; Downloads의 answer-trace-bundle(events 있는 zip)을 handoff에 **복사만** (지시서 대체 아님)
+- R5: completion에 적힌 cleanup PowerShell fixture 실패 재현; 고치기 어렵면 `tools`/스크립트 NOT_RUN+ticket 양식만
+
+산출: `C4-snapshot404-checklist.md`, `C5-cleanup-fixture-ticket.md` (이름 그대로 또는 합본)
+AC: 체크리스트 각 5줄 이상; LIVE 1회 또는 NOT_RUN
+
+### C5 — Rule / skill pointer (최소, 덮어쓰기 금지)
+Codex가 매 WP에 보게 **포인터만**:
+- `.grok/rules/` 또는 `AGENTS.md`에 **한 블록** (기존 구조 파괴 금지):
+  - residuals PASTE 경로
+  - spend-guard / soft-auto / 병행 금지(Devin misclassify) 3줄
+- 새 스킬 SSOT를 `.agents/skills`에 만들 경우: **짧은 1스킬** `demo1-codex-residuals-grind-rails` 수준, 이중 미러(`.windsurf/skills` 복제) 금지
+- `verify_codex_instructions.ps1` / `codex_context_status.py`가 있으면 통과 확인만
+
+산출: 포인터 diff 요약 + (선택) skill 1
+AC: 포인터 위치 경로; 기존 룰 본문 대규모 rewrite 없음
+
+### C6 — Handoff kit + Codex kick note (필수)
+폴더 `data/agent-handoff/clean-assist/codex-residuals-rails-0927/`에:
+- `README.md` (C0–C5 링크)
+- `FOR_CODEX.md` — Codex가 바로 읽는 1페이지:
+  - preflight 명령
+  - R1 probe 요약
+  - R2/R3 원커맨드
+  - R4/R5 체크리스트 위치
+  - “제품 패치는 네 PASTE R1–R5 / Clean은 레일만”
+- (선택) residuals 보고서 골격만: `docs/diagnostics/mxasain-residuals-20260927.md` 헤더+표 빈칸 — **판정 채우기는 Codex**
+
+AC: FOR_CODEX.md 존재; secrets 없음; commit/push 없음
+
+================================================================================
+6) 명시적 OUT
+================================================================================
+- ChatWorkflow / DynamicChatModelFactory / LlmRouterAspect / ApiFailureRecorder /
+  LlmGatewayFailureClassifier / TraceHtmlBuilder / chat-trace-ui.js / debug-events.html **제품 패치**
+- API-01/02·WP0–WP8 재구현, VECTOR wipe, QUERY 대이식
+- Groq free-plan evidence TTL 조작, billing evidence 날조
+- misclassify Java를 Devin과 이중 수정
+- agent-ops thin 전체 재실행을 이번 Done 조건으로 만들기 (원하면 별도 세션)
+
+================================================================================
+7) Done
+================================================================================
+- C0 + C1 + C2 + C3 + C6 필수
+- C4·C5: 하나 이상 진전 또는 NOT_RUN 사유
+- FOR_CODEX.md 준비됨 → 사용자/Codex에 경로만 알림
+- push/commit/secrets 없음 · PROTO_OPEN 유지
+
+================================================================================
+8) 첫 메시지 (Clean)
+================================================================================
+```
+ACK clean-codex-residuals-assist
+Root: C:\AbandonWare\demo-1\demo-1\src
+Pair: Codex=PASTE_CODEX_mxasain_residuals_continue · Devin=misclassify fix (Java skip)
+Mission: rails only — scripts/rules/tools/handoff for Codex grind R0–R6
+No product Java/JS patch / no Groq hammer / no push
+Starting C0 rails inventory
+```

@@ -371,6 +371,25 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     }
 
     @Override
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public Long appendMessageStrictReturningId(Long sessionId, String role, String content) {
+        if (!TransactionSynchronizationManager.isActualTransactionActive())
+            throw new IllegalStateException("strict_chat_transaction_required");
+        if (sessionId == null || content == null || content.isBlank()
+                || !("assistant".equals(role) || ("system".equals(role) && content.startsWith("⎔USUM⎔"))))
+            throw new IllegalArgumentException("invalid_strict_chat_message");
+        if (skipWeakAssistant && "assistant".equals(role)
+                && EvidenceAwareGuard.looksStructurallyEmpty(content)
+                && EvidenceAwareGuard.looksNoEvidenceTemplate(content))
+            throw new IllegalStateException("strict_chat_message_suppressed");
+        ChatSession session = lockedSession(sessionId);
+        if (session == null) throw new IllegalStateException("strict_chat_session_missing");
+        ChatMessage saved = messageRepository.saveAndFlush(new ChatMessage(session, role, content));
+        if (saved == null || saved.getId() == null) throw new IllegalStateException("strict_chat_insert_unconfirmed");
+        return saved.getId();
+    }
+
+    @Override
     @Transactional
     public void updateSessionAnswerModeAndTrace(Long sessionId, String answerMode, Long traceTurnId) {
         if (sessionId == null) return;
@@ -530,6 +549,12 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 org.springframework.data.domain.PageRequest.of(0, limit));
         sessions.sort(java.util.Comparator.comparing(ChatSession::getCreatedAt).reversed());
         return sessions.size() <= limit ? sessions : new java.util.ArrayList<>(sessions.subList(0, limit));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ChatSession getSessionForRequest(Long id) {
+        return id == null ? null : sessionRepository.findById(id).orElse(null);
     }
 
     public ChatSession getSessionWithMessages(Long id) {

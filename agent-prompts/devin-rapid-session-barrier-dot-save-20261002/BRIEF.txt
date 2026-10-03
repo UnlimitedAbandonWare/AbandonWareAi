@@ -1,0 +1,88 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @demo1-goal-switch-barrier @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-agent-code-evidence-gate
+
+# Devin — 연타 세션 찌꺼기 정상 스위치(Barrier 해제 + workspace.json 복구) 및 점(dot) 지시서 원샷 저장기 안착
+[Contract: DEMO1-DEVIN-RAPID-SESSION-BARRIER-DOT-SAVE-20261002]
+[ANTI-STOP] 이 파일을 읽은 건 intake일 뿐이다. 종료 기준 = 아래 통과 항목(A1~A5)이 ALL PASS인 상태. 계획만 쓰고 멈추지 말고 D1부터 즉시 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 AUTO_DECISION: 줄로 남긴다. 전역 설정 무변경, 새 파일과 전용 스크립트만 다룬다.
+
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(&& 금지, ; 사용). git은 F:\git\cmd\git.exe. 파일은 [IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))로 쓴다. Python은 표준 라이브러리만.
+
+## 0) 한 줄 목표
+연타(연속) Devin 세션 사용 시 누적되는 이전 작업의 좀비 리스·미종료 저널(allowedOpen: false)과 workspace.json 홈폴더 회귀를 말끔히 스위치/치료하고, 취소 세션으로 인해 멈춰 있던 점(dot) 지시서 원샷 저장기(dot_brief_save.py + rescue)를 격리 구현하여 연타 세션 병목을 영구 해소한다.
+
+## 1) 사실 (2026-10-02 16:45 KST 실측)
+- `python -B scripts/demo1_goal_switch_barrier.py check --agent devin` 실측: `allowedOpen: false`, `switchRequired: true`. 취소된 `devin-codex-brief-save-autoapprove-9bc8b5bf`의 활성 리스(`devin-codex-brief-save-autoapprove-9bc8b5bf.lock`)와 미종료 저널 2개(`devin-skill-harmony-1002-272b7c03`, `devin-codex-brief-save-autoapprove-9bc8b5bf`)가 남아 있어 새 Devin 세션 진입을 물리적으로 차단하고 있음.
+- `C:\Users\nninn\AppData\Roaming\Devin\Workspaces\1790732690335\workspace.json:4` 실측: `"path": "../../../../.."` (홈 폴더 `C:\Users\nninn`)가 창 조작 후 다시 회귀해 있음. 이로 인해 유저 홈 전체 스캔, Java LS invalid identifier, 훅 에러(4294770688)가 재발함.
+- `scripts/lease_conflict_autoflow.py scan` 실측: 5.2일 전 만료된 stale lease `clean-primitive-debug-ai-impl-0926.lock` 방치 중.
+- 취소된 작업(`devin-codex-brief-save-autoapprove`)을 대체하는 지시서 `PASTE_DEVIN_codex-dot-brief-save_20261002.txt`가 Downloads에 존재하나, 이전 리스/저널 병목으로 `scripts/dot_brief_save.py` 생성이 미실행 상태임.
+- `brief_save.py` 린트 거부로 인해 `PASTE_DEVIN_skill-harmony_20261002.txt`(13,570 B)가 Downloads 대신 `%TEMP%\demo1-skill-harmony-20261002-6e195462\`에 갇혔던 사례가 있음. `%TEMP%`에 버려진 지시서를 Downloads로 회수하는 `rescue` 기능이 필수임.
+- 다른 Top10 항목(Git 1,138개 더티 정리, MCP 리로드, swe-2-max 모델)은 이번 작업 범위 밖("다른 Top10 동시 패치 금지").
+
+## 2) 공통 규칙
+- lease: 기존 live foreign lease는 건드리지 않고, 본인(devin) 소유의 취소/완료 lease 및 5일 이상 지난 stale lease만 회수한다. 새 파일 작업 전 `python -B scripts/agent_scope_lease.py claim`으로 잡는다.
+- git: git push, git pull, git commit, git reset, git clean, git add -A 엄격 금지. 변경 사항은 순수 파일 생성 및 상태 문서 기록만 한다.
+- .secrets / .env / 비밀 / 토큰: 비밀값 절대 열람·출력 금지. 환경변수 이름만 사용.
+- NOT_RUN: 실행하지 못한 검증 단계가 있다면 반드시 이유와 함께 NOT_RUN으로 기록한다.
+- gradle: 전역 gradle clean이나 full test suite 금지.
+- 실제 외부 호출: 유료 API 호출 0회. 순수 로컬 파이썬 테스트만 수행.
+- 패키지 설치: npm/pip 설치 금지. 표준 라이브러리만 사용.
+
+## 3) 항목
+
+### D1 연타 세션 장벽 해제 및 워크스페이스 홈폴더 치료
+- 1) `python -B scripts/demo1_goal_switch_barrier.py switch --agent devin --old-task devin-codex-brief-save-autoapprove-9bc8b5bf,devin-skill-harmony-1002-272b7c03` 실행하여 잔여 리스 반납 및 저널을 superseded/done으로 정상 닫기.
+- 2) switch 후 `python -B scripts/demo1_goal_switch_barrier.py check --agent devin` 재실행하여 `allowedOpen: true`, `switchRequired: false` 확인.
+- 3) 만료 stale lease 자동 회수: `python -B scripts/lease_conflict_autoflow.py auto-reclaim`.
+- 4) `C:\Users\nninn\AppData\Roaming\Devin\Workspaces\1790732690335\workspace.json`에서 `"path": "../../../../.."` 제거. `folders` 배열에 `{"path": "../../../../../../../AbandonWare/demo-1/demo-1/src"}`만 남김.
+
+### D2 점(dot) 지시서 원샷 저장기 및 구출기 구현 (scripts/dot_brief_save.py)
+- 새 파일 `scripts/dot_brief_save.py` 작성 (표준 라이브러리만 사용, `brief_save.py` 수정/import 0).
+- 서브커맨드 1: `save --agent <AGENT> --topic <topic> [--date YYYYMMDD] --from <임시파일|->`
+  - 정규식 `^PASTE_[A-Z0-9]+_[a-z0-9-]+_\d{8}(_v\d+)?\.txt$`
+  - 저장 위치 2곳: `C:\Users\nninn\Downloads\` 및 `src\agent-prompts\<agent소문자>-<topic>-<date>\BRIEF.txt`
+  - 기존 파일 존재 시 `_v2`, `_v3`로 증분 (덮어쓰기/삭제 0).
+  - 유출 방지 패턴 검사(`ghp_`, `xox`, `-----BEGIN`, 비밀 키 토큰). 검출 시 `BLOCKED_SECRET`.
+  - 크기 상한 256 KB, UTF-8 BOM 없음.
+  - 저장 후 재검증(크기, sha12). JSON 출력 `{"ok": true, "via": "dot", "paths": [...], "size": ..., "sha12": "..."}`.
+  - 기록: `data/agent-handoff/dot-brief-save/log.jsonl`에 한 줄 append (메타데이터만).
+- 서브커맨드 2: `rescue [--hours 24] [--apply]`
+  - `%TEMP%\demo1-*\PASTE_*.txt`를 탐색하여 Downloads에 없는 지시서 목록을 탐지.
+  - `--apply` 지정 시 Downloads로 안전하게 복사.
+- 단위 테스트 `scripts/test_dot_brief_save.py` 작성 및 실행하여 PASS 검증.
+
+### D3 점 전용 스킬 및 안내 문서 작성
+- `.agents/skills/dot-brief-save/SKILL.md`: `[DOT-BRIEF]` 태그가 포함된 지시만 처리하도록 제한.
+- `docs/codex/DOT_BRIEF_SAVE_KO.md`: 점(ChatGPT dot) 사용자를 위한 3줄 복붙 안내문 작성.
+
+## HOLD
+- `brief_save.py` 원본 수정 (다른 세션/agy가 사용 중이므로 수정 금지, `dot_brief_save.py`로 격리 운영).
+- Git 더티 1,138개 정리 (별도 safe-cleanup 작업으로 분리).
+- MCP 서버 리로드 및 swe-2-max 모델 설정 (Devin UI Reload 필요).
+
+## ASK_ONCE
+- 없음 (모든 파일은 신규 격리 파일이거나 이전 세션 리스 반납이므로 기본값 AUTO).
+
+## 절대 금지
+- git push, git pull, git commit, git add -A, reset --hard, clean.
+- AbandonWare3 리모트 추가 금지 (유일한 remote는 AbandonWareAi).
+- 전역 `~/.codex/AGENTS.md` 수정 금지.
+- 비밀값, API 키 하드코딩.
+- 다른 활성 작업(codex-chat-rag-browser-selfcheck 등) 건드리기.
+- PROTO_OPEN 또는 admin 권한 수정.
+
+## Acceptance
+- A1 (D1): `python -B scripts/demo1_goal_switch_barrier.py check --agent devin` 결과 `allowedOpen: true`, `switchRequired: false` 확인.
+- A2 (D1): `workspace.json` 재확인 시 `../../../../..`가 없고 src 폴더만 존재하는 상태 확인.
+- A3 (D2): `python -B scripts/test_dot_brief_save.py` 실행 시 모든 단위 테스트 PASS (exit 0).
+- A4 (D2): `python -B scripts/dot_brief_save.py rescue` 실행하여 %TEMP% 갇힌 지시서 목록 정상 검색 확인.
+- A5 (D3): `.agents/skills/dot-brief-save/SKILL.md` 및 `docs/codex/DOT_BRIEF_SAVE_KO.md` 생성 확인.
+
+## 보고 형식
+외부 API: 없음
+- DV0-preflight 요약
+- A1~A5 검증 결과 표
+- 생성된 파일 목록 (경로, 바이트, sha12)
+- PLUGIN_USAGE: none
+
+[ANTI-STOP] 읽기는 intake일 뿐이다. 종료 기준 = A1~A5 ALL PASS. 바로 D1부터 실행한다.

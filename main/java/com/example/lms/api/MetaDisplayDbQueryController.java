@@ -177,8 +177,19 @@ public class MetaDisplayDbQueryController {
 
     private Connection readOnlyConnection() throws SQLException {
         Connection c = dataSource.getConnection();
-        c.setReadOnly(true);
-        return c;
+        try {
+            c.setReadOnly(true);
+            return c;
+        } catch (SQLException failure) {
+            try {
+                c.close();
+            } catch (SQLException closeFailure) {
+                if (closeFailure != failure) {
+                    failure.addSuppressed(closeFailure);
+                }
+            }
+            throw failure;
+        }
     }
 
     private static Long rowCount(Connection c, String schema, String name) {

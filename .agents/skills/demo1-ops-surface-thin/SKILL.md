@@ -12,7 +12,7 @@ description: >-
 코드·스킬·스크립트·레일은 건드리지 않는다.
 
 ## Do
-1. Project root: `C:\AbandonWare\demo-1\demo-1\src`
+1. Project root: `<repo>`
 2. 먼저 보고만:
    ```powershell
    Ops-Surface-Thin.bat            # = scripts\demo1_ops_surface_thin.ps1 (WhatIf 기본)

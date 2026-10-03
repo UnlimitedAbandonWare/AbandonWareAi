@@ -20,7 +20,7 @@ import java.util.Map;
 
 /**
  * Performs a web search for recent information.  Requires the {@code web.get}
- * scope.  This shim returns an empty list.
+ * scope. Delegates to the existing search/ranking gateway and records bounded diagnostics.
  */
 @Component
 @ConditionalOnBean(WebSearchGateway.class)

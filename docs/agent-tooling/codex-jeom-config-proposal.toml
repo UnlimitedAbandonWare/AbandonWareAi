@@ -1,0 +1,65 @@
+# codex-jeom-config-proposal.toml — ~/.codex/config.toml 병합 제안 (미적용)
+# Contract: DEMO1-DEVIN-CODEX-JEOM-GROKBOT-ACCESS-20261002
+# 목적: 점(dot)이 만드는 로컬 Codex task가 쓸 least-privilege 권한 프로필.
+# 주의: permission profiles는 beta. `sandbox_mode`/`sandbox_workspace_write`가
+#   어떤 로드된 config에 있으면 구형 샌드박스가 우선한다 — 이 프로필을 쓰려면
+#   해당 키들을 옮기거나 제거하는 작업이 필요하다(문서: codex/permissions).
+# 주의2(알려진 버그): Codex Desktop은 project-local .codex/config.toml의
+#   default_permissions를 아직 적용하지 않는다(github.com/openai/codex/issues/22553).
+#   따라서 user-level config에 두고 세션에서 Custom (config.toml) 선택을 확인한다.
+# 비밀값 없음. 적용 여부는 ASK_ONCE #1 — 미답 시 제안만.
+
+# --- 제안 A: 명명 프로필 (권장) ---
+# default_permissions = "jeom-grokbot"     # 선택을 기본으로 둘 때만 켠다.
+#                                         # 기존 sandbox_mode와 병용 불가 — 택1.
+
+[permissions.jeom-grokbot]
+description = "Jeom(dot) Grok-Bot role: read project+Downloads; write Downloads/agent-prompts/data-agent-handoff; secrets denied"
+extends = ":read-only"                    # 최소 권한에서 시작; 쓰기는 아래에서만 연다
+
+# workspace_roots: 이 프로필에서 "워크스페이스"로 취급할 디렉터리
+[permissions.jeom-grokbot.workspace_roots]
+"C:\\AbandonWare\\demo-1\\demo-1\\src" = true
+"C:\\Users\\nninn\\Downloads" = true
+
+# filesystem 규칙: 의사 경로와 글롭. 더 좁은 deny는 넓은 allow 안에서도 유지된다.
+[permissions.jeom-grokbot.filesystem]
+":minimal" = "read"
+
+# 루트 공통 규칙 — 기본은 읽기, 허용 서브트리만 쓰기
+[permissions.jeom-grokbot.filesystem.":workspace_roots"]
+"." = "read"
+"agent-prompts" = "write"                 # src 쪽 지시서 이중 저장용
+"data/agent-handoff" = "write"            # 장부·인계 산출물
+"**/.secrets/**" = "deny"
+"**/.env" = "deny"
+"**/auth.json" = "deny"
+"**/.sandbox-secrets/**" = "deny"
+"**/*.key" = "deny"
+"**/*.pem" = "deny"
+
+# Downloads는 통째로 쓰기 대상 — 위 글롭은 roots 공통이므로,
+# Downloads만 write·src는 read로 갈라야 하는 경우 아래 "제안 B"를 쓴다.
+
+# --- 제안 B (evidence_needed): 루트별 차등이 안 되면 ---
+# 문서상 filesystem 규칙 키로 ":minimal"/":workspace_roots" 같은 의사 경로 외에
+# 콘크리트 경로 키를 쓸 수 있는지는 확인이 필요하다(permissions 베타 표).
+# 되면 아래처럼 루트별 분리:
+#   [permissions.jeom-grokbot.filesystem."C:\\Users\\nninn\\Downloads"]
+#   "." = "write"
+#   [permissions.jeom-grokbot.filesystem."C:\\AbandonWare\\demo-1\\demo-1\\src"]
+#   "." = "read"
+#   "agent-prompts" = "write"
+#   "data/agent-handoff" = "write"
+# 안 되면: ":workspace"를 extends하고 workspace_roots에 쓰기 대상 3곳만 등록하되,
+# 프로젝트 루트 자체는 등록하지 않는다(읽기는 ":workspace"의 minimal+roots 규칙으로).
+
+# --- 네트워크 ---
+[permissions.jeom-grokbot.network]
+enabled = false                           # 기본 네트워크 off — 유료 API 차단의 1차 방어
+
+# --- 승인 정책 (점의 로컬 Codex task에도 같은 키가 적용된다는 전제) ---
+# 기존 approval_policy 값을 바꾸지 않는다. 되돌릴 수 없는 행동의 "매번 묻기"는
+# Codex 승인 + 점 Custom rules(Settings → Personalization) 양쪽에서 건다.
+# granular 표기가 필요하면:
+# approval_policy = { granular = { sandbox_approval = true, request_permissions = true } }

@@ -15,6 +15,9 @@ llm:
   owner-token: ${LLM_OWNER_TOKEN:}
   owner-token-header: ${LLM_OWNER_TOKEN_HEADER:X-Owner-Token}
   chat-model: ${LLM_CHAT_MODEL:gemma4:26b}
+  requested-model:
+    # chat-run 단일 상한(chat.run.max-duration-seconds)을 기본으로 따른다.
+    timeout-seconds: ${LLM_REQUESTED_MODEL_TIMEOUT_SECONDS:${chat.run.max-duration-seconds:600}}
   provider-guard:
     allow-private-remote: ${LLM_PROVIDER_GUARD_ALLOW_PRIVATE_REMOTE:false}
     allowed-hosts: ${LLM_PROVIDER_GUARD_ALLOWED_HOSTS:${MACMINI_API_ROUTER_ALLOWED_HOSTS:}}
@@ -477,6 +480,9 @@ nova:
 # ?????????????????????????????????????????????????????????????????????
 llmrouter:
   enabled: true
+  api-first:
+    enabled: ${LLMROUTER_API_FIRST:false}
+    route-order: ${LLMROUTER_API_FIRST_ROUTE_ORDER:api3,gemini-pro,mistral-medium,openai-balanced,openai-premium}
   fallback-when-openai-missing: ${LLMROUTER_FALLBACK_WHEN_OPENAI_MISSING:true}
   cooldown-ms: 20000
 
@@ -839,8 +845,29 @@ privacy:
 
 # Nova Orch Guards block added
 
-# Imported LLM policy supersedes the base request cap; explicit env still wins.
-# Allows the selected 180s transport timeout plus a bounded fallback window.
+# Sole YAML source for bounded ingress/body reception; explicit env still wins.
+# application.yml must not redeclare this key — a same-document declaration after
+# spring.config.import silently overrides the imported value.
+# The value protects incomplete request reception, not accepted chat/task lifetime.
 public:
   request-budget:
-    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:240000}
+    max-time-budget-ms: ${PUBLIC_REQUEST_MAX_TIME_BUDGET_MS:600000}
+
+# Personal overrides stay in profile_meta; these retain the existing effective defaults.
+chat:
+  run:
+    # Compatibility key: deprecated for accepted execution; ordinary legacy callers retain it.
+    max-duration-seconds: ${CHAT_RUN_MAX_DURATION_SECONDS:600}
+  defaults:
+    model: ${openai.api.model.default:${llm.chat-model:gemma4:26b}}
+    model-selection-mode: preferred
+    temperature: ${openai.api.temperature.default:${llm.chat.temperature:0.3}}
+    top-p: ${openai.api.top-p.default:1.0}
+    frequency-penalty: ${openai.api.frequency-penalty.default:0.0}
+    presence-penalty: ${openai.api.presence-penalty.default:0.0}
+    max-tokens: 2048
+    use-rag: true
+    use-web-search: false
+    search-mode: 'OFF'
+    rag-answer-policy: ${chat.ragAnswerPolicy:adaptive}
+    defaults-version: '1'

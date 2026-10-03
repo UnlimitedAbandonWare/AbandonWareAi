@@ -27,6 +27,11 @@ class TrainRagMixedDecisionCountBoundaryTest {
     void successfulProjectionCountIncludesRejectedAndQuarantinedSyntheticInputs() throws Exception {
         TraceStore.clear();
         var vector = mock(VectorStoreService.class);
+        when(vector.flush()).thenReturn(new VectorStoreService.VectorFlushOutcome(true, 3, 0, "complete"));
+        var receipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(receipt.durable()).thenReturn(true);
+        org.mockito.Mockito.when(receipt.reasonCode()).thenReturn("complete");
+        org.mockito.Mockito.when(vector.enqueueWithReceipt(anyString(), anyString(), anyString(), any())).thenReturn(receipt);
         var sid = mock(VectorSidService.class);
         var properties = new UawAutolearnProperties();
         properties.getRetrain().setIngestStatePath(temporary.resolve("state.json").toString());
@@ -51,7 +56,7 @@ class TrainRagMixedDecisionCountBoundaryTest {
         int returned = service.ingestNewSamples(dataset, "synthetic-dataset", () -> false);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metadata = ArgumentCaptor.forClass(Map.class);
-        verify(vector, times(3)).enqueue(anyString(), anyString(), anyString(), metadata.capture());
+        verify(vector, times(3)).enqueueWithReceipt(anyString(), anyString(), anyString(), metadata.capture());
         verify(vector).flush();
         List<Map<String, Object>> projected = metadata.getAllValues();
         long validationAccepted = count(projected, VectorMetaKeys.META_LEARNING_VALIDATION_DECISION, "accepted");

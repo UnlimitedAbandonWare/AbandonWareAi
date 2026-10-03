@@ -33,8 +33,9 @@ description: Use when choosing local GPU vs API after the RTX 3090 power issue w
    `localRetryBudget`이 이 상한을 그대로 준다.
 3. **Fallback order** — `configs/api-routing.yaml` `policy.order`
    (free_local → low_cost → paid_quality). 실패한 free_local 레인은 건너뛰고,
-   `paid_quality`는 `AWX_AGENT_ALLOW_PAID_MODELS` 게이트 유지
-   (`$demo1-agent-api-spend-guard`).
+   `paid_quality`는 `AWX_AGENT_ALLOW_PAID_MODELS` kill-switch 준수
+   (`=0`/`false`/`no`/`off`이면 차단, 미설정·그 외 값은 허용 —
+   `$demo1-agent-api-spend-guard` SSOT).
 4. **Log why only** — `[AWX][api-spend]` 필드에 `why=local_failover`,
    `errorClass=<reason>`, provider/model/env **이름**만. 키·토큰 값 금지
    (`docs/AGENT_API_SPEND_GUARD.md`).
@@ -47,7 +48,7 @@ description: Use when choosing local GPU vs API after the RTX 3090 power issue w
   류 질문 카드를 띄우지 않는다. 허용된 재시도 1회는 transient
   (`timeout`/`no_response`) 한정 선택지이지 확인 질문이 아니다.
 - Hard stops (여전히 멈춤/거부): 시크릿 값 출력·커밋,
-  `AWX_AGENT_ALLOW_PAID_MODELS` 없는 paid-tier 호출, `git add -A`/`push`,
+  `AWX_AGENT_ALLOW_PAID_MODELS=0` kill-switch 하의 paid-tier 호출, `git add -A`/`push`,
   타 세션 staged 해제, 한 건의 장애 때문에 `configs/api-routing.yaml` 개편.
 
 ## Existing seams — extend, don't rebuild

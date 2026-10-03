@@ -84,7 +84,7 @@ class LlmRouterRequestTimelineTest {
             }
         };
         weighted.setEnabled(true);
-        weighted.setName("weighted-model");
+        weighted.setName("qwen3.5:9b");
         weighted.setProvider("local");
         weighted.setBaseUrl("http://127.0.0.1:11435/v1");
         LlmRouterProperties props = new LlmRouterProperties();
@@ -92,7 +92,7 @@ class LlmRouterRequestTimelineTest {
         props.setModels(Map.of("weighted", weighted));
         LlmRouterBandit bandit = new LlmRouterBandit(props);
         bandit.recordOutcome("weighted", true, 25L);
-        LlmRouterAspect aspect = aspectWithTracker(props, tracker, null, bandit);
+        LlmRouterAspect aspect = aspectWithTracker(props, tracker, eligibleGateway(), bandit);
         FakePjp pjp = new FakePjp(
                 "factory-result", "llmrouter.auto", null, null, null, null, 64, 5);
         AtomicReference<Object> routed = new AtomicReference<>();
@@ -278,8 +278,7 @@ class LlmRouterRequestTimelineTest {
         TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY, true);
         LlmRouterProperties props = propsWithFallback();
 
-        HybridLlmGatewayProbeService gateway = mock(HybridLlmGatewayProbeService.class);
-        when(gateway.cloudFallbackEnabled()).thenReturn(true);
+        HybridLlmGatewayProbeService gateway = eligibleGateway();
         assertInstanceOf(ChatModel.class, aspectWithTracker(props, tracker, gateway).aroundLcWithTimeout(
                 new FakePjp("factory-result", "llmrouter.light", null, null, null, null, 64, 5)));
 
@@ -418,8 +417,7 @@ class LlmRouterRequestTimelineTest {
                 "http://127.0.0.1:" + primaryServer.getAddress().getPort() + "/v1",
                 "http://127.0.0.1:" + fallbackServer.getAddress().getPort() + "/v1");
         MockEnvironment env = baseEnv().withProperty("llm.api-key-openai", "loopback-test-key");
-        HybridLlmGatewayProbeService gateway = mock(HybridLlmGatewayProbeService.class);
-        when(gateway.cloudFallbackEnabled()).thenReturn(true);
+        HybridLlmGatewayProbeService gateway = eligibleGateway();
         LlmRouterAspect aspect = new LlmRouterAspect(
                 env, props, new LlmRouterBandit(props), guard, emptyKeyResolverProvider(),
                 gateway, null, new LlmGatewayFailureClassifier(), tracker);
@@ -503,11 +501,13 @@ class LlmRouterRequestTimelineTest {
         props.setEnabled(true);
         LlmRouterProperties.ModelConfig primary = new LlmRouterProperties.ModelConfig();
         primary.setName("gpt-4-private");
+        primary.setProvider("openai");
         primary.setBaseUrl(primaryBaseUrl);
         primary.setWeight(1.0d);
         primary.setFallbackKey("responses-fallback");
         LlmRouterProperties.ModelConfig fallback = new LlmRouterProperties.ModelConfig();
         fallback.setName("gpt-5-pro");
+        fallback.setProvider("openai");
         fallback.setBaseUrl(fallbackBaseUrl);
         fallback.setWeight(1.0d);
         fallback.setFallbackOnly(true);
@@ -522,11 +522,13 @@ class LlmRouterRequestTimelineTest {
         props.setEnabled(true);
         LlmRouterProperties.ModelConfig primary = new LlmRouterProperties.ModelConfig();
         primary.setName("gpt-5-pro");
+        primary.setProvider("openai");
         primary.setBaseUrl(primaryBaseUrl);
         primary.setWeight(1.0d);
         primary.setFallbackKey("chat-fallback");
         LlmRouterProperties.ModelConfig fallback = new LlmRouterProperties.ModelConfig();
         fallback.setName("gpt-4o-mini");
+        fallback.setProvider("openai");
         fallback.setBaseUrl(fallbackBaseUrl);
         fallback.setWeight(1.0d);
         fallback.setFallbackOnly(true);
@@ -569,8 +571,7 @@ class LlmRouterRequestTimelineTest {
                 "http://127.0.0.1:" + fallbackServer.getAddress().getPort() + "/v1");
         OutcomeRecordingBandit bandit = new OutcomeRecordingBandit(props);
         MockEnvironment env = baseEnv().withProperty("llm.api-key-openai", "loopback-test-key");
-        HybridLlmGatewayProbeService gateway = mock(HybridLlmGatewayProbeService.class);
-        when(gateway.cloudFallbackEnabled()).thenReturn(true);
+        HybridLlmGatewayProbeService gateway = eligibleGateway();
         LlmRouterAspect aspect = new LlmRouterAspect(
                 env, props, bandit, guard, emptyKeyResolverProvider(),
                 gateway, null, new LlmGatewayFailureClassifier(), tracker);
@@ -732,6 +733,19 @@ class LlmRouterRequestTimelineTest {
                 null,
                 new LlmGatewayFailureClassifier(),
                 tracker);
+    }
+
+    private static HybridLlmGatewayProbeService eligibleGateway() {
+        HybridLlmGatewayProbeService gateway = mock(HybridLlmGatewayProbeService.class);
+        when(gateway.cloudFallbackEnabled()).thenReturn(true);
+        when(gateway.evaluate(org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString())).thenAnswer(inv -> {
+            String key = inv.getArgument(0);
+            LlmRouterProperties.ModelConfig cfg = inv.getArgument(1);
+            return com.example.lms.llm.gateway.RoutingEligibility.eligible(
+                    key, cfg.getProvider(), cfg.getName(), "chat", 1, false, Map.of());
+        });
+        return gateway;
     }
 
     private static MockEnvironment baseEnv() {

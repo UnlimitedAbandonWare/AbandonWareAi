@@ -32,6 +32,12 @@ import org.springframework.context.annotation.Primary;
 
 @Configuration
 public class RetrieverChainConfig {
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.core.env.Environment environment;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.assist.JevChoiceAdvisor jevChoiceAdvisor;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.gptsearch.decision.SearchDecisionService searchDecisionService;
 
     @Bean
     @Primary
@@ -57,7 +63,8 @@ public class RetrieverChainConfig {
         if ("dynamic".equalsIgnoreCase(mode)) {
             DynamicRetrievalHandlerChain dyn = dynProvider.getIfAvailable();
             if (dyn != null) {
-                return dyn;
+                return com.example.lms.service.rag.handler.JevRetrievalGateHandler.wrapIfEnabled(dyn, true,
+                        environment, jevChoiceAdvisor, searchDecisionService);
             }
         }
 
@@ -86,7 +93,8 @@ public class RetrieverChainConfig {
                 .linkWith(hKg)
                 .linkWith(h4)
                 .linkWith(evidenceRepairHandler);
-        return h1;
+        return com.example.lms.service.rag.handler.JevRetrievalGateHandler.wrapIfEnabled(h1, false,
+                environment, jevChoiceAdvisor, searchDecisionService);
     }
 
     /**

@@ -1,0 +1,240 @@
+# Agent failure-mode catalog — curated from quarantined Codex rollouts.
+# Contract DEMO1-DEVIN-QUARANTINE-AGENT-GRAFT-20260929 §B.
+# Evidence base: C:\AbandonWare\_rescue\codex-quarantine-9only-20260919
+# (9 rollout sessions, ~154MB, class=child-stale-no-evidence; cold archive,
+# READ-ONLY — never embedded, never deleted, never pasted whole).
+# Consumers: scripts/agent_failure_mode_advise.py (symptom->mode->rail),
+# quarantine_failure_episode_extract.py (recommended_rail),
+# agent_vibe_auto_decision priors via the advise CLI's `judge` mode.
+schemaVersion: awx.agent-failure-mode-catalog.v1
+contract: DEMO1-DEVIN-QUARANTINE-AGENT-GRAFT-20260929
+generatedAtUtc: "2026-09-29T00:00:00Z"
+policy:
+  raw_rollout_rag: forbidden        # never embed/chunk/paste raw jsonl
+  curated_index_default: off        # only this file + the MD may be indexed
+  episodes_dir: data/agent-handoff/quarantine-agent-graft-20260929/episodes
+modes:
+  - id: done_without_evidence
+    summary: >-
+      Session ends with a Done/PARTIAL/GREEN claim while carrying no test
+      command, no GATE/exit-code record, and no handoff/journal path.
+      Quarantine signature of every W2/W6-style false completion.
+    stop_patterns: [done-no-evidence, goal-read-as-done]
+    signals: {doneClaims_gt: 0, evidence_test: false, evidence_gate: false}
+    graft: scripts/agent_done_evidence_guard.py
+    invoke: >-
+      python -B scripts/agent_work_pipeline.py done-check --task <taskId>
+      --text "<claim>"   (exit 2 = claim blocked)
+    severity: high
+    symptoms:
+      - done claim without tests
+      - marked complete but no verify output
+      - read the goal file then claimed done
+      - 완료 보고 no evidence
+    agent_hint: >-
+      Refuse Done unless GATE/test/handoff paths are recorded; goal-objective
+      intake is never Done (demo1-codex-goal-intake-continue).
+    vibe:
+      pattern: '(?i)\b(mark|claim|report|declare|call|set)\b[^\n]{0,40}\b(done|complete[ds]?|finish(?:ed)?|완료)\b|\b(done|complete[ds]?|finish(?:ed)?)\b[^\n]{0,30}\bwithout\b[^\n]{0,40}\b(test|verif|evidence|gate|proof)\w*'
+      effect: ask_once
+      question: >-
+        Claiming Done/PARTIAL with no recorded evidence — run
+        agent_done_evidence_guard (done-check) first?
+  - id: reversible_quiz_spam
+    summary: >-
+      Agent loops approval quiz cards (1/2/3 choice prompts) for reversible
+      local work instead of running the self-ask judge; burns turns while the
+      user is away. Quarantine rollouts show quiz densities >10/1k lines.
+    stop_patterns: [quiz-spam]
+    signals: {askish_gte: 8, askish_per_1k_gt: 10}
+    graft: scripts/agent_vibe_auto_decision.py
+    invoke: >-
+      python -B scripts/agent_vibe_auto_decision.py --action "<planned>"
+      --paths "a,b" --task <taskId>   (exit 0=AUTO 3=ASK_ONCE 4=HOLD)
+    severity: medium
+    symptoms:
+      - repeated approval quiz cards
+      - asking 1/2/3 choice on reversible local edits
+      - 승인 요청 반복
+    agent_hint: >-
+      Reversible local paths go AUTO via the self-ask judge; reserve one
+      question for genuinely irreversible/foreign-scope asks.
+    vibe:
+      pattern: '(?i)ask\s+(the\s+)?user|approval\s+quiz|quiz\s+card'
+      effect: note
+      question: null
+  - id: stale_child_no_evidence
+    summary: >-
+      Spawned child/subagent thread (thread_source=subagent) goes stale with
+      task_started>task_complete, no evidence items, and an empty index
+      title — the exact quarantine class (9/9 sessions, title="").
+    stop_patterns: [child-stale-no-evidence, stale-incomplete]
+    signals: {isChild: true, taskStarted_gt_taskComplete: true,
+              titleEmpty: true}
+    graft: scripts/agent_session_watch.py
+    invoke: >-
+      python -B scripts/agent_session_watch.py scan --agent codex
+      --stale-hours 48   (P9 stale + child/no-evidence flags; warn-level,
+      handoff only)
+    severity: high
+    symptoms:
+      - child agent session went silent
+      - empty title thread
+      - subagent never reported back
+    agent_hint: >-
+      Flag child-stale-no-evidence at the parent; sweep with
+      agent_session_watch + close/journal, never silently inherit claims.
+    vibe:
+      pattern: '(?i)stale\s+(child|subagent)|empty[-\s]?title|child.*no.*evidence'
+      effect: note
+      question: null
+  - id: gate_loop_no_exit
+    summary: >-
+      GATE/exit-code markers churn (>=20 lines) without a single recorded
+      passing exit — re-verification loop that never lands a green run.
+    stop_patterns: [gate-loop]
+    signals: {gateLines_gte: 20, evidence_gate: false}
+    graft: scripts/run_verified_command.py
+    invoke: >-
+      python -B scripts/run_verified_command.py --output <fresh-dir> --
+      <command>   then journal note --kind verify with the real exit code
+    severity: medium
+    symptoms:
+      - verification keeps failing in a loop
+      - GATE mentions but no pass evidence
+    agent_hint: >-
+      One recorded run beats repeated loops; a failed verify restores the
+      sealed postimage — do not re-run the same command unchanged.
+    vibe:
+      pattern: '(?i)(re-?)?run\s+(the\s+)?(same\s+)?(failing\s+)?(verify|test|gate)\s+(again|loop)'
+      effect: note
+      question: null
+  - id: context_blowup_full_rollout
+    summary: >-
+      Session file >50MB / single turn >200k tokens / >=2 compactions —
+      context contamination territory. Raw rollout must never be pasted,
+      embedded, or chunked into RAG; only episodes travel.
+    stop_patterns: [token-blowup]
+    signals: {bytes_gte: 52428800, maxTurnTokens_gte: 200000, compacted_gte: 2}
+    graft: scripts/quarantine_failure_episode_extract.py
+    invoke: >-
+      python -B scripts/quarantine_failure_episode_extract.py
+      --max-bytes-per-file 33554432 --max-per-file 50
+    severity: medium
+    symptoms:
+      - huge session file
+      - compaction storms
+      - context window exhaustion
+    agent_hint: >-
+      Extract episodes only; raw rollouts stay in cold quarantine.
+      demo1-agent-api-spend-guard applies to any recovery probe.
+    vibe:
+      pattern: '(?i)(paste|embed|chunk|ingest)\w*\s+(the\s+)?(raw\s+)?(rollout|session|quarantine)'
+      effect: ask_once
+      question: >-
+        Raw rollout ingest is forbidden — use the curated episode/catalog
+        pack instead?
+  - id: apply_patch_context_miss
+    summary: >-
+      apply_patch 'Failed to find expected lines' >=2 on the same file —
+      editing against a stale preimage while a foreign writer moved it.
+    stop_patterns: [apply-patch-context-miss]
+    signals: {patchMissSameFile_gte: 2}
+    graft: scripts/codex_work_checkpoint.py
+    invoke: >-
+      codex_work_checkpoint begin preserves preimage; apply refuses on drift —
+      re-read the file, never force-patch stale context
+    severity: medium
+    symptoms:
+      - patch failed to find lines
+      - stale preimage editing
+    agent_hint: >-
+      Treat repeated context-miss as 'another writer touched this file' —
+      re-read and re-preimage, never blind re-apply.
+    vibe:
+      pattern: '(?i)apply.?patch.*(fail|miss|again|retry)'
+      effect: note
+      question: null
+  - id: repeated_failed_command
+    summary: >-
+      Same normalized command (or same file via mutated one-liners) failing
+      >=3 times — retry loop without new evidence. Work-guard brake exists.
+    stop_patterns: [repeated-failed-command, same-target-retry, error-streak]
+    signals: {sameCmdFailed_gte: 3, sameFileFailed_gte: 3,
+              maxFailStreak_gte: 4}
+    graft: scripts/agent_work_guard.py
+    invoke: >-
+      python -B scripts/agent_work_guard.py check --root . --cmd "<cmd>"
+      (PostToolUse ledger blocks the 4th identical failure)
+    severity: medium
+    symptoms:
+      - same command keeps failing
+      - retry loop no new evidence
+    agent_hint: >-
+      Stop the loop; record the failure in the ledger and change the
+      hypothesis, not just the one-liner.
+    vibe:
+      pattern: '(?i)(retry|re-?run|try)\s+(the\s+)?same|again\s+and\s+again'
+      effect: note
+      question: null
+  - id: plugin_sprawl
+    summary: >-
+      Session accumulates recommended-plugin blocks (>=3) / @-mentions —
+      capability sprawl instead of using already-installed seams.
+    stop_patterns: [plugin-sprawl]
+    signals: {pluginLines_gte: 3}
+    graft: .agents/skills/demo1-codex-plugin-roles/SKILL.md
+    invoke: enable only the plugins the work type needs (plugin-roles matrix)
+    severity: low
+    symptoms:
+      - many recommended plugins requested
+      - tool/plugin sprawl
+    agent_hint: >-
+      Prefer existing repo seams over new plugin installs; unknown plugins
+      stay off.
+    vibe:
+      pattern: '(?i)(install|enable|add)\s+(more\s+|another\s+)?plugins?'
+      effect: note
+      question: null
+  - id: auth_claim_no_proof
+    summary: >-
+      Session claims admin/login/auth verified while no GATE evidence exists —
+      prototype-auth surface asserted stronger than observed.
+    stop_patterns: [auth-claim-no-proof]
+    signals: {authClaimLines_gt: 0, evidence_gate: false}
+    graft: scripts/agent_done_evidence_guard.py
+    invoke: done-check flags runtime/auth claims lacking runtime evidence
+    severity: high
+    symptoms:
+      - claims login works with no test
+      - admin verified unproven
+    agent_hint: >-
+      AUTH claims need runtime evidence; proto-open posture is a flag, not a
+      verified state.
+    vibe:
+      pattern: '(?i)(login|auth|admin)\w*\s+(works|verified|done|fixed)'
+      effect: ask_once
+      question: >-
+        Auth claim with no gate evidence — attach verify output or downgrade
+        to unverified?
+  - id: dup_service_suspect
+    summary: >-
+      Session drifts toward a duplicate service/JobService instead of
+      extending the owning seam — parallel-platform smell in rollouts.
+    stop_patterns: [dup-service-suspect]
+    signals: {dupServiceLines_gte: 3}
+    graft: .agents/skills/demo1-cross-subsystem-guard/SKILL.md
+    invoke: route through the owning subsystem; no new parallel service
+    severity: medium
+    symptoms:
+      - about to create a duplicate service
+      - parallel JobService
+    agent_hint: >-
+      Extend the existing owner seam; a new parallel service is never the
+      minimal diff.
+    vibe:
+      pattern: '(?i)(new|create|add)\s+(a\s+)?(parallel\s+|duplicate\s+)?(service|jobservice|orchestrator)'
+      effect: ask_once
+      question: >-
+        This looks like a duplicate service — is an existing owner seam the
+        intended target instead?

@@ -276,6 +276,7 @@ class ChatApiControllerBraveHeaderRequestPathTest {
             ChatSession session = new ChatSession("brave-path", "owner-a", "ANON");
             session.setId(42L);
             when(history.getSessionWithMessages(42L)).thenReturn(session);
+            when(history.getSessionForRequest(42L)).thenReturn(session);
             when(history.getSessionWithMessages(42L, 1)).thenReturn(session);
             when(history.startNewSession(any(), any(), any(), any(), any()))
                     .thenReturn(java.util.Optional.of(session));

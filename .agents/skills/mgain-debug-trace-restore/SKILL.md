@@ -9,8 +9,8 @@ description: Use when restoring the /chat per-answer expandable debug trace UI (
 
 ## Pinned paths
 
-- Product root: `C:\AbandonWare\demo-1\demo-1\src` (절대 Downloads·ZIP·attachments를 루트로 쓰지 않는다)
-- SSOT (read-only): `C:\Users\nninn\Downloads\MGAIN_DEBUG_TRACE_RESTORE_2026-09-26\` — `goal-objective.md`(HARD 완료 조건), `mgain_debug_trace_restore_directive_2026-09-26.md`(§1–§10), `source_evidence.md`(E01–E16), `tools/read_only_renderer_probe.mjs`(**패치 전 baseline 전용**)
+- Product root: `<repo>` (절대 Downloads·ZIP·attachments를 루트로 쓰지 않는다)
+- SSOT (read-only): `%USERPROFILE%\Downloads\MGAIN_DEBUG_TRACE_RESTORE_2026-09-26\` — `goal-objective.md`(HARD 완료 조건), `mgain_debug_trace_restore_directive_2026-09-26.md`(§1–§10), `source_evidence.md`(E01–E16), `tools/read_only_renderer_probe.mjs`(**패치 전 baseline 전용**)
 - Assist artifacts: `agent-prompts/mgain-debug-trace-devin-assist-20260926/` (codex-kickoff.md, t01-t16-verification-checklist.md)
 - Static smoke + live anchor map: `python -B scripts/mgain_trace_smoke.py [--strict|--json|--anchors-only]`
 

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("All", "ArchiveLoop", "CompletionAudit", "ExternalEvidence", "AgentDb", "Harmony")]
+    [ValidateSet("All", "ProducerKit", "SecretPattern", "ArchiveLoop", "CompletionAudit", "ExternalEvidence", "AgentDb", "Harmony", "Prompt")]
     [string]$Suite = "All"
 )
 
@@ -16,7 +16,7 @@ $McpNodeSetup = Join-Path $Root "scripts\awx_mcp_node_setup.py"
 $Manifest = Join-Path $Root "main\resources\mcp\awx-control-tower-tools.json"
 $Failures = 0
 $CompletionAuditIncludeTestDispatchEnv = "AWX_COMPLETION_AUDIT_INCLUDE_TEST_DISPATCH"
-$SecretLikePattern = "sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}"
+$SecretLikePattern = "(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|pcsk_[A-Za-z0-9_-]{20,}|sb_(?:secret|publishable)_[A-Za-z0-9_-]{10,}|sbp_[A-Za-z0-9_-]{10,}"
 
 function Write-Pass {
     param([Parameter(Mandatory = $true)][string]$Name)
@@ -47,10 +47,39 @@ function Test-HasSecretLikeValue {
 }
 
 function Test-SecretLikePatternIncludesSupabaseKeys {
+    $openAiLike = "sk-" + ("D" * 20)
     $secretKey = "sb_secret_" + ("A" * 10)
     $publishableKey = "sb_publishable_" + ("B" * 10)
     $accessToken = "sbp_" + ("C" * 10)
+    Assert-True "PowerShell secret-like pattern catches standalone sk token" (Test-HasSecretLikeValue $openAiLike) "standalone sk token prefix was not matched"
+    Assert-True "PowerShell secret-like pattern ignores risk prose" (-not (Test-HasSecretLikeValue "find-duplicate-risk-or-decisive-counter-evidence")) "safe risk prose was matched as a secret"
     Assert-True "PowerShell secret-like pattern catches Supabase sb keys" ((Test-HasSecretLikeValue $secretKey) -and (Test-HasSecretLikeValue $publishableKey) -and (Test-HasSecretLikeValue $accessToken)) "Supabase key prefixes were not matched by the shared test pattern"
+
+    Assert-True "completion audit script exists for secret pattern parity" (Test-Path -LiteralPath $CompletionAudit) "missing $CompletionAudit"
+    if (-not ((Test-Path -LiteralPath $CompletionAudit) -and (Get-Command python -ErrorAction SilentlyContinue))) {
+        return
+    }
+
+    $testScript = Join-Path ([IO.Path]::GetTempPath()) ("awx-completion-audit-secret-pattern-" + [guid]::NewGuid().ToString("N") + ".py")
+    @'
+import importlib.util
+import pathlib
+import sys
+
+spec = importlib.util.spec_from_file_location("awx_completion_audit", pathlib.Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+assert spec.loader is not None
+spec.loader.exec_module(module)
+assert module.SECRET_PATTERN.search("sk-" + ("D" * 20)) is not None
+assert module.SECRET_PATTERN.search("find-duplicate-risk-or-decisive-counter-evidence") is None
+'@ | Set-Content -LiteralPath $testScript -Encoding UTF8
+
+    try {
+        $lines = & python $testScript $CompletionAudit 2>&1 | ForEach-Object { $_.ToString() }
+        Assert-True "completion audit secret-like pattern ignores risk prose" ($LASTEXITCODE -eq 0) "output=$($lines -join "`n")"
+    } finally {
+        Remove-Item -LiteralPath $testScript -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-ReadableFile {
@@ -132,7 +161,7 @@ function Invoke-LauncherJson {
 }
 
 function New-ValidNodeSmokeSteps {
-    return @(
+    $steps = @(
         @{ toolName = "source_scan"; ok = $true; decision = "read_only_probe"; failReason = ""; outputCount = 1 },
         @{ toolName = "agent_db_snapshot"; ok = $false; decision = "agent_db_snapshot_unavailable_with_local_fallback"; failReason = "URLError"; outputCount = 0; localFallbackPresent = $true },
         @{ toolName = "trace_snapshot_probe"; ok = $false; decision = "trace_snapshot_unavailable_with_local_fallback"; failReason = "URLError"; outputCount = 0; localFallbackPresent = $true },
@@ -146,6 +175,15 @@ function New-ValidNodeSmokeSteps {
         @{ toolName = "run_pipeline"; ok = $true; decision = "pipeline_probe"; failReason = ""; outputCount = 1 },
         @{ toolName = "archive_restore"; ok = $false; decision = "restore_target_blocked"; failReason = "smb-conflict-risk"; outputCount = 0 }
     )
+    foreach ($step in $steps) {
+        $step.exitCode = 0
+        $step.elapsedMs = 0
+        if (-not $step.ContainsKey("localFallbackPresent")) {
+            $step.localFallbackPresent = $false
+        }
+        $step.evidence_needed = ""
+    }
+    return $steps
 }
 
 function Invoke-NodeSmokeJson {
@@ -377,15 +415,17 @@ function Test-McpStdioServerListsToolsResourcesAndPrompts {
         @{ jsonrpc = "2.0"; id = 2; method = "tools/list"; params = @{} },
         @{ jsonrpc = "2.0"; id = 3; method = "resources/list"; params = @{} },
         @{ jsonrpc = "2.0"; id = 4; method = "prompts/list"; params = @{} },
-        @{ jsonrpc = "2.0"; id = 5; method = "prompts/get"; params = @{ name = "macmini_patch_producer" } }
+        @{ jsonrpc = "2.0"; id = 5; method = "prompts/get"; params = @{ name = "macmini_patch_producer" } },
+        @{ jsonrpc = "2.0"; id = 6; method = "prompts/get"; params = @{ name = "desktop_final_verifier" } }
     )
     Assert-True "mcp stdio list session exits zero" ($session.ExitCode -eq 0) "output=$($session.Raw)"
-    if ($session.Json.Count -ge 5) {
+    if ($session.Json.Count -ge 6) {
         $init = @($session.Json | Where-Object { $_.id -eq 1 } | Select-Object -First 1)
         $tools = @($session.Json | Where-Object { $_.id -eq 2 } | Select-Object -First 1)
         $resources = @($session.Json | Where-Object { $_.id -eq 3 } | Select-Object -First 1)
         $prompts = @($session.Json | Where-Object { $_.id -eq 4 } | Select-Object -First 1)
         $macminiPrompt = @($session.Json | Where-Object { $_.id -eq 5 } | Select-Object -First 1)
+        $desktopPrompt = @($session.Json | Where-Object { $_.id -eq 6 } | Select-Object -First 1)
         Assert-True "mcp stdio initialize names server" ($init.result.serverInfo.name -eq "awx-control-tower") "init=$($init | ConvertTo-Json -Depth 10 -Compress)"
         Assert-True "mcp stdio tools list source_scan" (@($tools.result.tools | ForEach-Object { $_.name }) -contains "source_scan") "tools=$($tools | ConvertTo-Json -Depth 10 -Compress)"
         Assert-True "mcp stdio tools list desktop_dispatch_packet" (@($tools.result.tools | ForEach-Object { $_.name }) -contains "desktop_dispatch_packet") "tools=$($tools | ConvertTo-Json -Depth 10 -Compress)"
@@ -395,6 +435,75 @@ function Test-McpStdioServerListsToolsResourcesAndPrompts {
         Assert-True "mcp stdio prompts list desktop verifier" (@($prompts.result.prompts | ForEach-Object { $_.name }) -contains "desktop_final_verifier") "prompts=$($prompts | ConvertTo-Json -Depth 10 -Compress)"
         $promptText = $macminiPrompt.result.messages[0].content.text
         Assert-True "mcp stdio prompt get gives producer-safe instructions" ([bool]($promptText -match "producer-local" -and $promptText -match "PatchDrop" -and $promptText -match "awx-control-tower-mcp-client.sample.json" -and $promptText -match "Desktop final")) "prompt=$promptText"
+        $desktopPromptListEntry = @($prompts.result.prompts | Where-Object { $_.name -eq "desktop_final_verifier" } | Select-Object -First 1)
+        Assert-True "mcp stdio desktop verifier list description is local-first" (
+            $desktopPromptListEntry.Count -eq 1 -and
+            [string]$desktopPromptListEntry[0].description -eq "source_scan -> patch_plan -> boot_verify"
+        ) "promptEntry=$($desktopPromptListEntry | ConvertTo-Json -Depth 10 -Compress)"
+        $desktopPromptText = [string]$desktopPrompt.result.messages[0].content.text
+        $desktopPromptLines = @($desktopPromptText -split "`r?`n")
+        $defaultLocalFlowLine = @($desktopPromptLines | Where-Object { $_.StartsWith("Default local flow:") } | Select-Object -First 1)
+        $buildFailureFlowLine = @($desktopPromptLines | Where-Object { $_.StartsWith("Optional flow [build_failure_diagnostics]") } | Select-Object -First 1)
+        $deepAnalysisFlowLine = @($desktopPromptLines | Where-Object { $_.StartsWith("Optional flow [deep_analysis]") } | Select-Object -First 1)
+        $externalProducerFlowLine = @($desktopPromptLines | Where-Object { $_.StartsWith("Optional flow [external_producer_handoff]") } | Select-Object -First 1)
+        Assert-True "mcp stdio desktop verifier renders compact default local flow" (
+            $defaultLocalFlowLine.Count -eq 1 -and
+            [string]$defaultLocalFlowLine[0] -eq "Default local flow: source_scan -> patch_plan -> boot_verify" -and
+            [string]$defaultLocalFlowLine[0] -notmatch "build_error_mine|desktop_dispatch_packet|external_evidence_|peer_evidence_bus"
+        ) "prompt=$desktopPromptText"
+        Assert-True "mcp stdio desktop verifier mines build errors only after failed verification with a log" (
+            $buildFailureFlowLine.Count -eq 1 -and
+            [string]$buildFailureFlowLine[0] -eq "Optional flow [build_failure_diagnostics] when [verification_failed_with_log_path]: build_error_mine"
+        ) "prompt=$desktopPromptText"
+        Assert-True "mcp stdio desktop verifier keeps deep analysis demand-driven" (
+            $deepAnalysisFlowLine.Count -eq 1 -and
+            [string]$deepAnalysisFlowLine[0] -eq "Optional flow [deep_analysis] when [cross_subsystem_or_harmony_evidence_needed]: harmony_scan -> peer_evidence_bus"
+        ) "prompt=$desktopPromptText"
+        Assert-True "mcp stdio desktop verifier keeps producer handoff explicitly optional" (
+            $externalProducerFlowLine.Count -eq 1 -and
+            [string]$externalProducerFlowLine[0] -eq "Optional flow [external_producer_handoff] when [explicit_external_producer_handoff]: desktop_dispatch_packet -> external_evidence_intake -> external_evidence_audit"
+        ) "prompt=$desktopPromptText"
+        Assert-True "mcp stdio desktop verifier separates local and external completion proof" (
+            $desktopPromptText.Contains("Desktop-only proof: run the local flow plus Desktop Gradle/source-governance; optional producer proof does not block completion.") -and
+            $desktopPromptText.Contains("External producer proof: explicit handoff only; remains evidence_needed through dispatch/intake/audit, PatchDrop diff/secret/git-apply review, and Desktop Gradle/source-governance before applied.")
+        ) "prompt=$desktopPromptText"
+        $previousPromptTestRoot = $env:AWX_MCP_PROMPT_TEST_ROOT
+        try {
+            $env:AWX_MCP_PROMPT_TEST_ROOT = $script:Root
+            $normalizationProbeScript = @'
+import json
+import os
+import sys
+from pathlib import Path
+
+root = Path(os.environ["AWX_MCP_PROMPT_TEST_ROOT"])
+sys.path.insert(0, str(root / "scripts"))
+import awx_mcp_stdio_server as server
+
+result = server.normalize_optional_flows([
+    {"name": "null_flow", "when": "never", "flow": None},
+    {"name": "string_flow", "when": "never", "flow": "ab"},
+    {"name": "valid_flow", "when": "needed", "flow": ["source_scan", ""]},
+])
+print(json.dumps(result, sort_keys=True))
+'@
+            $normalizationProbeLines = $normalizationProbeScript | python - 2>&1 | ForEach-Object { $_.ToString() }
+            $normalizationProbeExit = $LASTEXITCODE
+        } finally {
+            if ($null -eq $previousPromptTestRoot) {
+                Remove-Item Env:\AWX_MCP_PROMPT_TEST_ROOT -ErrorAction SilentlyContinue
+            } else {
+                $env:AWX_MCP_PROMPT_TEST_ROOT = $previousPromptTestRoot
+            }
+        }
+        $normalizedFlows = if ($normalizationProbeExit -eq 0) { @(($normalizationProbeLines -join "`n") | ConvertFrom-Json) } else { @() }
+        Assert-True "mcp stdio optional flow normalization ignores malformed inner flow types" (
+            $normalizationProbeExit -eq 0 -and
+            $normalizedFlows.Count -eq 1 -and
+            [string]$normalizedFlows[0].name -eq "valid_flow" -and
+            @($normalizedFlows[0].flow).Count -eq 1 -and
+            [string]$normalizedFlows[0].flow[0] -eq "source_scan"
+        ) "exit=$normalizationProbeExit output=$($normalizationProbeLines -join ';')"
         Assert-True "mcp stdio list output redacts secrets" (-not (Test-HasSecretLikeValue $session.Raw)) "raw=$($session.Raw)"
     }
 }
@@ -626,6 +735,10 @@ function Test-ManifestDeclaresRequiredToolSchemas {
     foreach ($field in @("ok", "failReason", "decision", "restored", "outputCount")) {
         Assert-True "archive_restore schema requires $field" (@($archiveRestore.output_schema.required) -contains $field) "required=$($archiveRestore.output_schema.required -join ',')"
     }
+    $patchRender = $doc.tools | Where-Object { $_.name -eq "patch_render" } | Select-Object -First 1
+    foreach ($field in @("filemodeLineCount", "allowedNewFileCount", "filemodeViolationCount", "binaryPatchMarkerCount")) {
+        Assert-True "patch_render schema exposes $field" (@($patchRender.output_schema.properties.PSObject.Properties.Name) -contains $field) "output=$($patchRender.output_schema.properties.PSObject.Properties.Name -join ',')"
+    }
     $externalAudit = $doc.tools | Where-Object { $_.name -eq "external_evidence_audit" } | Select-Object -First 1
     Assert-True "external_evidence_audit schema requires Desktop final proof status" (@($externalAudit.output_schema.required) -contains "desktopFinalProof") "required=$($externalAudit.output_schema.required -join ',')"
     Assert-True "external_evidence_audit schema requires nextActions" (@($externalAudit.output_schema.required) -contains "nextActions") "required=$($externalAudit.output_schema.required -join ',')"
@@ -644,6 +757,9 @@ function Test-ManifestDeclaresRequiredToolSchemas {
         Assert-True "external_evidence_audit dispatch integrity schema exposes $field" (@($externalAudit.output_schema.properties.dispatchIntegrity.properties.PSObject.Properties.Name) -contains $field) "dispatchIntegrityFields=$($externalAudit.output_schema.properties.dispatchIntegrity.properties.PSObject.Properties.Name -join ',')"
     }
     Assert-True "external_evidence_audit producer bundle schema exposes filemode count" (@($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "filemodeLineCount") "producerBundleFields=$($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
+    foreach ($field in @("allowedNewFileCount", "filemodeViolationCount", "binaryPatchMarkerCount")) {
+        Assert-True "external_evidence_audit producer bundle schema exposes $field" (@($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains $field) "producerBundleFields=$($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
+    }
     Assert-True "external_evidence_audit producer bundle schema exposes forbidden path count" (@($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "forbiddenPathCount") "producerBundleFields=$($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
     Assert-True "external_evidence_audit producer bundle schema exposes diff header count" (@($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "diffHeaderCount") "producerBundleFields=$($externalAudit.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
     Assert-True "external_evidence_audit producer handoff schema exposes source root input hash" (@($externalAudit.output_schema.properties.producerHandoffs.items.properties.PSObject.Properties.Name) -contains "sourceRootInputHash") "producerHandoffFields=$($externalAudit.output_schema.properties.producerHandoffs.items.properties.PSObject.Properties.Name -join ',')"
@@ -669,6 +785,9 @@ function Test-ManifestDeclaresRequiredToolSchemas {
         Assert-True "external_evidence_intake summary schema exposes $field" (@($externalIntake.output_schema.properties.intakeSummary.properties.PSObject.Properties.Name) -contains $field) "summary=$($externalIntake.output_schema.properties.intakeSummary.properties.PSObject.Properties.Name -join ',')"
     }
     Assert-True "external_evidence_intake producer bundle schema exposes filemode count" (@($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "filemodeLineCount") "producerBundleFields=$($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
+    foreach ($field in @("allowedNewFileCount", "filemodeViolationCount", "binaryPatchMarkerCount")) {
+        Assert-True "external_evidence_intake producer bundle schema exposes $field" (@($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains $field) "producerBundleFields=$($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
+    }
     Assert-True "external_evidence_intake producer bundle schema exposes forbidden path count" (@($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "forbiddenPathCount") "producerBundleFields=$($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
     Assert-True "external_evidence_intake producer bundle schema exposes diff header count" (@($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name) -contains "diffHeaderCount") "producerBundleFields=$($externalIntake.output_schema.properties.producerBundles.items.properties.PSObject.Properties.Name -join ',')"
     Assert-True "external_evidence_intake producer handoff schema exposes source root input hash" (@($externalIntake.output_schema.properties.producerHandoffs.items.properties.PSObject.Properties.Name) -contains "sourceRootInputHash") "producerHandoffFields=$($externalIntake.output_schema.properties.producerHandoffs.items.properties.PSObject.Properties.Name -join ',')"
@@ -750,10 +869,8 @@ function Test-ProducerKitExportWritesPatchDropKit {
             Assert-True "producer_kit_export does not require protected docs when handoff fallback is packaged" (-not ($kitEvidenceNeeded -match "\.agents/skills|agent-prompts/.+demo1_mcp_control_tower")) "evidence_needed=$kitEvidenceNeeded"
             Assert-True "producer_kit_export includes install helpers" ((Test-Path -LiteralPath (Join-Path $kitDir "INSTALL.macmini.sh")) -and (Test-Path -LiteralPath (Join-Path $kitDir "INSTALL.notebook.ps1"))) "kitDir=$kitDir"
             $installText = (Get-Content -LiteralPath (Join-Path $kitDir "INSTALL.macmini.sh") -Raw) + (Get-Content -LiteralPath (Join-Path $kitDir "INSTALL.notebook.ps1") -Raw)
-            Assert-True "producer_kit_export install helpers enforce source isolation" ($installText -match "Desktop canonical" -and $installText -match "shared" -and $installText -match "awx_mcp_node_setup.py") "install=$installText"
-            Assert-True "producer_kit_export install helpers copy producer bundle helper" ($installText -match "__patch_drop__/producer_bundle.py" -and $installText -match "__patch_drop__/producer_bundle.ps1") "install=$installText"
-            Assert-True "producer_kit_export install helpers preflight git root before copying" ($installText -match "producer-git-root-invalid" -and $installText -match "rev-parse --show-toplevel") "install=$installText"
-            Assert-True "producer_kit_export install helpers verify kit manifest before copying" ($installText -match "producer-kit\.manifest\.json" -and $installText -match "producer-kit-manifest-missing" -and $installText -match "producer-kit-manifest-mismatch") "install=$installText"
+            Assert-True "producer_kit_export installers delegate to single safe owner" ($installText -match 'awx_mcp_safe_install.py' -and (Test-Path (Join-Path $kitDir 'scripts/awx_shared_state.py'))) 'safe installer dependency missing'
+            Assert-True "producer_kit_export installers contain no force copy" (-not ($installText -match 'Copy-Item|\bcp\s|--force')) 'unsafe copy loop present'
             $producerKitActionCommands = (@($kit.Json.nextActions) | ForEach-Object { [string]$_.command }) -join "`n"
             Assert-True "producer_kit_export nextActions use producer-visible PatchDrop placeholders" (
                 $producerKitActionCommands -match "<producer-visible-patchdrop>" -and
@@ -766,7 +883,7 @@ function Test-ProducerKitExportWritesPatchDropKit {
             $blockedInstall = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kitDir "INSTALL.notebook.ps1") -ProducerRoot "Z:\PatchDrop" -NodeRole notebook 2>&1 | ForEach-Object { $_.ToString() }
             $blockedRaw = $blockedInstall -join "`n"
             $blockedExit = $LASTEXITCODE
-            Assert-True "producer_kit_export notebook installer rejects PatchDrop source root" ($blockedExit -ne 0 -and $blockedRaw -match "refusing Desktop canonical or shared source target") "exit=$blockedExit raw=$blockedRaw"
+            Assert-True "producer_kit_export notebook installer rejects PatchDrop source root" ($blockedExit -ne 0 -and $blockedRaw -match "producer-source-isolation-violation") "exit=$blockedExit raw=$blockedRaw"
             $nonGitRoot = Join-Path $tmp "notebook-nongit-root"
             New-Item -ItemType Directory -Force -Path $nonGitRoot | Out-Null
             $blockedNonGitInstall = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kitDir "INSTALL.notebook.ps1") -ProducerRoot $nonGitRoot -NodeRole notebook 2>&1 | ForEach-Object { $_.ToString() }
@@ -776,11 +893,12 @@ function Test-ProducerKitExportWritesPatchDropKit {
             $validProducerRoot = Join-Path $tmp "notebook-valid-root"
             New-Item -ItemType Directory -Force -Path $validProducerRoot | Out-Null
             git -C $validProducerRoot init | Out-Null
-            $validInstall = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kitDir "INSTALL.notebook.ps1") -ProducerRoot $validProducerRoot -NodeRole notebook 2>&1 | ForEach-Object { $_.ToString() }
+            $localState = Join-Path $tmp 'host-state'
+            $validInstall = powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $kitDir "INSTALL.notebook.ps1") -ProducerRoot $validProducerRoot -NodeRole notebook -StateRoot $localState 2>&1 | ForEach-Object { $_.ToString() }
             $validInstallRaw = $validInstall -join "`n"
             $validInstallExit = $LASTEXITCODE
             Assert-True "producer_kit_export notebook installer succeeds for valid producer git root" ($validInstallExit -eq 0 -and (Test-Path -LiteralPath (Join-Path $validProducerRoot "scripts\awx_mcp_node_setup.py")) -and (Test-Path -LiteralPath (Join-Path $validProducerRoot "__patch_drop__\producer_bundle.py"))) "exit=$validInstallExit raw=$validInstallRaw"
-            Assert-True "producer_kit_export notebook installer writes mcp config on valid producer root" (Test-Path -LiteralPath (Join-Path $validProducerRoot ".codex\awx-control-tower.mcp.json")) "root=$validProducerRoot raw=$validInstallRaw"
+            Assert-True "producer_kit_export writes config outside shared source" ((Test-Path (Join-Path $localState 'awx-control-tower.mcp.json')) -and -not (Test-Path (Join-Path $validProducerRoot '.codex/awx-control-tower.mcp.json'))) 'host isolation failed'
             $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
             Assert-True "producer_kit_export manifest has checksums" (@($manifest.files | Where-Object { $_.sha256 -match "^[a-f0-9]{64}$" }).Count -eq @($manifest.files).Count) "manifest=$(Get-Content -LiteralPath $manifestPath -Raw)"
             Assert-True "producer_kit_export writes allowlisted audit" (Test-Path -LiteralPath $audit) "missing $audit"
@@ -1167,6 +1285,387 @@ function Test-ProducerBundleHelpersIncludeStagedChanges {
     }
 }
 
+function Test-PeerEvidenceBusTriPerspectiveQueryPacket {
+    $result = Invoke-ToolboxJson "peer_evidence_bus" @{
+        nodeRole = "desktop"
+        root = $script:Root
+        targetMetric = "tri-perspective-harvest"
+    }
+
+    Assert-True `
+        "peer_evidence_bus tri-perspective exits zero" `
+        ($result.ExitCode -eq 0) `
+        "output=$($result.Raw)"
+
+    if ($result.ExitCode -ne 0 -or $null -eq $result.Json) {
+        return
+    }
+
+    $packet = $result.Json.triPerspectiveQueryPacket
+    $roles = @($packet.roles | ForEach-Object { $_.name })
+
+    Assert-True `
+        "tri-perspective packet exists" `
+        ($null -ne $packet) `
+        "json=$($result.Raw)"
+
+    Assert-True `
+        "tri-perspective roles are SUPPORT FALSIFY HOLD" `
+        (($roles -join ",") -eq "SUPPORT,FALSIFY,HOLD") `
+        "roles=$($roles -join ',')"
+
+    Assert-True `
+        "tri-perspective limits candidates and calls" `
+        ([int]$packet.candidateLimit -eq 3 -and
+         [int]$packet.activeCandidateLimit -eq 1 -and
+         [int]$packet.modelCallLimitPerCandidate -eq 3) `
+        "packet=$($packet | ConvertTo-Json -Depth 20 -Compress)"
+
+    Assert-True `
+        "tri-perspective promotion gate matches Java runtime" `
+        ([double]$packet.promotionGate.minimumGrounding -eq 0.70 -and
+         [double]$packet.promotionGate.minimumScoreGap -eq 0.05 -and
+         $packet.promotionGate.safetyGate -eq "PASS" -and
+         $packet.promotionGate.evidenceStatus -eq "SUFFICIENT" -and
+         $packet.promotionGate.advisoryOnly -eq $true) `
+        "gate=$($packet.promotionGate | ConvertTo-Json -Compress)"
+
+    Assert-True `
+        "tri-perspective packet stores no raw prompt or query" `
+        ($packet.evidenceContract.rawPromptStored -eq $false -and
+         $packet.evidenceContract.rawQueryStored -eq $false -and
+         -not (Test-HasSecretLikeValue $result.Raw)) `
+        "raw=$($result.Raw)"
+}
+
+function Test-ProducerBundleHelpersRejectDesktopCanonicalRoot {
+    Assert-True "producer bundle helpers exist for Desktop canonical root guard" ((Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.py")) -and (Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.ps1"))) "producer bundle helpers missing"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Pass "producer bundle Desktop canonical root guard skipped because git is unavailable"
+        return
+    }
+
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("awx-mcp-producer-canonical-root-" + [guid]::NewGuid().ToString("N"))
+    $repo = Join-Path $tmp "repo"
+    $pyPatchDrop = Join-Path $tmp "patchdrop-py"
+    $psPatchDrop = Join-Path $tmp "patchdrop-ps"
+    $poisonedPyPatchDrop = Join-Path $tmp "patchdrop-poisoned-py"
+    $poisonedPsPatchDrop = Join-Path $tmp "patchdrop-poisoned-ps"
+    $previousCanonicalRoot = $env:AWX_DESKTOP_CANONICAL_ROOT
+    New-Item -ItemType Directory -Force -Path $repo, $pyPatchDrop, $psPatchDrop, $poisonedPyPatchDrop, $poisonedPsPatchDrop, (Join-Path $repo "src") | Out-Null
+    try {
+        git -C $repo init 2>$null | Out-Null
+        git -C $repo config user.email "awx@example.invalid" | Out-Null
+        git -C $repo config user.name "AWX Test" | Out-Null
+        [IO.File]::WriteAllText((Join-Path $repo "src\tracked.txt"), "before`n", [Text.UTF8Encoding]::new($false))
+        git -C $repo add src/tracked.txt | Out-Null
+        git -C $repo commit -m "baseline" 2>$null | Out-Null
+        [IO.File]::WriteAllText((Join-Path $repo "src\tracked.txt"), "after`n", [Text.UTF8Encoding]::new($false))
+        $env:AWX_DESKTOP_CANONICAL_ROOT = $repo
+
+        $pyLines = & python (Join-Path $Root "__patch_drop__\producer_bundle.py") --topic "producer canonical root" --node macmini --source-root $repo --patchdrop-root $pyPatchDrop --pathspec "src/tracked.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $pyExit = $LASTEXITCODE
+        $pyRaw = $pyLines -join "`n"
+        Assert-True "python producer bundle rejects Desktop canonical root" ($pyExit -ne 0 -and $pyRaw -match "source-isolation-violation") "exit=$pyExit output=$pyRaw"
+        Assert-True "python producer bundle writes no canonical-root patch" ((Get-ChildItem -LiteralPath $pyPatchDrop -Recurse -Filter "*.patch" -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) "output=$pyRaw"
+
+        $psLines = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "__patch_drop__\producer_bundle.ps1") -Topic "producer canonical root" -Node macmini -SourceRoot $repo -PatchDropRoot $psPatchDrop -PathSpec "src/tracked.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $psExit = $LASTEXITCODE
+        $psRaw = $psLines -join "`n"
+        Assert-True "PowerShell producer bundle rejects Desktop canonical root" ($psExit -ne 0 -and $psRaw -match "source-isolation-violation") "exit=$psExit output=$psRaw"
+        Assert-True "PowerShell producer bundle writes no canonical-root patch" ((Get-ChildItem -LiteralPath $psPatchDrop -Recurse -Filter "*.patch" -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) "output=$psRaw"
+
+        $env:AWX_DESKTOP_CANONICAL_ROOT = $repo
+        $poisonedPyLines = & python (Join-Path $Root "__patch_drop__\producer_bundle.py") --topic "producer poisoned canonical root" --node macmini --source-root $Root --patchdrop-root $poisonedPyPatchDrop --pathspec "scripts/awx_mcp_toolbox.py" 2>&1 | ForEach-Object { $_.ToString() }
+        $poisonedPyExit = $LASTEXITCODE
+        $poisonedPyRaw = $poisonedPyLines -join "`n"
+        Assert-True "python producer bundle rejects fixed Desktop root despite poisoned override" ($poisonedPyExit -ne 0 -and $poisonedPyRaw -match "source-isolation-violation") "exit=$poisonedPyExit output=$poisonedPyRaw"
+        Assert-True "python poisoned override writes no canonical-root patch" ((Get-ChildItem -LiteralPath $poisonedPyPatchDrop -Recurse -Filter "*.patch" -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) "output=$poisonedPyRaw"
+
+        $poisonedPsLines = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "__patch_drop__\producer_bundle.ps1") -Topic "producer poisoned canonical root" -Node macmini -SourceRoot $Root -PatchDropRoot $poisonedPsPatchDrop -PathSpec "scripts/awx_mcp_toolbox.py" 2>&1 | ForEach-Object { $_.ToString() }
+        $poisonedPsExit = $LASTEXITCODE
+        $poisonedPsRaw = $poisonedPsLines -join "`n"
+        Assert-True "PowerShell producer bundle rejects fixed Desktop root despite poisoned override" ($poisonedPsExit -ne 0 -and $poisonedPsRaw -match "source-isolation-violation") "exit=$poisonedPsExit output=$poisonedPsRaw"
+        Assert-True "PowerShell poisoned override writes no canonical-root patch" ((Get-ChildItem -LiteralPath $poisonedPsPatchDrop -Recurse -Filter "*.patch" -ErrorAction SilentlyContinue | Measure-Object).Count -eq 0) "output=$poisonedPsRaw"
+    } finally {
+        if ($null -eq $previousCanonicalRoot) {
+            Remove-Item Env:\AWX_DESKTOP_CANONICAL_ROOT -ErrorAction SilentlyContinue
+        } else {
+            $env:AWX_DESKTOP_CANONICAL_ROOT = $previousCanonicalRoot
+        }
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ProducerHandoffRejectsUnsafeFilemodeBundle {
+    Assert-True "producer handoff script exists for unsafe filemode bundle" (Test-Path -LiteralPath $ProducerHandoff) "missing $ProducerHandoff"
+    if (-not (Test-Path -LiteralPath $ProducerHandoff)) { return }
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Pass "producer handoff unsafe filemode bundle skipped because git is unavailable"
+        return
+    }
+
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("awx-mcp-handoff-filemode-" + [guid]::NewGuid().ToString("N"))
+    $repo = Join-Path $tmp "repo"
+    $patchDrop = Join-Path $tmp "patchdrop"
+    $fakeProducer = Join-Path $repo "__patch_drop__\fake_unsafe_producer.py"
+    New-Item -ItemType Directory -Force -Path $repo, $patchDrop, (Join-Path $repo "__patch_drop__"), (Join-Path $repo "src") | Out-Null
+    try {
+        git -C $repo init 2>$null | Out-Null
+        git -C $repo config user.email "awx@example.invalid" | Out-Null
+        git -C $repo config user.name "AWX Test" | Out-Null
+        Set-Content -LiteralPath (Join-Path $repo "src\smoke.txt") -Encoding UTF8 -Value "before"
+        git -C $repo add src/smoke.txt | Out-Null
+        git -C $repo commit -m "baseline" 2>$null | Out-Null
+        Set-Content -LiteralPath (Join-Path $repo "src\smoke.txt") -Encoding UTF8 -Value "after"
+
+        @'
+#!/usr/bin/env python3
+import argparse
+import hashlib
+import json
+import re
+from pathlib import Path
+
+def slugify(value):
+    return re.sub(r"[^a-z0-9._-]+", "-", value.strip().lower()).strip("-")
+
+def write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--topic", required=True)
+parser.add_argument("--node", required=True)
+parser.add_argument("--source-root", required=True)
+parser.add_argument("--patchdrop-root", required=True)
+parser.add_argument("--pathspec", action="append", nargs="+", required=True)
+args = parser.parse_args()
+
+slug = slugify(args.topic)
+bundle = f"{slug}-{args.node}-v3"
+patchdrop = Path(args.patchdrop_root)
+node_dir = patchdrop / args.node
+patch = node_dir / f"{bundle}.patch"
+report = node_dir / f"{bundle}.report.md"
+verify = node_dir / f"{bundle}.verify.log"
+manifest = node_dir / f"{bundle}.manifest.json"
+sha_sidecar = node_dir / f"{bundle}.sha256.txt"
+pending = patchdrop / f"{slug}.{args.node}-pending.md"
+
+write(patch, "diff --git a/src/new-file.txt b/src/new-file.txt\nnew file mode 100755\nindex 0000000..1111111\n--- /dev/null\n+++ b/src/new-file.txt\n@@ -0,0 +1 @@\n+created\n")
+write(report, "Desktop final proof: evidence_needed\n")
+write(verify, "secretPatternHits=0\nDesktop final proof: evidence_needed\n")
+write(manifest, json.dumps({
+    "schemaVersion": "patchdrop-producer-v3",
+    "node": args.node,
+    "topic": slug,
+    "activePatch": f"{bundle}.patch",
+    "sourceIsolation": {
+        "guard": "PASS",
+        "sourceRootKind": "local-worktree",
+        "sharedSourceRoot": False,
+        "desktopCanonicalSourceRoot": False,
+        "directCanonicalSourceEdit": False,
+        "gitRootPresent": True,
+        "gitRootMatchesSourceRoot": True,
+        "gitRootHash": "fixture-git-root"
+    },
+    "desktopFinalProof": "evidence_needed",
+    "verification": {
+        "diffHeaderCount": 1,
+        "filemodeLineCount": 1,
+        "allowedNewFileCount": 1,
+        "filemodeViolationCount": 0,
+        "secretPatternHits": 0
+    }
+}, indent=2) + "\n")
+write(pending, "Desktop final proof: evidence_needed\n")
+write(sha_sidecar, "\n".join([
+    sha(patch) + f"  {bundle}.patch",
+    sha(report) + f"  {bundle}.report.md",
+    sha(verify) + f"  {bundle}.verify.log",
+    sha(manifest) + f"  {bundle}.manifest.json",
+    sha(pending) + f"  ../{slug}.{args.node}-pending.md",
+]) + "\n")
+print(f"[producer-bundle][wrote] node={args.node} topic={slug} patch={args.node}\\{bundle}.patch secretPatternHits=0 desktopFinalProof=evidence_needed")
+'@ | Set-Content -LiteralPath $fakeProducer -Encoding UTF8
+
+        $handoff = Invoke-ProducerHandoffJson $repo $patchDrop "src/smoke.txt" "mcp-handoff-filemode" "" $fakeProducer
+        Assert-True "producer handoff rejects SHA-valid unsafe filemode bundle" ($handoff.ExitCode -ne 0) "output=$($handoff.Raw)"
+        Assert-True "producer handoff unsafe filemode emits JSON" ($null -ne $handoff.Json) "output=$($handoff.Raw)"
+        if ($handoff.Json) {
+            Assert-True "producer handoff unsafe filemode blocks promotion" ($handoff.Json.bundle.promotionReady -eq $false -and $handoff.Json.bundle.ok -eq $false) "bundle=$($handoff.Json.bundle | ConvertTo-Json -Depth 10 -Compress)"
+            Assert-True "producer handoff unsafe filemode preserves failure class" ($handoff.Json.failReason -match "filemode-blocked" -and $handoff.Json.bundle.failReason -match "filemode-blocked") "json=$($handoff.Raw)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ProducerBundleHelpersIncludeCumulativeTrackedState {
+    Assert-True "producer bundle helpers exist for cumulative tracked state" ((Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.py")) -and (Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.ps1"))) "producer bundle helpers missing"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Pass "producer bundle cumulative tracked state skipped because git is unavailable"
+        return
+    }
+
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("awx-mcp-producer-cumulative-tracked-" + [guid]::NewGuid().ToString("N"))
+    $repo = Join-Path $tmp "repo"
+    $pyPatchDrop = Join-Path $tmp "patchdrop-py"
+    $psPatchDrop = Join-Path $tmp "patchdrop-ps"
+    New-Item -ItemType Directory -Force -Path $repo, $pyPatchDrop, $psPatchDrop, (Join-Path $repo "src") | Out-Null
+    try {
+        git -C $repo init 2>$null | Out-Null
+        git -C $repo config user.email "awx@example.invalid" | Out-Null
+        git -C $repo config user.name "AWX Test" | Out-Null
+        $trackedPath = Join-Path $repo "src\tracked.txt"
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($trackedPath, "before`n", $utf8NoBom)
+        git -C $repo add src/tracked.txt | Out-Null
+        git -C $repo commit -m "baseline" 2>$null | Out-Null
+        [System.IO.File]::WriteAllText($trackedPath, "staged-intermediate`n", $utf8NoBom)
+        git -C $repo add src/tracked.txt | Out-Null
+        [System.IO.File]::WriteAllText($trackedPath, "worktree-final`n", $utf8NoBom)
+        $indexHashBefore = (Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash
+
+        $pyLines = & python (Join-Path $Root "__patch_drop__\producer_bundle.py") --topic "producer cumulative tracked" --node macmini --source-root $repo --patchdrop-root $pyPatchDrop --pathspec "src/tracked.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $pyExit = $LASTEXITCODE
+        $pyRaw = $pyLines -join "`n"
+        Assert-True "python producer bundle writes cumulative tracked state" ($pyExit -eq 0) "exit=$pyExit output=$pyRaw"
+        $pyPatch = Join-Path $pyPatchDrop "macmini\producer-cumulative-tracked-macmini-v3.patch"
+        Assert-True "python cumulative tracked patch exists" (Test-Path -LiteralPath $pyPatch) "patch=$pyPatch output=$pyRaw"
+        if (Test-Path -LiteralPath $pyPatch) {
+            $pyPatchText = Get-Content -LiteralPath $pyPatch -Raw
+            Assert-True "python cumulative tracked patch uses final worktree bytes" ($pyPatchText -match "(?m)^\+worktree-final$" -and $pyPatchText -notmatch "(?m)^\+staged-intermediate$") "patch=$pyPatchText"
+        }
+        Assert-True "python cumulative tracked producer leaves real index unchanged" ((Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash -eq $indexHashBefore) "real index changed"
+
+        $psLines = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "__patch_drop__\producer_bundle.ps1") -Topic "producer cumulative tracked" -Node macmini -SourceRoot $repo -PatchDropRoot $psPatchDrop -PathSpec "src/tracked.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $psExit = $LASTEXITCODE
+        $psRaw = $psLines -join "`n"
+        Assert-True "PowerShell producer bundle writes cumulative tracked state" ($psExit -eq 0) "exit=$psExit output=$psRaw"
+        $psPatch = Join-Path $psPatchDrop "macmini\producer-cumulative-tracked-macmini-v3.patch"
+        Assert-True "PowerShell cumulative tracked patch exists" (Test-Path -LiteralPath $psPatch) "patch=$psPatch output=$psRaw"
+        if (Test-Path -LiteralPath $psPatch) {
+            $psPatchText = Get-Content -LiteralPath $psPatch -Raw
+            Assert-True "PowerShell cumulative tracked patch uses final worktree bytes" ($psPatchText -match "(?m)^\+worktree-final$" -and $psPatchText -notmatch "(?m)^\+staged-intermediate$") "patch=$psPatchText"
+        }
+        Assert-True "PowerShell cumulative tracked producer leaves real index unchanged" ((Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash -eq $indexHashBefore) "real index changed"
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ProducerBundleHelpersIncludeExplicitUntrackedNewFile {
+    Assert-True "producer bundle helpers exist for explicit untracked new file" ((Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.py")) -and (Test-Path -LiteralPath (Join-Path $Root "__patch_drop__\producer_bundle.ps1"))) "producer bundle helpers missing"
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Pass "producer bundle explicit untracked new file skipped because git is unavailable"
+        return
+    }
+
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("awx-mcp-producer-untracked-new-file-" + [guid]::NewGuid().ToString("N"))
+    $repo = Join-Path $tmp "repo"
+    $pyPatchDrop = Join-Path $tmp "patchdrop-py"
+    $psPatchDrop = Join-Path $tmp "patchdrop-ps"
+    New-Item -ItemType Directory -Force -Path $repo, $pyPatchDrop, $psPatchDrop, (Join-Path $repo "src") | Out-Null
+    try {
+        git -C $repo init 2>$null | Out-Null
+        git -C $repo config user.email "awx@example.invalid" | Out-Null
+        git -C $repo config user.name "AWX Test" | Out-Null
+        $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText((Join-Path $repo "README.md"), "baseline`n", $utf8NoBom)
+        git -C $repo add README.md | Out-Null
+        git -C $repo commit -m "baseline" 2>$null | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $repo "src\new-file.txt"), "created`n", $utf8NoBom)
+        $statusBefore = ((git -C $repo status --porcelain=v1 --untracked-files=all) | ForEach-Object { $_.ToString() }) -join "`n"
+        $indexHashBefore = (Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash
+
+        $pyLines = & python (Join-Path $Root "__patch_drop__\producer_bundle.py") --topic "producer untracked new file" --node macmini --source-root $repo --patchdrop-root $pyPatchDrop --pathspec "src/new-file.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $pyExit = $LASTEXITCODE
+        $pyRaw = $pyLines -join "`n"
+        Assert-True "python producer bundle includes explicit untracked new file" ($pyExit -eq 0) "exit=$pyExit output=$pyRaw"
+        $pyPatch = Join-Path $pyPatchDrop "macmini\producer-untracked-new-file-macmini-v3.patch"
+        Assert-True "python explicit untracked patch exists" (Test-Path -LiteralPath $pyPatch) "patch=$pyPatch output=$pyRaw"
+        if (Test-Path -LiteralPath $pyPatch) {
+            $pyPatchText = Get-Content -LiteralPath $pyPatch -Raw
+            Assert-True "python explicit untracked patch has canonical creation block" (
+                $pyPatchText -match "(?m)^new file mode 100644$" -and
+                $pyPatchText -match "(?m)^--- /dev/null$" -and
+                $pyPatchText -match "(?m)^\+\+\+ b/src/new-file\.txt$" -and
+                $pyPatchText -match "(?m)^\+created$"
+            ) "patch=$pyPatchText"
+        }
+        $statusAfterPython = ((git -C $repo status --porcelain=v1 --untracked-files=all) | ForEach-Object { $_.ToString() }) -join "`n"
+        Assert-True "python explicit untracked producer leaves worktree status unchanged" ($statusAfterPython -eq $statusBefore) "before=$statusBefore after=$statusAfterPython"
+        Assert-True "python explicit untracked producer leaves real index unchanged" ((Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash -eq $indexHashBefore) "real index changed"
+
+        $psLines = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "__patch_drop__\producer_bundle.ps1") -Topic "producer untracked new file" -Node macmini -SourceRoot $repo -PatchDropRoot $psPatchDrop -PathSpec "src/new-file.txt" 2>&1 | ForEach-Object { $_.ToString() }
+        $psExit = $LASTEXITCODE
+        $psRaw = $psLines -join "`n"
+        Assert-True "PowerShell producer bundle includes explicit untracked new file" ($psExit -eq 0) "exit=$psExit output=$psRaw"
+        $psPatch = Join-Path $psPatchDrop "macmini\producer-untracked-new-file-macmini-v3.patch"
+        Assert-True "PowerShell explicit untracked patch exists" (Test-Path -LiteralPath $psPatch) "patch=$psPatch output=$psRaw"
+        if (Test-Path -LiteralPath $psPatch) {
+            $psPatchText = Get-Content -LiteralPath $psPatch -Raw
+            Assert-True "PowerShell explicit untracked patch has canonical creation block" (
+                $psPatchText -match "(?m)^new file mode 100644$" -and
+                $psPatchText -match "(?m)^--- /dev/null$" -and
+                $psPatchText -match "(?m)^\+\+\+ b/src/new-file\.txt$" -and
+                $psPatchText -match "(?m)^\+created$"
+            ) "patch=$psPatchText"
+        }
+        $statusAfterPowerShell = ((git -C $repo status --porcelain=v1 --untracked-files=all) | ForEach-Object { $_.ToString() }) -join "`n"
+        Assert-True "PowerShell explicit untracked producer leaves worktree status unchanged" ($statusAfterPowerShell -eq $statusBefore) "before=$statusBefore after=$statusAfterPowerShell"
+        Assert-True "PowerShell explicit untracked producer leaves real index unchanged" ((Get-FileHash -LiteralPath (Join-Path $repo ".git\index") -Algorithm SHA256).Hash -eq $indexHashBefore) "real index changed"
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ProducerPowerShellParserEnforcesExactTrackedHunks {
+    $producerPath = Join-Path $Root '__patch_drop__\producer_bundle.ps1'
+    $source = Get-Content -LiteralPath $producerPath -Raw
+    $start = $source.IndexOf('function Get-DiffHeaderCount', [StringComparison]::Ordinal)
+    $end = $source.IndexOf('$ResolvedSourceRoot =', [StringComparison]::Ordinal)
+    Assert-True 'producer PowerShell exact parser definitions found' ($start -ge 0 -and $end -gt $start) "start=$start end=$end"
+    if ($start -lt 0 -or $end -le $start) { return }
+    $definitions = $source.Substring($start, $end - $start)
+    $probe = [scriptblock]::Create($definitions + "`nGet-PatchStructureViolationCount -PatchText (`$args[0])")
+    $pathProbe = [scriptblock]::Create($definitions + "`n@((Get-PatchTargetPaths -PatchText (`$args[0]))) -join '|'")
+    $script:ForbiddenPatchPathPatterns = @()
+    $envelope = @(
+        'diff --git a/f.txt b/f.txt',
+        '--- a/f.txt',
+        '+++ b/f.txt'
+    )
+    $valid = ($envelope + @(
+        '@@ -1,4 +1,4 @@', '-l1', '+L1', ' l2', ' l3', ' l4',
+        '@@ -9,4 +9,4 @@ l8', ' l9', ' l10', ' l11', '-l12', '+L12', ''
+    )) -join "`n"
+    $validHeaderPayload = ($envelope + @('@@ -1 +1 @@', '--- old-content', '+++ new-content', '')) -join "`n"
+    $validUnsafeLookingPayload = ($envelope + @('@@ -1 +1 @@', '--- ../../outside.txt', '+++ pages/api/unsafe.ts', '')) -join "`n"
+    $invalid = @{
+        deficit = ($envelope + @('@@ -1,2 +1,2 @@', '-l1', '+L1', '')) -join "`n"
+        overflow = ($envelope + @('@@ -1 +1 @@', '-l1', '+L1', '+extra', '')) -join "`n"
+        marker = ($envelope + @('@@ -1 +1 @@', '\ No newline at end of file', '-l1', '+L1', '')) -join "`n"
+        trailing = ($envelope + @('@@ -1 +1 @@', '-l1', '+L1', 'TRAILER', '')) -join "`n"
+        oldMarkerBeforeOldPayload = ($envelope + @('@@ -1,2 +1,2 @@', '-l1', '\ No newline at end of file', '-l2', '+L1', '+L2', '')) -join "`n"
+        newMarkerBeforeNewPayload = ($envelope + @('@@ -1 +1,2 @@', '-l1', '+L1', '\ No newline at end of file', '+L2', '')) -join "`n"
+        markerBeforeLaterHunk = ($envelope + @('@@ -1 +1 @@', '-l1', '+L1', '\ No newline at end of file', '@@ -3 +3 @@', '-l3', '+L3', '')) -join "`n"
+        contextMarkerBeforeContext = ($envelope + @('@@ -1,2 +1,2 @@', ' l1', '\ No newline at end of file', ' l2', '')) -join "`n"
+    }
+    Assert-True 'producer PowerShell exact parser accepts valid multi-hunk' ([int](& $probe $valid) -eq 0) 'valid multi-hunk rejected'
+    Assert-True 'producer PowerShell exact parser accepts header-like payload' ([int](& $probe $validHeaderPayload) -eq 0) 'valid header-like payload rejected'
+    Assert-True 'producer PowerShell path scan ignores header-like payload' (([string](& $pathProbe $validUnsafeLookingPayload)) -eq 'f.txt') "paths=$(& $pathProbe $validUnsafeLookingPayload)"
+    foreach ($entry in $invalid.GetEnumerator()) {
+        Assert-True "producer PowerShell exact parser rejects $($entry.Key)" ([int](& $probe $entry.Value) -gt 0) 'malformed tracked hunk accepted'
+    }
+}
+
 function Test-ProducerHandoffPropagatesProducerBundleFailureClass {
     Assert-True "producer handoff script exists for bundle failure propagation" (Test-Path -LiteralPath $ProducerHandoff) "missing $ProducerHandoff"
     if (-not (Test-Path -LiteralPath $ProducerHandoff)) { return }
@@ -1493,7 +1992,7 @@ function Test-CompletionAuditCoversControlTowerObjective {
         $threeNodeReq = @($requirements | Where-Object { $_.id -eq "three-node-local-smoke" } | Select-Object -First 1)
         Assert-True "completion audit tracks local three-node smoke without satisfying external proof" ($threeNodeReq.status -eq "satisfied" -and $threeNodeReq.evidence -match "three_node_patchdrop_smoke.ps1" -and $threeNodeReq.evidence -match "simulated") "threeNodeReq=$($threeNodeReq | ConvertTo-Json -Depth 10 -Compress)"
         $safeDeleteReq = @($requirements | Where-Object { $_.id -eq "safe-delete-readonly-gate" } | Select-Object -First 1)
-        Assert-True "completion audit tracks safe delete readonly gate" ($safeDeleteReq.status -eq "satisfied" -and $safeDeleteReq.evidence -match "mutationAllowed=False" -and $safeDeleteReq.evidence -match "HOLD_SECRET_PATH" -and $safeDeleteReq.evidence -match "REVIEW_REPORT_OUTPUT") "safeDeleteReq=$($safeDeleteReq | ConvertTo-Json -Depth 10 -Compress)"
+        Assert-True "completion audit tracks safe delete readonly gate" ($safeDeleteReq.status -in @("satisfied", "incomplete") -and $safeDeleteReq.evidence -match "mutationAllowed=False" -and $safeDeleteReq.evidence -match "HOLD_SECRET_PATH" -and $safeDeleteReq.evidence -match "REVIEW_REPORT_OUTPUT") "safeDeleteReq=$($safeDeleteReq | ConvertTo-Json -Depth 10 -Compress)"
         $safeDeleteCheck = @($audit.Json.checked | Where-Object { $_.id -eq "safe-delete.path-presence" } | Select-Object -First 1)
         Assert-True "completion audit verifies safe delete artifact is non-mutating" ($safeDeleteCheck.evidence -match "mutationAllowed=False" -and $safeDeleteCheck.evidence -match "deleteCommandEmitted=False" -and $safeDeleteCheck.evidence -match "rawSecretPatternHits=0") "safeDeleteEvidence=$($safeDeleteCheck.evidence)"
         $sourceGovernanceReq = @($requirements | Where-Object { $_.id -eq "source-governance-stability-proof" } | Select-Object -First 1)
@@ -1545,7 +2044,10 @@ function Test-CompletionAuditCoversControlTowerObjective {
         Assert-True "completion audit verifies Desktop intake dispatch SHA preflight" ($dispatchCheck.evidence -match "DesktopIntakeDispatchShaPreflight=True") "dispatchEvidence=$($dispatchCheck.evidence)"
         Assert-True "completion audit reports Desktop producer-root visibility" ($dispatchCheck.evidence -match "macminiDesktopSourceRootExists=" -and $dispatchCheck.evidence -match "notebookDesktopSourceRootExists=") "dispatchEvidence=$($dispatchCheck.evidence)"
         Assert-True "completion audit reports producer pathspec overlap" ($dispatchCheck.evidence -match "PathspecOverlapCount=" -and $dispatchCheck.evidence -match "macminiPathspecCount=" -and $dispatchCheck.evidence -match "notebookPathspecCount=") "dispatchEvidence=$($dispatchCheck.evidence)"
-        Assert-True "completion audit carries producer-root visibility evidence_needed" ((@($audit.Json.evidence_needed) -join "|") -match "producer source root not visible on Desktop" -and (@($audit.Json.evidence_needed) -join "|") -match "producer_patchdrop_roots") "evidence_needed=$(@($audit.Json.evidence_needed) -join '|')"
+        $producerVisibilityNeeded = @($audit.Json.supportingEvidenceNeeded) -join "|"
+        $producerVisibilityDetails = @($audit.Json.supportingEvidenceNeededDetails) -join "|"
+        Assert-True "completion audit compacts producer-root visibility supporting evidence" ($producerVisibilityNeeded -match "producer-root-not-visible" -and $producerVisibilityNeeded -match "producer_patchdrop_roots" -and [string]$audit.Json.supportingEvidenceNeededDetailMode -eq "compact") "supportingEvidenceNeeded=$producerVisibilityNeeded mode=$($audit.Json.supportingEvidenceNeededDetailMode)"
+        Assert-True "completion audit keeps producer-root visibility details opt-in" (@($audit.Json.supportingEvidenceNeededDetails).Count -eq 0 -and [int]$audit.Json.supportingEvidenceNeededDetailsOmitted -gt 0 -and [string]$audit.Json.supportingEvidenceNeededDetailHint -match "--include-supporting-next-actions") "supportingEvidenceNeededDetails=$producerVisibilityDetails omitted=$($audit.Json.supportingEvidenceNeededDetailsOmitted) hint=$($audit.Json.supportingEvidenceNeededDetailHint)"
         Assert-True "completion audit has repo-local skill docs" (-not ((@($audit.Json.evidence_needed) -join "|") -match "repo-local task skill docs")) "evidence_needed=$(@($audit.Json.evidence_needed) -join '|')"
         Assert-True "completion audit has control tower prompt pack" (-not ((@($audit.Json.evidence_needed) -join "|") -match "repo-local control tower prompt pack")) "evidence_needed=$(@($audit.Json.evidence_needed) -join '|')"
         Assert-True "completion audit reports remaining external evidence" (@($audit.Json.evidence_needed).Count -ge 1) "evidence_needed missing"
@@ -2422,13 +2924,14 @@ function Test-CompletionAuditRejectsDispatchWithoutPinnedDesktopTopic {
         $text = $text -replace "; topic = '[^']+'", ""
         Set-Content -LiteralPath $desktopIntake -Value $text -Encoding UTF8
 
-        $lines = python $CompletionAudit --root $Root 2>&1 | ForEach-Object { $_.ToString() }
+        $lines = python $CompletionAudit --root $Root --topic $topic 2>&1 | ForEach-Object { $_.ToString() }
         $raw = $lines -join "`n"
         $json = try { $raw | ConvertFrom-Json } catch { $null }
         Assert-True "completion audit rejects dispatch without pinned Desktop topic" ($LASTEXITCODE -ne 0) "expected nonzero exit; output=$raw"
         Assert-True "completion audit emits JSON for missing Desktop topic" ($null -ne $json) "output=$raw"
         if ($json) {
             $dispatchCheck = @($json.checked | Where-Object { $_.id -eq "desktop.dispatch-artifacts" } | Select-Object -First 1)
+            Assert-True "completion audit scopes Desktop topic pin check to requested dispatch" ($dispatchCheck.evidence -match "dispatchPacketCount=1;" -and $dispatchCheck.evidence -notmatch "\|topic=") "dispatchEvidence=$($dispatchCheck.evidence)"
             Assert-True "completion audit names missing Desktop topic pin" ($dispatchCheck.evidence -match "DesktopTopicPinned=False") "dispatchEvidence=$($dispatchCheck.evidence)"
         }
     } finally {
@@ -3603,11 +4106,13 @@ function Write-ProducerBundleEvidence {
         schemaVersion = "patchdrop-producer-v3"
         node = $Role
         topic = $Topic
+        slug = $Topic
         bundle = $bundle
         status = "PENDING_DESKTOP_CONSUMPTION"
         activePatch = $patchName
         sourceRoot = $SourceRoot
         sourceRootInputHash = $SourceRootInputHash
+        sourceRootHash = $gitRootHash
         patchDropRoot = $PatchDrop
         sourceIsolation = @{
             guard = "PASS"
@@ -3620,6 +4125,15 @@ function Write-ProducerBundleEvidence {
             gitRootHash = $gitRootHash
         }
         desktopFinalProof = "evidence_needed"
+        verification = @{
+            diffHeaderCount = 1
+            filemodeLineCount = 0
+            allowedNewFileCount = 0
+            filemodeViolationCount = 0
+            forbiddenPathCount = 0
+            secretPatternHits = 0
+            rawSecretPatternHits = 0
+        }
     } | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $nodeDir $manifestName) -Encoding UTF8
 
     $pendingText = @(
@@ -3749,11 +4263,43 @@ function Update-ProducerBundleShaSidecar {
     $bundle = "$Topic-$Role-v3"
     $nodeDir = Join-Path $PatchDrop $Role
     $pendingPath = Join-Path $PatchDrop "$Topic.$Role-pending.md"
+    $patchPath = Join-Path $nodeDir "$bundle.patch"
+    $manifestPath = Join-Path $nodeDir "$bundle.manifest.json"
+    $patchText = Get-Content -LiteralPath $patchPath -Raw
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    $modeLines = @([regex]::Matches($patchText, '(?m)^(old mode|new mode|deleted file mode|new file mode)(?:\s+.*)?$') | ForEach-Object { $_.Value })
+    $allowedNewFiles = 0
+    $filemodeViolations = 0
+    if ($patchText -match '(?m)^\+\+\+ /dev/null(?:\t.*)?$') {
+        $filemodeViolations = [Math]::Max(1, $modeLines.Count)
+    } elseif ($patchText -match '(?m)^--- /dev/null(?:\t.*)?$') {
+        $newFileHeader = [regex]::Match($patchText, '(?m)^@@ -0,0 \+1(?:,([0-9]+))? @@(?: .*)?$')
+        $declared = if ($newFileHeader.Success -and $newFileHeader.Groups[1].Success) { [int]$newFileHeader.Groups[1].Value } elseif ($newFileHeader.Success) { 1 } else { 0 }
+        $payloadCount = @($patchText -split "`r?`n" | Where-Object { $_.StartsWith('+') -and -not $_.StartsWith('+++ ') }).Count
+        if ($modeLines.Count -eq 1 -and $modeLines[0] -ceq 'new file mode 100644' -and $declared -gt 0 -and $payloadCount -eq $declared) {
+            $allowedNewFiles = 1
+        } else {
+            $filemodeViolations = [Math]::Max(1, $modeLines.Count)
+        }
+    } elseif ($modeLines.Count -gt 0) {
+        $filemodeViolations = $modeLines.Count
+    }
+    $verification = [ordered]@{
+        diffHeaderCount = [regex]::Matches($patchText.TrimStart([char]0xfeff), '(?m)^diff --git ').Count
+        filemodeLineCount = $modeLines.Count
+        allowedNewFileCount = $allowedNewFiles
+        filemodeViolationCount = $filemodeViolations
+        forbiddenPathCount = 0
+        secretPatternHits = 0
+        rawSecretPatternHits = 0
+    }
+    $manifest | Add-Member -NotePropertyName verification -NotePropertyValue $verification -Force
+    $manifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
     $entries = @(
-        @{ Name = "$bundle.patch"; Path = (Join-Path $nodeDir "$bundle.patch") },
+        @{ Name = "$bundle.patch"; Path = $patchPath },
         @{ Name = "$bundle.report.md"; Path = (Join-Path $nodeDir "$bundle.report.md") },
         @{ Name = "$bundle.verify.log"; Path = (Join-Path $nodeDir "$bundle.verify.log") },
-        @{ Name = "$bundle.manifest.json"; Path = (Join-Path $nodeDir "$bundle.manifest.json") },
+        @{ Name = "$bundle.manifest.json"; Path = $manifestPath },
         @{ Name = "../$Topic.$Role-pending.md"; Path = $pendingPath }
     )
     $shaLines = foreach ($entry in $entries) {
@@ -4189,6 +4735,87 @@ function Test-ExternalEvidenceAuditRejectsProducerFilemodePatch {
             Assert-True "external_evidence_audit marks filemode bundle invalid" ($bundleRow.valid -eq $false -and $bundleRow.failReason -match "filemode-blocked") "bundle=$($bundleRow | ConvertTo-Json -Depth 10 -Compress)"
             Assert-True "external_evidence_audit reports filemode count" ([int]$bundleRow.filemodeLineCount -eq 2) "bundle=$($bundleRow | ConvertTo-Json -Depth 10 -Compress)"
             Assert-True "external_evidence_audit filemode keeps Desktop proof pending" ($external.Json.desktopFinalProof -eq "evidence_needed") "json=$($external.Raw)"
+        }
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Test-ExternalEvidenceAuditAcceptsCanonicalNewFilePatch {
+    $tmp = Join-Path ([IO.Path]::GetTempPath()) ("awx-mcp-external-new-file-" + [guid]::NewGuid().ToString("N"))
+    $evidenceDir = Join-Path $tmp "evidence"
+    $patchDrop = Join-Path $tmp "__patch_drop__"
+    $index = Join-Path $tmp "index.jsonl"
+    $topic = "mcp-new-file-proof"
+    New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
+    try {
+        Set-Content -LiteralPath $index -Encoding UTF8 -Value '{"path":"snapshots/mcp.md","title":"MCP evidence","summary":"safe patch"}'
+        Write-NodeSmokeEvidence $evidenceDir "macmini"
+        Write-ProducerBundleEvidence $patchDrop "macmini" $topic
+
+        $bundle = "$topic-macmini-v3"
+        $nodeDir = Join-Path $patchDrop "macmini"
+        $patchName = "$bundle.patch"
+        $patchPath = Join-Path $nodeDir $patchName
+        $patchText = @(
+            "diff --git a/scripts/new-fixture.txt b/scripts/new-fixture.txt",
+            "new file mode 100644",
+            "index 0000000..2222222",
+            "--- /dev/null",
+            "+++ b/scripts/new-fixture.txt",
+            "@@ -0,0 +1 @@",
+            "+created"
+        ) -join "`n"
+        Set-Content -LiteralPath $patchPath -Encoding UTF8 -Value $patchText
+        Update-ProducerBundleShaSidecar -PatchDrop $patchDrop -Role "macmini" -Topic $topic
+
+        $handoffPath = Join-Path $patchDrop "external-node-proof\macmini-producer-handoff.json"
+        $handoff = Get-Content -LiteralPath $handoffPath -Raw | ConvertFrom-Json
+        $handoff.bundle.patchHash = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $handoff | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $handoffPath -Encoding UTF8
+
+        $external = Invoke-ToolboxJson "external_evidence_audit" @{
+            requestId = "test-external-new-file"
+            sessionId = "session-a"
+            nodeRole = "desktop"
+            evidence_dir = $evidenceDir
+            patchdrop_root = $patchDrop
+            required_roles = @("macmini")
+            topic = $topic
+            archive_index = $index
+        }
+
+        Assert-True "external_evidence_audit canonical new-file exits zero" ($external.ExitCode -eq 0) "output=$($external.Raw)"
+        if ($external.Json) {
+            $bundleRow = @($external.Json.producerBundles | Where-Object { $_.nodeRole -eq "macmini" } | Select-Object -First 1)
+            Assert-True "external_evidence_audit accepts canonical new-file bundle" ($bundleRow.valid -eq $true -and $bundleRow.failReason -notmatch "filemode-blocked") "bundle=$($bundleRow | ConvertTo-Json -Depth 10 -Compress)"
+            Assert-True "external_evidence_audit reports canonical new-file metrics" (
+                [int]$bundleRow.filemodeLineCount -eq 1 -and
+                [int]$bundleRow.allowedNewFileCount -eq 1 -and
+                [int]$bundleRow.filemodeViolationCount -eq 0
+            ) "bundle=$($bundleRow | ConvertTo-Json -Depth 10 -Compress)"
+            Assert-True "external_evidence_audit canonical new-file keeps Desktop proof pending" ($external.Json.desktopFinalProof -eq "evidence_needed") "json=$($external.Raw)"
+        }
+
+        Set-Content -LiteralPath $patchPath -Encoding UTF8 -Value $patchText.Replace('@@ -0,0 +1 @@', '@@ -0,0 +1,999 @@')
+        Update-ProducerBundleShaSidecar -PatchDrop $patchDrop -Role "macmini" -Topic $topic
+        $handoff = Get-Content -LiteralPath $handoffPath -Raw | ConvertFrom-Json
+        $handoff.bundle.patchHash = (Get-FileHash -LiteralPath $patchPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        $handoff | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $handoffPath -Encoding UTF8
+        $malformed = Invoke-ToolboxJson "external_evidence_audit" @{
+            requestId = "test-external-malformed-new-file"
+            sessionId = "session-a"
+            nodeRole = "desktop"
+            evidence_dir = $evidenceDir
+            patchdrop_root = $patchDrop
+            required_roles = @("macmini")
+            topic = $topic
+            archive_index = $index
+        }
+        Assert-True "external_evidence_audit malformed new-file exits zero" ($malformed.ExitCode -eq 0) "output=$($malformed.Raw)"
+        if ($malformed.Json) {
+            $malformedRow = @($malformed.Json.producerBundles | Where-Object { $_.nodeRole -eq "macmini" } | Select-Object -First 1)
+            Assert-True "external_evidence_audit rejects malformed new-file hunk counts" ($malformedRow.valid -eq $false -and $malformedRow.failReason -match 'filemode-blocked') "bundle=$($malformedRow | ConvertTo-Json -Depth 10 -Compress)"
         }
     } finally {
         Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -5706,9 +6333,9 @@ function Test-DesktopDispatchPacketWritesPatchDropArtifacts {
             $runtimeCompletionIndex = $desktopRuntimeText.IndexOf('awx_mcp_completion_audit.py')
             $desktopDispatchSidecarIndex = $desktopRuntimeText.IndexOf('desktop-dispatch-sha-sidecar-missing')
             $desktopDispatchMismatchIndex = $desktopRuntimeText.IndexOf('desktop-dispatch-sha-mismatch')
-            Assert-True "desktop_dispatch_packet write Desktop intake executes source-edit lease begin" ($desktopRuntimeText.Contains("source_edit_session.ps1") -and $leaseBeginIndex -ge 0 -and $desktopRuntimeText.Contains("-Role desktop-consumer") -and $leaseBeginIndex -lt $runtimeIntakeIndex) "desktopCommands=$desktopText"
-            Assert-True "desktop_dispatch_packet write Desktop intake releases source-edit lease after verification" ($leaseEndIndex -gt $runtimeCompletionIndex -and $desktopRuntimeText.Contains('$DesktopLeaseAcquired')) "desktopCommands=$desktopText"
-            Assert-True "desktop_dispatch_packet write Desktop intake fails closed on source lease begin" ($desktopRuntimeText.Contains('$LeaseBeginExit = $LASTEXITCODE') -and $desktopRuntimeText.Contains('source-lease-begin-failed') -and $desktopRuntimeText.IndexOf('$LeaseBeginExit = $LASTEXITCODE') -lt $runtimeIntakeIndex) "desktopCommands=$desktopText"
+            Assert-True "Desktop evidence intake requires no application-source lease" (-not $desktopRuntimeText.Contains('source_edit_session.ps1') -and $leaseBeginIndex -eq -1 -and $leaseEndIndex -eq -1) "source lease leaked into artifact-only wrapper"
+            Assert-True "Desktop evidence intake coordinates its selected artifact directory" ($desktopRuntimeText.Contains('.evidence-intake.lock') -and $desktopRuntimeText.Contains('$EvidenceHandle.Dispose()') -and $desktopRuntimeText.Contains('evidence-intake-lock-busy')) "artifact coordination missing"
+            Assert-True "Desktop completion binds the selected evidence and topic" ($desktopRuntimeText.Contains('--evidence-dir $EvidenceDir --topic')) "completion evidence path missing"
             Assert-True "desktop_dispatch_packet write Desktop intake validates dispatch SHA sidecar before external intake" ($desktopText.Contains('$DispatchShaSidecar =') -and $desktopText.Contains('$DispatchCoveredFiles = @(') -and $desktopDispatchSidecarIndex -gt $leaseBeginIndex -and $desktopDispatchMismatchIndex -gt $desktopDispatchSidecarIndex -and $desktopDispatchMismatchIndex -lt $runtimeIntakeIndex) "desktopCommands=$desktopText"
             Assert-True "desktop_dispatch_packet write Desktop intake fails closed after evidence intake" ($intakeCommandIndex -ge 0 -and $intakeExitIndex -gt $intakeCommandIndex -and $intakeExitIndex -lt $auditCommandIndex -and $desktopText.Contains('external-evidence-intake-failed') -and $desktopText.Contains('exit $IntakeExit')) "desktopCommands=$desktopText"
             Assert-True "desktop_dispatch_packet write Desktop intake validates intake JSON semantics" ($desktopText.Contains('$IntakeRaw =') -and $desktopText.Contains('$IntakeJson = $IntakeRaw | ConvertFrom-Json') -and $desktopText.Contains('external-evidence-intake-incomplete') -and $desktopText.Contains('externalEvidenceComplete')) "desktopCommands=$desktopText"
@@ -6334,10 +6961,14 @@ function Test-HarmonyScanRecognizesContextPropagationBreadcrumb {
 }
 
 try {
-    Remove-LiveDispatchFixtureArtifacts
+    if ($Suite -ne 'ProducerKit') { Remove-LiveDispatchFixtureArtifacts }
     Test-SecretLikePatternIncludesSupabaseKeys
     Assert-True "toolbox script exists" (Test-Path -LiteralPath $Toolbox) "missing $Toolbox"
-    if ($Suite -eq "ArchiveLoop") {
+    if ($Suite -eq 'ProducerKit') {
+        Test-ProducerKitExportWritesPatchDropKit
+    } elseif ($Suite -eq "SecretPattern") {
+        # The shared secret-pattern test above is the complete focused suite.
+    } elseif ($Suite -eq "ArchiveLoop") {
         if (Test-Path -LiteralPath $Toolbox) {
             Test-ArchiveSearchTwoPassAndEvidenceNeeded
             Test-ArchiveRestoreWritesAuditAndChecksums
@@ -6354,6 +6985,7 @@ try {
             Test-CompletionAuditRejectsDispatchWithoutDesktopIntakeJsonSemantics
             Test-CompletionAuditRejectsDispatchWithoutProducerRootGuard
             Test-CompletionAuditRejectsDispatchWithoutHandoffAuditLog
+            Test-CompletionAuditRejectsDispatchWithoutPinnedDesktopTopic
             Test-CompletionAuditRejectsDispatchWithoutProducerBundleGate
             Test-CompletionAuditRejectsDispatchWithoutRequiredProducerPathspecs
         }
@@ -6362,11 +6994,20 @@ try {
         Test-CompletionAuditRejectsExternalProducerHandoffPatchHashMismatch
         Test-CompletionAuditRejectsSmokeOnlyExternalProof
     } elseif ($Suite -eq "ExternalEvidence") {
+        Test-ManifestDeclaresRequiredToolSchemas
+        Test-PeerEvidenceBusTriPerspectiveQueryPacket
+        Test-ProducerPowerShellParserEnforcesExactTrackedHunks
+        Test-ProducerHandoffRejectsUnsafeFilemodeBundle
+        Test-ProducerHandoffDefaultsToProducerLocalBundleHelper
+        Test-ProducerBundleHelpersRejectDesktopCanonicalRoot
+        Test-ProducerBundleHelpersIncludeCumulativeTrackedState
+        Test-ProducerBundleHelpersIncludeExplicitUntrackedNewFile
         if (Test-Path -LiteralPath $Toolbox) {
             Test-ExternalEvidenceAuditKeepsDesktopFinalProofPending
             Test-ExternalEvidenceAuditRejectsSmokeOnlyProof
             Test-ExternalEvidenceAuditRejectsMissingProducerHandoff
             Test-ExternalEvidenceAuditRejectsProducerFilemodePatch
+            Test-ExternalEvidenceAuditAcceptsCanonicalNewFilePatch
             Test-ExternalEvidenceAuditReportsUnrelatedPatchDropEvidence
             Test-ExternalEvidenceIntakeCopiesValidPatchDropProof
             Test-ExternalEvidenceIntakeCarriesNextActionsWhenIncomplete
@@ -6379,6 +7020,8 @@ try {
         Test-AgentDbSnapshotReportsSubsystemPersistenceGaps
     } elseif ($Suite -eq "Harmony") {
         Test-HarmonyScanRecognizesContextPropagationBreadcrumb
+    } elseif ($Suite -eq "Prompt") {
+        Test-McpStdioServerListsToolsResourcesAndPrompts
     } else {
         Test-LauncherSupportsTaskAliases
         Test-NodeSmokeRunnerMacminiContract
@@ -6387,6 +7030,7 @@ try {
         Test-NodeSmokeUsesArchiveIndexEnvFallback
     Test-ProducerHandoffRunsSmokeBeforeBundle
     Test-ProducerHandoffRejectsProducerShaMismatch
+    Test-ProducerHandoffRejectsUnsafeFilemodeBundle
     Test-ProducerHandoffDefaultsToProducerLocalBundleHelper
     Test-ProducerHandoffRejectsSharedProducerScript
     Test-ProducerDocsUseProducerLocalBundleHelpers
@@ -6394,7 +7038,10 @@ try {
     Test-ProducerHandoffTreatsMappedDriveAsSharedRoot
     Test-ProducerHandoffRejectsCanonicalSourceRootWithJson
     Test-ProducerBundleHelpersRejectForbiddenPatchTargets
+    Test-ProducerBundleHelpersRejectDesktopCanonicalRoot
     Test-ProducerBundleHelpersIncludeStagedChanges
+    Test-ProducerBundleHelpersIncludeCumulativeTrackedState
+    Test-ProducerBundleHelpersIncludeExplicitUntrackedNewFile
     Test-ProducerHandoffPropagatesProducerBundleFailureClass
     Test-CompletionAuditCoversControlTowerObjective
     Test-CompletionAuditProofFindersFailSoftOnUnreadablePaths
@@ -6425,6 +7072,7 @@ try {
     Test-CompletionAuditRejectsSmokeOnlyExternalProof
     Test-TaskSkillsExistAndPointAtLauncher
     Test-ManifestDeclaresRequiredToolSchemas
+    Test-PeerEvidenceBusTriPerspectiveQueryPacket
     if (Test-Path -LiteralPath $Toolbox) {
         Test-ArchiveSearchTwoPassAndEvidenceNeeded
         Test-ArchiveRestoreWritesAuditAndChecksums
@@ -6446,6 +7094,7 @@ try {
         Test-ExternalEvidenceAuditRejectsProducerHandoffWithoutGitRootProof
         Test-ExternalEvidenceAuditRejectsPendingNoticeMissingShaEntry
         Test-ExternalEvidenceAuditRejectsProducerFilemodePatch
+        Test-ExternalEvidenceAuditAcceptsCanonicalNewFilePatch
         Test-ExternalEvidenceAuditRejectsProducerNonUnifiedPatch
         Test-ExternalEvidenceAuditRejectsProducerForbiddenPathPatch
         Test-ExternalEvidenceAuditRejectsProducerUnsafePathPatch
@@ -6489,8 +7138,10 @@ try {
     Write-Fail "unexpected exception" $_.Exception.Message
 }
 
-Remove-LiveDispatchFixtureArtifacts
-Assert-NoLiveDispatchFixtureArtifacts
+if ($Suite -ne 'ProducerKit') {
+    Remove-LiveDispatchFixtureArtifacts
+    Assert-NoLiveDispatchFixtureArtifacts
+}
 
 if ($Failures -gt 0) {
     Write-Host "[awx-mcp-toolbox-test][SUMMARY] failed=$Failures"

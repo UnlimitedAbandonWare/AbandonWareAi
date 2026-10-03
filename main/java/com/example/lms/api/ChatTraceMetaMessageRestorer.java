@@ -22,6 +22,48 @@ final class ChatTraceMetaMessageRestorer {
     private static final int MAX_TRACE_META_B64_CHARS = 64_000;
     private static final String DURABLE_ENVELOPE_VERSION_V1 = "v1";
     private static final String DURABLE_ENVELOPE_VERSION_V2 = "v2";
+    private static final String DURABLE_ENVELOPE_VERSION_V3 = "v3";
+    static final int MAX_DETAIL_BYTES = 8_192;
+    private static final int MAX_DETAIL_FIELDS = 96;
+    private static final Set<String> DETAIL_FLAGS = Set.of(
+            "queryTransformer.bypassed", "qtx.stagePolicy.enabled", "qtx.stagePolicy.clamped",
+            "qtx.suppressed.minLiveBudget", "qtx.timeoutMs.cappedByMinLiveBudget",
+            "keywordSelection.cacheSeeded", "keywordSelection.noiseEscape",
+            "keywordSelection.qtxGate.softAllow.used", "keywordSelection.qtxGate.softAllow.oneShotAttempted",
+            "embed.normalizeApplied", "embed.matryoshka.sliced", "embed.failover.used",
+            "vector.fp.bypassed", "vector.federated.timeout",
+            "orch.strike", "orch.compression", "orch.bypass", "orch.auxDegraded", "orch.auxHardDown",
+            "orch.webRateLimited", "orch.auxLlmDown", "orch.highRisk",
+            "prompt.historyRendered", "prompt.lastAssistantRendered", "prompt.memoryPresent",
+            "prompt.agentDebugEvidence.chatHarmony.applied", "prompt.builder.required.enforced",
+            "prompt.context.refiner.activated", "prompt.context.refiner.failSoft", "prompt.learningDegraded",
+            "llm.output.blank", "attachment.bind.attempted", "attachment.bind.applied",
+            "rag.evidence.promotion.evidenceGatePassed", "rag.evidence.promotion.citationGateMinPassed",
+            "finalAnswer.releaseAllowed", "finalAnswer.evidenceScopeBound");
+    private static final Set<String> DETAIL_COUNTS = Set.of(
+            "queryTransformer.bypassed.queryLength", "qtx.minLiveBudgetMs",
+            "qtx.timeoutMs.before", "qtx.timeoutMs.after", "qtx.constraints.rejectedCount",
+            "keywordSelection.maxMust", "keywordSelection.fallback.must.count",
+            "keywordSelection.fallback.should.count", "keywordSelection.fallback.mustLimit",
+            "embed.actualDim", "embed.sourceDim", "embed.targetDim", "embed.providerActualDim",
+            "vector.fp.dropped", "vector.fp.wantLength",
+            "prompt.webCount", "prompt.ragCount", "prompt.localDocsCount", "prompt.citableEvidenceCount",
+            "prompt.memoryLen", "prompt.context.composer.input.ragCount", "prompt.localDocsRenderedCount",
+            "prompt.ctx.len", "prompt.instr.len", "llm.call.approxInputTokens",
+            "llm.output.contentLength", "memory.session.tokenEstimate", "fallbackCount",
+            "attachment.bind.count", "attachment.sessionFilter.allowedCount",
+            "rag.evidence.promotion.candidateCount", "rag.evidence.promotion.citableLocatorCount",
+            "rag.evidence.promotion.promotedCount");
+    private static final Set<String> DETAIL_NUMBERS = Set.of("prompt.context.refiner.phi", "orch.irregularity");
+    private static final Set<String> DETAIL_LABELS = Set.of(
+            "queryTransformer.reason", "qtx.bypass.reason", "qtx.constraints.reason",
+            "keywordSelection.mode", "keywordSelection.reason", "keywordSelection.cacheSeeded.reason",
+            "keywordSelection.fallback.intent", "embed.sliceMethod", "embed.sliceReason",
+            "embed.failover.stage", "vector.fp.blockedReason", "vector.federated.cancelMode",
+            "orch.mode", "orch.reason", "llm.output.doneReason", "llm.route",
+            "observedProvider", "routeId", "fallbackReason", "observedReason",
+            "attachment.bind.reason", "rag.evidence.promotion.disabledReason",
+            "finalAnswer.releaseReason", "finalAnswer.evidenceReleaseState", "finalAnswer.retrievalExecution");
     private static final int MAX_DURABLE_PROJECTION_BYTES = 2_048;
     private static final int MAX_DURABLE_PROJECTION_B64_CHARS = 2_732;
     private static final int MAX_DURABLE_PROJECTION_FIELDS = 16;
@@ -88,7 +130,8 @@ final class ChatTraceMetaMessageRestorer {
     }
 
     record SnapshotPointer(String snapshotId, Map<String, String> projection,
-                           Long assistantMessageId, boolean legacyFallbackAllowed) {
+                           Long assistantMessageId, boolean legacyFallbackAllowed,
+                           Map<String, Object> diagnostics) {
     }
 
     static Optional<SnapshotPointer> parseSnapshotPointer(String content, Long messageId) {
@@ -113,8 +156,61 @@ final class ChatTraceMetaMessageRestorer {
         }
         boolean legacyFallbackAllowed = firstDelimiter < 0
                 || (DURABLE_ENVELOPE_VERSION_V1.equals(version) && !projection.isEmpty());
-        return Optional.of(new SnapshotPointer(snapshotId, projection, assistantMessageId,
-                legacyFallbackAllowed));
+        Map<String, Object> diagnostics = new LinkedHashMap<>();
+        Map<String, String> summary = new LinkedHashMap<>();
+        projection.forEach((key, value) -> {
+            if (key.startsWith("diag.")) diagnostics.put(key.substring(5), decodeDiagnostic(key.substring(5), value));
+            else summary.put(key, value);
+        });
+        return Optional.of(new SnapshotPointer(snapshotId, Map.copyOf(summary), assistantMessageId,
+                legacyFallbackAllowed, Map.copyOf(diagnostics)));
+    }
+
+    static Map<String, String> projectDiagnostics(Map<String, Object> source) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (source == null) return out;
+        source.keySet().stream().filter(java.util.Objects::nonNull).sorted().forEach(key -> {
+            Object safe = SafeRedactor.diagnosticValue(key, source.get(key));
+            String encoded = encodeDiagnostic(key, safe);
+            if (encoded != null && out.size() < 80) out.put("diag." + key, encoded);
+        });
+        return out;
+    }
+
+    private static String encodeDiagnostic(String key, Object value) {
+        if ("observedModel".equals(key) && value instanceof String model
+                && model.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) return "s:" + model;
+        if (DETAIL_FLAGS.contains(key) && value instanceof Boolean) return "b:" + value;
+        if (DETAIL_COUNTS.contains(key) && (value instanceof Byte || value instanceof Short
+                || value instanceof Integer || value instanceof Long)) {
+            long number = ((Number) value).longValue();
+            return number >= 0 && number <= 1_000_000 ? "n:" + number : null;
+        }
+        if (DETAIL_NUMBERS.contains(key) && (value instanceof Float || value instanceof Double)) {
+            double number = ((Number) value).doubleValue();
+            return Double.isFinite(number) && Math.abs(number) <= 1_000_000 ? "f:" + number : null;
+        }
+        if (DETAIL_LABELS.contains(key) && value instanceof String s
+                && (SAFE_LABEL.matcher(s).matches() || SAFE_HASH.matcher(s).matches())
+                && s.equals(SafeRedactor.traceLabel(s))) return "s:" + s;
+        return null;
+    }
+
+    private static Object decodeDiagnostic(String key, String encoded) {
+        if (encoded == null || encoded.length() < 3 || encoded.length() > ("observedModel".equals(key) ? 202 : 82)) return null;
+        try {
+            String value = encoded.substring(2);
+            Object decoded = switch (encoded.substring(0, 2)) {
+                case "b:" -> "true".equals(value) ? Boolean.TRUE : "false".equals(value) ? Boolean.FALSE : null;
+                case "n:" -> Long.valueOf(value);
+                case "f:" -> Double.valueOf(value);
+                case "s:" -> value;
+                default -> null;
+            };
+            return decoded != null && encoded.equals(encodeDiagnostic(key, decoded)) ? decoded : null;
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
     }
 
     static boolean isSafeTraceSnapshotId(String snapshotId) {
@@ -140,18 +236,20 @@ final class ChatTraceMetaMessageRestorer {
         if (secondDelimiter < 0
                 || pointer.indexOf('|', secondDelimiter + 1) >= 0
                 || !(DURABLE_ENVELOPE_VERSION_V1.equals(version)
-                || DURABLE_ENVELOPE_VERSION_V2.equals(version))) {
+                || DURABLE_ENVELOPE_VERSION_V2.equals(version)
+                || DURABLE_ENVELOPE_VERSION_V3.equals(version))) {
             traceSnapshotEnvelopeSkipped(turnId, "invalid_envelope");
             return Map.of();
         }
         String encoded = pointer.substring(secondDelimiter + 1);
-        if (encoded.isBlank() || encoded.length() > MAX_DURABLE_PROJECTION_B64_CHARS) {
+        boolean detail = DURABLE_ENVELOPE_VERSION_V3.equals(version);
+        if (encoded.isBlank() || encoded.length() > (detail ? 10_924 : MAX_DURABLE_PROJECTION_B64_CHARS)) {
             traceSnapshotEnvelopeSkipped(turnId, "invalid_size");
             return Map.of();
         }
         try {
             byte[] decoded = Base64.getUrlDecoder().decode(encoded);
-            if (decoded.length == 0 || decoded.length > MAX_DURABLE_PROJECTION_BYTES) {
+            if (decoded.length == 0 || decoded.length > (detail ? MAX_DETAIL_BYTES : MAX_DURABLE_PROJECTION_BYTES)) {
                 traceSnapshotEnvelopeSkipped(turnId, "invalid_size");
                 return Map.of();
             }
@@ -165,7 +263,7 @@ final class ChatTraceMetaMessageRestorer {
                 if (line.isEmpty()) {
                     continue;
                 }
-                if (projection.size() >= MAX_DURABLE_PROJECTION_FIELDS) {
+                if (projection.size() >= (detail ? MAX_DETAIL_FIELDS : MAX_DURABLE_PROJECTION_FIELDS)) {
                     traceSnapshotEnvelopeSkipped(turnId, "too_many_fields");
                     return Map.of();
                 }
@@ -186,7 +284,7 @@ final class ChatTraceMetaMessageRestorer {
                     || !projection.containsKey("reason")
                     || !projection.containsKey("method")
                     || !projection.containsKey("pathHash")
-                    || (DURABLE_ENVELOPE_VERSION_V2.equals(version)
+                    || ((DURABLE_ENVELOPE_VERSION_V2.equals(version) || detail)
                     && !projection.containsKey("assistantMessageId"))) {
                 traceSnapshotEnvelopeSkipped(turnId, "missing_required_field");
                 return Map.of();
@@ -199,8 +297,11 @@ final class ChatTraceMetaMessageRestorer {
     }
 
     private static boolean isValidDurableField(String key, String value, String version) {
+        if (key.startsWith("diag.")) {
+            return DURABLE_ENVELOPE_VERSION_V3.equals(version) && decodeDiagnostic(key.substring(5), value) != null;
+        }
         if ("assistantMessageId".equals(key)) {
-            if (!DURABLE_ENVELOPE_VERSION_V2.equals(version)) return false;
+            if (!DURABLE_ENVELOPE_VERSION_V2.equals(version) && !DURABLE_ENVELOPE_VERSION_V3.equals(version)) return false;
             try {
                 return Long.parseLong(value) > 0L;
             } catch (NumberFormatException ignored) {

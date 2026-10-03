@@ -1,6 +1,6 @@
 ---
 name: demo1-stepwise-ask-report
-description: Use before large, ambiguous, irreversible, or plugin-blocked demo-1 work
+description: Use when a demo-1 step is about to grow in scope, stays ambiguous after web search, needs plugin/login/secret/device action, or is irreversible — report known/unknown/options and get go/no-go per step.
 ---
 
 # Demo1 Stepwise Ask Report

@@ -5,6 +5,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
+import com.example.lms.trace.TraceContext;
+import com.example.lms.routing.ApiRoutingPolicySnapshot;
+import com.example.lms.guard.ProviderCredentialResolver;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
+import org.springframework.core.env.StandardEnvironment;
+import java.time.Duration;
+import java.util.function.Predicate;
+import java.util.concurrent.atomic.AtomicInteger;
 import com.acme.aicore.domain.ports.WebSearchProvider;
 import com.acme.aicore.domain.ports.RankingPort;
 import com.acme.aicore.domain.model.WebSearchQuery;
@@ -30,25 +38,61 @@ public class AcmeAICoreGateway implements WebSearchGateway {
 
     private final List<WebSearchProvider> providers;
     private final RankingPort ranking;
+    private final ApiRoutingPolicySnapshot policy;
+    private final Predicate<String> credentialEligible;
+
+    public AcmeAICoreGateway(List<WebSearchProvider> providers, RankingPort ranking) {
+        this(providers, ranking, new ApiRoutingPolicySnapshot(new StandardEnvironment()),
+                new ProviderCredentialResolver(new StandardEnvironment()));
+    }
 
     @Autowired
-    public AcmeAICoreGateway(List<WebSearchProvider> providers, RankingPort ranking) {
-        this.providers = providers;
+    public AcmeAICoreGateway(List<WebSearchProvider> providers, RankingPort ranking,
+                            ApiRoutingPolicySnapshot policy, ProviderCredentialResolver credentials) {
+        this(providers, ranking, policy, id -> credentialEligible(credentials, id));
+    }
+
+    public AcmeAICoreGateway(List<WebSearchProvider> providers, RankingPort ranking,
+                            ApiRoutingPolicySnapshot policy, Predicate<String> credentialEligible) {
+        this.providers = List.copyOf(providers);
         this.ranking = ranking;
+        this.policy = Objects.requireNonNull(policy);
+        this.credentialEligible = Objects.requireNonNull(credentialEligible);
     }
 
     @Override
     public List<Map<String, Object>> searchAndRank(String query, int topK, String lang) {
+        if (query == null || query.isBlank() || Boolean.FALSE.equals(TraceContext.current().getFlag("allowWeb"))) {
+            traceResult("request-disallowed", 0);
+            return List.of();
+        }
+        initializeDeadline();
         List<SearchBundle> bundles = new ArrayList<>();
         String requestHash = safeHash(query, "query-unavailable");
         String optionsHash = safeHash("topK=" + topK + ";lang=" + String.valueOf(lang), "options-unavailable");
         int attemptOrdinal = 0;
-        for (WebSearchProvider p : providers) {
+        List<WebSearchProvider> candidates = policy.routes("search").stream()
+                .flatMap(route -> providers.stream().filter(provider -> route.id().equals(eligibleProviderId(provider))))
+                .filter(provider -> credentialEligible.test(eligibleProviderId(provider))).distinct().toList();
+        for (WebSearchProvider p : candidates) {
+            if (remainingMillis() <= 0) {
+                traceResult("budget-exhausted", 0);
+                return List.of();
+            }
+            if (!reserveAttempt()) {
+                if (!bundles.isEmpty()) break;
+                traceResult("budget-exhausted", 0);
+                return List.of();
+            }
             attemptOrdinal++;
             long startedAtNanos = System.nanoTime();
             ProviderIdentity identity = providerIdentity(p);
             try {
-                var bundle = p.search(new WebSearchQuery(query)).block();
+                var bundle = p.search(new WebSearchQuery(query)).block(Duration.ofMillis(remainingMillis()));
+                if (remainingMillis() <= 0) {
+                    traceResult("budget-exhausted", 0);
+                    return List.of();
+                }
                 if (bundle == null) {
                     appendProviderAttempt(requestHash, optionsHash, identity, attemptOrdinal,
                             "nonresponse", "nonresponse", startedAtNanos, 0, false);
@@ -60,6 +104,7 @@ public class AcmeAICoreGateway implements WebSearchGateway {
                 String reason = returnedCount == 0 ? "zero-result" : "none";
                 appendProviderAttempt(requestHash, optionsHash, identity, attemptOrdinal,
                         outcome, reason, startedAtNanos, returnedCount, true);
+                if (returnedCount > 0) break;
             } catch (RuntimeException e) {
                 FailureKind failure = failureKind(e);
                 try {
@@ -75,13 +120,17 @@ public class AcmeAICoreGateway implements WebSearchGateway {
             }
         }
         if (bundles.isEmpty()) {
-            traceResult("zero-result", 0);
+            traceResult(attemptOrdinal == 0 ? "no-eligible-provider" : "all-providers-failed", 0);
             return List.of();
         }
 
         List<RankedDoc> ranked;
         try {
-            ranked = ranking.fuseAndRank(bundles, RankingParams.defaults()).block();
+            if (remainingMillis() <= 0) {
+                traceResult("budget-exhausted", 0);
+                return List.of();
+            }
+            ranked = ranking.fuseAndRank(bundles, RankingParams.defaults()).block(Duration.ofMillis(remainingMillis()));
         } catch (RuntimeException e) {
             try {
                 traceRankingSuppressed(e);
@@ -95,6 +144,10 @@ public class AcmeAICoreGateway implements WebSearchGateway {
         }
         if (ranked == null) {
             traceResult("ranking-nonresponse", 0);
+            return List.of();
+        }
+        if (remainingMillis() <= 0) {
+            traceResult("budget-exhausted", 0);
             return List.of();
         }
 
@@ -121,6 +174,61 @@ public class AcmeAICoreGateway implements WebSearchGateway {
                 : out.isEmpty() ? "zero-result" : "success";
         traceResult(reason, out.size());
         return out;
+    }
+
+    private boolean reserveAttempt() {
+        TraceContext context = TraceContext.current();
+        synchronized (context) {
+            Object existing = context.getFlag("agent.webSearch.providerCalls");
+            AtomicInteger calls = existing instanceof AtomicInteger counter ? counter : new AtomicInteger();
+            context.setFlag("agent.webSearch.providerCalls", calls);
+            int limit = 1 + policy.maxClassifiedRetries();
+            Object requested = context.getFlag("agent.webSearch.maxProviderCalls");
+            if (requested instanceof Number number) limit = Math.min(limit, Math.max(0, number.intValue()));
+            if (calls.get() >= limit) return false;
+            calls.incrementAndGet();
+            TraceStore.put("agent.acmeGateway.providerCalls", calls.get());
+            return true;
+        }
+    }
+
+    private static void initializeDeadline() {
+        var context = TraceContext.current();
+        synchronized (context) {
+            if (context.getFlag("agent.webSearch.deadlineNanos") == null) {
+                var shared = TimeBudgetContext.get();
+                long remaining = Math.min(context.remainingMillis(),
+                        shared == null ? Long.MAX_VALUE : shared.remainingMillis());
+                if (remaining == Long.MAX_VALUE) remaining = 3_000L;
+                context.setFlag("agent.webSearch.deadlineNanos",
+                        System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(remaining));
+            }
+        }
+    }
+
+    public static long remainingMillis() {
+        if (Thread.currentThread().isInterrupted()) return 0;
+        var shared = TimeBudgetContext.get();
+        Object deadline = TraceContext.current().getFlag("agent.webSearch.deadlineNanos");
+        long remaining = deadline instanceof Long value
+                ? Math.max(0L, java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(value - System.nanoTime()))
+                : Long.MAX_VALUE;
+        return Math.min(remaining, Math.min(TraceContext.current().remainingMillis(),
+                shared == null ? Long.MAX_VALUE : shared.remainingMillis()));
+    }
+
+    private static String eligibleProviderId(WebSearchProvider provider) {
+        try { return provider == null ? "" : provider.id(); }
+        catch (RuntimeException unavailable) { return ""; }
+    }
+
+    private static boolean credentialEligible(ProviderCredentialResolver resolver, String id) {
+        if ("brave".equals(id) && resolver.resolveBraveFree().enabled()) return true;
+        try {
+            return resolver.resolve(ProviderCredentialResolver.Provider.valueOf(id.toUpperCase(Locale.ROOT))).enabled();
+        } catch (IllegalArgumentException unknown) {
+            return false;
+        }
     }
 
     private static ProviderIdentity providerIdentity(WebSearchProvider provider) {

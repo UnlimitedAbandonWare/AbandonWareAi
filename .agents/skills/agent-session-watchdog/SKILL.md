@@ -16,6 +16,7 @@ sessions under `C:\AbandonWare\_rescue\codex-quarantine-9only-20260919`).
 python -B scripts/agent_session_watch.py stores        # discover 4-agent session stores
 python -B scripts/agent_session_watch.py patterns      # pattern table
 python -B scripts/agent_session_watch.py scan          # bounded scan (default: codex, last 72h)
+python -B scripts/agent_session_watch.py scan --agent grok --since-hours 72   # Grok store scan
 python -B scripts/agent_session_watch.py watch         # scan + auto-diagnostics on 'auto' findings
 python -B scripts/agent_session_watch.py diagnose      # bounded diagnostic bundle only
 Watch-Agents.bat                                       # BAT wrapper (same args)
@@ -35,7 +36,7 @@ Useful flags: `--agent codex|grok|devin|cline|all`, `--file F` / `--dir D`
 | P4 | error-streak | warn | ≥4 consecutive failed tool calls |
 | P5 | context-compaction-heavy | warn | compacted ≥10 / file ≥50MB / tasks ≥50 |
 | P6 | model-switch-mid-session | warn | non-developer model_switch, or >=2 switches. A single developer-role marker is the Codex session template (quarantine 9/9 false positives) |
-| P7 | goal-conflict | warn | create_goal unfinished-goal rejection |
+| P7 | goal-conflict | warn | create_goal unfinished-goal rejection; count ≥2 in one session → next action: `update_goal`/complete the open goal, never retry create_goal |
 | P8 | edit-outside-cwd | warn | patch target outside the session cwd root |
 | P9 | stale-incomplete-session | warn | task_started>task_complete and idle past --stale-hours |
 | P10 | subagent-fanout | info | spawn_agent+followup_task >=20 |
@@ -103,3 +104,12 @@ is not runtime proof. Grok project hooks load at session start — a new
 Trace: `var/agent-work-guard/hook-trace.jsonl` (tool name/id, decision, exit,
 elapsed; no cmd/body). No enter line means not-called. Grok fail-open on
 timeout; Codex skips untrusted hook hashes.
+
+## Parallel-lane preflight (additive)
+
+For multi-chat runs on this checkout,
+`python -B scripts/codex_parallel_preflight.py --root . --goal-key <key>
+--scope <paths> --agent <name> --json` complements this watchdog: it judges
+duplicate goals, stale claims and unclaimed edits from repo-local evidence
+before the first write — detection only, never session mutation. See
+`.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.

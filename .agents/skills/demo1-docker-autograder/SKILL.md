@@ -16,7 +16,7 @@ Execute only an immutable, ready-last job packet. Treat the result as supporting
 
 ## Execute
 
-Create the ready-last job with `scripts/new_docker_autograder_job.ps1`. Pass the
+Create the ready-last job with `.\.agents\skills\demo1-docker-autograder\scripts\new_docker_autograder_job.ps1`. Pass the
 two immutable upstream files: RED uses decision + intent spec; GREEN uses
 verification + PatchIntent. The builder binds their hashes and fixes network,
 pull, and mutation policy. Then run:

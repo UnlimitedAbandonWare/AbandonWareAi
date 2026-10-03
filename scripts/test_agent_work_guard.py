@@ -150,6 +150,17 @@ class Adapters(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertEqual("block", payload["decision"])
 
+    def test_codex_pre_allow_emits_no_stdout(self):
+        # Codex marks unsupported PreToolUse fields (e.g. decision:"allow") as
+        # hook failures; success is exit 0 with empty stdout.
+        event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "Get-Content main/java/Foo.java"},
+                 "tool_use_id": "tu0", "session_id": "s0"}
+        (self.root / "main" / "java" / "Foo.java").write_text("x\n")
+        payload, code = g.hook(self.root, event, self.ledger)
+        self.assertEqual(0, code)
+        self.assertIsNone(payload)
+
     def test_codex_post_uses_tool_response(self):
         (self.root / "main" / "java" / "Foo.java").write_text("x\n")
         event = {"hook_event_name": "PostToolUse", "tool_name": "Bash",
@@ -158,7 +169,7 @@ class Adapters(unittest.TestCase):
                  "tool_use_id": "tu2"}
         payload, code = g.hook(self.root, event, self.ledger)
         self.assertEqual(0, code)
-        self.assertEqual("fail", payload["result"])
+        self.assertIsNone(payload)
 
     def test_devin_post_uses_success_false(self):
         event = {"hook_event_name": "PostToolUse", "tool_name": "exec",
@@ -168,6 +179,18 @@ class Adapters(unittest.TestCase):
         payload, code = g.hook(self.root, event, self.ledger)
         self.assertEqual(0, code)
         self.assertEqual("fail", payload["result"])
+
+    def test_guard_error_fails_open_not_exit_1(self):
+        # A broken guard path (e.g. ledger object without read access) is
+        # environmental: exit 0 + per-agent allow, never an exit-1 storm.
+        event = {"hook_event_name": "PreToolUse", "tool_name": "Bash",
+                 "tool_input": {"command": "Get-Content main/java/Foo.java"},
+                 "tool_use_id": "tu9"}
+        ledger_dir = str(self.root / "no-such-dir" / "ledger.json")
+        payload, code = g.hook(self.root, event, ledger_dir)
+        self.assertIn(code, (0, 2))
+        if code == 0:
+            self.assertIsNone(payload)  # codex allow = empty stdout
 
 
 class AdviseDoesNotPoison(unittest.TestCase):

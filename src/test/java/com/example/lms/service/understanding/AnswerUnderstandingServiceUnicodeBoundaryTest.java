@@ -48,6 +48,67 @@ class AnswerUnderstandingServiceUnicodeBoundaryTest {
         verifyNoInteractions(fixture.geminiClient(), fixture.promptBuilder());
     }
 
+    @Test
+    void expiredRequestBudgetSkipsGenerationAndDoesNotPretendSummaryWasPrepared() {
+        FallbackFixture fixture = fixture();
+        ReflectionTestUtils.setField(fixture.service(), "understandingEnabled", true);
+        ReflectionTestUtils.setField(fixture.service(), "timeoutMs", 12000L);
+        org.mockito.Mockito.when(fixture.promptBuilder().build("question", "answer")).thenReturn("synthetic");
+        org.mockito.Mockito.when(fixture.geminiClient().generate("synthetic"))
+                .thenReturn(reactor.core.publisher.Mono.just("{\"tldr\":\"summary\",\"confidence\":0.9}"));
+        var budget = new com.abandonware.ai.addons.budget.TimeBudget(1000);
+        budget.cancel();
+        com.abandonware.ai.addons.budget.TimeBudgetContext.set(budget);
+        try {
+            org.junit.jupiter.api.Assertions.assertNull(fixture.service().understand("answer", "question"));
+            verifyNoInteractions(fixture.geminiClient(), fixture.promptBuilder());
+        } finally {
+            com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
+            com.example.lms.search.TraceStore.clear();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"caller", "configured", "request"})
+    void shortestAllowanceBoundsAndDisposesSummaryWait(String limiter) {
+        FallbackFixture fixture = fixture();
+        ReflectionTestUtils.setField(fixture.service(), "understandingEnabled", true);
+        ReflectionTestUtils.setField(fixture.service(), "timeoutMs", limiter.equals("configured") ? 60L : 12000L);
+        org.mockito.Mockito.when(fixture.promptBuilder().build("question", "answer")).thenReturn("synthetic");
+        var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+        org.mockito.Mockito.when(fixture.geminiClient().generate("synthetic"))
+                .thenReturn(reactor.core.publisher.Mono.<String>never().doOnCancel(() -> cancelled.set(true)));
+        if (limiter.equals("request"))
+            com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(200));
+        try {
+            var summary = org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(2),
+                    () -> {
+                        // The request budget is thread-local; bind the same budget on the timed worker.
+                        if (limiter.equals("request"))
+                            com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(200));
+                        try { return fixture.service().understand("answer", "question", limiter.equals("caller") ? 60L : 12000L); }
+                        finally { com.abandonware.ai.addons.budget.TimeBudgetContext.clear(); com.example.lms.search.TraceStore.clear(); }
+                    });
+            assertEquals("answer", summary.tldr());
+            org.junit.jupiter.api.Assertions.assertTrue(cancelled.get(), "timed-out subscription must be disposed");
+            org.mockito.Mockito.verify(fixture.geminiClient()).generate("synthetic");
+        } finally {
+            com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
+        }
+    }
+
+    @Test
+    void zeroCallerAllowanceNeverStartsSummaryGeneration() {
+        FallbackFixture fixture = fixture();
+        ReflectionTestUtils.setField(fixture.service(), "understandingEnabled", true);
+        ReflectionTestUtils.setField(fixture.service(), "timeoutMs", 12000L);
+        try {
+            org.junit.jupiter.api.Assertions.assertNull(fixture.service().understand("answer", "question", 0));
+            verifyNoInteractions(fixture.geminiClient(), fixture.promptBuilder());
+            assertEquals("skipped", com.example.lms.search.TraceStore.get("understanding.status"));
+        } finally { com.example.lms.search.TraceStore.clear(); }
+    }
+
     private static FallbackFixture fixture() {
         GeminiClient geminiClient = mock(GeminiClient.class);
         AnswerUnderstandingPromptBuilder promptBuilder = mock(AnswerUnderstandingPromptBuilder.class);

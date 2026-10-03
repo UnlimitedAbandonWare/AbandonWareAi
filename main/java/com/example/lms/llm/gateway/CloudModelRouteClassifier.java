@@ -31,10 +31,36 @@ public class CloudModelRouteClassifier {
     }
 
     public List<CloudModelRouteRow> classifyDefaultCatalog(String stage) {
-        if (catalogLoader == null) {
-            return List.of();
-        }
-        return classify(catalogLoader.loadDefaultCatalog(), stage);
+        var snapshots = catalogLoader == null ? List.<ModelSpecSnapshot>of() : catalogLoader.loadDefaultCatalog();
+        var rows = new java.util.ArrayList<>(classify(snapshots, stage));
+        if (routerProperties == null || gatewayProbeService == null) return List.copyOf(rows);
+        // Registered endpoints are authoritative even when a bundled manifest
+        // does not yet list their model. No generation or model-name inference.
+        routerProperties.getModels().entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(entry -> {
+            var cfg = entry.getValue();
+            if (cfg == null || cfg.getProvider() == null || cfg.getName() == null
+                    || java.util.Set.of("local", "ollama", "local_llm", "chatgpt-oauth")
+                            .contains(cfg.getProvider().toLowerCase(Locale.ROOT))
+                    || rows.stream().anyMatch(r -> entry.getKey().equals(r.routeKey()))) return;
+            var manifest = snapshots.stream().filter(s -> same(s.provider(), cfg.getProvider())
+                    && same(s.model(), cfg.getName())).findFirst().orElse(null);
+            if (manifestDisabled(manifest)) {
+                rows.add(CloudModelRouteRow.fromSnapshot(entry.getKey(), manifest, stage, 0, false,
+                        cfg.isFallbackOnly(), List.of(LlmFailureClass.DISABLED), "cloud_manifest_disabled"));
+                return;
+            }
+            var eligibility = gatewayProbeService.evaluate(entry.getKey(), cfg, stage);
+            if (eligibility == null) return;
+            Object observedCaps = eligibility.safeMeta().get("capabilities");
+            var caps = observedCaps instanceof Collection<?> values
+                    ? values.stream().map(String::valueOf).toList() : List.<String>of();
+            Object context = eligibility.safeMeta().get("contextTokens");
+            var snapshot = manifest == null ? ModelSpecSnapshot.of(cfg.getProvider(), cfg.getName(),
+                    endpointHost(cfg.getBaseUrl()), context instanceof Number n ? n.intValue() : null,
+                    null, caps, Map.of("catalogTrust", "registered_route")) : manifest;
+            rows.add(CloudModelRouteRow.fromEligibility(entry.getKey(), snapshot, eligibility));
+        });
+        return List.copyOf(rows);
     }
 
     public List<CloudModelRouteRow> classify(Collection<ModelSpecSnapshot> snapshots, String stage) {
@@ -96,8 +122,7 @@ public class CloudModelRouteClassifier {
             if (cfg == null) {
                 continue;
             }
-            if (same(snapshot.model(), cfg.getName()) && (same(snapshot.provider(), cfg.getProvider())
-                    || same(snapshot.endpointHost(), endpointHost(cfg.getBaseUrl())))) {
+            if (same(snapshot.model(), cfg.getName()) && same(snapshot.provider(), cfg.getProvider())) {
                 return entry;
             }
         }

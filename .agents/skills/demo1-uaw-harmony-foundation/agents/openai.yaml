@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · UAW Harmony Foundation"
+  short_description: "UAW 큰 그림 조화 밑밥: 스파인 탐침·매트릭스·셋업 순서 (제품 패치는 Codex 소유)"
+  default_prompt: "Use $demo1-uaw-harmony-foundation for UAW/Abandon_X harmony groundwork: run scripts/uaw_spine_probe.py, refresh docs/diagnostics/uaw-harmony-foundation-0928 matrices and setup-order docs, keep product source Codex-owned, and mark unrun checks evidence_needed."

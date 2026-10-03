@@ -6,7 +6,7 @@ description: Use when demo-1 work needs conditional local Git staging, staged sc
 # demo1-conditional-local-git
 
 Conditional local Git gate for THIS canonical root only
-(`C:\AbandonWare\demo-1\demo-1\src`). User authorization 2026-09-23 replaced
+(`<repo>`). User authorization 2026-09-23 replaced
 the blanket mutation ban here — nowhere else. Policy body:
 `.grok/rules/demo1-conditional-local-git.md`; AGENTS.md
 `DEMO1-GIT-LOCAL-FIRST` carries the same rules for Codex. Enforcement:
@@ -36,7 +36,7 @@ python -B scripts/conditional_local_git.py check -- git add <path>
 python -B scripts/conditional_local_git.py check -- git commit -F msg.txt
 python -B scripts/conditional_local_git.py scan --repo . [--path <expected>...]
 python -B scripts/conditional_local_git.py commit --repo . --message-file <file> --path <owned-path> [--path ...] [--preserve-foreign-staged|--strict-staging]
-python -B scripts/conditional_local_git.py lock --repo . [--days 1.0] [--backup-dir <dir>]
+python -B scripts/conditional_local_git.py lock --repo . [--days 0.25] [--backup-dir <dir>]
 ```
 
 - `check` verdicts: `allow-local` (read-only), `needs-scan` (add/commit — scan
@@ -55,10 +55,21 @@ python -B scripts/conditional_local_git.py lock --repo . [--days 1.0] [--backup-
   entries — foreign staging stays byte-identical (`foreignStagingPreserved`).
   `--strict-staging` names the exact-match contract explicitly.
 - `index.lock`: agents never delete `.git` internals by hand. A proven-stale
-  0-byte lock (age ≥ `--days`, no confirmed `git.exe` writer, unchanged index
-  hash) is only *moved aside* by `lock` (`--backup-dir`) or by the
-  orchestrator (`--stale-lock-days`, default 0.25 = 6h); any unmet condition
-  → `action: preserved` + reason → BLOCKED, never force-delete.
+  0-byte lock (age ≥ `--days`; `lock` and the orchestrator share
+  `DEFAULT_STALE_LOCK_DAYS` = 0.25 = 6h — no confirmed `git.exe` writer,
+  unchanged index hash) is only *moved aside* by `lock` (`--backup-dir`) or
+  by the orchestrator (`--stale-lock-days`); a nonempty lock holding the
+  gate's own `conditional-local-git:` marker — a self-orphaned
+  selected-commit — is reclaimed the same way after a settle window. Any
+  other nonempty lock or unmet condition → `action: preserved` + reason →
+  BLOCKED, never force-delete.
+- Failure JSON stays diagnosable: `selected-staged-scan-failed` carries
+  `scanReason`/`scanFindings` (paths appear only as sha256 `pathHash` +
+  rule names, never content) and `selected-commit-failed` carries
+  `errorType`/`errorDetail`. `__pycache__/`, `*.pyc`, and `*.class` under
+  `build/` are rejected as `forbidden-path` before any commit attempt; a
+  dry-run plan shows `candidatePathCount`/`maxPaths`/`remainingPathCapacity`
+  so `blast-radius-paths` is announced before any opaque failure.
 - `missing-blob` (exit 3) means a staged index entry points at an object the
   store lost — integrity, not a policy block; it is reported separately from
   `blocked-path`. Foreign missing blobs do not block a
@@ -78,11 +89,11 @@ python -B scripts/conditional_local_git.py lock --repo . [--days 1.0] [--backup-
   versioned artifact uploads — agents make local selective commits only,
   never a version/release structure.
 - Sole valid main remote is `AbandonWareAi`
-  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`); `AbandonWare3` is
-  fully discarded — never a valid remote, temporary origin, migration keep, or
-  backup upstream, and never a second remote. If `git remote -v` still lists
-  `AbandonWare3`, report it and never fetch/push to it — removal needs an
-  explicit user ask (AGENTS.md `DEMO1-GIT-REMOTE-SOLE`).
+  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) — the only valid
+  remote is `origin` at that URL; never add, change, fetch, or push another
+  remote, and never a second remote. If `git remote -v` lists a different
+  remote, report it and never fetch/push to it — removal needs an explicit
+  user ask (AGENTS.md `DEMO1-GIT-REMOTE-SOLE`).
 - Never print or commit secret values; never commit raw conversation,
   databases, models, indexes, or large logs.
 - Never delete/rename/empty `.git` or `index.lock`, never kill `git.exe`.

@@ -14,6 +14,16 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
 class ChatModelCatalogServiceTest {
+    @Test void apiFirstCatalogueDesignatesEligibleCloudDefaultWithoutOpeningRejectedRoutes() {
+        var catalog=remoteCatalog("",true,"");
+        org.springframework.test.util.ReflectionTestUtils.setField(catalog,"apiFirstEnabled",true);
+        org.springframework.test.util.ReflectionTestUtils.setField(catalog,"apiFirstRouteOrder","api3,openai-economy");
+        var rows=catalog.choices();
+        var json=new ObjectMapper().valueToTree(rows);
+        assertThat(rows.stream().filter(c->json.get(rows.indexOf(c)).path("defaultChoice").asBoolean())
+            .map(ChatModelCatalogService.Choice::id)).containsExactly("llmrouter.api3");
+        assertThat(json.get(0).has("capabilities")).isTrue();
+    }
     @Test void exactRouteOptInDoesNotOpenOtherEligibleCloudModels() {
         var catalog = remoteCatalog("api3", true, "");
         assertThat(catalog.resolve("llmrouter.api3").orElseThrow().selectable()).isTrue();

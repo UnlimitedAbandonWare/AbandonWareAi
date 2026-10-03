@@ -47,10 +47,12 @@ import time
 import uuid
 from pathlib import Path
 
-CODEX_HOME = Path(os.environ.get("CODEX_HOME", r"C:\Users\nninn\.codex"))
+from awx_paths import resolve as _awx_resolve
+
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 # hygiene 2026-09-26: default rescue root advanced off the 20260919 run (that run stays
-# restorable via --rescue=C:\AbandonWare\_rescue\codex-quarantine-20260919). Pass --rescue= per run.
-RESCUE = Path(r"C:\AbandonWare\_rescue\codex-quarantine-20260926")
+# restorable via --rescue=<rescue.root>/codex-quarantine-20260919). Pass --rescue= per run.
+RESCUE = _awx_resolve("rescue.root") / "codex-quarantine-20260926"
 LEGACY_MANIFEST = "manifest.jsonl"      # pre-hardening name; read-only fallback
 LEGACY_APPLYLOG = "apply-log.jsonl"
 STALE_MS = 7 * 24 * 3600 * 1000

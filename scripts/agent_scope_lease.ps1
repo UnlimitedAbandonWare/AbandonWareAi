@@ -1,6 +1,7 @@
 # Thin PowerShell proxy for scripts/agent_scope_lease.py so PowerShell-native
 # callers get the same work-scope coordinator without typing the interpreter.
 # All semantics, state and exit codes live in the Python tool.
+# SSOT: scripts/agent_scope_lease.py
 [CmdletBinding()]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]

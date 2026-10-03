@@ -23,7 +23,7 @@ class LlmRouterHttpAttemptBudgetContractTest {
                 StandardCharsets.UTF_8);
         int builderStart = source.indexOf("OpenAiChatModel.builder()");
         int builderEnd = source.indexOf(
-                "ChatModel routedModel = verifyResponseModelIfRequired(b.build(), modelName, cfg);",
+                "ChatModel routedModel = verifyResponseModelIfRequired(",
                 builderStart);
         assertTrue(builderStart >= 0 && builderEnd > builderStart, "router builder must remain present");
 
@@ -51,12 +51,32 @@ class LlmRouterHttpAttemptBudgetContractTest {
     }
 
     @Test
+    void acceptedFallbackRetainsTransportWaitAfterIngressBudgetExpires() throws Exception {
+        TimeBudget ingress = mock(TimeBudget.class);
+        when(ingress.remainingMillis()).thenReturn(0L);
+        TimeBudgetContext.set(ingress);
+        try {
+            Method timeoutMethod = LlmRouterAspect.class.getDeclaredMethod(
+                    "routeTimeoutMillis", long.class, String.class);
+            timeoutMethod.setAccessible(true);
+            try (var accepted = com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask()) {
+                assertEquals(5_000L, timeoutMethod.invoke(null, 5_000L, "fallback"));
+            }
+            assertEquals(1L, timeoutMethod.invoke(null, 5_000L, "fallback"));
+        } finally {
+            TimeBudgetContext.clear();
+        }
+    }
+
+    @Test
     void everyFallbackCapableOpenAiClientUsesTheRoleAwareMillisecondTimeout() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java"),
                 StandardCharsets.UTF_8);
 
-        assertTrue(source.contains("routeTimeoutMillis(Math.max(1_000L, ca.timeoutMs), attemptRole)"),
+        assertTrue(java.util.regex.Pattern.compile(
+                        "long\\s+routeTimeoutMs\\s*=\\s*routeTimeoutMillis\\([\\s\\S]*?\\battemptRole\\)")
+                        .matcher(source).find(),
                 "the active route builder must derive one role-aware transport timeout");
         assertTrue(source.contains(
                         "new OpenAiResponsesChatModel(baseUrl, apiKey, modelName, routeTimeoutMs,"),

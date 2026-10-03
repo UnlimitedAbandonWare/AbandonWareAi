@@ -1,0 +1,5 @@
+﻿[ANTI-STOP]
+- goal-objective.md / 이 문서 읽기 = intake. Done 조건 아님.
+- 등록 목표 제목에 "읽기/Read …" 쓰지 말 것. Mission/WP AC만 제목.
+- 소스 diff 0 + 테스트 NOT_RUN 으로 complete-stop 호출 금지.
+- 읽기만 끝냈으면 CONTINUE: 다음 WP seam 구현.

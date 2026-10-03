@@ -172,7 +172,7 @@ public class NovaOrchestrationAutoConfiguration {
                 java.util.concurrent.TimeUnit.SECONDS,
                 q,
                 tf,
-                new java.util.concurrent.ThreadPoolExecutor.CallerRunsPolicy());
+                new java.util.concurrent.ThreadPoolExecutor.AbortPolicy());
         ex.allowCoreThreadTimeOut(true);
         return ex;
     }

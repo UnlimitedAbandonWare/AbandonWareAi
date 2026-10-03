@@ -40,6 +40,12 @@ public final class PromptMasker {
     // Put '-' at the end of the class or escape as \\- to avoid illegal escape.
     private static final Pattern BEARER =
             Pattern.compile("(?i)\\bBearer\\s+[A-Za-z0-9._~+/\\-]+=*");
+    // Bounded bare-token shapes: retain short rt_ words and ordinary dotted text.
+    private static final Pattern BARE_JWT = Pattern.compile(
+            "(?<![A-Za-z0-9_.-])eyJ[A-Za-z0-9_-]{5,}+\\.[A-Za-z0-9_-]{8,}+\\.[A-Za-z0-9_-]{8,}+"
+                    + "(?![A-Za-z0-9_-]|\\.[A-Za-z0-9_-])");
+    private static final Pattern BARE_REFRESH_TOKEN =
+            Pattern.compile("(?<![A-Za-z0-9_-])rt_[A-Za-z0-9_-]{16,}+(?![A-Za-z0-9_-])");
 
     /**
      * Mask any secrets contained in the input string.  Known secret
@@ -71,6 +77,8 @@ public final class PromptMasker {
             String g = m.group();
             return g.substring(0, Math.min(6, g.length())) + stars(Math.max(0, g.length() - 6));
         });
+        masked = BARE_JWT.matcher(masked).replaceAll(m -> stars(m.group().length()));
+        masked = BARE_REFRESH_TOKEN.matcher(masked).replaceAll(m -> stars(m.group().length()));
         return masked;
     }
 

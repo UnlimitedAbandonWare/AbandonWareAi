@@ -6,6 +6,7 @@ import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
 import com.abandonware.ai.addons.budget.TimeBudget;
 import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.llm.TimedChatModelCaller;
+import com.example.lms.llm.JudgeCallObservation;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.data.message.UserMessage;
 import com.example.lms.search.TraceStore;
@@ -82,6 +83,9 @@ public class ClaimVerifierService {
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=\\.|!|\\?|\\n)");
 
     public VerificationResult verifyClaims(String context, String draftAnswer, String model) {
+        TraceStore.put("claimVerifier.judge.disabledReason", null);
+        JudgeCallObservation.notRun("claim_extraction", "extraction_not_run");
+        JudgeCallObservation.notRun("claim_judgment", "judgment_not_run");
         if (draftAnswer == null || draftAnswer.isBlank()) {
             return new VerificationResult("정보 없음", List.of(), false, false);
         }
@@ -180,11 +184,13 @@ try {
         // Use the ChatModel to execute the prompt directly.  Temperature and top-p
         // parameters cannot be tuned per call; the ChatModel bean should
         // already be configured with appropriate defaults.
-        JudgeCallResult response = callChatModelDetailed(claimExtractionPrompt);
+        JudgeCallResult response = callChatModelDetailed(claimExtractionPrompt, "claim_extraction");
         ParsedStringArray parsed = parseJsonArray(response.text());
         if (response.outcomeKnown() && !parsed.valid()) {
             traceJudgeFailSoft("judge_malformed_response");
         }
+        response.observation().finish(parsed.valid() ? "judge" : "none", response.outcomeKnown() && parsed.valid(),
+                response.outcomeKnown() && !parsed.valid() ? "judge_malformed_response" : null);
         return new ClaimExtraction(parsed.values(), response.outcomeKnown() && parsed.valid());
     }
 
@@ -202,11 +208,13 @@ try {
           CLAIMS:
           %s
           """.formatted(context, claims.toString());
-        JudgeCallResult response = callChatModelDetailed(claimJudgmentPrompt);
+        JudgeCallResult response = callChatModelDetailed(claimJudgmentPrompt, "claim_judgment");
         ParsedBooleanArray parsed = parseJsonBooleans(response.text(), claims.size());
         if (response.outcomeKnown() && !parsed.valid()) {
             traceJudgeFailSoft("judge_malformed_response");
         }
+        response.observation().finish(parsed.valid() ? "judge" : "none", response.outcomeKnown() && parsed.valid(),
+                response.outcomeKnown() && !parsed.valid() ? "judge_malformed_response" : null);
         return new ClaimJudgment(
                 parsed.values(),
                 response.outcomeKnown() && parsed.valid());
@@ -345,57 +353,72 @@ try {
      * @return the AI response text or an empty string
      */
     private String callChatModel(String claimVerifierPrompt) {
-        return callChatModelDetailed(claimVerifierPrompt).text();
+        return callChatModelDetailed(claimVerifierPrompt, "claim_extraction").text();
     }
 
-    private JudgeCallResult callChatModelDetailed(String claimVerifierPrompt) {
+    private JudgeCallResult callChatModelDetailed(String claimVerifierPrompt, String lane) {
+        JudgeCallObservation observation = JudgeCallObservation.start(lane);
         if (chatModel == null || chatModel instanceof ExpectedFailureChatModel) {
             traceJudgeFailSoft("judge_model_unavailable");
-            return new JudgeCallResult("", false);
+            observation.skipped("judge_model_unavailable");
+            observation.finish("none", false, "judge_model_unavailable");
+            return new JudgeCallResult("", false, observation);
         }
         try {
             TimeBudget requestBudget = TimeBudgetContext.get();
             if (requestBudget != null && requestBudget.expired()) {
                 traceJudgeFailSoft("request_budget_exhausted");
-                return new JudgeCallResult("", false);
+                observation.skipped("request_budget_exhausted");
+                observation.finish("none", false, "request_budget_exhausted");
+                return new JudgeCallResult("", false, observation);
             }
             var userMessage = UserMessage.from(claimVerifierPrompt);
-            dev.langchain4j.data.message.AiMessage ai;
+            dev.langchain4j.model.chat.response.ChatResponse response;
             if (requestBudget == null) {
-                var res = chatModel.chat(userMessage);
-                ai = res == null ? null : res.aiMessage();
+                try (var judgeBinding = observation.bind()) {
+                    observation.invocationStarted();
+                    response = chatModel.chat(userMessage);
+                }
+                observation.responseReceived(response);
             } else {
                 long remainingMs = requestBudget.remainingMillis();
                 if (remainingMs <= 0L) {
                     traceJudgeFailSoft("request_budget_exhausted");
-                    return new JudgeCallResult("", false);
+                observation.skipped("request_budget_exhausted");
+                observation.finish("none", false, "request_budget_exhausted");
+                    return new JudgeCallResult("", false, observation);
                 }
-                ai = TimedChatModelCaller.chat(
+                response = TimedChatModelCaller.chatResponse(
                         chatModel,
                         List.of(userMessage),
                         Duration.ofMillis(remainingMs),
                         "claim_verifier_judge",
-                        chatModel.getClass().getName());
+                        chatModel.getClass().getName(), observation);
             }
+            var ai = response == null ? null : response.aiMessage();
             if (ai == null) {
                 traceJudgeFailSoft("judge_empty_response");
-                return new JudgeCallResult("", false);
+                observation.finish("none", false, "judge_empty_response");
+                return new JudgeCallResult("", false, observation);
             }
             String text = ai.text() == null ? "" : ai.text().trim();
             if (text.isBlank()) {
                 traceJudgeFailSoft("judge_empty_response");
-                return new JudgeCallResult("", false);
+                observation.finish("none", false, "judge_empty_response");
+                return new JudgeCallResult("", false, observation);
             }
-            return new JudgeCallResult(text, true);
+            return new JudgeCallResult(text, true, observation);
         } catch (Exception e) {
+            observation.failed(e);
+            observation.finish("none", false, "judge_call_failed");
             traceJudgeFailSoft("judge_call_failed");
             log.debug("[ClaimVerifier] ChatModel call failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return new JudgeCallResult("", false);
+            return new JudgeCallResult("", false, observation);
         }
     }
 
-    private record JudgeCallResult(String text, boolean outcomeKnown) {
+    private record JudgeCallResult(String text, boolean outcomeKnown, JudgeCallObservation observation) {
     }
 
     private record ClaimExtraction(List<String> claims, boolean outcomeKnown) {

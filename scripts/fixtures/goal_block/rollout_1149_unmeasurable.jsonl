@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-03T04:00:00.000Z","type":"session_meta","payload":{"id":"fixture-1149","cwd":"C:\\AbandonWare\\demo-1\\demo-1\\src","source":"vscode"}}
+{"timestamp":"2026-10-03T04:00:30.000Z","type":"event_msg","payload":{"type":"user_message","message":"WP1-WP5 테스트 기반 범위 검증 계속"}}
+{"timestamp":"2026-10-03T04:50:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"WP1-WP5 테스트 검증을 진행했습니다. PARTIAL 상태입니다."}}
+{"timestamp":"2026-10-03T04:55:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"같은 검증을 재확인했습니다."}}
+{"timestamp":"2026-10-03T05:04:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"**목표 상태를 `blocked`로 갱신합니다.** 필수 A8 호출 상한 게이트가 세 번의 연속 목표 턴에서 계속 입증되지 않았습니다. 요청별 실제 호출 수를 집계할 수 없습니다."}}

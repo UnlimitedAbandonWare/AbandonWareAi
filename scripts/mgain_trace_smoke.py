@@ -2,7 +2,7 @@
 """mgain debug-trace restore -- read-only static smoke + live anchor map.
 
 Assist artifact for the Codex task `mgain-trace-restore-0926`.
-SSOT: C:/Users/nninn/Downloads/MGAIN_DEBUG_TRACE_RESTORE_2026-09-26/
+SSOT: %USERPROFILE%/Downloads/MGAIN_DEBUG_TRACE_RESTORE_2026-09-26/
 
 What this tool does:
   * re-derives live anchor line numbers (anchors rot; never paste stale ones)

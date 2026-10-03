@@ -24,7 +24,7 @@ All persistent artifacts are beneath `data/agent-handoff/docker-autograder/<runI
 
 Unknown fields are rejected. The job is an execution description, not a shell escape hatch; callers cannot provide arbitrary commands or Docker options.
 
-Use `scripts/new_docker_autograder_job.ps1` to publish the job, SHA sidecar,
+Use `.\.agents\skills\demo1-docker-autograder\scripts\new_docker_autograder_job.ps1` to publish the job, SHA sidecar,
 and ready marker atomically. For RED, `decisionSha256` and
 `intentSpecSha256` retain their literal meanings. For GREEN, they bind the
 current GREEN verification and PatchIntent respectively; the postprocessor

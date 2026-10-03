@@ -21,7 +21,7 @@ public class AngerOverdriveNarrower {
     private final CrossEncoderReranker reranker;
 
     @Autowired
-    public AngerOverdriveNarrower(ObjectProvider<CrossEncoderReranker> rerankerProvider) {
+    public AngerOverdriveNarrower(@Qualifier("crossEncoderReranker") ObjectProvider<CrossEncoderReranker> rerankerProvider) {
         this(resolveReranker(rerankerProvider));
     }
 
@@ -35,7 +35,7 @@ public class AngerOverdriveNarrower {
             return Collections.emptyList();
         }
         if (reranker == null) {
-            traceNarrow(current.size(), current.size(), true, "reranker_missing_original_returned", "noop_passthrough");
+            traceNarrow(current.size(), current.size(), true, "reranker_missing_original_returned", "unavailable");
             return current;
         }
         try {
@@ -77,8 +77,9 @@ public class AngerOverdriveNarrower {
             TraceStore.put("overdrive.narrow.failSoft", failSoft);
             TraceStore.put("overdrive.narrow.reranker.source", SafeRedactor.traceLabelOrFallback(source, "unknown"));
             TraceStore.put("overdrive.narrow.reason", safeReason);
-            TraceStore.put("overdrive.anchor.error", safeReason);
-            TraceStore.put("overdrive.anchor.narrowed.k", Math.max(0, outputCount));
+            TraceStore.put("overdrive.anchor.error", failSoft ? safeReason : "");
+            TraceStore.put("overdrive.anchor.narrowed.k",
+                    !failSoft && outputCount < inputCount ? Math.max(0, outputCount) : 0);
             TraceStore.put("overdrive.anchor.narrowedReason", safeReason);
             TraceStore.put("overdrive.anchor.skipReason", failSoft ? safeReason : "");
         } catch (RuntimeException ex) {

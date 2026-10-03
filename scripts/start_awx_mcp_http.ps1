@@ -3,7 +3,7 @@ param(
     [ValidateSet('Status','Configure','Start','Run','InstallStartup')]
     [string]$Action = 'Status',
     [string]$StateDirectory = (Join-Path $env:LOCALAPPDATA 'AwxMcpHttp'),
-    [string]$Python = 'C:\Users\nninn\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe'
+    [string]$Python = (Join-Path $env:USERPROFILE 'AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe')
 )
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot

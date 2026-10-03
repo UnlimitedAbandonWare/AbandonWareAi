@@ -8,6 +8,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.core.env.Environment;
+import java.util.function.Supplier;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -37,8 +39,16 @@ public class ToolManifestCatalog {
     );
 
     private final ObjectMapper objectMapper;
+    private final Environment environment;
+    private final Supplier<ToolRegistry> registry;
 
     public ToolManifestCatalog() {
+        this(null, () -> null);
+    }
+
+    public ToolManifestCatalog(Environment environment, Supplier<ToolRegistry> registry) {
+        this.environment = environment;
+        this.registry = registry;
         this.objectMapper = new ObjectMapper().enable(SerializationFeature.INDENT_OUTPUT);
         try {
             this.objectMapper.findAndRegisterModules();
@@ -46,6 +56,11 @@ public class ToolManifestCatalog {
             traceSuppressed("objectMapper.findAndRegisterModules", ignore);
             // best-effort
         }
+    }
+
+    public boolean webSearchEnabled() {
+        return environment != null && Boolean.parseBoolean(environment.getProperty(
+                "agent.tools.web-search.enabled", environment.getProperty("AGENT_WEB_SEARCH_ENABLED", "false")));
     }
 
     public ToolManifestSnapshot load() {
@@ -168,6 +183,17 @@ public class ToolManifestCatalog {
                 continue;
             }
             boolean enabled = node.path("enabled").asBoolean(true);
+            String disabledReason = textOr(node, "disabledReason", "");
+            if ("web.search".equals(id) && enabled) {
+                ToolRegistry currentRegistry = registry == null ? null : registry.get();
+                if (!webSearchEnabled()) {
+                    enabled = false;
+                    disabledReason = "feature_flag_off";
+                } else if (currentRegistry == null || currentRegistry.get(id).isEmpty()) {
+                    enabled = false;
+                    disabledReason = "registry_missing";
+                }
+            }
             String risk = textOr(node, "risk", "read_only");
             boolean readOnly = node.has("readOnly")
                     ? node.path("readOnly").asBoolean()
@@ -194,7 +220,7 @@ public class ToolManifestCatalog {
                     maxOutputBytes,
                     node.path("returnsLargePayloadByReference").asBoolean(false),
                     textOr(node, "endpoint", ""),
-                    textOr(node, "disabledReason", ""),
+                    disabledReason,
                     Map.copyOf(rawSummary)
             );
             entries.put(id, entry);

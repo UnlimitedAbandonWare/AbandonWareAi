@@ -1,0 +1,25 @@
+{
+  "schemaVersion": "awx.parallel-handoff.v1",
+  "fromTask": "incident-goal-alpha-bbbbbbbb",
+  "toTask": null,
+  "fromChat": "01a0fada",
+  "lastCheckpoint": "data/agent-handoff/codex-autonomy/incident-goal-alpha-bbbbbbbb/cycle-replay/checkpoint.json",
+  "ownedChanges": [
+    "main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java",
+    "src/test/java/com/example/lms/llm/gateway/FallbackAwareReplaySafetyTest.java"
+  ],
+  "smokeUsed": 0,
+  "restartUsed": 0,
+  "openItems": [
+    "4 runtime-failover tests still conflict with existing no-replay policy; user decision pending",
+    "no runtime smoke run; Verify-RAG not executed in this lane"
+  ],
+  "askOnceAnswers": [
+    "generic-503 stays no-replay (user kept existing policy)"
+  ],
+  "findings": [
+    "warmup lane and failover lane share ChatWorkflow.java - keep them in one lane or hand off explicitly"
+  ],
+  "atUtc": "2026-10-02T04:48:29+00:00",
+  "_fixtureNote": "Schema example for the DV5 handoff contract, transcribed from the real 2026-10-02 inter-chat handoff shape. A TAKEOVER verdict accepts this file (or journal kind=handoff) as the takeover baseline."
+}

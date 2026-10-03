@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-03T04:00:00.000Z","type":"session_meta","payload":{"id":"fixture-1243","cwd":"C:\\AbandonWare\\demo-1\\demo-1\\src","source":"vscode"}}
+{"timestamp":"2026-10-03T04:00:30.000Z","type":"event_msg","payload":{"type":"user_message","message":"주간 감사 마무리 적용"}}
+{"timestamp":"2026-10-03T04:05:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PASS 4/10, HOLD 5/10 상태입니다."}}
+{"timestamp":"2026-10-03T04:07:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"writer-cap 차단이 동일합니다."}}
+{"timestamp":"2026-10-03T04:09:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"**목표 상태를 `blocked`로 갱신합니다.** 동일한 writer-cap 차단 조건이 세 번 연속 확인됐습니다. 작성자 이력 64개는 모두 RELEASED인데 도구 한도가 해제되지 않았습니다."}}

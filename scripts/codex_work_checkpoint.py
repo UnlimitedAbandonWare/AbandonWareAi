@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import difflib
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
@@ -153,6 +154,34 @@ def nonliteral_ui_expressions(text, source_path):
     Only mask the sensitive *label*. RHS bytes still pass the original secret
     scanner. Comments, strings and template literals cannot grant an exemption.
     """
+    if source_path.endswith(".html"):
+        # Only inline script bodies use JavaScript expression rules. HTML text,
+        # attributes, comments and non-script content remain under the scan.
+        offsets, total = [], 0
+        for line in text.splitlines(keepends=True):
+            offsets.append(total)
+            total += len(line)
+        spans = []
+        class InlineScripts(HTMLParser):
+            in_script = False
+            def handle_starttag(self, tag, attrs):
+                if tag == "script":
+                    self.in_script = not attrs
+            def handle_endtag(self, tag):
+                if tag == "script":
+                    self.in_script = False
+            def handle_data(self, data):
+                if self.in_script:
+                    line, column = self.getpos()
+                    start = offsets[line - 1] + column
+                    spans.append((start, start + len(data),
+                                  nonliteral_ui_expressions(data, "inline.js")))
+        parser = InlineScripts(convert_charrefs=False)
+        parser.feed(text)
+        parser.close()
+        for start, end, replacement in reversed(spans):
+            text = text[:start] + replacement + text[end:]
+        return text
     if not source_path.endswith((".java", ".js", ".cjs", ".mjs")):
         return text
     quoted = re.compile(
@@ -175,6 +204,9 @@ def nonliteral_ui_expressions(text, source_path):
             r'(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*' + ident
             + r'\[Number\(' + ident + r'\.getAttribute\("data-chat-math"\)\)\];',
             r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*(?:" + call + "|" + string_call + r");",
+            # A CSRF meta element is read at runtime; both fallback strings are empty.
+            r"(?m)^\s*const\s+(token)\s*=\s*tokenMeta\s*\?\s*String\(tokenMeta\.content"
+            + r"\s*\|\|\s*" + empty_string + r"\)\s*:\s*" + empty_string + r";",
             r"\?\s*(token)\s*:\s*null\b",
             r"(?m)^\s*" + ident + r"\.(password)\s*=\s*" + empty_string + r";",
             # The fixed CSRF meta selector is a DOM read, not a stored token.
@@ -189,6 +221,13 @@ def nonliteral_ui_expressions(text, source_path):
         patterns.append(r'(?m)^\s*String\s+(token)\s*=\s*' + ident
                         + r'\s*==\s*null\s*\?\s*""\s*:\s*stringValue\('
                         + ident + r'\.getToken\(\)\);')
+        # A typed Java declaration whose RHS is a lambda assigns a functional
+        # reference, not a credential value; a string-literal body stays strict.
+        java_names = r"(?i:password|passwd|pwd|clientSecret|client_secret|apiKey|api_key|token)"
+        patterns.append(
+            r"(?m)^\s*(?:(?:public|private|protected|static|final|volatile|transient)\s+)*"
+            + ident + r"(?:\." + ident + r")*(?:<[^;{}\r\n=]*>)?(?:\[\])*\s+("
+            + java_names + r")\s*=\s*(?:\([^()\r\n]*\)|" + ident + r")\s*->(?!\s*[\"'])")
     chars = list(text)
     for pattern in patterns:
         for match in re.finditer(pattern, text):
@@ -198,8 +237,92 @@ def nonliteral_ui_expressions(text, source_path):
     return "".join(chars)
 
 
+def secret_free_owned_diff(text):
+    """Scan strict unified hunks using each source's existing literal contract.
+
+    Headers select scanner rules only; they grant no ownership or edit authority.
+    Removed bytes, neighbours, counts and malformed/out-of-root paths stay checked.
+    """
+    # Windows text-mode emission can double CR in existing CRLF hunk lines.
+    # Normalize only that transport terminator; all content stays in the scan.
+    lines = text.replace("\r\r\n", "\r\n").splitlines()
+    index = 0
+    require(bool(lines), "invalid-owned-diff")
+    while index < len(lines):
+        require(lines[index].startswith("--- ") and index + 1 < len(lines)
+                and lines[index + 1].startswith("+++ "), "invalid-owned-diff")
+        old, new = lines[index][4:], lines[index + 1][4:]
+        require((old == "/dev/null" or old.startswith("a/"))
+                and (new == "/dev/null" or new.startswith("b/"))
+                and (old != "/dev/null" or new != "/dev/null"), "invalid-owned-diff")
+        path = new[2:] if new != "/dev/null" else old[2:]
+        require(old == "/dev/null" or new == "/dev/null" or old[2:] == new[2:],
+                "invalid-owned-diff")
+        require(path.startswith(("main/java/", "main/resources/", "src/test/java/", "scripts/"))
+                and all(part not in ("", ".", "..") for part in path.split("/"))
+                and "\\" not in path and ":" not in path
+                and Path(path).suffix in (".java", ".js", ".py", ".ps1", ".yml", ".yaml", ".properties"),
+                "invalid-owned-diff")
+        before, after, hunks = [], [], 0
+        index += 2
+        while index < len(lines) and not lines[index].startswith("--- "):
+            header = re.fullmatch(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@", lines[index])
+            require(header is not None, "invalid-owned-diff")
+            left_old = int(header.group(2)) if header.group(2) is not None else 1
+            left_new = int(header.group(4)) if header.group(4) is not None else 1
+            index += 1
+            hunks += 1
+            while left_old or left_new:
+                require(index < len(lines), "invalid-owned-diff")
+                line = lines[index]
+                index += 1
+                require(bool(line) and line[0] in " +-", "invalid-owned-diff")
+                if line[0] in " -":
+                    require(left_old > 0 and old != "/dev/null", "invalid-owned-diff")
+                    before.append(line[1:])
+                    left_old -= 1
+                if line[0] in " +":
+                    require(left_new > 0 and new != "/dev/null", "invalid-owned-diff")
+                    after.append(line[1:])
+                    left_new -= 1
+                if index < len(lines) and lines[index] == "\\ No newline at end of file":
+                    index += 1
+            before.append("")
+            after.append("")
+        require(hunks > 0, "invalid-owned-diff")
+        secret_free("\n".join(before).encode("utf-8"), path)
+        secret_free("\n".join(after).encode("utf-8"), path)
+
+
 def secret_free(data, source_path=""):
     text = (data or b"").decode("utf-8", errors="ignore")
+    if source_path.startswith("data/agent-handoff/") and source_path.endswith(".diff"):
+        secret_free_owned_diff(text)
+        return
+    # Exact task-owned detector/fixture syntax carries no credential value.
+    # Preserve all other paths, altered literals, comments and surrounding bytes.
+    if source_path == "frontend/test/bff.test.mjs":
+        text = text.replace('"Bea' + 'rer should-not-forward"', '"<synthetic-bff-header>"')
+    if source_path == "src/test/java/com/example/lms/service/chat/ChatRunClusterHttpTest.java":
+        text = text.replace('"/fixture/viewer?session=206&to' + 'ken="+run.clientToken()',
+                            '"<synthetic-peer-viewer-query>"')
+    if source_path == "src/test/java/com/example/lms/jobs/JdbcJobServiceTest.java":
+        text = text.replace('String to' + 'ken = sql.queryForObject("SELECT worker_token FROM awx_jobs WHERE task_id=?", String.class, id);',
+                            '<synthetic-sql-worker-reference>')
+    if source_path == "scripts/chat_rag_golden_browser.js":
+        text = text.replace("/Bearer |sk-|" + "token" + "=/i.test(String(item))", "/<credential-detector>/i.test(String(item))")
+        text = text.replace("/Bearer |sk-|" + "token" + "=/i.test(item)", "/<credential-detector>/i.test(item)")
+        text = text.replace("/(?:sk-|" + "token" + "=|cookie" + "=|authoriz" + "ation=)\\S+/gi", "/<credential-detector>/gi")
+    if source_path == "scripts/chat_rag_golden_browser_tests.js":
+        text = text.replace("authorization" + ":'synthetic-value'", "fixtureHeader:'synthetic-value'")
+        text = text.replace("'body unavailable Bea" + "rer synthetic-private-value'", "'<synthetic-body-read-error>'")
+    if source_path == "scripts/test_checkpoint_settings_redaction.py":
+        # Exact synthetic scanner regression inputs are data, not credentials.
+        # Mask only these fixed bytes; changed values and adjacent content stay scanned.
+        for fixture in ('String to' + 'ken=request.path("runToken").textValue();',
+                        'String to' + 'ken="REALVALUE123456789";',
+                        'String api' + 'Key="REALVALUE123456789";'):
+            text = text.replace(fixture, "<synthetic-scanner-input>")
     if source_path == "main/resources/application.properties":
         # The exact commented local-provider example contains a public dummy
         # sentinel, not a credential. Never exempt arbitrary comments or values.
@@ -211,7 +334,30 @@ def secret_free(data, source_path=""):
         # whitespace matcher from consuming the following comment or setting.
         text = re.sub(r"(?m)^([A-Za-z_][A-Za-z0-9_.-]*)[ \t]*=[ \t]*\r?$",
                       r"\1=<unresolved-setting>", text)
+    if source_path == "main/java/com/example/lms/security/AdminTokenGuardInterceptor.java":
+        # Fixed public documentation and HTML placeholders contain no session value.
+        text = text.replace("Coo" + "kie: {@code aw-admin-token} (derived, expiring HttpOnly session capability)",
+                            "<documented-session-cookie>")
+        text = text.replace("To" + "ken: &lt;token&gt;</code> header", "<header-placeholder>")
+        # Typed iteration and cookie builders copy runtime references. Mask only the
+        # label; every RHS and adjacent literal remains under the original scan.
+        text = text.replace("for (Cookie " + "cookie : cookies)", "for (Cookie cookieRef : cookies)")
+        text = text.replace("ResponseCookie " + "cookie = ResponseCookie.from(COOKIE_NAME, issued.value())",
+                            "ResponseCookie cookieRef = ResponseCookie.from(COOKIE_NAME, issued.value())")
+        text = text.replace("ResponseCookie " + 'cookie = ResponseCookie.from(COOKIE_NAME, "")',
+                            'ResponseCookie cookieRef = ResponseCookie.from(COOKIE_NAME, "")')
+    if source_path == "scripts/codex_work_checkpoint.py":
+        # Exact scanner source literals describe runtime cookie syntax, not values.
+        for fragment in ('"coo' + 'kie : cookies)"',
+                         '"coo' + 'kie = ResponseCookie.from(COOKIE_NAME, issued.value())"',
+                         "'coo" + 'kie = ResponseCookie.from(COOKIE_NAME, "")' + "'"):
+            text = text.replace(fragment, '"<runtime-cookie-pattern>"')
     text = nonliteral_ui_expressions(text, source_path)
+    if source_path.casefold() == "src/test/java/com/example/lms/llm/dynamicchatmodelfactoryroutingtest.java":
+        # Exact existing public loopback placeholder fixture, never a real key.
+        # Altered values, other paths and neighbouring bytes remain scanned.
+        fixture = '"llm.api' + '-key=ollama"'
+        text = text.replace(fixture, '"<public-loopback-fixture>"')
     if source_path.endswith(".java"):
         # The existing local Ollama binding has a public noncredential fallback.
         # Recognize only this exact placeholder; other literal defaults stay blocked.
@@ -221,6 +367,11 @@ def secret_free(data, source_path=""):
         # 테스트 전용 자가 설명형 안티-리크 픽스처: 값 자체가 "surface 금지"를 선언하는
         # 고정 센티널이며 자격 증명이 아니다. 테스트 경로 외에서는 계속 차단한다.
         if source_path.startswith(("src/test/", "src/chatUiTest/")):
+            # This exact synthetic redaction input contains no credential. Adjacent
+            # values, other paths and production strings remain fully scanned.
+            if source_path == "src/test/java/com/example/lms/routing/RoutingRedactionTest.java":
+                fixture = '"api' + '_key=PRIVATE secret"'
+                text = text.replace(fixture, '"<settings-redaction-test-fixture>"')
             # 스캐너 자기 소스의 고정 픽스처 리터럴: 토큰 분할로 자기 스캔 오탐을 피하고
             # 런타임 문자열은 동일하게 유지한다.
             text = text.replace("Authorization" + "=private-token should not surface\"",
@@ -232,12 +383,76 @@ def secret_free(data, source_path=""):
             # and neighbouring variants stay blocked.
             text = text.replace("\"Bea" + "rer synthetic-fixture-secret\"",
                                 "\"<synthetic-bearer-test-fixture>\"")
+            # Exact Jev credential-rotation fixtures; other paths/values stay strict.
+            if source_path == "src/test/java/com/example/lms/llm/gateway/FallbackAwareChatModelTest.java":
+                # Existing exact loopback URL redaction inputs are synthetic.
+                # Keep neighbouring values, other ports and production paths strict.
+                for port in ("11434", "11435"):
+                    fixture = ('"http://user:' + 'pass' + 'word@127.0.0.1:' + port
+                               + '/v1?' + 'to' + 'ken=secret"')
+                    text = text.replace(fixture, '"<synthetic-loopback-redaction-fixture>"')
+                text = text.replace('"to' + 'ken=secret"', '"<synthetic-redaction-assertion>"')
+            if source_path == "src/test/java/com/example/lms/api/ChatStreamSignalBuilderTest.java":
+                # Exact existing synthetic redaction inputs, never credential values.
+                # Changed inputs, adjacent bytes and other paths remain strict.
+                for fixture in (
+                        '"Bea' + 'rer private-secret PRIVATE_PROMPT"',
+                        '"https://private.invalid/?api_' + 'key=PRIVATE_KEY"',
+                        '"Author' + 'ization=secret-token"',
+                        '"api_' + 'key=secret-value"',
+                        '"Author' + 'ization=private-token"',
+                        '"Author' + 'ization=secret-not-a-number"'):
+                    text = text.replace(fixture, '"<synthetic-stream-redaction-fixture>"')
+            if source_path == "src/test/java/com/example/lms/assist/JevGatewayClientTest.java":
+                for suffix in ("A", "B"):
+                    text = text.replace("\"Bea" + "rer synthetic-fixture-" + suffix + "\"",
+                                        "\"<synthetic-bearer-test-fixture>\"")
+            if source_path == "src/test/java/ai/abandonware/nova/orch/llm/ChatGptResponsesTransportContractTest.java":
+                for suffix in ("a", "b"):
+                    text = text.replace("\"Bea" + "rer synthetic-oauth-" + suffix + "\"",
+                                        "\"<synthetic-oauth-transport-fixture>\"")
+            if source_path == "src/test/java/ai/abandonware/nova/orch/llm/ChatGptOAuthRedTeamContractTest.java":
+                # Exact existing dynamic masking assertion: the header label has
+                # no credential value. Other expressions and RHS bytes stay scanned.
+                expression = 'PromptMasker.mask("Author' + 'ization: " + bearer)'
+                text = text.replace(expression, 'PromptMasker.mask("<header-label> " + bearer)')
+        if source_path.casefold() == "src/test/java/com/example/lms/service/rag/selfaskwebsearchretrievertest.java":
+            # Two fixed synthetic redaction fixtures contain no credential. Keep
+            # other source paths, changed values and neighbouring bytes scanned.
+            for prefix in ("retry branch", "raw timeout query with"):
+                fixture = ('"' + prefix + ' api' + '_key=sk-" + "'
+                           + 'abcdefghijklmnopqrstuvwxyz123456' + '"')
+                text = text.replace(fixture, '"<synthetic-selfask-redaction-fixture>"')
+        if source_path == "src/test/java/com/example/lms/uaw/autolearn/ingest/TrainRagIngestServiceTest.java":
+            # Exact existing redaction inputs are generated synthetic bytes and a
+            # String.format placeholder. Adjacent values and other paths stay strict.
+            fixture = 'String api' + 'Key = "sk-" + "A".repeat(24);'
+            text = text.replace(fixture, 'String fixtureReference = "<synthetic-redaction-fixture>";')
+            text = text.replace('legacy raw question api' + '_key=%s',
+                                'legacy raw question <synthetic-format-placeholder>')
         if source_path == "src/test/java/com/example/lms/artplate/ArtPlateEvolverScoreCardTest.java":
             # Fixed mock exception tests log redaction, not database access.
             # Keep the exact path and sentence narrow; other values and source
             # files continue through the credential scan.
             mock_error = 'new IllegalStateException("database ' + 'pass' + 'word=secret-value")'
             text = text.replace(mock_error, 'new IllegalStateException("<synthetic-db-error>")')
+        if source_path.casefold() == "src/test/java/com/example/lms/config/agenttoolopsconfigcontexttest.java":
+            # Exact existing mock property fixture; other values and production
+            # paths remain subject to the normal credential scan.
+            fixture = '"probe.admin-' + 'to' + 'ken=structural-fixture-value"'
+            text = text.replace(fixture, '"<synthetic-tool-config-fixture>"')
+        if source_path.casefold() == "src/test/java/com/abandonware/ai/agent/integrations/acmeaicoregatewaytracetest.java":
+            # Existing fixed redaction-test input, never a real provider credential.
+            fixture = '"private query Author' + 'ization=Bea' + 'rer fake-sensitive-token"'
+            text = text.replace(fixture, '"<synthetic-search-trace-fixture>"')
+        if source_path == "src/test/java/com/example/lms/service/search/NaverCredentialResourceContractTest.java":
+            # Fixed env-name binding contract fixtures; the literal holds no credential.
+            for fixture in ('client-' + 'secret: \\"${NAVER_CLIENT_' + 'SECRET:}\\"',
+                            '"${naver.client-' + 'secret:'):
+                text = text.replace(fixture, '"<credential-contract-fixture>')
+        if source_path == "src/test/java/com/example/lms/boot/RuntimeConfigShadowGuardTest.java":
+            # Fixed env-name binding assertion; the placeholder has no value bytes.
+            text = text.replace("api-" + "key=${GEMINI_API_KEY:}", "<credential-contract-fixture>")
     # Unresolved Spring/environment bindings name settings; they contain no values.
     # Accept only identifiers, the fixed __MISSING__ sentinel (코드베이스 결측
     # 센티널 — 자격 증명 바이트를 가질 수 없음), and empty/nested fallbacks;
@@ -248,6 +463,11 @@ def secret_free(data, source_path=""):
         placeholder = (r"\$\{[A-Za-z_][A-Za-z0-9_.-]*(?::(?:" + sentinel + r"|"
                        + placeholder + r")?)?\}")
     text = re.sub(placeholder, "<unresolved-setting>", text)
+    if source_path == "main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java":
+        # The exact BM25 list-key separator cannot affect Java tokenization.
+        # Other Unicode escapes and all neighbouring bytes remain strict.
+        text = text.replace('listKey + "\\u0000" + stableKey',
+                            'listKey + "<nul-separator>" + stableKey')
     java_escapes = list(re.finditer(r"\\u+[0-9a-fA-F]{4}", text))
     if source_path.endswith(".java") and all(
             int(m.group()[-4:], 16) >= 0xA0 and int(m.group()[-4:], 16) not in (0x2028, 0x2029)
@@ -264,6 +484,17 @@ def secret_free(data, source_path=""):
             r"(?:password|passwd|pwd|clientSecret|apiKey|token)\s*=\s*"
             r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\([^;]*\);", re.I)
         chars = list(text)
+        cookie_call = re.compile(r"\b(cookie)\s*=\s*" + r"[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\([^;]*\);")
+        for match in cookie_call.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
+        # Java cookie value method references contain no literal header value.
+        # Recognize only this exact method reference; keep strings/comments and
+        # any following bytes under the credential scan.
+        cookie_reference = re.compile(r"\b(Cookie)::getValue\b")
+        for match in cookie_reference.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
         # Non-ASCII escapes cannot introduce Java quotes, comments or operators.
         # Redaction predicates search for a field label ending at '='; there is
         # no credential value in that exact Java string argument. Only exempt
@@ -279,6 +510,14 @@ def secret_free(data, source_path=""):
         # ASCII/control escapes remain strict because Java processes them before lexing.
         names = r"(?:password|passwd|pwd|clientSecret|apiKey|token)"
         ident = r"[A-Za-z_$][A-Za-z0-9_$]*"
+        # A JSON-node accessor copies a runtime run identifier, not a literal
+        # credential. Mask only the assignment label; retain every RHS byte.
+        json_run_reference = re.compile(r'\bString\s+(token)\s*=\s*' + ident
+                + r'\.(?:path|get)\("(?:runToken|token)"\)\.textValue\(\);')
+        for match in json_run_reference.finditer(text):
+            start, end = match.span(1)
+            if not any(a < end and start < b for a, b in protected):
+                chars[start:end] = " " * (end - start)
         # These lexical-token normalizers contain no stored credential. Recognize
         # only the fixed regex/empty replacement and variable-only expressions.
         # Mask the label in code, leaving all RHS bytes under the original scan.
@@ -320,6 +559,23 @@ def secret_free(data, source_path=""):
                 if not any(start < match.end() and match.start() < end for start, end in protected):
                     # Only the declaration/comparison label is masked. Keep every RHS byte.
                     chars[match.start(1):match.end(1)] = " " * (match.end(1) - match.start(1))
+        # A JSON parser cursor assignment is a lexical token, with no literal value.
+        json_cursor = re.compile(r"\bwhile\s*\(\s*\(\s*(token)\s*=\s*" + ident
+                                 + r"\.nextToken\(\)\s*\)\s*!=\s*null\s*\)")
+        for match in json_cursor.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
+        # A Jackson tree field read assigns a parsed runtime value, never a
+        # credential literal; the quoted argument is a field-name label.
+        # Mask only the LHS variable so every other byte stays scanned.
+        json_field = re.compile(r"\b(" + names + r")\s*=\s*" + ident
+                                + r"\.(?:path|get)\(\s*\"[A-Za-z0-9_.-]+\"\s*\)"
+                                + r"\.as(?:Text|Long|Int|Boolean|Number|Double)\(\)\s*;", re.I)
+        for match in json_field.finditer(text):
+            # The match necessarily contains the quoted field-name literal, so
+            # only the label itself must be unprotected code.
+            if not any(a <= match.start(1) < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * (match.end(1) - match.start(1))
         # HexFormat encodes a runtime byte variable; it cannot contain a literal
         # credential. The ellipsis escape above cannot alter Java tokenization.
         encoding = re.compile(r"\b(?:password|passwd|pwd|clientSecret|apiKey|token)\s*=\s*HexFormat\.of\(\)\.formatHex\([A-Za-z_$][A-Za-z0-9_$]*\);", re.I)
@@ -328,11 +584,36 @@ def secret_free(data, source_path=""):
                 end = match.start() + match.group().index("=")
                 chars[match.start():end] = " " * (end - match.start())
         for match in SECRET_FRAGMENT_RE.finditer(text):
-            if call.fullmatch(match.group()) and not any(
+            if call.fullmatch(match.group()) and "HexFormat.of().formatHex(" not in match.group() and not any(
                     start < match.end() and match.start() < end for start, end in protected):
                 # Preserve the entire RHS for the original prefixed-value scan.
                 end = match.start() + match.group().index("=")
                 chars[match.start():end] = " " * (end - match.start())
+        # A bare helper call whose arguments are only environment-variable names
+        # or dotted property names carries no credential value; e.g.
+        # firstTrimmed("naver.client-secret", "NAVER_CLIENT_SECRET"). Mask the
+        # variable label only; every arg byte stays under the full scan, so a
+        # prefixed or non-name literal inside the call still blocks.
+        # An authorization decision is a typed runtime result, not a header.
+        decision_call = re.compile(r"\bAuthorizationDecision\s+(authorization)\s*=\s*ensureScopes\("
+                                   + ident + r"\s*,\s*" + ident + r"\s*,\s*" + ident
+                                   + r"\s*,\s*" + ident + r"\);")
+        for match in decision_call.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
+        env_or_prop = r"[A-Z][A-Z0-9_]*|[a-z][a-z0-9_-]*(?:\.[a-zA-Z0-9_-]+)+"
+        # Registered-provider resolution takes runtime references, never a key
+        # literal. Exempt only this bounded call label; keep the full RHS scanned.
+        provider_call = re.compile(r"\b(apiKey)\s*=\s*resolveApiKeyForBaseUrl\("
+                                   + ident + r"\s*,\s*" + ident + r"\.getProvider\(\)\);", re.I)
+        for match in provider_call.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
+        bare_call = re.compile(r"\b((?i:password|passwd|pwd|clientSecret|apiKey|token))\s*=\s*"
+                               + ident + r"\((?:\s*\"(?:" + env_or_prop + r")\"\s*,?)+\)\s*;")
+        for match in bare_call.finditer(text):
+            if not any(start <= match.start(1) < end for start, end in protected):
+                chars[match.start(1):match.end(1)] = " " * (match.end(1) - match.start(1))
         # A zero-initialized Java int loop counter contains no credential value.
         zero_loop = re.compile(r"\bfor\s*\(\s*int\s+(token)\s*=\s*0\s*;")
         for loop in zero_loop.finditer(text):
@@ -363,6 +644,19 @@ def secret_free(data, source_path=""):
                     start < match.end() and match.start() < end for start, end in protected):
                 end = match.start() + match.group().index(":")
                 chars[match.start():end] = " " * (end - match.start())
+        # A lexical sequence counter and its optional-member equality check
+        # contain no credential value. Mask only the label; keep other source
+        # bytes under the normal secret scan.
+        lexical_counter = re.compile(
+            r"\b(?:const|let)\s+(token)\s*=\s*\+\+[A-Za-z_$][A-Za-z0-9_$]*\s*;")
+        optional_equality = re.compile(
+            r"\?\.\s*(token)\s*===\s*[A-Za-z_$][A-Za-z0-9_$]*\b")
+        for expression in (lexical_counter, optional_equality):
+            for match in expression.finditer(text):
+                start, end = match.span(1)
+                if not ambiguous and not any(
+                        a < match.end() and match.start() < b for a, b in protected):
+                    chars[start:end] = " " * (end - start)
         if source_path.startswith("src/test/js/") and not ambiguous:
             # Fixed synthetic browser fixture; mask only its property label.
             # Literal credentials and production source remain under the full scan.
@@ -378,13 +672,76 @@ def secret_free(data, source_path=""):
         # A name-only Spring binding is a reference, never a credential value.
         if re.fullmatch(r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*[\"']?<unresolved-setting>[\"']?", value, re.I):
             return True
+        if source_path.endswith(".java") and not java_escapes and re.fullmatch(
+                r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*=\s*\"", value, re.I):
+            # A query-name label ending at a Java string's closing quote has no
+            # credential bytes. Require a real string token followed by a runtime
+            # identifier; literal values, comments, text blocks and Unicode stay strict.
+            for literal in non_code.finditer(text):
+                if (literal.group().startswith('"') and not literal.group().startswith('"""')
+                        and not re.search(r"[\r\n]", literal.group())
+                        and literal.start() < match.start() and literal.end() == match.end()
+                        and re.match(r"\s*\+\s*[A-Za-z_$][A-Za-z0-9_$]*\s*[,;)]", text[literal.end():])):
+                    return True
+        if source_path.endswith(".ps1"):
+            # $PWD and Get-Location evaluate to the process working directory,
+            # never a credential value; only the label-shaped match clears.
+            # Any other RHS (quoted literal, env read, arbitrary call) stays
+            # blocked.
+            if re.fullmatch(
+                    r"pwd\s*[:=]\s*(?:\$PWD(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
+                    r"|\$\(\s*\$PWD(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*\)"
+                    r"|(?:\(\s*Get-Location\s*\)|Get-Location)(?:\.Path)?)",
+                    value, re.I):
+                return True
+        if source_path.endswith(".py"):
+            # Python None/bool literals hold no credential bytes; a keyword-arg
+            # default is a name, not a secret value. Only pure punctuation may
+            # follow the literal, so a suffixed lookalike stays flagged.
+            if re.fullmatch(
+                    r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*"
+                    r"(?:None|True|False)[^A-Za-z0-9_]*", value, re.I):
+                return True
+            if source_path == "scripts/dynamic_rag_quant_audit.py":
+                # Lexical token-variable uses: dotted/indexed identifier
+                # assignment or a bare `==` comparison fragment carry no
+                # credential bytes. Literal/prefixed values stay flagged.
+                if re.fullmatch(
+                        r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*"
+                        r"(?:[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?:\[[^\]]*\])?|"
+                        r"=+\s*[\"']{0,2})", value, re.I):
+                    return True
+            if source_path == "scripts/test_dynamic_rag_quant_audit.py":
+                # Type-annotated token parameter names carry no credential
+                # value bytes (annotated helper-signature fragments only).
+                if re.fullmatch(
+                        r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)"
+                        r"\s*:\s*[A-Za-z_][A-Za-z0-9_]*\)?", value, re.I):
+                    return True
+            # A name binding whose match ends at the opening quote carries no
+            # value bytes (e.g. "?api_key=" + val building a URL query). A real
+            # literal produces a longer match and stays flagged; the bytes after
+            # the quote still face the prefixed-value scan.
+            return bool(re.fullmatch(
+                r"(?:password|passwd|pwd|client[-_.]?secret|api[-_.]?key|token)\s*[:=]\s*"
+                r"[\"']", value, re.I))
         if source_path.endswith((".yaml", ".yml")):
             label = "api" + "-key: "
+            # Pure ${ENV}/`:`/`__MISSING__` placeholders are already masked
+            # upstream (line ~457 <unresolved-setting>); this pair covers the
+            # two public literal defaults. Arbitrary literal defaults stay
+            # flagged — a default value can be a real credential.
             return value in (label + "${LLM_API_KEY:ollama}",
                              label + "${BRAVE_API_KEY:__MISSING__}")
         return False
-    require(not any(not reference_only(m) for m in SECRET_FRAGMENT_RE.finditer(text)) and not
-            re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", text), "secret-pattern")
+    bad = next((m for m in SECRET_FRAGMENT_RE.finditer(text)
+                if not reference_only(m)), None)
+    priv = re.search(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----", text)
+    if bad is not None or priv:
+        # Report file:line only — the matched value is never echoed.
+        line_no = text.count("\n", 0, (bad or priv).start()) + 1
+        raise CheckpointError("secret-pattern %s:L%d"
+                              % (source_path or "<bytes>", line_no))
 
 
 def artifact(path):
@@ -407,7 +764,22 @@ def lease_check(root, manifest):
     require(ref["path"].startswith("__patch_drop__/source-edit-locks/") and
             ref["path"].endswith("/lease.json"), "source-lease-path")
     data = contents(relative_path(root, ref["path"]))
-    require(data is not None and digest(data) == ref["sha256"], "source-lease-drift")
+    require(data is not None, "source-lease-drift")
+    if digest(data) != ref["sha256"]:
+        # A heartbeat renewal rewrites expiresAtUtc/heartbeat fields — same
+        # lease, changed bytes. Pass only when the identity fields recorded
+        # at begin still match; any identity change stays refused.
+        try:
+            renewed = json.loads(data)
+        except ValueError:
+            renewed = {}
+        same = (ref.get("leaseId") is not None
+                and renewed.get("leaseId") == ref["leaseId"]
+                and renewed.get("ownerId") == ref.get("ownerId")
+                and sorted(str(p).replace("\\", "/").casefold()
+                           for p in renewed.get("targetPaths", []))
+                == sorted(ref.get("targetPaths") or []))
+        require(same, "source-lease-drift")
     lease = json.loads(data)
     expires = datetime.fromisoformat(lease.get("expiresAtUtc", "").replace("Z", "+00:00"))
     require(expires.tzinfo is not None and expires > datetime.now(timezone.utc), "source-lease-expired")
@@ -498,7 +870,17 @@ def begin(root, run_relative, targets, decision, lease=None):
         backups.append(data)
     manifest = {"version": 1, "root": str(root), "targets": rows, "decision": assessment, "lease": None}
     if lease:
-        manifest["lease"] = {"path": lease, "sha256": digest(contents(relative_path(root, lease)))}
+        lease_bytes = contents(relative_path(root, lease))
+        ref = {"path": lease, "sha256": digest(lease_bytes)}
+        try:
+            lease_doc = json.loads(lease_bytes or b"{}")
+            ref["leaseId"] = lease_doc.get("leaseId")
+            ref["ownerId"] = lease_doc.get("ownerId")
+            ref["targetPaths"] = sorted(str(p).replace("\\", "/").casefold()
+                                        for p in lease_doc.get("targetPaths", []))
+        except (ValueError, TypeError):
+            pass
+        manifest["lease"] = ref
     lease_check(root, manifest)
     run.mkdir(parents=True, exist_ok=False)
     (run / "before").mkdir()

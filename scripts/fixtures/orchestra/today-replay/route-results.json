@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "awx.orchestra-replay-routes.v1",
+  "expected": {
+    "b": "GPTPRO_THEN_CODEX",
+    "c": "GPTPRO_THEN_CODEX",
+    "d": "DEVIN",
+    "e": "DEVIN"
+  },
+  "routes": {
+    "a": {
+      "lane": "GROKBOT_AMPLIFY",
+      "reasons": [
+        "kind=idea 이고 아직 흐릿함(표지·짧은 요약·files 없음)",
+        "Grok Bot 연타로 키움"
+      ],
+      "nextAgent": "grokbot",
+      "highBar": [],
+      "roundtrips": 0,
+      "overlapWarnings": []
+    },
+    "b": {
+      "lane": "GPTPRO_THEN_CODEX",
+      "reasons": [
+        "고점 표지 3개: broad-surface, external-info, quality-ceiling",
+        "GPT Pro 지시서(웹서치+ZIP)를 거쳐 Codex로"
+      ],
+      "nextAgent": "codex",
+      "highBar": [
+        "broad-surface",
+        "external-info",
+        "quality-ceiling"
+      ],
+      "roundtrips": 1,
+      "overlapWarnings": [
+        {
+          "type": "signal-overlap",
+          "otherId": "a2247137d9b4",
+          "otherFrom": "grokbot",
+          "files": [
+            "main/java/com/example/lms/api",
+            "main/java/com/example/lms/config/chatdefaultsproperties.java",
+            "main/java/com/example/lms/dto/chatrequestdto.java",
+            "main/java/com/example/lms/service/chatpreferenceservice.java",
+            "main/resources/static/js/chat-settings-bridge.js",
+            "main/resources/static/js/settings-page.js",
+            "main/resources/templates/settings.html",
+            "src/chatuitest/java"
+          ],
+          "suggestion": "같은 줄기로 묶거나 순서 정하기"
+        }
+      ]
+    },
+    "c": {
+      "lane": "GPTPRO_THEN_CODEX",
+      "reasons": [
+        "고점 표지 2개: broad-surface, quality-ceiling",
+        "GPT Pro 지시서(웹서치+ZIP)를 거쳐 Codex로"
+      ],
+      "nextAgent": "codex",
+      "highBar": [
+        "broad-surface",
+        "quality-ceiling"
+      ],
+      "roundtrips": 2,
+      "overlapWarnings": [
+        {
+          "type": "signal-overlap",
+          "otherId": "b1210a144a0f",
+          "otherFrom": "gptpro",
+          "files": [
+            "main/java/com/example/lms/api",
+            "main/java/com/example/lms/config/chatdefaultsproperties.java",
+            "main/java/com/example/lms/dto/chatrequestdto.java",
+            "main/java/com/example/lms/service/chatpreferenceservice.java",
+            "main/resources/static/js/chat-settings-bridge.js",
+            "main/resources/static/js/settings-page.js",
+            "main/resources/templates/settings.html",
+            "src/chatuitest/java"
+          ],
+          "suggestion": "같은 줄기로 묶거나 순서 정하기"
+        }
+      ]
+    },
+    "d": {
+      "lane": "DEVIN",
+      "reasons": [
+        "도구·스크립트·규칙·검증 범위",
+        "제품 소스 수정 없음 → Devin"
+      ],
+      "nextAgent": "devin",
+      "highBar": [],
+      "roundtrips": 2,
+      "overlapWarnings": []
+    },
+    "e": {
+      "lane": "DEVIN",
+      "reasons": [
+        "도구·스크립트·규칙·검증 범위",
+        "제품 소스 수정 없음 → Devin"
+      ],
+      "nextAgent": "devin",
+      "highBar": [],
+      "roundtrips": 2,
+      "overlapWarnings": []
+    }
+  }
+}

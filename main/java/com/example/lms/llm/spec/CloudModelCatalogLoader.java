@@ -102,6 +102,11 @@ public class CloudModelCatalogLoader {
         copy(metadata, model, "sourceDocUrl");
         copy(metadata, model, "catalogCapturedAt");
         copy(metadata, model, "catalogTrust");
+        copy(metadata, model, "modelSnapshot");
+        copy(metadata, model, "adapterVersion");
+        copy(metadata, model, "nominalTier");
+        copy(metadata, model, "catalogCheckedAt");
+        copy(metadata, model, "supportedRoles");
         if (endpoint != null) {
             copy(metadata, endpoint, "type", "endpointType");
         }

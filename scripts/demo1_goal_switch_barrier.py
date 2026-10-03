@@ -7,7 +7,8 @@
   switch           소유 in_progress를 superseded|abandoned로 닫고, 소유 lease를
                    end 하며, allowedOpen 신호 + 새 ask의 router resolve를 출력
   reject-complete  "Read ... before continuing" 같은 지시문/도구 서문이 완료
-                   문장으로 오인되는 것을 차단 (exit != 0)
+                   문장으로 오인되는 것을 차단 (exit != 0). 단 구체적 검증 증거
+                   (exit 0, 테스트 통과 수치, 파일 변경)가 함께 있으면 수용.
 
 소유 판정: journal.agent == --agent 이거나, lease/claim의 ownerId가 --agent 또는
 --agent 소유 taskId 와 일치할 때만. foreign in_progress/lease는 절대 변경하지
@@ -59,6 +60,20 @@ INSTRUCTIONAL = [
     ("re-read-before", re.compile(r"\bre-?read\b", re.I)),
     ("use-skill", re.compile(r"\b(?:use|invoke|load|apply|follow)\s+\$[A-Za-z0-9][\w.-]*", re.I)),
     ("before-proceeding", re.compile(r"\bbefore\s+(?:proceeding|you\s+proceed|continuing)\b", re.I)),
+    # goal 파일 "읽기"를 Done으로 주장 — intake는 acceptance가 아니다.
+    # 등록 목표 제목/완료 문장이 읽기 행위면 항상 reject (구현 증거 문장만 통과).
+    ("goal-read-done", re.compile(
+        r"(?:goal[-\s]?objective(?:\.md)?|목표\s*(?:파일|objective))"
+        r"[^\n]{0,120}?(?:읽|read|완료|done|completed?)", re.I)),
+    ("read-goal-done", re.compile(
+        r"\b(?:read|reading)\s+(?:the\s+)?goal(?:[-\s]?objective)?(?:\.md)?\b"
+        r"|목표\s*파일\s*읽기", re.I)),
+    ("registered-goal-read-done", re.compile(
+        r"등록된\s*목표[^\n]{0,120}?(?:읽|read)[^\n]{0,120}?(?:완료|done|completed?)", re.I)),
+    ("intake-only-done", re.compile(
+        r"\b(?:intake|preflight)[-\s]?only\b[^\n]{0,80}?"
+        r"(?:done|complete|finished|완료|끝)"
+        r"|문서만\s*확인[^\n]{0,80}?(?:완료|done|끝|했습)", re.I)),
 ]
 # 순수 tool preamble: 텍스트 전체가 명령어 한 줄 (수락 문장이 아님)
 TOOL_PREAMBLE = re.compile(
@@ -66,6 +81,28 @@ TOOL_PREAMBLE = re.compile(
     r"npm\b|npx\b|node\b|gradlew(?:\.bat)?\b|\.\.?[\\/]|curl\b|git\b)[^\n]*$",
     re.I,
 )
+
+# 구체적 검증 증거 — 지시 어휘가 함께 있어도 완료 보고를 수용하는 최소셋.
+# "사람 얼굴이 감지되면 소프트하게" 열어주는 모델과 같이, 실제 테스트 통과/
+# 파일 변경 증거가 명시된 보고는 어휘 매칭만으로 reject하지 않는다.
+EVIDENCE = [
+    ("exit-zero", re.compile(
+        r"\bexit\s*(?:code)?\s*[:=]?\s*0(?!\d)\b|\bexitcode\s*[:=]?\s*0\b", re.I)),
+    ("build-successful", re.compile(r"\bBUILD\s+SUCCESSFUL\b", re.I)),
+    ("test-ratio", re.compile(
+        r"\b\d+\s*/\s*\d+\b[^\n]{0,40}?(?:pass(?:ed)?|tests?|cases?|통과)"
+        r"|(?:tests?|cases?)\s*[=:]?\s*\d+\s*/\s*\d+", re.I)),
+    ("tests-passed-count", re.compile(
+        r"\b\d+\s+tests?\s+pass(?:ed)?\b|\ball\s+tests?\s+pass(?:ed)?\b"
+        r"|failures\s*[=:\"]?\s*0\b", re.I)),
+    ("file-change", re.compile(
+        r"(?:modified|patched|edited|updated|created|changed|수정|변경|패치|생성)"
+        r"[^\n]{0,60}?(?:\.java|\.py|\.ya?ml|\.md|\.ps1|\.kts|scripts/|main/java/|src/test/)",
+        re.I)),
+    ("verified-marker", re.compile(
+        r"\bverified\b[^\n]{0,60}?(?:exit|pass|통과)|(?:통과|pass(?:ed)?)[^\n]{0,40}?verified",
+        re.I)),
+]
 
 
 def utcnow() -> str:
@@ -481,12 +518,24 @@ def cmd_reject_complete(args) -> int:
     text = str(args.text or "")
     matched = [name for name, pattern in INSTRUCTIONAL if pattern.search(text)]
     tool_only = bool(TOOL_PREAMBLE.match(text.strip()))
-    rejected = bool(matched) or tool_only
+    evidence = [name for name, pattern in EVIDENCE if pattern.search(text)]
+    # 증거 기반 완화: 명령어 한 줄(tool preamble)은 항상 reject하지만,
+    # 지시 어휘가 섞인 완료 보고는 구체적 검증 증거(exit 0, 테스트 통과 수치,
+    # 파일 변경)가 있으면 수용한다. 증거 없는 지시문은 기존대로 reject.
+    rejected = tool_only or (bool(matched) and not evidence)
+    if tool_only or (matched and not evidence):
+        reason = "instructional-not-acceptance"
+    elif matched and evidence:
+        reason = "instructional-with-evidence"
+    else:
+        reason = "not-instructional"
     out = {
         "schemaVersion": SCHEMA, "action": "reject-complete",
         "rejected": rejected,
-        "reason": "instructional-not-acceptance" if rejected else "not-instructional",
+        "reason": reason,
         "matched": matched + (["tool-preamble"] if tool_only else []),
+        "evidence": evidence,
+        "evidenceAccepted": bool(matched) and bool(evidence) and not rejected,
     }
     print(json.dumps(out, ensure_ascii=True))
     return 5 if rejected else 0
@@ -524,7 +573,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=lambda r, a: cmd_switch(r, a))
 
     p = sub.add_parser("reject-complete",
-                       help="지시문/도구 서문이면 exit!=0 (instructional-not-acceptance)")
+                       help="증거 없는 지시문/도구 서문이면 exit!=0 (instructional-not-acceptance)")
     p.add_argument("--root", default=str(DEFAULT_ROOT))
     p.add_argument("--text", required=True, help="완료로 주장하려는 문장")
     p.set_defaults(func=lambda r, a: cmd_reject_complete(a))

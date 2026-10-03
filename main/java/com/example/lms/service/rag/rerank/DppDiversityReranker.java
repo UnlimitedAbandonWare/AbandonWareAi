@@ -145,6 +145,104 @@ public class DppDiversityReranker {
                                                          Map<T, Double> relevance,
                                                          Function<T, Set<String>> shinglesOf,
                                                          Map<T, String> stableKeys) {
+        TraceStore.put("dpp.incremental.fallbackCount", 0);
+        TraceStore.put("dpp.incremental.fallbackReason", "");
+        int n = in.size();
+        double[] qualities = new double[n];
+        double[] diagonal = new double[n];
+        double[] residual = new double[n];
+        double[][] factors = new double[k][n];
+        double safeLambda = clamp01(lambda);
+        double diversityWeight = 1.0d - safeLambda * safeLambda * safeLambda;
+        for (int i = 0; i < n; i++) {
+            qualities[i] = quality(relevance.getOrDefault(in.get(i), 0.5d));
+            diagonal[i] = qualities[i] * qualities[i] + 1.0e-9d;
+            residual[i] = diagonal[i];
+        }
+        List<T> chosen = new ArrayList<>();
+        Set<T> chosenSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        double selectedDeterminant = 1.0d;
+        double conditionBound = 1.0d;
+        while (chosen.size() < k) {
+            int step = chosen.size();
+            int picked = -1;
+            double bestScore = -1.0d;
+            for (int i = 0; i < n; i++) {
+                T candidate = in.get(i);
+                if (chosenSet.contains(candidate)) continue;
+                double score = selectedDeterminant * residual[i];
+                if (!Double.isFinite(score) || score < Double.MIN_NORMAL) {
+                    return legacyFallback("PRODUCT_UNDERFLOW", in, k, lambda, relevance, shinglesOf, stableKeys);
+                }
+                double scoreTolerance = 1.0e-12d * Math.max(Math.abs(score), Math.abs(bestScore));
+                if (score > bestScore + scoreTolerance
+                        || (picked >= 0 && Math.abs(score - bestScore) <= scoreTolerance
+                        && stableKeys.get(candidate).compareTo(stableKeys.get(in.get(picked))) < 0)) {
+                    picked = i;
+                    bestScore = score;
+                }
+            }
+            if (picked < 0) break;
+            // The first diagonal is bit-identical to legacy. Later close comparisons
+            // may depend on Gaussian-elimination rounding: rerun the whole old selector.
+            if (step > 0) {
+                for (int i = 0; i < n; i++) {
+                    if (in.get(i) == in.get(picked) || chosenSet.contains(in.get(i))) continue;
+                    double score = selectedDeterminant * residual[i];
+                    double scale = Math.max(Math.abs(score), Math.abs(bestScore));
+                    double uncertainty = 256.0d * Math.ulp(1.0d) * (step + 1) * (step + 1)
+                            * conditionBound * scale;
+                    if (Math.abs(score - bestScore) <= 1.0e-12d * scale + uncertainty) {
+                        return legacyFallback("SCORE_BOUNDARY", in, k, lambda, relevance, shinglesOf, stableKeys);
+                    }
+                }
+            }
+            T pickedItem = in.get(picked);
+            chosen.add(pickedItem);
+            chosenSet.add(pickedItem);
+            if (chosen.size() == k) break;
+            double pivot = residual[picked];
+            if (!Double.isFinite(pivot) || pivot <= 1.0e-6d * diagonal[picked]) {
+                return legacyFallback("RESIDUAL_ILL_CONDITIONED", in, k, lambda, relevance, shinglesOf, stableKeys);
+            }
+            selectedDeterminant = bestScore;
+            double divisor = Math.sqrt(pivot);
+            for (int i = 0; i < n; i++) {
+                if (chosenSet.contains(in.get(i))) continue;
+                double similarity = setSimilarity(shinglesOf.apply(pickedItem), shinglesOf.apply(in.get(i)));
+                double kernelValue = qualities[picked] * qualities[i] * clamp01(similarity * diversityWeight);
+                double dot = 0.0d;
+                for (int previous = 0; previous < step; previous++) {
+                    dot += factors[previous][picked] * factors[previous][i];
+                }
+                double coefficient = (kernelValue - dot) / divisor;
+                factors[step][i] = coefficient;
+                residual[i] -= coefficient * coefficient;
+                if (!Double.isFinite(residual[i]) || residual[i] <= 1.0e-6d * diagonal[i]) {
+                    return legacyFallback("RESIDUAL_ILL_CONDITIONED", in, k, lambda, relevance, shinglesOf, stableKeys);
+                }
+                conditionBound = Math.max(conditionBound, diagonal[i] / residual[i]);
+            }
+        }
+        return chosen;
+    }
+
+    private static <T> List<T> legacyFallback(String reason, List<T> in, int k, double lambda,
+                                               Map<T, Double> relevance,
+                                               Function<T, Set<String>> shinglesOf,
+                                               Map<T, String> stableKeys) {
+        TraceStore.put("dpp.incremental.fallbackCount", 1);
+        TraceStore.put("dpp.incremental.fallbackReason", reason);
+        return legacyDeterminantalSelect(in, k, lambda, relevance, shinglesOf, stableKeys);
+    }
+
+    /** Exact preimage selector for numerical boundaries; emits no outer rerank trace. */
+    private static <T> List<T> legacyDeterminantalSelect(List<T> in,
+                                                         int k,
+                                                         double lambda,
+                                                         Map<T, Double> relevance,
+                                                         Function<T, Set<String>> shinglesOf,
+                                                         Map<T, String> stableKeys) {
         List<T> chosen = new ArrayList<>();
         Set<T> chosenSet = Collections.newSetFromMap(new IdentityHashMap<>());
         while (chosen.size() < k) {

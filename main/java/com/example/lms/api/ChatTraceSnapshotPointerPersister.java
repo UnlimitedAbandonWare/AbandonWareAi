@@ -31,28 +31,43 @@ final class ChatTraceSnapshotPointerPersister {
             TraceSnapshotStore traceSnapshotStore,
             ChatHistoryService historyService,
             Logger log) {
+        return persist(sessionId, assistantMessageId, reason, method, path, traceMeta, traceHtml,
+                traceSnapshotStore, historyService, log, true);
+    }
+
+    static Long persist(
+            Long sessionId, Long assistantMessageId, String reason, String method, String path,
+            Map<String, Object> traceMeta, String traceHtml, TraceSnapshotStore traceSnapshotStore,
+            ChatHistoryService historyService, Logger log, boolean renderHtml) {
         if (sessionId == null || assistantMessageId == null || assistantMessageId <= 0L
                 || traceSnapshotStore == null) {
             return null;
         }
         boolean missingTraceHtml = traceHtml == null || traceHtml.isBlank();
-        boolean metadataOnlyTraceMemory = isTraceMemorySnapshot(traceMeta) && missingTraceHtml;
-        boolean metadataOnlyHarmony = isAgentVisibleHarmony(traceMeta) && missingTraceHtml;
+        boolean durableProjection = !renderHtml && traceMeta != null && !traceMeta.isEmpty();
+        boolean metadataOnlyTraceMemory = renderHtml && isTraceMemorySnapshot(traceMeta) && missingTraceHtml;
+        boolean metadataOnlyHarmony = renderHtml && isAgentVisibleHarmony(traceMeta) && missingTraceHtml;
         String snapshotHtml = metadataOnlyTraceMemory
                 ? metadataOnlyTraceMemoryTraceHtml(traceMeta)
                 : (metadataOnlyHarmony ? metadataOnlyHarmonyTraceHtml(traceMeta) : traceHtml);
-        if (snapshotHtml == null || snapshotHtml.isBlank()) {
+        if (!durableProjection && (snapshotHtml == null || snapshotHtml.isBlank())) {
             return null;
         }
         try {
             Map<String, Object> snapMeta = new LinkedHashMap<>(traceMeta == null ? Map.of() : traceMeta);
             snapMeta.putIfAbsent("ui.traceHtml.kind", metadataOnlyTraceMemory ? "traceMemoryMetadataOnly"
                     : (metadataOnlyHarmony ? "chatHarmonyMetadataOnly" : "splitPanel"));
-            snapMeta.putIfAbsent("ui.traceHtml.length", snapshotHtml.length());
+            snapMeta.putIfAbsent("ui.traceHtml.length", snapshotHtml == null ? 0 : snapshotHtml.length());
+            if (durableProjection) {
+                snapMeta.put("ui.traceHtml.kind", "durableProjection");
+                snapMeta.put("ui.traceHtml.length", 0);
+            }
             if (metadataOnlyTraceMemory || metadataOnlyHarmony) {
                 snapMeta.putIfAbsent("ui.traceHtml.synthetic", true);
             }
-            String snapshotId = traceSnapshotStore.captureCustom(reason, method, path, null, null, snapMeta, snapshotHtml);
+            String snapshotId = durableProjection
+                    ? traceSnapshotStore.captureCustom(reason, method, path, null, null, snapMeta, null, false)
+                    : traceSnapshotStore.captureCustom(reason, method, path, null, null, snapMeta, snapshotHtml);
             if (!ChatTraceMetaMessageRestorer.isSafeTraceSnapshotId(snapshotId)) {
                 return null;
             }
@@ -109,8 +124,13 @@ final class ChatTraceSnapshotPointerPersister {
         appendOptionalProjectionLabel(projection, "traceMemoryReason", traceMeta,
                 "traceMemory.trigger.reason");
 
+        Map<String, String> diagnostics = ChatTraceMetaMessageRestorer.projectDiagnostics(traceMeta);
+        String version = diagnostics.isEmpty() ? DURABLE_ENVELOPE_VERSION : "v3";
+        diagnostics.forEach((key, value) -> appendProjection(projection, key, value));
         byte[] bytes = projection.toString().getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > MAX_DURABLE_PROJECTION_BYTES) {
+        if (bytes.length > (diagnostics.isEmpty() ? MAX_DURABLE_PROJECTION_BYTES
+                : ChatTraceMetaMessageRestorer.MAX_DETAIL_BYTES)) {
+            version = DURABLE_ENVELOPE_VERSION;
             String minimal = "storageMode=durable_fallback\n"
                     + (assistantMessageId != null && assistantMessageId > 0L
                     ? "assistantMessageId=" + assistantMessageId + "\n" : "")
@@ -120,7 +140,7 @@ final class ChatTraceSnapshotPointerPersister {
             bytes = minimal.getBytes(StandardCharsets.UTF_8);
         }
         String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        return TRACE_SNAPSHOT_META_PREFIX + snapshotId + "|" + DURABLE_ENVELOPE_VERSION + "|" + encoded;
+        return TRACE_SNAPSHOT_META_PREFIX + snapshotId + "|" + version + "|" + encoded;
     }
 
     private static void appendProjection(StringBuilder out, String key, Object value) {

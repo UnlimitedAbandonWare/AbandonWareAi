@@ -31,6 +31,89 @@ import static org.mockito.Mockito.*;
 class ChatApiControllerSyncLifecycleTest {
 
     @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "failure,FAIL_SOFT", "empty,OK", "no-provider,SKIPPED", "off,SKIPPED"
+    })
+    void agentSearchOutcomeSurvivesOrdinaryChatResponseAndStreamProjection(String scenario, String status) {
+        try (Fixture f = new Fixture()) {
+            var calls = new AtomicInteger();
+            var tools = new com.abandonware.ai.agent.tool.ToolRegistry();
+            tools.register(new com.abandonware.ai.agent.tool.impl.WebSearchTool((q, k, locale) -> {
+                calls.incrementAndGet();
+                if ("failure".equals(scenario)) throw new IllegalStateException("private synthetic detail");
+                com.example.lms.search.TraceStore.put("agent.acmeGateway.result.reason",
+                        "no-provider".equals(scenario) ? "no-eligible-provider" : "zero-result");
+                return List.of();
+            }));
+            var catalog = new com.abandonware.ai.agent.contract.ToolManifestCatalog(
+                    new org.springframework.mock.env.MockEnvironment()
+                            .withProperty("agent.tools.web-search.enabled", "true"), () -> tools);
+            var invoker = new com.abandonware.ai.agent.tool.AgentToolInvoker(tools, catalog,
+                    new com.abandonware.ai.agent.policy.ToolPolicyEnforcer(), null, null,
+                    new com.abandonware.ai.agent.tool.AgentToolArtifactWriter());
+            ReflectionTestUtils.setField(f.controller, "agentToolInvoker", invoker);
+            ReflectionTestUtils.setField(f.controller, "agentWebSearchEnabled", true);
+            var rollout = new com.example.lms.orchestration.control.RagControlRolloutState(
+                    new com.example.lms.orchestration.control.RagControlProperties(20, 0.01d, 20));
+            ReflectionTestUtils.setField(f.controller, "ragControlPresentationBoundary",
+                    new com.example.lms.orchestration.control.RagControlPresentationBoundary(
+                            new com.example.lms.orchestration.control.RagControlCoordinator(
+                                    new com.example.lms.orchestration.control.RagGuardProbeComposer(), rollout),
+                            new com.example.lms.orchestration.control.RagControlRuntimeAdapter(),
+                            new com.example.lms.orchestration.control.RagControlProjectionRenderer(), null));
+            org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                    new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                            "synthetic-operator", null, List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_ADMIN"))));
+            var captured = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+            when(f.chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+                var supplier = (com.example.lms.service.ChatWorkflow.WebEvidenceSupplier) invocation.getArgument(1);
+                assertTrue(supplier.evidence("synthetic search").isEmpty());
+                com.example.lms.orchestration.control.RagControlRuntimeAdapter.capturePresentationInput(
+                        com.example.lms.orchestration.control.RagControlRuntimeAdapter.RuntimeInput.evidenceNeeded(true));
+                captured.set(com.example.lms.search.TraceStore.getAll());
+                return ChatResult.of("generated answer", "mock-model", false);
+            });
+            boolean enabled = !"off".equals(scenario);
+            var request = ChatRequestDto.builder().message("synthetic search question").sessionId(42L)
+                    .searchMode(enabled ? com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
+                            : com.example.lms.gptsearch.dto.SearchMode.OFF)
+                    .useRag(enabled).useWebSearch(enabled).build();
+            var response = f.controller.chatSync(request, null, new MockHttpServletRequest());
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertEquals("generated answer", response.getBody().getContent());
+            assertEquals(enabled ? 1 : 0, calls.get());
+            assertEquals(status, captured.get().get("agent.webSearch.prompt.status"));
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var syncJson = mapper.valueToTree(response.getBody());
+            var outcome = syncJson.path("pipelineSnapshot").path("agentWebSearch");
+            assertEquals(status, outcome.path("status").asText());
+            assertEquals(0, outcome.path("returnedCount").asInt(-1));
+            assertEquals(java.util.Objects.toString(captured.get().get("agent.webSearch.prompt.reasonCode"), ""),
+                    outcome.path("reasonCode").asText(""));
+            var pipeline = ChatStreamSignalBuilder.buildPipelineSnapshot(captured.get(), null, null, null);
+            var streamJson = mapper.valueToTree(com.example.lms.dto.ChatStreamEvent.trace(null, null,
+                    ChatStreamSignalBuilder.withTraceTurnId(pipeline, null, 421L)));
+            assertEquals(outcome, streamJson.path("pipelineSnapshot").path("agentWebSearch"));
+            assertFalse(syncJson.toString().contains("private synthetic detail"));
+            assertFalse(streamJson.toString().contains("private synthetic detail"));
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.clearContext();
+            com.example.lms.search.TraceStore.clear();
+            com.example.lms.trace.TraceContext.cleanupCurrentThread();
+        }
+    }
+
+    @org.junit.jupiter.api.Test
+    void absentSearchObservationDoesNotReusePreviousOutcome() {
+        var failed = ChatStreamSignalBuilder.buildPipelineSnapshot(Map.of(
+                "agent.webSearch.prompt.status", "FAIL_SOFT",
+                "agent.webSearch.prompt.reasonCode", "web_search_failed",
+                "agent.webSearch.prompt.returnedCount", 0), null, null, null);
+        assertNotNull(failed, "an observed search outcome must survive an otherwise empty snapshot");
+        assertNull(ChatStreamSignalBuilder.buildPipelineSnapshot(Map.of(), null, null, null));
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = {"sync", "chat"})
     void incompleteResponseReachesEnvelopeWithoutCompletedPersistence(String route) throws Exception {
         try (Fixture f = new Fixture()) {
@@ -242,6 +325,19 @@ class ChatApiControllerSyncLifecycleTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"sync", "chat"})
+    void requestSettingsUseMetadataLookupWithoutTranscriptLoad(String route) {
+        try (Fixture f = new Fixture()) {
+            var response = f.request(route);
+            assertEquals(HttpStatus.OK, response.getStatusCode());
+            assertEquals("generated answer", response.getBody().getContent());
+            verify(f.history, atLeastOnce()).getSessionForRequest(42L);
+            verify(f.history, never()).getSessionWithMessages(42L);
+        }
+    }
+
+
     private static final class Fixture implements AutoCloseable {
         final ChatHistoryService history = mock(ChatHistoryService.class);
         final ChatService chat = mock(ChatService.class);
@@ -265,6 +361,7 @@ class ChatApiControllerSyncLifecycleTest {
             ChatSession session = new ChatSession("lifecycle", "owner-a", "ANON");
             session.setId(42L);
             when(history.getSessionWithMessages(42L)).thenAnswer(invocation -> deleted.get() ? null : session);
+            when(history.getSessionForRequest(42L)).thenAnswer(invocation -> deleted.get() ? null : session);
             when(history.getSessionWithMessages(42L, 1)).thenAnswer(invocation -> deleted.get() ? null : session);
             doAnswer(invocation -> {
                 events.add("delete-history");

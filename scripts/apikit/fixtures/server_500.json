@@ -1,0 +1,6 @@
+{
+  "provider": "jev",
+  "expect": "SERVER_5XX",
+  "http_status": 502,
+  "body": {"error": {"type": "upstream_error", "message": "Bad gateway"}}
+}

@@ -244,8 +244,9 @@ public class SelfAskPlanner {
                         ? localCounterFallback(query, timeoutMs, reason, effectiveRewriteTemperature, effectiveLaneWeights)
                         : fallbackText(query, lane);
                 if (seen.add(canon(sub))) {
-                    String model = lane == SubQuestionType.RC ? localFallbackModelLabel() : modelId;
-                    String fallbackProvider = lane == SubQuestionType.RC ? "local-fallback" : provider;
+                    boolean boundCounter=lane==SubQuestionType.RC && com.example.lms.routing.RoutingInvocation.current(roleForLane(lane)).isPresent();
+                    String model = boundCounter ? "deterministic" : lane == SubQuestionType.RC ? localFallbackModelLabel() : modelId;
+                    String fallbackProvider = boundCounter ? "local" : lane == SubQuestionType.RC ? "local-fallback" : provider;
                     out.add(new SubQuestion(lane, sub,
                             laneMeta(lane, model, "true", fallbackProvider, reason, laneWeight, laneTemperature, laneTimeoutMs)));
                 }
@@ -318,7 +319,8 @@ public class SelfAskPlanner {
 
     private String generateLane(String query, SubQuestionType lane, String modelId, long timeoutMs,
             double rewriteTemperature, double laneWeight) {
-        ChatModel model = modelFor(modelId, timeoutMs, rewriteTemperature);
+        var invocation=com.example.lms.routing.RoutingInvocation.current(roleForLane(lane)).orElse(null);
+        ChatModel model = modelFor(modelId, timeoutMs, rewriteTemperature,invocation);
         String sub = model.chat(List.of(
                 SystemMessage.from(laneSystemPrompt(lane)),
                 UserMessage.from(query))).aiMessage().text();
@@ -335,6 +337,11 @@ public class SelfAskPlanner {
     }
 
     private ChatModel modelFor(String modelId, long timeoutMs, double rewriteTemperature) {
+        return modelFor(modelId,timeoutMs,rewriteTemperature,null);
+    }
+
+    private ChatModel modelFor(String modelId,long timeoutMs,double rewriteTemperature,
+            com.example.lms.routing.RoutingInvocation invocation) {
         DynamicChatModelFactory factory = modelFactoryProvider == null ? null : modelFactoryProvider.getIfAvailable();
         if (factory != null && modelId != null && !modelId.isBlank()) {
             int timeoutSeconds = timeoutMs > 0
@@ -342,13 +349,17 @@ public class SelfAskPlanner {
                     : 8;
             double sanitized = ModelCapabilities.sanitizeTemperature(modelId,
                     sanitizeRewriteTemperature(rewriteTemperature));
-            return factory.lcWithTimeout(modelId, sanitized, 0.8d, 96, timeoutSeconds);
+            return invocation==null?factory.lcWithTimeout(modelId, sanitized, 0.8d, 96, timeoutSeconds)
+                    :factory.lcWithTimeout(modelId,sanitized,0.8d,null,null,96,timeoutSeconds,0,null,invocation);
         }
+        if(invocation!=null)throw new IllegalStateException("routing_factory_unavailable");
         return fallbackPlanningModel();
     }
 
     private String localCounterFallback(String query, long timeoutMs, String disabledReason,
             double rewriteTemperature, Map<String, Double> laneWeights) {
+        if(com.example.lms.routing.RoutingInvocation.current(com.example.lms.routing.RoutingProfile.Role.SELFASK_RC).isPresent())
+            return fallbackText(query,SubQuestionType.RC);
         LinkedHashSet<String> parts = new LinkedHashSet<>();
         double laneWeight = laneWeight(SubQuestionType.RC, laneWeights);
         double laneTemperature = laneTemperature(rewriteTemperature, laneWeight);
@@ -455,6 +466,8 @@ public class SelfAskPlanner {
     }
 
     private String modelIdForLane(SubQuestionType lane) {
+        var binding=com.example.lms.routing.RoutingInvocation.current(roleForLane(lane));
+        if(binding.isPresent())return binding.get().binding().primary().target();
         SelfAskProperties.Lane cfg = laneConfig(lane);
         if (cfg != null && cfg.getModel() != null && !cfg.getModel().isBlank()) {
             return cfg.getModel().trim();
@@ -463,6 +476,8 @@ public class SelfAskPlanner {
     }
 
     private String providerForLane(SubQuestionType lane, String modelId) {
+        var binding=com.example.lms.routing.RoutingInvocation.current(roleForLane(lane));
+        if(binding.isPresent())return binding.get().binding().primary().provider();
         SelfAskProperties.Lane cfg = laneConfig(lane);
         if (cfg != null && cfg.getProvider() != null && !cfg.getProvider().isBlank()) {
             return cfg.getProvider().trim();
@@ -653,6 +668,12 @@ public class SelfAskPlanner {
             log.debug("[SelfAskPlanner] fail-soft stage={}", "traceLane");
             // Trace is best-effort and must never affect retrieval.
         }
+    }
+
+    private static com.example.lms.routing.RoutingProfile.Role roleForLane(SubQuestionType lane){
+        return switch(lane){case BQ->com.example.lms.routing.RoutingProfile.Role.SELFASK_BQ;
+            case ER->com.example.lms.routing.RoutingProfile.Role.SELFASK_ER;
+            case RC->com.example.lms.routing.RoutingProfile.Role.SELFASK_RC;};
     }
 
     private static void traceRegenerate(SubQuestionType lane,

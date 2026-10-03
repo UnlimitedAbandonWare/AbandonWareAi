@@ -1,0 +1,19 @@
+{
+ "schemaVersion": "awx.artifact-grade-scan.v1",
+ "generatedAt": "2026-09-28T13:10:58Z",
+ "total": 424,
+ "counts": {
+  "A": 353,
+  "S": 47,
+  "X": 15,
+  "B": 5,
+  "C": 4
+ },
+ "corpusFiles": {
+  "1": 10197,
+  "3": 8452,
+  "4": 3874
+ },
+ "scriptsCorpus": 424,
+ "csv": "docs\\diagnostics\\artifact-refine-0928\\02_ARTIFACT_GRADES.csv"
+}

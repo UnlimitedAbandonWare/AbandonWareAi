@@ -66,7 +66,7 @@ Read `references/direct-patch-contract.md` before the first direct patch.
 
 1. Prove the active sourceSet or call boundary with current repo files.
 2. Start at `Y:\` and run the historical
-   `scripts/macsrc_smb_patch_guard.ps1 -Mode Prepare` with a relative declared
+   `.\.agents\skills\demo1-macsrc-smb-direct-patch\scripts\macsrc_smb_patch_guard.ps1 -Mode Prepare` with a relative declared
    target, repo-relative boundary evidence, and the narrowest practical
    `-WatchRoots`. Use the complete example in
    [the direct patch contract](references/direct-patch-contract.md#commands).

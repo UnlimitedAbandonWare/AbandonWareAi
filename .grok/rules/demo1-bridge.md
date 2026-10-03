@@ -7,7 +7,7 @@ pointer bridge, not a rule duplicate. Verify loading with `grok inspect`
 
 ## Project root
 
-- Project Root is exactly `C:\AbandonWare\demo-1\demo-1\src`. All relative
+- Project Root is exactly `<repo>`. All relative
   paths (scripts, main\java, docs) resolve from here.
 
 ## Task entry
@@ -27,16 +27,18 @@ pointer bridge, not a rule duplicate. Verify loading with `grok inspect`
   foreign active lease.
 - Git is read-only evidence at most — never a restore source.
 - Sole valid main remote is `AbandonWareAi`
-  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`); `AbandonWare3` is
-  fully discarded — never fetch/push to it, never add a second remote, and
-  report a leftover local `origin` pointing at it (AGENTS.md
-  `DEMO1-GIT-REMOTE-SOLE`).
+  (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) — the only valid
+  remote is `origin` at that URL; never fetch/push to another remote, never
+  add a second remote, and report a leftover `origin` pointing anywhere else
+  (AGENTS.md `DEMO1-GIT-REMOTE-SOLE`).
 
 ## Secrets and spend
 
 - Never print, log, commit, or send secret values — env var NAMES only.
-- Prefer free/local models and tools before paid providers; no paid fanout
-  unless `AWX_AGENT_ALLOW_PAID_MODELS=1`.
+- Agent spend/model order: `$demo1-agent-api-spend-guard` SSOT
+  (`configs/agent-api-spend-guard.yaml`) — codex_credits → external_paid_api →
+  free_tier → local_ollama; paid ON by default, `AWX_AGENT_ALLOW_PAID_MODELS=0`
+  is the kill switch. Product routing keeps `configs/api-routing.yaml` order.
 
 ## Skills
 

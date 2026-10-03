@@ -17,18 +17,36 @@ import java.util.*;
 public class ChatModelCatalogService {
     public record Choice(String id, String provider, String endpointId, String modelId,
             String status, boolean selectable, String reason, String release,
-            String evidence) {}
+            String evidence, boolean defaultChoice, List<String> capabilities) {
+        public Choice { capabilities = capabilities == null ? List.of() : List.copyOf(capabilities); }
+        public Choice(String id, String provider, String endpointId, String modelId,
+                String status, boolean selectable, String reason, String release, String evidence) {
+            this(id, provider, endpointId, modelId, status, selectable, reason, release, evidence, false, List.of());
+        }
+    }
+    @Value("${llmrouter.api-first.enabled:false}")
+    private boolean apiFirstEnabled;
+    @Value("${llmrouter.api-first.route-order:}")
+    private String apiFirstRouteOrder = "";
     private final CloudModelRouteClassifier cloud;
     private final ModelRuntimeHealthTracker health;
     private final RestTemplate http;
     private final String base;
     private final boolean allowRemote;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.llm.ChatGptOAuthRegistration chatGptOAuth;
     @Value("${app.ai.remote-model-selection-routes:}")
     private String remoteSelectionRoutes = "";
+    private final Object stateLock = new Object();
+    private volatile Set<String> runtimeApprovedRoutes = Set.of();
+    private long generation;
+    private boolean serverRefreshing;
+    private boolean publicRefreshing;
     private volatile List<Choice> cached = List.of();
     private volatile long expiresAt;
-    private List<Choice> publicCatalog = List.of();
-    private long publicExpiresAt;
+    private volatile List<Choice> publicCatalog = List.of();
+    private volatile long publicExpiresAt;
+    private volatile boolean publicCatalogStale;
     // Local inventory observation state: a failed or malformed /api/tags response
     // is not evidence that installed models were deleted.
     private volatile boolean inventoryObserved;
@@ -49,14 +67,41 @@ public class ChatModelCatalogService {
         this.allowRemote = allowRemote;
     }
 
-    public synchronized List<Choice> choices() {
+    public List<Choice> choices() {
+        return choices(com.example.lms.llm.RequestedModelSelection.ownerHash());
+    }
+    public List<Choice> choices(String ownerHash) {
+        List<Choice> serverRows = serverChoices();
+        List<String> oauthModels = chatGptOAuth == null ? List.of() : chatGptOAuth.models(ownerHash);
+        if (oauthModels.isEmpty()) return serverRows;
+        List<Choice> rows = new ArrayList<>(serverRows);
+        if (chatGptOAuth != null) {
+            for (String slug : oauthModels) {
+                rows.add(new Choice(com.example.lms.llm.ChatGptOAuthRegistration.route(slug),
+                        com.example.lms.llm.ChatGptOAuthRegistration.PROVIDER, "chatgpt-oauth", slug,
+                        "configured", true, "", "account_catalog", "chatgpt_account_catalog"));
+            }
+        }
+        return List.copyOf(rows);
+    }
+
+    /** Only the server/API-key inventory is cached; account file changes are observed per call. */
+    private List<Choice> serverChoices() {
         if (System.currentTimeMillis() < expiresAt) return cached;
+        final long flight;
+        synchronized (stateLock) {
+            if (System.currentTimeMillis() < expiresAt || serverRefreshing) return cached;
+            serverRefreshing = true;
+            flight = generation;
+        }
+        try {
         List<Choice> rows = new ArrayList<>();
+        boolean observed = false;
+        String failure = null;
         // No browser-supplied URL and no credentials. Remote/local gateways must use
         // their existing authenticated probe; never send an unguarded discovery call.
         if (loopback(base)) {
             long deadline = System.nanoTime() + Duration.ofSeconds(3).toNanos();
-            boolean observed = false;
             try {
                 JsonNode tags = http.getForObject(base + "/api/tags", JsonNode.class);
                 if (tags != null && tags.path("models").isArray()) {
@@ -77,31 +122,26 @@ public class ChatModelCatalogService {
                 } else {
                     // HTTP 200 without an inventory body is an observation failure,
                     // not proof of an empty installation.
-                    inventoryFailure = "malformed";
+                    failure = "malformed";
                 }
             } catch (org.springframework.web.client.HttpClientErrorException.Unauthorized
                     | org.springframework.web.client.HttpClientErrorException.Forbidden denied) {
-                inventoryFailure = "unauthorized";
+                failure = "unauthorized";
             } catch (RuntimeException unavailable) {
-                inventoryFailure = "unavailable";
+                failure = "unavailable";
             }
             if (observed) {
                 // A new authoritative generation grants one new bounded detail probe
                 // per model; the stale-failure path must not re-open it.
-                inventoryObserved = true;
-                inventoryFailure = null;
-                detailProbeConsumed.clear();
+                failure = null;
             } else {
                 // A failed probe is not evidence that installed models were deleted.
                 // Retain observations but never authorize generation from stale inventory.
-                inventoryObserved = false;
                 for (Choice previous : cached) {
                     if ("Ollama".equals(previous.provider()))
                         rows.add(local(previous.id(), false, "catalog_unavailable", "previously_installed"));
                 }
             }
-        } else {
-            inventoryObserved = false;
         }
         if (cloud != null) {
             for (var row : cloud.classifyDefaultCatalog("chat")) {
@@ -113,9 +153,12 @@ public class ChatModelCatalogService {
                         && "attachment_unverified".equals(row.metadata().get("catalogTrust")))) continue;
                 String id = route == null || route.isBlank()
                         ? "catalog:" + row.provider() + ":" + row.modelId() : "llmrouter." + route;
-                boolean permitted = allowRemote || (route != null && !route.isBlank()
-                        && Arrays.stream(remoteSelectionRoutes.split(","))
-                                .map(String::trim).anyMatch(route::equals));
+                boolean permitted = allowRemote || (apiFirstEnabled
+                        && !com.example.lms.llm.ChatGptOAuthRegistration.PROVIDER.equals(row.provider()))
+                        || (route != null && !route.isBlank()
+                        && (Arrays.stream(remoteSelectionRoutes.split(","))
+                                .map(String::trim).anyMatch(route::equals)
+                                || runtimeApprovedRoutes.contains(route)));
                 String reason = !permitted ? "remote_selection_disabled"
                         : row.disabledReason() == null ? "route_not_configured" : row.disabledReason();
                 // Availability is separate from generation success; no paid route is enabled here.
@@ -123,50 +166,135 @@ public class ChatModelCatalogService {
                 rows.add(new Choice(id, row.provider(), route == null ? "unconfigured" : route,
                         row.modelId(), ready ? "configured" : "unavailable", ready,
                         ready ? "" : reason, release(row.modelId(), row.metadata()),
-                        "server_catalog"));
+                        "server_catalog", false, row.capabilities()));
             }
         }
-        cached = rows.stream().distinct().sorted(Comparator.comparing(Choice::provider)
+        List<Choice> snapshot = rows.stream().distinct().sorted(Comparator.comparing(Choice::provider)
                 .thenComparing(Choice::modelId)).toList();
-        expiresAt = System.currentTimeMillis() + 30_000;
+        if (apiFirstEnabled) {
+            var order = Arrays.stream(apiFirstRouteOrder.split(",")).map(String::trim).toList();
+            String defaultId = snapshot.stream().filter(c -> c.selectable() && c.id().startsWith("llmrouter.")
+                    && !Set.of("Ollama", "local", "ollama", "local_llm",
+                            com.example.lms.llm.ChatGptOAuthRegistration.PROVIDER).contains(c.provider()))
+                    .min(Comparator.comparingInt(c -> {
+                        int rank = order.indexOf(c.endpointId()); return rank < 0 ? 1000 : rank;
+                    })).map(Choice::id).orElse("");
+            snapshot = snapshot.stream().map(c -> new Choice(c.id(), c.provider(), c.endpointId(), c.modelId(),
+                    c.status(), c.selectable(), c.reason(), c.release(), c.evidence(),
+                    c.id().equals(defaultId), c.capabilities())).toList();
+        }
+        synchronized (stateLock) {
+            if (flight == generation) {
+                cached = snapshot;
+                inventoryObserved = observed;
+                inventoryFailure = failure;
+                if (observed) detailProbeConsumed.clear();
+                expiresAt = System.currentTimeMillis() + 30_000;
+            }
+        }
         return cached;
+        } finally {
+            synchronized (stateLock) { serverRefreshing = false; }
+        }
     }
 
-    public synchronized Optional<Choice> resolve(String id) {
+    /** Settings policy reads reuse this snapshot; they never initiate catalog discovery. */
+    public List<Choice> observedServerChoices() { return List.copyOf(cached); }
+
+    public Optional<Choice> resolve(String id) {
+        return resolve(id, com.example.lms.llm.RequestedModelSelection.ownerHash());
+    }
+    public Optional<Choice> resolve(String id, String ownerHash) {
         if (id == null) return Optional.empty();
-        Optional<Choice> selected = choices().stream().filter(row -> row.id().equals(id)).findFirst();
+        Optional<Choice> selected = choices(ownerHash).stream().filter(row -> row.id().equals(id)).findFirst();
         if (selected.isPresent() && "Ollama".equals(selected.get().provider())
-                && "capability_not_observed".equals(selected.get().reason())
-                && detailProbeConsumed.add(id)) {
+                && "capability_not_observed".equals(selected.get().reason())) {
+            final long flight;
+            final List<Choice> before;
+            synchronized (stateLock) {
+                if (!detailProbeConsumed.add(id)) return selected;
+                flight = generation;
+                before = cached;
+            }
             // At most one extra detail probe per model per observed inventory
             // generation. The slot is consumed before I/O, so concurrent and
             // repeated resolve() calls share this single attempt's outcome
             // instead of re-entering a probe loop on the same generation.
             Choice observed = inspectLocalModel(id);
-            List<Choice> updated = new ArrayList<>(cached);
+            List<Choice> updated = new ArrayList<>(before);
             updated.removeIf(row -> row.id().equals(id));
             if (observed != null) updated.add(observed);
-            cached = List.copyOf(updated);
-            return Optional.ofNullable(observed);
+            synchronized (stateLock) {
+                if (flight == generation && cached == before) {
+                    cached = List.copyOf(updated);
+                    return Optional.ofNullable(observed);
+                }
+            }
+            return cached.stream().filter(row -> row.id().equals(id)).findFirst();
         }
         return selected;
     }
 
     /** User-triggered metadata recheck: a bounded forced inventory refresh plus
      *  this generation's single detail probe. Never downloads, warms or generates. */
-    public synchronized Optional<Choice> recheck(String id) {
+    public Optional<Choice> recheck(String id) {
+        return recheck(id, com.example.lms.llm.RequestedModelSelection.ownerHash());
+    }
+    public Optional<Choice> recheck(String id, String ownerHash) {
         if (!validId(id)) return Optional.empty();
         long now = System.currentTimeMillis();
-        if (now >= recheckReadyAt) {
-            recheckReadyAt = now + RECHECK_INTERVAL_MS;
-            expiresAt = 0L;
+        synchronized (stateLock) {
+            if (now >= recheckReadyAt) {
+                recheckReadyAt = now + RECHECK_INTERVAL_MS;
+                generation++;
+                expiresAt = 0L;
+            }
         }
-        return resolve(id);
+        return resolve(id, ownerHash);
+    }
+
+    /** Post-install invalidation: the next choices() call re-observes inventory
+     *  and probe state. Never itself pulls, warms or generates. */
+    public void expireCache() {
+        synchronized (stateLock) {
+            generation++;
+            expiresAt = 0L;
+            publicExpiresAt = 0L;
+        }
+    }
+
+    /** Runtime per-route opt-in added by an approved web-install registration.
+     *  Extends the configured remoteSelectionRoutes for this process only;
+     *  never flips app.ai.allow-remote-model-selection and does not survive a
+     *  restart unless the operator persists CHAT_REMOTE_MODEL_SELECTION_ROUTES. */
+    public boolean registerApprovedRoute(String routeId) {
+        if (!validRouteKey(routeId)) return false;
+        synchronized (stateLock) {
+            if (runtimeApprovedRoutes.contains(routeId)) return false;
+            Set<String> updated = new HashSet<>(runtimeApprovedRoutes);
+            updated.add(routeId);
+            runtimeApprovedRoutes = Set.copyOf(updated);
+            generation++;
+            expiresAt = 0L;
+            return true;
+        }
+    }
+
+    /** True when the route is selectable-permitted by either the configured
+     *  allowlist or a runtime registration. Eligibility probing is unchanged. */
+    public boolean isRouteApproved(String routeId) {
+        return routeId != null && (runtimeApprovedRoutes.contains(routeId)
+                || Arrays.stream(remoteSelectionRoutes.split(","))
+                        .map(String::trim).anyMatch(routeId::equals));
+    }
+
+    static boolean validRouteKey(String id) {
+        return id != null && id.length() <= 80 && id.matches("[a-zA-Z0-9][a-zA-Z0-9._-]*");
     }
 
     /** Public failure code that separates confirmed absence from an
      *  inventory that could not be observed at all. */
-    public synchronized String failureCode(Choice choice) {
+    public String failureCode(Choice choice) {
         if (choice == null) {
             if ("unauthorized".equals(inventoryFailure)) return "provider_unauthorized";
             return inventoryObserved ? "model_unavailable" : "backend_unavailable";
@@ -205,21 +333,44 @@ public class ChatModelCatalogService {
     }
 
     /** Explicit user catalog browsing only: public metadata GET, no credentials or generation. */
-    public synchronized List<Choice> choices(boolean discover) {
+    public List<Choice> choices(boolean discover) {
+        return choices(discover, com.example.lms.llm.RequestedModelSelection.ownerHash());
+    }
+    public List<Choice> choices(boolean discover, String ownerHash) {
         var merged = new LinkedHashMap<String, Choice>();
-        for (Choice row : choices()) merged.put(row.id(), row);
+        for (Choice row : choices(ownerHash)) merged.put(row.id(), row);
         if (!discover) return List.copyOf(merged.values());
-        if (System.currentTimeMillis() >= publicExpiresAt) {
+        refreshPublicCatalog(merged.values());
+        boolean stale = publicCatalogStale;
+        for (Choice row : publicCatalog) {
+            Choice projection = stale ? new Choice(row.id(), row.provider(), row.endpointId(), row.modelId(),
+                    "stale", false, row.reason(), row.release(), "public_catalog_stale") : row;
+            merged.putIfAbsent(row.id(), projection);
+        }
+        return List.copyOf(merged.values());
+    }
+
+    private void refreshPublicCatalog(Collection<Choice> configured) {
+        if (System.currentTimeMillis() < publicExpiresAt) return;
+        final long flight;
+        synchronized (stateLock) {
+            if (System.currentTimeMillis() < publicExpiresAt || publicRefreshing) return;
+            publicRefreshing = true;
+            flight = generation;
+        }
+        try {
             var found = new ArrayList<Choice>();
+            boolean success = false;
             try {
                 JsonNode response = http.getForObject(
                         "https://openrouter.ai/api/v1/models?limit=1000&output_modalities=text", JsonNode.class);
                 if (response != null && response.path("data").isArray()) {
+                    success = true;
                     for (JsonNode model : response.path("data")) {
                         if (found.size() >= 1000) break;
                         String id = model.path("id").asText("");
                         if (!validId(id) || !contains(model.path("architecture").path("output_modalities"), "text")) continue;
-                        boolean alreadyListed = merged.values().stream().anyMatch(
+                        boolean alreadyListed = configured.stream().anyMatch(
                                 row -> "openrouter".equals(row.provider()) && id.equals(row.modelId()));
                         if (alreadyListed) continue;
                         found.add(new Choice("catalog:openrouter:" + id, "openrouter", "unconfigured",
@@ -230,16 +381,21 @@ public class ChatModelCatalogService {
             } catch (RuntimeException unavailable) {
                 // Keep existing configured/local choices; never invent model IDs on lookup failure.
             }
-            publicCatalog = List.copyOf(found);
-            publicExpiresAt = System.currentTimeMillis() + 300_000;
+            synchronized (stateLock) {
+                if (flight == generation) {
+                    if (success) publicCatalog = List.copyOf(found);
+                    publicCatalogStale = !success;
+                    publicExpiresAt = System.currentTimeMillis() + (success ? 300_000 : 30_000);
+                }
+            }
+        } finally {
+            synchronized (stateLock) { publicRefreshing = false; }
         }
-        for (Choice row : publicCatalog) merged.putIfAbsent(row.id(), row);
-        return List.copyOf(merged.values());
     }
 
     private static Choice local(String id, boolean ready, String reason, String evidence) {
         return new Choice(id, "Ollama", "local-default", id, ready ? "installed" : "unavailable",
-                ready, reason, "unknown", evidence);
+                ready, reason, "unknown", evidence, false, ready ? List.of("completion") : List.of());
     }
     static boolean loopback(String base) {
         try {

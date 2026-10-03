@@ -2,6 +2,8 @@ package com.example.lms.service.rag.pre;
 
 import com.example.lms.config.rag.RagCognitiveProperties;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -59,8 +61,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
                 continue;
             }
             // rag.cognitive.enabled=false 이면 Guardrail 단계만 스킵
-            if (guardrailDisabled(d)) {
-                traceGuardrailSkipped("enrich", d);
+            String skipReason = guardrailSkipReason(d, m);
+            if (skipReason != null) {
+                traceGuardrailSkipped("enrich", d, skipReason);
                 continue;
             }
             try {
@@ -78,7 +81,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
             } catch (Exception e) {
                 tracePreprocessorFailure("enrich", d, enriched, e);
                 if (d instanceof GuardrailQueryPreprocessor) {
-                    // Guardrail 단계에서만 fail-soft: 경고 로그만 남기고 원본 쿼리로 진행
+                    // Guardrail 단계에서만 fail-soft: 경고 로그만 남기고 원본 쿼리로 진행.
+                    // 이후 진입점(enrich/detectDomain/…)에서는 fast-path 스킵해 재지연을 막는다.
+                    TraceStore.put("query.preprocessor.guardrailStageFailed", true);
                     log.warn("[AWX][rag][preprocessor] guardrail failed failureReason={} errorType={} preprocessor={} queryHash12={} queryLength={}",
                             "guardrail-preprocessor-error",
                             SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"),
@@ -105,8 +110,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
         String first = null;
         for (QueryContextPreprocessor d : delegates) {
             if (d == this) continue;
-            if (guardrailDisabled(d)) {
-                traceGuardrailSkipped("detect_domain", d);
+            String skipReason = guardrailSkipReason(d, null);
+            if (skipReason != null) {
+                traceGuardrailSkipped("detect_domain", d, skipReason);
                 continue;
             }
             try {
@@ -115,6 +121,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
                 if (first == null) first = dom;
                 if (!"GENERAL".equalsIgnoreCase(dom)) return dom;
             } catch (Exception domainEx) {
+                if (d instanceof GuardrailQueryPreprocessor) {
+                    TraceStore.put("query.preprocessor.guardrailStageFailed", true);
+                }
                 String errorType = SafeRedactor.traceLabelOrFallback(domainEx.getClass().getSimpleName(), "unknown");
                 TraceStore.put("query.preprocessor.suppressed.stage", "detectDomain");
                 TraceStore.put("query.preprocessor.suppressed.errorType", errorType);
@@ -131,8 +140,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
         String first = null;
         for (QueryContextPreprocessor d : delegates) {
             if (d == this) continue;
-            if (guardrailDisabled(d)) {
-                traceGuardrailSkipped("infer_intent", d);
+            String skipReason = guardrailSkipReason(d, null);
+            if (skipReason != null) {
+                traceGuardrailSkipped("infer_intent", d, skipReason);
                 continue;
             }
             try {
@@ -141,6 +151,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
                 if (first == null) first = intent;
                 if (!"GENERAL".equalsIgnoreCase(intent)) return intent;
             } catch (Exception intentEx) {
+                if (d instanceof GuardrailQueryPreprocessor) {
+                    TraceStore.put("query.preprocessor.guardrailStageFailed", true);
+                }
                 String errorType = SafeRedactor.traceLabelOrFallback(intentEx.getClass().getSimpleName(), "unknown");
                 TraceStore.put("query.preprocessor.suppressed.stage", "inferIntent");
                 TraceStore.put("query.preprocessor.suppressed.errorType", errorType);
@@ -157,8 +170,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
         Map<String, LinkedHashSet<String>> merged = new LinkedHashMap<>();
         for (QueryContextPreprocessor d : delegates) {
             if (d == this) continue;
-            if (guardrailDisabled(d)) {
-                traceGuardrailSkipped("interaction_rules", d);
+            String skipReason = guardrailSkipReason(d, null);
+            if (skipReason != null) {
+                traceGuardrailSkipped("interaction_rules", d, skipReason);
                 continue;
             }
             try {
@@ -171,6 +185,9 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
                     merged.computeIfAbsent(e.getKey(), k -> new LinkedHashSet<>()).addAll(vals);
                 }
             } catch (Exception rulesEx) {
+                if (d instanceof GuardrailQueryPreprocessor) {
+                    TraceStore.put("query.preprocessor.guardrailStageFailed", true);
+                }
                 String errorType = SafeRedactor.traceLabelOrFallback(rulesEx.getClass().getSimpleName(), "unknown");
                 TraceStore.put("query.preprocessor.suppressed.stage", "interactionRules");
                 TraceStore.put("query.preprocessor.suppressed.errorType", errorType);
@@ -213,11 +230,38 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
         TraceStore.putIfAbsent("query.preprocessor.queryLength", query == null ? 0 : query.length());
     }
 
-    private boolean guardrailDisabled(QueryContextPreprocessor delegate) {
-        return !cognitiveProps.isEnabled() && delegate instanceof GuardrailQueryPreprocessor;
+    /**
+     * Guardrail 단계를 이번 호출에서 스킵해야 하는 이유. null 이면 정상 실행.
+     * - cognitive_disabled: rag.cognitive.enabled=false (기존 정적 스킵)
+     * - prior_stage_failure: 이 요청 안에서 Guardrail 단계가 이미 예외를 던짐.
+     *   저사양/고부하 로컬 레인에서 실패한 무거운 단계를 재호출하지 않는
+     *   다이나믹 fail-soft fast path.
+     * - cheap_or_bypass_mode: GuardContext의 cheapSearch/bypass 모드 — 단순·경량
+     *   쿼리 레인에서는 다단계 가드를 건너뛰고 원본 쿼리로 전진.
+     * - fast_path_flag: 호출자가 meta 에 명시한 fast-path 힌트.
+     */
+    private String guardrailSkipReason(QueryContextPreprocessor delegate, Map<String, Object> meta) {
+        if (!(delegate instanceof GuardrailQueryPreprocessor)) {
+            return null;
+        }
+        if (!cognitiveProps.isEnabled()) {
+            return "cognitive_disabled";
+        }
+        if (Boolean.TRUE.equals(TraceStore.get("query.preprocessor.guardrailStageFailed"))) {
+            return "prior_stage_failure";
+        }
+        GuardContext ctx = GuardContextHolder.get();
+        if (ctx != null && (ctx.isCheapSearchMode() || ctx.isBypassMode())) {
+            return "cheap_or_bypass_mode";
+        }
+        if (meta != null && (Boolean.TRUE.equals(meta.get("guardrailFastPath"))
+                || Boolean.TRUE.equals(meta.get("fastPath")))) {
+            return "fast_path_flag";
+        }
+        return null;
     }
 
-    private static void traceGuardrailSkipped(String stage, QueryContextPreprocessor delegate) {
+    private static void traceGuardrailSkipped(String stage, QueryContextPreprocessor delegate, String reason) {
         String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
         String safePreprocessor = delegate == null
                 ? "unknown"
@@ -225,7 +269,8 @@ public class CompositeQueryContextPreprocessor implements QueryContextPreprocess
         TraceStore.inc("query.preprocessor.guardrailSkipped.count");
         TraceStore.put("query.preprocessor.guardrailSkipped", true);
         TraceStore.put("query.preprocessor.guardrailSkipped.stage", safeStage);
-        TraceStore.put("query.preprocessor.guardrailSkipped.reason", "cognitive_disabled");
+        TraceStore.put("query.preprocessor.guardrailSkipped.reason",
+                SafeRedactor.traceLabelOrFallback(reason, "unknown"));
         TraceStore.put("query.preprocessor.guardrailSkipped.name", safePreprocessor);
     }
 

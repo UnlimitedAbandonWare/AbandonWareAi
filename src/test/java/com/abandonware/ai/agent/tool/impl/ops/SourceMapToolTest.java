@@ -111,6 +111,32 @@ class SourceMapToolTest {
                 beans.getBeanProvider(RequestMappingHandlerMapping.class), new ToolRegistry()));
     }
 
+    @Test
+    void targetedLookupFindsRegisteredPostHandlerBeyondDefaultLimit() {
+        List<RequestMappingInfo> infos = numberedRoutes(299);
+        RequestMappingInfo get = RequestMappingInfo.paths("/route/299").methods(RequestMethod.GET).build();
+        RequestMappingInfo post = RequestMappingInfo.paths("/route/299").methods(RequestMethod.POST).build();
+        Map<RequestMappingInfo, HandlerMethod> handlers = new LinkedHashMap<>();
+        infos.forEach(info -> handlers.put(info, HANDLER));
+        handlers.put(get, new HandlerMethod(new RouteHandlers(),
+                ReflectionUtils.findMethod(RouteHandlers.class, "get")));
+        handlers.put(post, new HandlerMethod(new RouteHandlers(),
+                ReflectionUtils.findMethod(RouteHandlers.class, "post")));
+        SnapshotMapping mapping = new SnapshotMapping(List.of()) {
+            @Override public Map<RequestMappingInfo, HandlerMethod> getHandlerMethods() {
+                return Collections.unmodifiableMap(handlers);
+            }
+        };
+
+        Map<?, ?> result = invoke(mapping, Map.of("pattern", "/route/299", "method", "POST", "limit", 1));
+
+        assertThat(result.get("routeCount")).isEqualTo(301);
+        assertThat(result.get("matchedRouteCount")).isEqualTo(1);
+        assertThat(routes(result)).hasSize(1);
+        assertThat(routes(result).get(0).get("handlerClass")).isEqualTo(RouteHandlers.class.getName());
+        assertThat(routes(result).get(0).get("handlerMethod")).isEqualTo("post");
+    }
+
     private static void assertEmptyRoutes(SourceMapTool tool) {
         Map<?, ?> result = (Map<?, ?>) tool.execute(new ToolRequest(Map.of(), null))
                 .data().get("sourceMap");
@@ -120,10 +146,14 @@ class SourceMapToolTest {
     }
 
     private static Map<?, ?> invoke(SnapshotMapping mapping) {
+        return invoke(mapping, Map.of());
+    }
+
+    private static Map<?, ?> invoke(SnapshotMapping mapping, Map<String, Object> input) {
         StaticListableBeanFactory beans = new StaticListableBeanFactory(Map.of("mapping", mapping));
         SourceMapTool tool = new SourceMapTool(
                 beans.getBeanProvider(RequestMappingHandlerMapping.class), new ToolRegistry());
-        return (Map<?, ?>) tool.execute(new ToolRequest(Map.of(), null)).data().get("sourceMap");
+        return (Map<?, ?>) tool.execute(new ToolRequest(input, null)).data().get("sourceMap");
     }
 
     private static List<Map<?, ?>> routes(Map<?, ?> result) {
@@ -155,5 +185,10 @@ class SourceMapToolTest {
         public Map<RequestMappingInfo, HandlerMethod> getHandlerMethods() {
             return Collections.unmodifiableMap(handlers);
         }
+    }
+
+    private static class RouteHandlers {
+        public void get() { }
+        public void post() { }
     }
 }

@@ -68,6 +68,9 @@ public class FingerprintAwareEmbeddingStore implements EmbeddingStore<TextSegmen
     }
 
 
+    /** The existing decorator preserves the delegate's physical write target. */
+    public EmbeddingStore<TextSegment> primaryWriteDelegate() { return delegate; }
+
     @Override
     public String add(Embedding embedding) {
         return delegate.add(embedding);

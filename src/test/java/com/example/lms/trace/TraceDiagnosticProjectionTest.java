@@ -17,6 +17,14 @@ class TraceDiagnosticProjectionTest {
                 Map.entry("prompt.historyRendered", true),
                 Map.entry("prompt.contextInjected.delivered", true),
                 Map.entry("prompt.events.webCount", 4),
+                Map.entry("prompt.agentDebugEvidence.chatHarmony.applied", true),
+                Map.entry("prompt.builder.required.enforced", true),
+                Map.entry("prompt.context.composer.input.ragCount", 0),
+                Map.entry("prompt.context.refiner.activated", false),
+                Map.entry("prompt.context.refiner.failSoft", false),
+                Map.entry("prompt.context.refiner.phi", 0.375d),
+                Map.entry("prompt.learningDegraded", false),
+                Map.entry("prompt.localDocsRenderedCount", 0),
                 Map.entry("llm.call.approxInputTokens", 128),
                 Map.entry("llm.ollamaNative.maxTokens", 256L),
                 Map.entry("memory.session.tokenEstimate", 64),
@@ -40,6 +48,18 @@ class TraceDiagnosticProjectionTest {
         Object safe = SafeRedactor.diagnosticValue("prompt.events", input);
         assertEquals(input, safe);
         assertEquals(safe, SafeRedactor.diagnosticValue("prompt.events", safe));
+    }
+
+    @Test
+    void promptRatioOnlyAdmitsFiniteBoundedFloatingPointValues() {
+        String key = "prompt.context.refiner.phi";
+        for (Object invalid : List.of(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+                1_000_001d, -1_000_001d, 1, "0.375")) {
+            assertFalse(SafeRedactor.isTypedDiagnostic(key, invalid));
+            assertInstanceOf(Map.class, SafeRedactor.diagnosticValue(key, invalid));
+        }
+        Object nested = Map.of("refiner", Map.of("phi", 0.375d, "activated", false));
+        assertEquals(nested, SafeRedactor.diagnosticValue("prompt.context", nested));
     }
 
     @Test

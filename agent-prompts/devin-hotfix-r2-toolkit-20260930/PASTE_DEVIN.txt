@@ -1,0 +1,137 @@
+# Devin — Codex 소스감사·핫픽스 R2용 "칼집" 준비 (룰·도구·스크립트만, 소스 수정 금지)
+[Contract: DEMO1-DEVIN-HOTFIX-R2-TOOLKIT-20260930]
+작성: 2026-09-30 Asia/Seoul · Grok Bot
+
+## 0) EXTEND / SUPERSEDE
+- 이번 작업은 다음 두 지시서를 **Codex가 실제로 따를 수 있게 받쳐 주는 도구 세트**를 만드는 것이다. 두 지시서의 내용을 새로 쓰거나 대신 실행하는 게 아니다.
+  - `CODEX_DEVIN_RUNTIME_HOTFIX_R2_20260930.md` (WP1 ChatRunRegistry 잠금 분리 → WP2 Jev 전송·permit → WP3 Brave lane → WP4 GPU/Ollama → WP5 H2 HOLD)
+  - `CODEX_DEVIN_JEV_BODY_DEADLINE_20260930.md` (BoundedHttpBody, RED-first 테스트 17종)
+  - 사용자가 Codex에게 준 "소스 감사 지시서"의 플러그인 역할 제한표 (Superpowers / Browser / GitHub / Exa / AWX / Computer / glm_worker / Vercel)
+- 원칙: **칼은 칼집에 꽂아 두고, 그 단계가 오면 한 자루만 뽑는다.** 도구를 늘어놓는 게 아니라, 단계마다 "지금 뽑을 도구 하나 + 뽑으면 안 되는 도구"가 바로 보이게 만든다.
+
+## 1) Mission (한 줄)
+Codex가 WP를 진행하면서 막히는 지점(기준선 불일치, Gradle 거짓 exit 0, 0개 테스트 통과, ZIP 줄번호 표류, 플러그인 남용, 비밀값 유출)을 **스크립트 한 줄로 판정**할 수 있게 도구·룰·스킬을 준비한다. 제품 소스는 한 줄도 건드리지 않는다.
+
+## 2) LIVE 증거 (Codex 세션 관측, 2026-09-30 21:54~22:09 KST)
+- Codex는 **워크트리(detached HEAD b6ec55d1)**에서 돌고 있다. 원격 main은 b2eaba46, 사용자 기준선은 `4150b2822f2c` @ `codex/owned-runtime-browser-restart`. 워크트리에서는 RagControl·backend_unavailable·chat.js가 안 보였다 → **기준선 불일치가 첫 번째 함정**.
+- Gradle: `:app` 빌드 스크립트 오류 28개로 구성 단계 실패, `cfvm-raw/build.gradle.kts` 문법 오류가 전체 `compileJava`를 선차단, `:app:compileJava`는 누락 타입·의존성. 그런데 **wrapper exit code는 0** → exit만 믿으면 거짓 GREEN.
+- AWX `build_error_mine`은 이 로그를 `other`로 분류 → 정제 로그를 넘기는 경로가 필요.
+- localhost 8080/8081 연결 거부. 실제 포트는 `Start-RAG.bat` 기준 18180/18181/18182.
+- 테스트 소스 루트는 `src\src\test\java`(중첩). 지시서의 경로는 ZIP 기준 `main/java/...` → 실제 sourceSet 매핑이 필요.
+- Clean과 마찬가지로 **Codex 워크트리는 커밋 안 된 새 스크립트를 못 본다.** 모든 도구는 절대경로 + `--root <대상 트리>`로 호출 가능해야 한다.
+
+## 3) Project Root + 규칙
+- Root: `C:\AbandonWare\demo-1\demo-1\src` (도구는 여기에 만든다. Codex 워크트리 안에는 쓰지 않는다.)
+- 시작: `python -B scripts/agent_preflight.py --root .` → `work_journal open` → `demo1_vibe_skill_router.py resolve "<이번 요청>"`으로 대표 skill 선택 → `codex_work_checkpoint.py begin`.
+- 파일마다 lease(`__patch_drop__/source_edit_session.ps1`) 후 수정. live lease는 건너뛰고, stale만 `lease_conflict_autoflow.py reclaim`.
+- 셸에서 bat 실행 전 `AWX_RAG_NO_PAUSE=1`. java/node 이름으로 일괄 kill 금지. 병행 빌드는 `AWX_SPLIT_BUILD_OUTPUTS=1` + `AWX_BUILD_HOST_ID=devin-<세션>`.
+
+## 4) Self-Ask 5
+1. 요청 행동? → 도구·룰·스킬·문서 준비. 제품 소스·빌드 스크립트 수정은 아님.
+2. 현재 증거? → 2)의 관측. 기준선·Gradle·포트·sourceSet 네 가지가 실제로 막고 있다.
+3. 애매한 것? → Codex가 어느 트리를 기준으로 고칠지. 도구는 판정만 하고 결정은 사용자·Codex에게 넘긴다.
+4. 바꾸면 안 되는 것? → `main/**`, `app/**`, `frontend/**`, `src/test/**`, `*.gradle*`, `application*.yml`, `.env*`, `.secrets/**`, 포트·프로퍼티명·버전.
+5. 최소 seam? → 기존 `scripts/`·`.agents/skills/`·`docs/codex/`에 붙인다. 같은 일을 하는 스크립트가 이미 있으면 새로 만들지 말고 **얇은 wrapper나 문서 포인터로 연결**한다(먼저 `rg`로 확인하고 결과를 보고에 적는다).
+
+## 5) WP — 칼집 목록
+
+### WP0 — 기존 도구 재고 조사 (수정 없음)
+- 목표: 아래 WP1~WP6과 기능이 겹치는 기존 스크립트·skill을 찾는다(`scripts/`, `.agents/skills/`, `docs/codex/`, `.devin/PROMPTS`). `__patch_drop__/`·`data/agent-handoff/`·`agent-prompts/`는 통째로 검색하지 않는다.
+- 출력: `data/agent-handoff/devin-hotfix-r2-toolkit-0930/WP0-inventory.md` (재사용 / wrapper / 신규 판정표).
+- AC: [ ] 각 WP마다 "재사용할 기존 도구 또는 신규 필요 이유" 한 줄.
+
+### WP1 — 기준선 판정 칼: `scripts/baseline_sync_probe.py`
+- 입력: `--root <트리>` (기본 Root), `--expect-head 4150b2822f2c`, `--expect-branch codex/owned-runtime-browser-restart`.
+- 출력(JSON + 한 줄 요약): toplevel, HEAD, branch 또는 detached, `git worktree list`, origin/main SHA(fetch 없이 로컬 ref만), 기대값 대비 `MATCH / AHEAD / BEHIND / DIVERGED / DETACHED_OTHER`, 핵심 심볼 존재 여부(`ChatRunRegistry`, `JevGatewayClient`, `JevEvaluationRuntime`, `BraveSearchService`, `LocalLlmProcessManager`, `RagControl`, `chat.js`).
+- 판정: 불일치면 `BASELINE_MISMATCH` + "어느 트리를 기준으로 할지 사용자 확인 필요" 한 줄. 자동 checkout/reset/fetch 금지.
+- AC: [ ] Root와 Codex 워크트리 둘 다에 대해 실행 결과를 첨부 [ ] git 쓰기 명령 0건.
+
+### WP2 — 경로 번역 칼: `scripts/zip_path_to_sourceset.py`
+- 목표: 지시서의 ZIP 경로(`main/java/com/...`)와 `file:line` 앵커를 실제 트리의 경로·줄·Gradle 모듈·test task·test source root로 번역한다.
+- 줄번호는 믿지 말고 **심볼(메서드명)로 재탐색**해서 현재 줄을 알려 준다(예: `ChatRunRegistry.runTerminalSideEffect` ZIP 806~818 → live L???). 표류폭도 표시.
+- 입력: 지시서 md 경로. 출력: `anchor_map.json` + 표.
+- AC: [ ] R2 지시서 WP1~WP5와 Jev 지시서의 모든 앵커를 번역한 결과 첨부 [ ] 못 찾은 앵커는 `ANCHOR_MISSING`으로 표시(추정 금지).
+
+### WP3 — Gradle 진실 판정 칼: `scripts/gradle_truth_gate.ps1` (+ `scripts/test_xml_evidence.py`)
+- 목표: exit code 대신 **로그 본문 + test XML**로 판정한다.
+- 동작: 지정 task를 실행 → 로그 저장 → `BUILD FAILED`/`FAILURE:`/`error:`/`Could not compile build file` 파싱 → test-results XML에서 testcase 수·failures·errors·skipped·시간·JDK 집계.
+- 판정 enum: `BASELINE_BLOCKED`(구성·컴파일 실패, RED로 세지 않음) / `RED`(컴파일 OK + assertion 실패) / `GREEN`(실행 수 > 0, 실패·오류 0) / `NO_TESTS`(NO-SOURCE·0개·전부 skipped = 통과 아님) / `WRAPPER_EXIT_LIE`(exit 0인데 로그는 실패).
+- 옵션: `--repeat 20` (targeted suite 반복, 회차별 exit 기록), `--sanitized-log-out <경로>` (WP5용).
+- 전체 `:test`, 전역 clean은 스크립트 수준에서 거부한다(인자에 `--tests`가 없으면 에러).
+- AC: [ ] 현재 트리에서 `compileJava` 1회 실행 결과가 `BASELINE_BLOCKED` 또는 실제 판정으로 나옴 [ ] 가짜 XML fixture로 5개 enum 전부 재현하는 `scripts/test_gradle_truth_gate.py` GREEN.
+
+### WP4 — 웹 재현 매트릭스 칼: `scripts/web_repro_matrix.py`
+- 목표: Browser 역할의 재현을 **HTTP 수준 증거**로 남긴다. 새 세션(저장된 storageState·쿠키 재사용 금지)에서:
+  1. `안녕?` → 응답 본문 HOLD 여부
+  2. 일반 질문 → `backend_unavailable` 여부
+  3. admin 로그인 → 보호된 관리자 URL 실제 접근
+  4. 잘못된 계정 → 차단 여부
+  5. 로그아웃 후 → 재차단 여부
+- 각 항목마다 HTTP status, 서버 reasonCode, 요청/trace 식별자, 소요시간만 기록. 본문은 앞 200자만, 토큰·쿠키·Set-Cookie 값은 마스킹.
+- 포트는 인자로 받는다(기본 18180). 연결 거부면 `SERVER_DOWN`으로 끝내고 서버를 대신 띄우지 않는다.
+- **PROTO_OPEN 주의:** 3~5번은 현재 프로토타입 정책상 **관측 항목**이다. 결과를 기록하되, 차단이 안 된다고 FAIL이나 패치 대상으로 올리지 않는다(판정 칸에 `OBSERVE_PROTO_OPEN`).
+- 결과 저장: `var/web-repro/<timestamp>/` (gitignore 확인, 없으면 보고만 하고 .gitignore는 건드리지 않음).
+- AC: [ ] 서버가 떠 있으면 5항목 표, 아니면 `SERVER_DOWN` 한 줄 [ ] 결과 파일에 쿠키·토큰 값 0건(grep 증거).
+
+### WP5 — 로그 정제 + AWX 연결 칼: `scripts/log_redact.py`
+- 목표: AWX `build_error_mine`·glm_worker에 넘기기 전 로그를 정제한다. API 키 패턴, `Authorization`, `Cookie`, JDBC URL 안의 계정, 사용자 홈 경로 일부를 마스킹하고, Gradle 오류 블록(첫 원인 + 스택 상위 N줄)만 남긴다.
+- 출력 경로를 WP3의 `--sanitized-log-out`과 맞춘다. "기본 AWX가 정상이면 복구용 AWX 사용 금지"를 사용법에 명시.
+- AC: [ ] 비밀값 샘플을 넣은 fixture에서 원문 0건 [ ] 실제 compileJava 로그 1건을 정제해 AWX에 넣었을 때의 분류 결과 기록(`other`면 그대로 적는다).
+
+### WP6 — 칼 고르는 법: 룰·스킬·반박 템플릿
+1. `.agents/skills/demo1-codex-tool-router/SKILL.md` (신규 skill. 기존에 비슷한 게 있으면 그걸 확장)
+   - 단계 → 뽑을 도구 하나 → 뽑으면 안 되는 도구 표:
+     | 단계 | 뽑는다 | 뽑지 않는다 |
+     |---|---|---|
+     | 착수 | `baseline_sync_probe.py` → git status/HEAD 비교 | GitHub snapshot을 로컬보다 우선 |
+     | 원인 탐침 | Superpowers systematic-debugging, 원인 1개씩 | 새 서비스·새 계층 |
+     | 경로 확인 | `zip_path_to_sourceset.py` | ZIP 줄번호 그대로 인용 |
+     | RED/GREEN | `gradle_truth_gate.ps1` (`--tests` 필수) | 전체 suite, wrapper exit만 보고 |
+     | 빌드 실패 분류 | `log_redact.py` → AWX `build_error_mine` | 복구용 AWX(기본이 정상일 때), 원본 스택 재확인 생략 |
+     | 공식 규격 | Exa, 도메인 제한(docs.spring.io, playwright.dev, docs.github.com, docs.oracle.com, vercel.com, docs.ollama.com, h2database.github.io) + 확인일·적용 버전 기록 | 블로그 예제 이식 |
+     | 웹 재현 | `web_repro_matrix.py` | 저장된 인증 상태로 로그인 성공 주장 |
+     | 로컬 UI 조작 | Computer (Browser로 못 여는 것만) | 소스 탐색·수정에 Computer |
+     | 1차 수정 후 | glm_worker 반박 검토 | glm 동의 = 검증 성공 |
+     | Jev/Gateway | Vercel: env 이름 존재·로그인/OIDC 상태·공식 문서만 | 키 값 출력, 배포·설정·DNS 변경, env pull 파일 커밋 |
+   - 멈춤 규칙: `BASELINE_MISMATCH`, `BASELINE_BLOCKED`, `SERVER_DOWN`, Vercel `auth-blocked`는 **그 자리에서 보고하고 다음 칼로 넘어가지 않는다.**
+2. `docs/codex/glm-rebuttal-review-template.md`: glm_worker에 줄 반박 질문 3개 고정 — ① 증상을 숨겼나 근본 원인을 없앴나 ② 관리자 권한을 넓혔나 ③ "검증 불필요"와 "검증 실패"를 섞었나. 입력은 diff + `gradle_truth_gate` 결과만(정제본).
+3. `docs/codex/HOTFIX_R2_TOOLKIT.md`: WP1~WP5(R2)와 Jev 지시서의 각 단계에서 위 도구를 **어떤 명령으로** 부르는지 한 장 인덱스. Codex 워크트리에서도 쓸 수 있게 전부 절대경로 + `--root` 예시로 적는다.
+4. 포인터(각 5줄 이하): `agents.md`에 "Codex 핫픽스 도구 인덱스 → docs/codex/HOTFIX_R2_TOOLKIT.md" 한 줄, `.devin/PROMPTS`·`.cline`·`.grok/rules`에도 같은 포인터. 규칙 본문 복붙 금지.
+- AC: [ ] skill이 `demo1_vibe_skill_router.py resolve "Codex 핫픽스 도구"`로 실제 선택됨 [ ] 포인터 파일 diff 각 5줄 이하.
+
+## 6) 검증 / Done
+- 새 스크립트마다 `python -B -m unittest scripts.test_<이름> -v` GREEN(ps1은 Pester 대신 py wrapper 테스트 허용). 네트워크·유료 호출·실제 공급자 0건.
+- 실제 트리 대상 드라이런: WP1(Root + Codex 워크트리), WP2(두 지시서), WP3(`compileJava` 1회), WP4(서버 상태에 따라 표 또는 SERVER_DOWN), WP5(로그 1건).
+- `git diff --check`, 비밀값 스캔(키 이름만 보고).
+- 완료 = 위 AC 전부 PASS. 읽기·계획만은 완료가 아니다. 안 돌린 건 NOT_RUN.
+
+## 7) Must NOT
+- 제품 소스·테스트·빌드 스크립트 수정: `main/**`, `app/**`, `frontend/**`, `src/test/**`, `*.gradle`, `*.gradle.kts`(cfvm-raw 문법 오류도 **고치지 말고 WP3 결과로 보고만**), `application*.yml`.
+- Codex 워크트리에 파일 쓰기, Codex가 잡은 lease 건드리기, Codex의 JVM/Gradle 종료, 공용 `build/` 삭제.
+- push · pull · fetch · merge · rebase · reset · clean · `add -A` · `--no-verify` · remote 변경. 커밋은 사용자가 원할 때만 `scripts/agent_git_vibe_commit.py`로 내 경로만.
+- `.env*`, `.secrets/**`, `apikey.txt` 읽기·출력. 키는 이름만.
+- 유료 API 호출, Vercel 배포·설정·DNS 변경, `vercel env pull` 결과 커밋.
+- PROTO_OPEN 강화, admin 게이트 추가, CSRF 끄기.
+- 같은 기능의 중복 스크립트·새 프레임워크.
+
+## 8) Report (첫 메시지 형식 + 최종 보고)
+첫 메시지:
+`ACK DEMO1-DEVIN-HOTFIX-R2-TOOLKIT-20260930 / Root C:\AbandonWare\demo-1\demo-1\src / Plan WP0→WP6 / No product source, no push / Starting WP0`
+
+최종:
+```
+DEVIN: DONE|PARTIAL|HOLD
+WP0 inventory: 재사용 n / wrapper n / 신규 n
+WP1 baseline: Root=<판정> / Codex worktree=<판정>
+WP2 anchors: 번역 n / ANCHOR_MISSING n
+WP3 gradle: compileJava=<enum> / fixture 5/5
+WP4 web: <5항목 표 or SERVER_DOWN>
+WP5 redact: 원문 유출 0 / AWX 분류=<값>
+WP6 rules: skill 선택됨 Y/N / 포인터 n개
+FILES_TOUCHED: …
+EVIDENCE_COMMANDS: … (exit code 포함)
+NOT_RUN: …
+HARD_STOP_CHECK: 제품소스 0 / push 0 / secrets 0 / 유료호출 0
+FOR_CODEX: 한 줄 (예: "기준선 DIVERGED — 사용자에게 트리 확인 먼저")
+```
+SSOT: `agent-prompts/devin-hotfix-r2-toolkit-20260930/PASTE_DEVIN.txt`

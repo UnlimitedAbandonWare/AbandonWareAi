@@ -1,0 +1,13 @@
+{
+  "provider": "cerebras",
+  "http_status": 403,
+  "body": {
+    "error": {
+      "message": "This endpoint is only available for the paid plan",
+      "type": "permission_denied",
+      "code": "plan_required"
+    }
+  },
+  "expect": "PLAN_GATE",
+  "expect_code": "plan_required"
+}

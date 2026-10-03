@@ -10,7 +10,9 @@ import com.example.lms.debug.DebugEventLevel;
 import com.example.lms.debug.DebugEventStore;
 import com.example.lms.debug.DebugProbeType;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +28,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -212,6 +215,273 @@ class WebFailSoftSearchAspectTest {
         assertFalse(trace.contains(rawQuery), trace);
         assertFalse(trace.contains("ownerToken"), trace);
         assertFalse(trace.contains("CancellationException"), trace);
+    }
+
+    @Test
+    void boundedHybridRoutePreventsAllAspectOwnedExtraSearchCalls() throws Throwable {
+        NovaWebFailSoftProperties props = new NovaWebFailSoftProperties();
+        props.setAllowExtraSearchCalls(true);
+        props.setMaxExtraSearchCalls(2);
+        WebFailSoftSearchAspect aspect = new WebFailSoftSearchAspect(
+                props,
+                new RuleBasedQueryAugmenter(props),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new FixedProvider<>(null));
+        AtomicInteger calls = new AtomicInteger();
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.getArgs()).thenReturn(new Object[] { "Gemini API pricing evidence", 3 });
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            TraceStore.put("web.boundedRoute", true);
+            TraceStore.put("web.boundedRoute.completed", true);
+            return List.of();
+        });
+
+        Object result = aspect.aroundSearch(pjp);
+
+        assertEquals(List.of(), result);
+        assertEquals(1, calls.get());
+        assertEquals(Boolean.TRUE, TraceStore.get("web.failsoft.extraCalls.skipped"));
+        assertEquals("boundedRoute", TraceStore.get("web.failsoft.extraCalls.skipped.reason"));
+    }
+
+    @Test
+    void conversateBoundedRouteKeepsDistinctDocumentsFromOneHost() throws Throwable {
+        var docs = List.of("Python API reference https://docs.python.org/3/reference/a",
+                "Python API constraints https://docs.python.org/3/reference/b",
+                "Python API limitations https://docs.python.org/3/reference/c");
+        assertEquals(3, boundedCueDocuments(true, false, docs).size());
+    }
+
+    @Test
+    void ordinaryBoundedRouteStillRequiresHostDiversity() throws Throwable {
+        var docs = List.of("Python API reference https://docs.python.org/3/reference/a",
+                "Python API constraints https://docs.python.org/3/reference/b",
+                "Python API limitations https://docs.python.org/3/reference/c");
+        assertEquals(1, boundedCueDocuments(false, false, docs).size());
+    }
+
+    @Test
+    void conversateOfficialOnlyPreservesExistingFallbackSelection() throws Throwable {
+        var docs = List.of("Python API reference https://docs.python.org/3/reference/a",
+                "Python API constraints https://docs.python.org/3/reference/b");
+        assertEquals(2, boundedCueDocuments(true, true, docs).size());
+    }
+
+    @Test
+    void conversateBoundedRouteStillDropsDuplicateUrlsAndTechnicalSpam() throws Throwable {
+        String doc = "Python API reference https://docs.python.org/3/reference/a";
+        var out = boundedCueDocuments(true, false, List.of(doc, doc,
+                "Python API loan-spam https://docs.python.org/3/reference/spam"));
+        assertEquals(1, out.size());
+        assertFalse(out.get(0).contains("loan-spam"));
+    }
+
+    private List<String> boundedCueDocuments(boolean cue, boolean officialOnly, List<String> docs) throws Throwable {
+        NovaWebFailSoftProperties props = new NovaWebFailSoftProperties();
+        props.setAllowExtraSearchCalls(true);
+        props.setMaxExtraSearchCalls(2);
+        props.setTechSpamKeywords(List.of("loan-spam"));
+        var aspect = new WebFailSoftSearchAspect(props, new RuleBasedQueryAugmenter(props),
+                null, null, null, null, null, null, null, new FixedProvider<>(null));
+        GuardContext context = new GuardContext();
+        context.setMinCitations(3);
+        context.setOfficialOnly(officialOnly);
+        GuardContextHolder.set(context);
+        TraceStore.put("conversate.web.singleCycle", cue);
+        AtomicInteger calls = new AtomicInteger();
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.getArgs()).thenReturn(new Object[] { "OpenAI API pricing quota", 3 });
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            calls.incrementAndGet();
+            TraceStore.put("web.boundedRoute", true);
+            return docs.stream().map(doc -> "[WEB:DOCS|CRED:TRUSTED] " + doc).toList();
+        });
+        try {
+            @SuppressWarnings("unchecked")
+            var out = (List<String>) aspect.aroundSearch(pjp);
+            assertEquals(1, calls.get());
+            return out;
+        } finally {
+            GuardContextHolder.clear();
+        }
+    }
+
+    @Test
+    void cheapSearchModeSkipsExtraOfficialDocsRescueCalls() throws Throwable {
+        NovaWebFailSoftProperties props = new NovaWebFailSoftProperties();
+        props.setAllowExtraSearchCalls(true);
+        props.setMaxExtraSearchCalls(2);
+        props.setOfficialDocsRescueQueries(List.of("{canonical} official docs"));
+        WebFailSoftSearchAspect aspect = new WebFailSoftSearchAspect(
+                props,
+                new RuleBasedQueryAugmenter(props),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new FixedProvider<>(null));
+        GuardContext context = new GuardContext();
+        context.setOfficialOnly(true);
+        context.setMinCitations(2);
+        context.setCheapSearchMode(true);
+        GuardContextHolder.set(context);
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        String rawQuery = "qwen api pricing quota";
+        AtomicInteger calls = new AtomicInteger();
+        when(pjp.getArgs()).thenReturn(new Object[] { rawQuery, 4 });
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            int call = calls.incrementAndGet();
+            if (call == 1) {
+                return List.of("[WEB:NOFILTER_SAFE|CRED:UNVERIFIED] Community note https://community.example/qwen");
+            }
+            return List.of("[WEB:DOCS|CRED:TRUSTED] Official docs https://docs.example/qwen");
+        });
+
+        try {
+            Object result = assertDoesNotThrow(() -> aspect.aroundSearch(pjp));
+
+            assertEquals(1, calls.get(), "FORCE_LIGHT/cheap mode should not issue rescue provider calls");
+            assertTrue(result instanceof List<?>);
+            assertEquals(Boolean.TRUE, TraceStore.get("web.failsoft.extraCalls.skipped"));
+            assertEquals("cheapSearchMode", TraceStore.get("web.failsoft.extraCalls.skipped.reason"));
+            assertNull(TraceStore.get("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.attempted"));
+        } finally {
+            GuardContextHolder.clear();
+        }
+    }
+
+    @Test
+    void searchWithTraceRunsQualityGateRescueWhenOfficialOnlyFallbackHasNoOfficialDocs() throws Throwable {
+        NovaWebFailSoftProperties props = new NovaWebFailSoftProperties();
+        props.setAllowExtraSearchCalls(true);
+        props.setMaxExtraSearchCalls(1);
+        props.setOfficialDocsRescueQueries(List.of("site:developers.openai.com {canonical}"));
+        WebFailSoftSearchAspect aspect = new WebFailSoftSearchAspect(
+                props,
+                new RuleBasedQueryAugmenter(props),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new FixedProvider<>(null));
+        GuardContext context = new GuardContext();
+        context.setOfficialOnly(true);
+        context.setMinCitations(2);
+        GuardContextHolder.set(context);
+
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        String rawQuery = "OpenAI Responses API web_search official evidence";
+        AtomicInteger calls = new AtomicInteger();
+        when(pjp.getArgs()).thenReturn(new Object[] { rawQuery, 4 });
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            Object[] args = invocation.getArgument(0);
+            int call = calls.incrementAndGet();
+            if (call == 1) {
+                return new NaverSearchService.SearchResult(
+                        List.of("[WEB:NOFILTER_SAFE|CRED:UNVERIFIED] Community mirror https://community.example/openai"),
+                        null);
+            }
+            assertTrue(String.valueOf(args[0]).startsWith("site:developers.openai.com "),
+                    "searchWithTrace quality-gate rescue should use scoped official-docs query");
+            return new NaverSearchService.SearchResult(
+                    List.of("[WEB:DOCS|CRED:TRUSTED] Official docs https://developers.openai.com/api/docs/guides/tools-web-search"),
+                    null);
+        });
+
+        try {
+            Object result = assertDoesNotThrow(() -> aspect.aroundSearchWithTrace(pjp));
+
+            assertTrue(result instanceof NaverSearchService.SearchResult);
+            NaverSearchService.SearchResult sr = (NaverSearchService.SearchResult) result;
+            assertEquals(2, calls.get(), "searchWithTrace should issue one quality-gate rescue provider call");
+            assertTrue(sr.snippets().stream().anyMatch(s -> s.contains("developers.openai.com")),
+                    String.valueOf(sr.snippets()));
+            assertEquals(Boolean.TRUE,
+                    TraceStore.get("web.failsoft.starvationFallback.qualityGate.rescueExtraSearch.attempted"));
+            assertEquals(Boolean.TRUE,
+                    TraceStore.get("web.failsoft.starvationFallback.qualityGate.rescueInserted"));
+        } finally {
+            GuardContextHolder.clear();
+        }
+    }
+
+    @Test
+    void searchWithTraceQualityGateRescueWaitsThroughShortBraveCooldownBeforeRetry() throws Throwable {
+        NovaWebFailSoftProperties props = new NovaWebFailSoftProperties();
+        props.setAllowExtraSearchCalls(true);
+        props.setMaxExtraSearchCalls(1);
+        props.setOfficialDocsRescueQueries(List.of("site:developers.openai.com {canonical}"));
+        RateLimitBackoffCoordinator backoff = mock(RateLimitBackoffCoordinator.class);
+        when(backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE)).thenReturn(
+                RateLimitBackoffCoordinator.Decision.allow(),
+                RateLimitBackoffCoordinator.Decision.skip(5L, "local_rate_limit", false),
+                RateLimitBackoffCoordinator.Decision.allow());
+        WebFailSoftSearchAspect aspect = new WebFailSoftSearchAspect(
+                props,
+                new RuleBasedQueryAugmenter(props),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new FixedProvider<>(backoff));
+        GuardContext context = new GuardContext();
+        context.setOfficialOnly(true);
+        context.setMinCitations(2);
+        GuardContextHolder.set(context);
+
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        String rawQuery = "OpenAI changelog latest official docs";
+        AtomicInteger calls = new AtomicInteger();
+        when(pjp.getArgs()).thenReturn(new Object[] { rawQuery, 4 });
+        when(pjp.proceed(any(Object[].class))).thenAnswer(invocation -> {
+            int call = calls.incrementAndGet();
+            if (call == 1) {
+                return new NaverSearchService.SearchResult(
+                        List.of("[WEB:NOFILTER_SAFE|CRED:UNVERIFIED] Community mirror https://community.example/openai"),
+                        null);
+            }
+            if (Boolean.TRUE.equals(TraceStore.get(
+                    "web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.attempted"))) {
+                return new NaverSearchService.SearchResult(
+                        List.of("[WEB:DOCS|CRED:TRUSTED] Official changelog https://openai.com/changelog/"),
+                        null);
+            }
+            return new NaverSearchService.SearchResult(List.of(), null);
+        });
+
+        try {
+            Object result = assertDoesNotThrow(() -> aspect.aroundSearchWithTrace(pjp));
+
+            assertTrue(result instanceof NaverSearchService.SearchResult);
+            NaverSearchService.SearchResult sr = (NaverSearchService.SearchResult) result;
+            assertEquals(2, calls.get(), "rescue should retry once after the bounded cooldown wait");
+            assertTrue(sr.snippets().stream().anyMatch(s -> s.contains("openai.com/changelog")),
+                    String.valueOf(sr.snippets()));
+            assertEquals(Boolean.TRUE, TraceStore.get(
+                    "web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.attempted"));
+            assertEquals("brave", TraceStore.get(
+                    "web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.provider"));
+            assertEquals(5L, TraceStore.getLong(
+                    "web.failsoft.starvationFallback.qualityGate.rescueCooldownWait.remainingMs"));
+        } finally {
+            GuardContextHolder.clear();
+        }
     }
 
     @Test

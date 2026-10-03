@@ -14,7 +14,7 @@ Run through the launcher:
   nodeRole = "macmini"
   mode = "restore"
   archive_root = "BackupsXS"
-  canonical_root = "C:\AbandonWare\demo-1\demo-1\src"
+  canonical_root = "<repo>"
   glob = "snapshots/*.java"
   target_dir = "C:\awx-macmini-restore"
   audit_log = "logs\awx-mcp-audit.ndjson"

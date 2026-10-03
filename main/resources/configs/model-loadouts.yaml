@@ -1,0 +1,9 @@
+# References to trusted prompt modules. This file cannot carry prompt text or change retrieval execution.
+# Activation uses only chat.loadout.enabled, whose code default is false.
+version: "1"
+retrievalRef: CURRENT
+evidencePolicyRef: existing
+skills:
+  - evidence-summary
+  - compare-with-citations
+  - contradiction-check

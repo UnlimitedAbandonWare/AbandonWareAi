@@ -4,7 +4,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$d=(Get-Location).ProviderPath; for($i=0;$i -lt 32;$i++){ $p=Join-Path $d 'scripts\\awx_device_bus.py'; if((Test-Path -LiteralPath $p) -and (Test-Path -LiteralPath (Join-Path $d 'config\\project-resources.json'))){ & python -B $p hook --root $d; exit $LASTEXITCODE }; $n=Split-Path $d -Parent; if(!$n -or $n -eq $d){break}; $d=$n }; exit 0\"",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/AbandonWare/demo-1/demo-1/src/.codex/hooks/project_capabilities_hook.ps1",
           "timeout": 40,
           "statusMessage": "Checking project resource capabilities",
           "additionalContextLimit": 512
@@ -15,7 +15,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .codex/hooks/source_edit_triage.ps1",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/AbandonWare/demo-1/demo-1/src/.codex/hooks/source_edit_triage.ps1",
           "timeout": 15
         }
       ]
@@ -27,7 +27,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/devin_pre_edit_guard.ps1",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/AbandonWare/demo-1/demo-1/src/scripts/devin_pre_edit_guard.ps1",
           "timeout": 15
         }
       ]
@@ -37,7 +37,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/AbandonWare/demo-1/demo-1/src/scripts/agent_work_guard.ps1",
           "timeout": 12
         }
       ]
@@ -49,7 +49,7 @@
       "hooks": [
         {
           "type": "command",
-          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agent_work_guard.ps1",
+          "command": "powershell -NoProfile -ExecutionPolicy Bypass -File C:/AbandonWare/demo-1/demo-1/src/scripts/agent_work_guard.ps1",
           "timeout": 12
         }
       ]

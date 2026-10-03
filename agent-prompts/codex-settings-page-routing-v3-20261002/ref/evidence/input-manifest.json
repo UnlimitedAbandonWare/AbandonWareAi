@@ -1,0 +1,62 @@
+{
+  "basis": "2026-10-01 provided snapshots",
+  "head": null,
+  "build_root": null,
+  "source_set": null,
+  "inputs": [
+    {
+      "name": "FIND_X.zip",
+      "bytes": 6107296,
+      "sha256_before": "d94c087f8d89eb2a8f14206c273b49ca82dbe3178cae464e483df8ecb39143ea",
+      "sha256_after": "d94c087f8d89eb2a8f14206c273b49ca82dbe3178cae464e483df8ecb39143ea",
+      "unchanged": true
+    },
+    {
+      "name": "UAW.txt",
+      "bytes": 286051,
+      "sha256_before": "a4ab90929e7c7541c3b4a9b28a60ed4234578d708f641d3479380ff15cffbe16",
+      "sha256_after": "a4ab90929e7c7541c3b4a9b28a60ed4234578d708f641d3479380ff15cffbe16",
+      "unchanged": true
+    },
+    {
+      "name": "Abandon_X.txt",
+      "bytes": 30280,
+      "sha256_before": "ee74bf2dba9a28a7c7c93036b941dce755b7b20c7b03a69441ef983917252b06",
+      "sha256_after": "ee74bf2dba9a28a7c7c93036b941dce755b7b20c7b03a69441ef983917252b06",
+      "unchanged": true
+    },
+    {
+      "name": "FIND_X_settings_routing_v2_ko.md",
+      "bytes": 91611,
+      "sha256_before": "4fb5b311a07204ca8fb5b3d59402deaba19dc3b33d710712f2f8bd8f72ef3c0f",
+      "sha256_after": "4fb5b311a07204ca8fb5b3d59402deaba19dc3b33d710712f2f8bd8f72ef3c0f",
+      "unchanged": true
+    },
+    {
+      "name": "FIND_X_settings_routing_v2_package.zip",
+      "bytes": 57220,
+      "sha256_before": "2486c1a8070077ce1205afea3ca68128f8ebbd966808e217e073ccb0d25cb3dc",
+      "sha256_after": "2486c1a8070077ce1205afea3ca68128f8ebbd966808e217e073ccb0d25cb3dc",
+      "unchanged": true
+    },
+    {
+      "name": "FIND_X_settings_instructions_ko.md",
+      "bytes": 168173,
+      "sha256_before": "0b3e19e9815bb82f089c1a83091f251a7d9b21a585708e978b2fe273f433ce1f",
+      "sha256_after": "0b3e19e9815bb82f089c1a83091f251a7d9b21a585708e978b2fe273f433ce1f",
+      "unchanged": true
+    }
+  ],
+  "archive_stats": {
+    "entries": 3037,
+    "regular_files": 2394
+  },
+  "selected_source_files_read": 35,
+  "inspection": "전체 파일 목록과 관련 소스 선별 열람. 기록된 파일 전체를 의미 검증했다는 뜻이 아니다.",
+  "original_code_changes": 0,
+  "source_document_changes": 0,
+  "external_model_calls": 0,
+  "application_tests": "NOT_RUN",
+  "runtime_startup": "NOT_RUN",
+  "public_api_changes": 0
+}

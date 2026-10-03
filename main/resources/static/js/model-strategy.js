@@ -45,51 +45,30 @@
     } catch {}
   };
 
-  const isLocalProvider = () =>
-    lower(window.initialData?.llmProvider) === "local";
+  let catalogModels = [];
+  const localProviders = new Set(["local", "ollama", "local_llm"]);
+  const isLocalProvider = () => localProviders.has(
+    catalogModels.find(model => model.defaultChoice)?.provider);
+  const isRemoteSelectionAllowed = () =>
+    catalogModels.some(model => !localProviders.has(model.provider));
+  const isChatSelectableId = id =>
+    catalogModels.some(model => model.id === safeText(id));
+  const preferredDefaults = () =>
+    catalogModels.filter(model => model.defaultChoice).map(model => model.id);
 
-  const isRemoteSelectionAllowed = () => {
-    const value = window.initialData?.allowRemoteModelSelection;
-    if (value === false) return false;
-    if (typeof value === "string") return value.trim().toLowerCase() !== "false";
-    return value === true;
-  };
-
-  const isRemoteLookingId = (id) => {
-    const s = lower(id);
-    return s.startsWith("gpt-") || s.startsWith("openai") || /^o\d/.test(s) || s.startsWith("o-");
-  };
-
-  const isChatSelectableId = (id) => {
-    let s = lower(id);
-    if (!s) return false;
-    if (s.includes(":")) s = s.split(":")[0];
-    if (s.includes("embedding") || s.startsWith("text-embedding")) return false;
-    if (s === "babbage-002" || s === "davinci-002") return false;
-    if (isLocalProvider() && !isRemoteSelectionAllowed() && isRemoteLookingId(s)) return false;
-    return true;
-  };
-
-  const LOCAL_PREFERRED_DEFAULTS = [
-    "gemma4:26b",
-    "qwen3:8b",
-  ];
-
-  const REMOTE_PREFERRED_DEFAULTS = [
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
-    "gpt-4.1-mini",
-    "o4-mini",
-  ];
-
-  const preferredDefaults = () => {
-    const configured = [
-      window.initialData?.currentModel,
-      window.initialData?.defaultModel,
-    ].filter(Boolean);
-    return configured.concat(isLocalProvider() ? LOCAL_PREFERRED_DEFAULTS : REMOTE_PREFERRED_DEFAULTS);
-  };
+  async function loadCatalogue() {
+    try {
+      const response = await fetch("/api/chat/models", { credentials: "same-origin", cache: "no-store" });
+      if (!response.ok || response.redirected) throw new Error("catalog_unavailable");
+      const rows = await response.json();
+      if (!Array.isArray(rows)) throw new Error("catalog_invalid");
+      catalogModels = uniqById(rows);
+    } catch {
+      catalogModels = [];
+      storageRemove(ACTIVE_KEY);
+      storageSet(STRATEGY_KEY, "backend-default");
+    }
+  }
 
   const readIdList = (key) => {
     try {
@@ -106,46 +85,22 @@
     } catch {}
   };
 
-  const normalizeProvider = (raw, id) => {
-    const explicit = safeText(raw?.provider || raw?.owner || raw?.ownedBy || raw?.owned_by);
-    if (explicit) return explicit.toLowerCase();
-
-    const s = lower(id);
-    if (s.startsWith("gpt-") || /^o\d/.test(s) || s.startsWith("o-")) return "openai";
-    if (s.includes("gemini")) return "gemini";
-    if (s.includes("groq") || s.includes("llama-3") || s.includes("mixtral")) return "groq";
-    if (s.includes("claude")) return "anthropic";
-    if (s.includes(":") || s.includes("qwen") || s.includes("gemma") || s.includes("llama")) return "local";
-    return "unknown";
-  };
-
-  const inferUsage = (model) => {
-    const text = `${model.id} ${model.label} ${model.features}`.toLowerCase();
-    const usage = new Set();
-    if (/vision|image|ocr|multimodal/.test(text)) usage.add("vision");
-    if (/code|coder|coding/.test(text)) usage.add("coding");
-    if (/reason|thinking|qwq|r1|o1|o3|o4/.test(text)) usage.add("reasoning");
-    if (/fast|mini|flash|small|8b|7b/.test(text)) usage.add("fast");
-    if (/moe|mixture/.test(text)) usage.add("moe");
-    if (/long|context|128k|200k|1m/.test(text) || Number(model.ctx || 0) >= 100000) usage.add("long-context");
-    if (!usage.size) usage.add("chat");
-    return [...usage];
-  };
-
-  const normalizeModel = (raw) => {
-    const id = safeText(raw?.modelId || raw?.id || raw?.value);
-    if (!id || !isChatSelectableId(id)) return null;
-    const label = safeText(raw?.label || raw?.name || id);
-    const model = {
+  const normalizeModel = raw => {
+    const id = safeText(raw?.id);
+    if (!id || raw?.selectable !== true) return null;
+    const capabilities = Array.isArray(raw.capabilities) ? raw.capabilities.map(lower).filter(Boolean) : [];
+    if (capabilities.includes("embedding") && !capabilities.some(value => ["chat", "completion"].includes(value))) return null;
+    return {
       id,
-      label,
-      provider: normalizeProvider(raw, id),
-      features: lower(raw?.features),
-      ctx: Number(raw?.ctxWindow ?? raw?.ctx ?? 0) || 0,
-      release: safeText(raw?.releaseDate || raw?.release || ""),
+      label: safeText(raw.modelId || raw.label || id),
+      provider: lower(raw.provider) || "unknown",
+      features: capabilities.join(" "),
+      usage: capabilities,
+      defaultChoice: raw.defaultChoice === true,
+      capabilities,
+      ctx: Number(raw.ctxWindow ?? raw.contextTokens ?? 0) || 0,
+      release: safeText(raw.release),
     };
-    model.usage = inferUsage(model);
-    return model;
   };
 
   const uniqById = (list) => {
@@ -160,38 +115,7 @@
     return out;
   };
 
-  const getModelsFromSelect = (select) => {
-    if (!select?.options?.length) return [];
-    return [...select.options]
-      .filter((option) => option.value)
-      .map((option) => normalizeModel({
-        id: option.value,
-        label: option.textContent,
-        provider: option.dataset.provider,
-        features: option.dataset.features,
-        ctxWindow: option.dataset.ctxWindow,
-        releaseDate: option.dataset.releaseDate,
-      }))
-      .filter(Boolean);
-  };
-
-  const getInitialModels = () => {
-    const fromInitial = uniqById(window.initialData?.models || []);
-    if (fromInitial.length) return fromInitial;
-
-    const fromSelects = uniqById([
-      ...getModelsFromSelect(document.getElementById("defaultModelSelect")),
-      ...getModelsFromSelect(document.getElementById("defaultModel")),
-      ...getModelsFromSelect(document.getElementById("modelPicker")),
-    ]);
-    if (fromSelects.length) return fromSelects;
-
-    try {
-      return uniqById(JSON.parse(storageGet(CACHE_KEY) || "[]"));
-    } catch {
-      return [];
-    }
-  };
+  const getInitialModels = () => catalogModels;
 
   const modelsById = (models) => new Map((models || []).map((model) => [model.id, model]));
 
@@ -216,15 +140,6 @@
       .indexOf(id);
     let pref = preferredIndex >= 0 ? 10000 - (preferredIndex * 100) : 0;
 
-    if (!isLocalProvider()) {
-      if (id === "gpt-5.5") pref = Math.max(pref, 10000);
-      else if (id.startsWith("gpt-5.5")) pref = Math.max(pref, 9000);
-      else if (id.startsWith("gpt-5")) pref = Math.max(pref, 8000);
-    } else if (id.includes("gemma")) {
-      pref += 500;
-    } else if (id.includes("qwen")) {
-      pref += 300;
-    }
 
     const moeBoost = model?.usage?.includes("moe") ? 100 : 0;
     const ctxScore = Math.min(Number(model?.ctx || 0), 256000) / 1000;
@@ -710,6 +625,7 @@
   function selectedActive(models, primarySelect) {
     const inList = (id) => (models || []).some((model) => model.id === id);
     let active =
+      (storageGet(STRATEGY_KEY) !== "manual" ? pickPreferred(models) : "") ||
       safeText(storageGet(ACTIVE_KEY)) ||
       safeText(window.initialData?.currentModel) ||
       safeText(window.initialData?.defaultModel);
@@ -802,6 +718,7 @@
   }
 
   async function initUI() {
+    await loadCatalogue();
     const models = getInitialModels();
     cleanupStoredIds(models);
     const surfaces = buildSurfaces();
@@ -837,7 +754,7 @@
   }
 
   window.__modelStrategy = {
-    getActiveModel: () => safeText(storageGet(ACTIVE_KEY)),
+    getActiveModel: () => isChatSelectableId(storageGet(ACTIVE_KEY)) ? safeText(storageGet(ACTIVE_KEY)) : "",
     getRecentModels: () => readIdList(RECENT_KEY),
     getFavoriteModels: () => readIdList(FAVORITES_KEY),
     refresh: refreshAllSurfaces,

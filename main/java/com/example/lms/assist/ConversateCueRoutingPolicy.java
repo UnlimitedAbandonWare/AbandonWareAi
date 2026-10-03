@@ -2,6 +2,7 @@ package com.example.lms.assist;
 
 import ai.abandonware.nova.config.LlmRouterProperties;
 import com.example.lms.config.ConfigValueGuards;
+import com.example.lms.llm.ChatGptOAuthRegistration;
 import com.example.lms.llm.gateway.HybridLlmGatewayProbeService;
 import dev.langchain4j.model.output.TokenUsage;
 import org.springframework.core.env.Environment;
@@ -30,6 +31,10 @@ final class ConversateCueRoutingPolicy {
     private final com.example.lms.agent.GroqFreeTierGuard groqGuard;
     private final Map<String, Health> health = new HashMap<>();
     private final Map<String, Account> accounts = new HashMap<>();
+    private ChatGptOAuthRegistration chatGptOAuth;
+
+    synchronized void setChatGptOAuth(ChatGptOAuthRegistration registration) { chatGptOAuth = registration; }
+    synchronized boolean oauthAvailable() { return chatGptOAuth != null && !chatGptOAuth.models().isEmpty(); }
 
     ConversateCueRoutingPolicy(LlmRouterProperties routes, HybridLlmGatewayProbeService eligibility, Environment env, Clock clock) {
         this.routes = routes; this.eligibility = eligibility; this.env = env; this.clock = clock;
@@ -46,6 +51,14 @@ final class ConversateCueRoutingPolicy {
     }
 
     private List<Choice> select(Demand demand, Set<String> used, List<Map<String,Object>> skipped) {
+        return select(demand, used, skipped, null);
+    }
+
+    private List<Choice> select(Demand demand, Set<String> used, List<Map<String,Object>> skipped, Boolean oauthOnly) {
+        if (!routes.isEnabled() || demand.latencyBudgetMs() <= 0) return List.of();
+        if (!demand.gate() && Boolean.TRUE.equals(oauthOnly)) {
+            return selectOauth(demand, used, skipped);
+        }
         boolean enforceCost=env.getProperty("conversate.cost.enforce-limits",Boolean.class,true);
         if (!routes.isEnabled() || demand.latencyBudgetMs() <= 0 || enforceCost&&demand.remainingUsd() < 0) return List.of();
         var choices = new ArrayList<Choice>();
@@ -124,6 +137,38 @@ final class ConversateCueRoutingPolicy {
         return choices.stream().filter(c -> identities.add(identity(routes.getModels().get(c.key())))).toList();
     }
 
+    private List<Choice> selectOauth(Demand demand, Set<String> used, List<Map<String,Object>> skipped) {
+        // Reserved: no product caller sets oauthRequired=true; this cue lane is reached only by tests.
+        // Activating it requires a separate directive.
+        List<String> models = chatGptOAuth == null ? List.of() : chatGptOAuth.models();
+        String requested = env.getProperty("chatgpt.oauth.cue-model", "");
+        String slug = requested.isBlank() ? models.stream()
+                .filter(m -> m.contains("mini") || m.contains("nano") || m.contains("fast"))
+                .findFirst().orElse(models.isEmpty() ? "" : models.get(0)) : requested;
+        String key = ChatGptOAuthRegistration.route(slug);
+        if (!models.contains(slug)) {
+            recordSkip(skipped, "chatgpt-oauth", "chatgpt_oauth_unavailable"); return List.of();
+        }
+        Health h = health(key); Account a = oauthAccount();
+        if (!used.isEmpty() || h.blockedUntil > clock.millis() || a.blockedUntil > clock.millis()
+                || a.requests >= number("chatgpt.oauth.cue-daily-request-limit", 1000)) {
+            recordSkip(skipped, key, "oauth_cooldown_or_request_limit"); return List.of();
+        }
+        long latency = (long)Math.max(2000, Math.min(3000, number("chatgpt.oauth.cue-expected-latency-ms", 2000)));
+        if (latency > demand.latencyBudgetMs()) {
+            recordSkip(skipped, key, "oauth_latency_over_budget"); return List.of();
+        }
+        // USD fields are unused for this reservation; never price subscription usage as a free API call.
+        return List.of(new Choice(key, 0, h.success, latency, "subscription_request_admitted"));
+    }
+
+    private Account oauthAccount() {
+        Account a = accounts.computeIfAbsent(ChatGptOAuthRegistration.BILLING_SOURCE, k -> new Account());
+        long day = clock.millis()/86400000;
+        if (a.day != day) { a.day = day; a.requests = 0; }
+        return a;
+    }
+
     /** Selection and reservation share one monitor: parallel cues cannot spend the same allowance twice. */
     synchronized Reservation reserve(Demand demand, Set<String> used) {
         return reserve(demand, used, null);
@@ -131,8 +176,16 @@ final class ConversateCueRoutingPolicy {
 
     /** When skipped is non-null it receives the per-route exclusion reasons of this evaluation. */
     synchronized Reservation reserve(Demand demand, Set<String> used, List<Map<String,Object>> skipped) {
-        var choices = select(demand, used, skipped); if (choices.isEmpty()) return null;
+        return reserve(demand, used, skipped, null);
+    }
+
+    synchronized Reservation reserve(Demand demand, Set<String> used, List<Map<String,Object>> skipped, Boolean oauthOnly) {
+        var choices = select(demand, used, skipped, oauthOnly); if (choices.isEmpty()) return null;
         Choice choice = choices.get(0); var cfg = routes.getModels().get(choice.key());
+        if (ChatGptOAuthRegistration.isRoute(choice.key())) {
+            health(choice.key()).requests++; oauthAccount().requests++;
+            return new Reservation(choice, ChatGptOAuthRegistration.BILLING_SOURCE, 0, false);
+        }
         Health h = health(choice.key()); Account a = account(cfg);
         h.requests++; a.requests++; a.snapshotRequests++;
         a.spent += choice.estimatedCost(); a.snapshotSpent += choice.estimatedCost();
@@ -149,6 +202,7 @@ final class ConversateCueRoutingPolicy {
             if (Set.of("GENERATION_RATE_LIMITED","API_QUOTA_EXHAUSTED").contains(failure)) step = Math.max(1, step);
             h.blockedUntil = clock.millis()+COOLDOWN_MS[step];
         }
+        if (ChatGptOAuthRegistration.isRoute(reservation.choice().key())) return;
         if (Set.of("GENERATION_DENIED","API_QUOTA_EXHAUSTED").contains(failure))
             accounts.get(reservation.account()).blockedUntil = clock.millis()+300000;
         // Missing or partial usage, including a timeout, retains its conservative reservation.
@@ -167,10 +221,16 @@ final class ConversateCueRoutingPolicy {
         long now = clock.millis();
         for (var entry : health.entrySet()) {
             var cfg = routes.getModels().get(entry.getKey()); var h = entry.getValue();
-            if (cfg == null) continue;
+            boolean oauth = ChatGptOAuthRegistration.isRoute(entry.getKey());
+            if (cfg == null && !oauth) continue;
             var row = new LinkedHashMap<String, Object>();
             row.put("route", entry.getKey());
-            row.put("provider", cfg.getProvider()); row.put("model", cfg.getName());
+            row.put("provider", oauth ? ChatGptOAuthRegistration.PROVIDER : cfg.getProvider());
+            row.put("model", oauth ? ChatGptOAuthRegistration.model(entry.getKey()) : cfg.getName());
+            if (oauth) {
+                row.put("billingSource", ChatGptOAuthRegistration.BILLING_SOURCE);
+                row.put("sessionDailyRequests", oauthAccount().requests);
+            }
             row.put("consecutiveFailures", h.consecutiveFailures);
             row.put("cooldownActive", h.blockedUntil > now);
             row.put("cooldownUntilMs", h.blockedUntil > now ? h.blockedUntil : 0L);
@@ -182,6 +242,7 @@ final class ConversateCueRoutingPolicy {
     }
 
     double estimate(String key, int inputTokens, int outputTokens) {
+        if (ChatGptOAuthRegistration.isRoute(key)) throw new IllegalArgumentException("oauth_usd_not_applicable");
         var cfg = routes.getModels().get(key); String p = prefix(key);
         double input = number(p+"input-usd-per-million", 10), output = number(p+"output-usd-per-million", 30);
         // Published 3.8 Flash promotional end date; avoid silently retaining its half price in 2027.

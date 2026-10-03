@@ -13,7 +13,7 @@ class LogbackTraceFileEncoderTest {
     @Test
     void traceFileAppenderUsesClasspathSafeNdjsonPatternEncoder() throws Exception {
         assertClasspathSafeTraceEncoder(Path.of("main/resources/logback-spring.xml"));
-        assertClasspathSafeTraceEncoder(Path.of("app/src/main/resources/logback-spring.xml"));
+        assertClasspathSafeTraceEncoder(Path.of("app/quarantine/resources_legacy/logback-spring.xml"));
     }
 
     private static void assertClasspathSafeTraceEncoder(Path path) throws Exception {

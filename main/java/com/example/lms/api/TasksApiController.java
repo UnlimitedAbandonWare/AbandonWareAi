@@ -44,10 +44,12 @@ public class TasksApiController {
     void registerPersistedWork() {
         jobService.registerHandler("task_ask", new JobService.JobHandler() {
             public String execute(String json) throws Exception {
-                TaskAskRequest req = jobMapper.readValue(json, TaskAskRequest.class);
-                ChatRequestDto chatReq = toChatRequest(req);
-                var result = chatService.continueChat(chatReq);
-                return jobMapper.writeValueAsString(new ChatResponseDto(result.content(), chatReq.getSessionId(), result.modelUsed(), result.ragUsed()));
+                try (var execution = com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask()) {
+                    TaskAskRequest req = jobMapper.readValue(json, TaskAskRequest.class);
+                    ChatRequestDto chatReq = toChatRequest(req);
+                    var result = chatService.continueChat(chatReq);
+                    return jobMapper.writeValueAsString(new ChatResponseDto(result.content(), chatReq.getSessionId(), result.modelUsed(), result.ragUsed()));
+                }
             }
             public boolean needsCompletion(String json) throws Exception {
                 String url = jobMapper.readValue(json, TaskAskRequest.class).callbackUrl();
@@ -114,7 +116,7 @@ public class TasksApiController {
                     .body(new ChatResponseDto("bad_request", null, "missing_message", false));
         }
         checkNewWorkCost();
-        try {
+        try (var execution = com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask()) {
             ChatRequestDto chatReq = toChatRequest(req);
             var result = chatService.continueChat(chatReq);
             ChatResponseDto dto = new ChatResponseDto(
@@ -151,6 +153,9 @@ public class TasksApiController {
     public ResponseEntity<Map<String, String>> askAsync(TaskAskRequest req) {return askAsync(req,null);}
     @PostMapping("/ask/async")
     public ResponseEntity<Map<String, String>> askAsync(@RequestBody TaskAskRequest req,@RequestHeader(value="Idempotency-Key",required=false) String idempotencyKey) {
+        if (jobService.isTypeDisabled("task_ask")) {
+            return ResponseEntity.status(503).body(Map.of("error", "job_type_disabled"));
+        }
         if (req == null) {
             return ResponseEntity.badRequest().body(Map.of(
                     "error", "bad_request",
@@ -190,15 +195,17 @@ public class TasksApiController {
         if (jobService.runsPersistedJobs()) {
             return ResponseEntity.accepted().location(java.net.URI.create("/v1/tasks/" + jobId)).body(Map.of("taskId", jobId));
         }
-        // Explicit development implementations retain the legacy execution contract.
+        // Development workers use the accepted execution lifetime of persisted jobs.
         jobService.executeAsync(jobId, () -> {
-            ChatRequestDto chatReq = toChatRequest(req);
-            var result = chatService.continueChat(chatReq);
-            return new ChatResponseDto(
-                    result.content(),
-                    chatReq.getSessionId(),
-                    result.modelUsed(),
-                    result.ragUsed());
+            try (var accepted = com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask()) {
+                ChatRequestDto chatReq = toChatRequest(req);
+                var result = chatService.continueChat(chatReq);
+                return new ChatResponseDto(
+                        result.content(),
+                        chatReq.getSessionId(),
+                        result.modelUsed(),
+                        result.ragUsed());
+            }
         }, res -> {
             // If a callback was provided notify the remote URL
             if (req.callbackUrl() != null && !req.callbackUrl().isBlank()) {

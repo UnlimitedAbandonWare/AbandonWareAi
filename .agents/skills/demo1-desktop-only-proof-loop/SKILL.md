@@ -7,7 +7,7 @@ description: Use when demo-1 work asks whether Desktop-local source, script, Gra
 
 ## Core Rule
 
-Treat Desktop canonical proof as the default completion lane for source patches in `C:\AbandonWare\demo-1\demo-1\src`. External host, UI, and Supabase evidence stays supporting unless the user or changed surface explicitly requires it.
+Treat Desktop canonical proof as the default completion lane for source patches in `<repo>`. External host, UI, and Supabase evidence stays supporting unless the user or changed surface explicitly requires it.
 
 ## Reference Routing
 

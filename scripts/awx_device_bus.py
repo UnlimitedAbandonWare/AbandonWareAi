@@ -265,8 +265,12 @@ def main():
         print(render_result(args.action, result))
         blocked = result.get('status') in ('conflict', 'evidence_needed') or (args.action == 'sync' and
             result.get('sharedSecretsStatus') in ('conflict', 'evidence_needed'))
+        # A UserPromptSubmit hook that exits nonzero blocks the user's prompt;
+        # evidence gaps belong in additionalContext, never in the exit code.
+        if args.action == 'hook':
+            return 0
         return 2 if blocked else 0
-    except (Conflict, OSError, ValueError, KeyError):
+    except Exception:
         print(render_result(args.action, {'status': 'evidence_needed', 'reason': 'resource-operation-rejected'}))
         return 0 if args.action == 'hook' else 2
 

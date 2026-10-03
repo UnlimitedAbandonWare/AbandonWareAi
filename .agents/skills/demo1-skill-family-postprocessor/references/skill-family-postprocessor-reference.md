@@ -9,7 +9,7 @@ Validate this postprocessor skill after skill-only edits:
 
 ```powershell
 $env:PYTHONUTF8 = "1"
-python C:\Users\nninn\.codex\skills\.system\skill-creator\scripts\quick_validate.py .\.agents\skills\demo1-skill-family-postprocessor
+python %USERPROFILE%\.codex\skills\.system\skill-creator\scripts\quick_validate.py .\.agents\skills\demo1-skill-family-postprocessor
 ```
 
 Run the validator option self-test after editing validator behavior:

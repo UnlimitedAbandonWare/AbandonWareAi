@@ -156,6 +156,54 @@ class StrategyConflictResolverTest {
     }
 
     @Test
+    void compoundSignalsEmitDeferredAndParallelStageHints() {
+        StrategyConflictResolver resolver = new StrategyConflictResolver();
+
+        ExecutionPlan plan = resolver.resolve(new StrategyConflictResolver.Signals(
+                true, true, true, true));
+
+        assertEquals(ExecutionPlan.PrimaryMode.EXTREMEZ, plan.primaryMode());
+        assertEquals("OVERDRIVE,HYPERNOVA", plan.knobs().get("specialMode.conflict.suppressed"));
+        assertEquals(List.of("OVERDRIVE", "HYPERNOVA"),
+                plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_DEFERRED));
+        assertEquals(Boolean.TRUE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_PARALLEL_VERIFY));
+        assertEquals(Boolean.FALSE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_FAST_EMIT));
+        assertEquals(Boolean.TRUE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_RETRY_ON_EMPTY));
+        assertEquals(ExecutionPlan.DEFAULT_STAGES, plan.stages());
+    }
+
+    @Test
+    void zeroSignalsEmitFastEmitBypassHints() {
+        StrategyConflictResolver resolver = new StrategyConflictResolver();
+
+        ExecutionPlan plan = resolver.resolve(new StrategyConflictResolver.Signals(
+                false, false, false, false));
+
+        assertEquals(ExecutionPlan.PrimaryMode.NORMAL, plan.primaryMode());
+        assertEquals(Boolean.TRUE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_FAST_EMIT));
+        assertEquals(Boolean.FALSE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_RETRY_ON_EMPTY));
+        assertEquals(List.of("ExtremeZBurst", "OverdriveNarrow"),
+                plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_SKIP));
+        assertEquals(List.of(), plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_DEFERRED));
+        assertEquals(Boolean.FALSE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_PARALLEL_VERIFY));
+    }
+
+    @Test
+    void lowRecallOnlySkipsUnusedModeStagesAsHint() {
+        StrategyConflictResolver resolver = new StrategyConflictResolver();
+
+        ExecutionPlan plan = resolver.resolve(new StrategyConflictResolver.Signals(
+                true, false, false, false));
+
+        assertEquals(ExecutionPlan.PrimaryMode.EXTREMEZ, plan.primaryMode());
+        List<String> skip = (List<String>) plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_SKIP);
+        assertTrue(skip.contains("OverdriveNarrow"));
+        assertFalse(skip.contains("ExtremeZBurst"));
+        assertEquals(List.of(), plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_DEFERRED));
+        assertEquals(Boolean.FALSE, plan.knobs().get(ExecutionPlan.KNOB_STAGE_HINT_PARALLEL_VERIFY));
+    }
+
+    @Test
     void traceFallbackCatchUsesDirectSafeLog() throws Exception {
         String source = Files.readString(
                 Path.of("main/java/com/example/lms/orchestration/StrategyConflictResolver.java"),

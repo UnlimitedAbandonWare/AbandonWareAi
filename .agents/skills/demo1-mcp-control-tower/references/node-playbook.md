@@ -178,7 +178,7 @@ Mac mini 작업본으로 추정하지 않습니다.
 확인된 producer 작업본에서 노드 실행 증거가 필요한 경우:
 
 ```bash
-python scripts/awx_mcp_node_smoke.py --root . --canonical-root C:/AbandonWare/demo-1/demo-1/src --node-role macmini
+python scripts/awx_mcp_node_smoke.py --root . --canonical-root <repo> --node-role macmini
 ```
 
 위 명령은 Mac mini의 독립 작업본에서 실행할 예시입니다. 인자의 Desktop 경로는 격리 비교용 기준이며

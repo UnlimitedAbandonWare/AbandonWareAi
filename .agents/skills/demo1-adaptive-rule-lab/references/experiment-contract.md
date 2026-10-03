@@ -1,7 +1,7 @@
 # Local experiment contract
 
-All examples run from `C:\AbandonWare\demo-1\demo-1\src`. Prefix the action with
-`python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py`.
+All examples run from `<repo>`. Prefix the action with
+`python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py`.
 Use `catalog.py` in the same directory for discovery. Commands write only an
 explicit campaign, derived catalog or usage event. Raw source files are retained.
 
@@ -41,14 +41,14 @@ Both index bytes and evaluator code are pinned. Do not rebuild an index during a
 campaign. Changes need a new candidate index; baseline remains frozen.
 
 ```powershell
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py register --campaign route-demo --cases data/route-cases.json --spec data/baseline.json --hypothesis "Purpose aliases recover valid routes missed by names."
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py candidate --campaign route-demo --candidate alias-v1 --spec data/candidate.json --hypothesis "Reviewed concepts improve top-one retrieval." --changed-basis "Add bilingual purpose aliases."
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py run --campaign route-demo --candidate alias-v1 --run-id dev-v1
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py candidate --campaign route-demo --candidate alias-v2 --parent alias-v1 --spec data/revised.json --hypothesis "Separate retrieval from verdict concepts." --changed-basis "Development residuals confuse evidence collection with judgment."
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py run --campaign route-demo --candidate alias-v2 --run-id dev-v2
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py run --campaign route-demo --candidate alias-v2 --run-id confirm-v2 --split confirmation
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py status --campaign route-demo
-python -B .agents/skills/demo1-adaptive-rule-lab/scripts/experiment.py promote --campaign route-demo --run-id confirm-v2
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py register --campaign route-demo --cases data/route-cases.json --spec data/baseline.json --hypothesis "Purpose aliases recover valid routes missed by names."
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py candidate --campaign route-demo --candidate alias-v1 --spec data/candidate.json --hypothesis "Reviewed concepts improve top-one retrieval." --changed-basis "Add bilingual purpose aliases."
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py run --campaign route-demo --candidate alias-v1 --run-id dev-v1
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py candidate --campaign route-demo --candidate alias-v2 --parent alias-v1 --spec data/revised.json --hypothesis "Separate retrieval from verdict concepts." --changed-basis "Development residuals confuse evidence collection with judgment."
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py run --campaign route-demo --candidate alias-v2 --run-id dev-v2
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py run --campaign route-demo --candidate alias-v2 --run-id confirm-v2 --split confirmation
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py status --campaign route-demo
+python -B .agents\skills\demo1-adaptive-rule-lab\scripts\experiment.py promote --campaign route-demo --run-id confirm-v2
 ```
 
 `--case-ids` may narrow development cases only. Confirmation evaluates the entire
@@ -72,7 +72,7 @@ passed. `quality` must still be measured on its declared rubric. Set the frozen
 policy `taskType` to `debugging` to score debug verification in the quality slot.
 The adapter must operate only on authorized local inputs. It may parse an existing
 test result or run a bounded approved probe; it must not start persistent children.
-The included `scripts/junit_adapter.py` reads a case's repo-relative `reportPath`
+The included `.agents\skills\demo1-adaptive-rule-lab\scripts\junit_adapter.py` reads a case's repo-relative `reportPath`
 and verifies `reportHash` before parsing. It rejects empty/inconsistent reports,
 entities and oversized XML. Skipped tests cannot count as verified debugging.
 Set optional `capabilityLoss: true` for any protected capability loss; it is a

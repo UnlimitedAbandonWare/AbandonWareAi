@@ -23,9 +23,17 @@
   }
   function mount(document){
     const button=document.getElementById('observe'),output=document.getElementById('diagnostic-data');
-    const labels={audioState:'수음 상태',audioChunks:'서버 수신 오디오 청크',audioBytes:'서버 수신 오디오 바이트',lastAudioReceivedAt:'마지막 오디오 수신',lastTranscriptReceivedAt:'마지막 전사 수신',reconnects:'전사 재연결',decision:'표시 판단',reason:'결과 코드',processingMs:'처리 시간 ms',searchResults:'검색 결과 수',embeddingModel:'임베딩 모델',observedAt:'관측 시각',audio:'STT',pipeline:'RAG / LLM'};
+    const labels={audioState:'수음 상태',audioChunks:'서버 수신 오디오 청크',audioBytes:'서버 수신 오디오 바이트',lastAudioReceivedAt:'마지막 오디오 수신',lastTranscriptReceivedAt:'마지막 전사 수신',reconnects:'전사 재연결',decision:'표시 판단',reason:'결과 코드',processingMs:'처리 시간 ms',searchResults:'검색 결과 수',embeddingModel:'임베딩 모델',observedAt:'관측 시각',audio:'STT',pipeline:'RAG / LLM',jevLatencyMs:'Jev 지연시간 ms',jevDecision:'Jev 판단',jevMode:'Jev 모드',jevReasonCode:'Jev 결과 코드',jevApplied:'Jev 적용 여부'};
     const observer=createObserver({onData(data){output.replaceChildren();if(!data)return;
-      for(const [key,label]of Object.entries(labels)){const value=data[key];if(value===undefined)continue;const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;dd.textContent=typeof value==='object'?JSON.stringify(value):String(value);output.append(dt,dd);}},
+      const nested=data.pipeline!==null&&typeof data.pipeline==='object'?data.pipeline:{};
+      for(const [key,label]of Object.entries(labels)){let value=data[key];
+        if(value===undefined&&key.startsWith('jev'))value=nested[key];
+        if(key==='jevLatencyMs'&&value!==undefined&&(!Number.isInteger(value)||value<0))continue;
+        if(value===undefined)continue;
+        const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=label;
+        let shown=value;
+        if(key==='pipeline'&&value!==null&&typeof value==='object'){shown={...value};if(!Number.isInteger(shown.jevLatencyMs)||shown.jevLatencyMs<0)delete shown.jevLatencyMs;}
+        dd.textContent=typeof shown==='object'?JSON.stringify(shown):String(shown);output.append(dt,dd);}},
       onState(state){document.getElementById('diagnostic-status').textContent=({OFF:'진단 꺼짐',STARTING:'권한 확인 중',ON:'진단 조회 중',DENIED:'개발자 권한을 확인해 주세요.',NO_SESSION:'이 브라우저에 허가된 세션이 없습니다.',UNAVAILABLE:'진단을 조회하지 못했습니다.'})[state];button.textContent=['STARTING','ON'].includes(state)?'진단 끄기':'진단 켜기';}});
     button.onclick=()=>observer.isActive()?observer.stop():observer.start();
     globalThis.addEventListener('pagehide',()=>observer.stop());

@@ -27,8 +27,32 @@ public final class ChatRunExecutionContext {
         this.commitLease = commitLease;
     }
 
+    public java.util.Optional<com.example.lms.ensemble.PreparedContextPacket> cachedContextPreparation(String identity){
+        return registry.cachedContextPreparation(this,identity);
+    }
+    public void rememberContextPreparation(com.example.lms.ensemble.PreparedContextPacket packet){
+        registry.rememberContextPreparation(this,packet);
+    }
+
     public boolean isCancellationRequested() {
         return registry.isCancellationRequested(this);
+    }
+
+    public com.example.lms.routing.RunRoutingSnapshot routingSnapshot() {
+        return registry.routingSnapshot(this);
+    }
+
+    public java.util.Optional<com.example.lms.routing.RoutingInvocation> routingInvocation(com.example.lms.routing.RoutingProfile.Role role) {
+        return registry.routingInvocation(this,role);
+    }
+
+    public boolean bindPersistedUserMessage(Long id) { return registry.bindPersistedUserMessage(this, id); }
+    public Long persistedUserMessageId() { return registry.persistedUserMessageId(this); }
+    public boolean rememberUnderstandingIntent(com.example.lms.service.understanding.UnderstandingCommitService.Intent intent) {
+        return registry.rememberUnderstandingIntent(this, intent);
+    }
+    public java.util.Optional<com.example.lms.service.understanding.UnderstandingCommitService.Intent> understandingIntent() {
+        return registry.understandingIntent(this);
     }
 
     /** Only short, nonblocking admission/observation callbacks may run under the run gate. */
@@ -46,14 +70,18 @@ public final class ChatRunExecutionContext {
 
     public static void throwIfCancelled() {
         ChatRunExecutionContext run = current();
-        if (Thread.currentThread().isInterrupted() || (run != null && !run.admitCall(() -> {}))) {
+        if (Thread.currentThread().isInterrupted() || (run != null && run.isCancellationRequested())) {
             throw new java.util.concurrent.CancellationException("exact chat run cancelled");
         }
     }
 
-    /** Cap this wait against the original request deadline; zero never means unlimited I/O. */
+    /** Accepted runs retain finite transport waits without inheriting an ingress deadline. */
     public static long capRequestWait(long configuredMillis) {
         throwIfCancelled();
+        if (isAcceptedExecution()) {
+            if (configuredMillis <= 0) throw new IllegalArgumentException("positive transport wait required");
+            return configuredMillis;
+        }
         var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
         long remaining = budget == null ? configuredMillis : budget.capWaitMillis(configuredMillis);
         if (remaining <= 0) {
@@ -65,7 +93,14 @@ public final class ChatRunExecutionContext {
 
     /** Scope must be opened on the blocking caller, never on a shared I/O event loop. */
     public static BlockingCall interruptibleCall(String transport) {
-        capRequestWait(Long.MAX_VALUE);
+        throwIfCancelled();
+        if (!isAcceptedExecution()) {
+            var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            if (budget != null && budget.expired()) {
+                throw new com.example.lms.llm.gateway.LlmGatewayException("request budget exhausted",
+                        com.example.lms.llm.gateway.LlmFailureClass.TIMEOUT_SOFT, "request_budget_exhausted");
+            }
+        }
         return new BlockingCall(current(), Thread.currentThread(), transport);
     }
 
@@ -195,6 +230,17 @@ public final class ChatRunExecutionContext {
         Binding binding = new Binding(context, CURRENT.get());
         CURRENT.set(binding);
         return new Scope(binding, Thread.currentThread());
+    }
+
+    /** The durable job worker owns task cancellation through its thread and commit fence. */
+    public static Scope bindAcceptedTask() {
+        Binding binding = new Binding(null, CURRENT.get());
+        CURRENT.set(binding);
+        return new Scope(binding, Thread.currentThread());
+    }
+
+    public static boolean isAcceptedExecution() {
+        return CURRENT.get() != null;
     }
 
     private static final class Binding {

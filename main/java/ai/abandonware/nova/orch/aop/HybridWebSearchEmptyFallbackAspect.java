@@ -38,6 +38,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -1156,12 +1157,20 @@ public class HybridWebSearchEmptyFallbackAspect {
             int submitted = 0;
 
             if (!skipNaver && naver != null) {
-                futures.add(ecs.submit(() -> callNaver(naver, query, topK, deadlineNs, maxNaverBlockMs)));
-                submitted++;
+                try {
+                    futures.add(ecs.submit(() -> callNaver(naver, query, topK, deadlineNs, maxNaverBlockMs)));
+                    submitted++;
+                } catch (RejectedExecutionException rejected) {
+                    naverRes = ProviderResult.empty("naver", "executor_saturated", 0L);
+                }
             }
             if (!skipBrave && brave != null) {
-                futures.add(ecs.submit(() -> callBrave(brave, query, topK)));
-                submitted++;
+                try {
+                    futures.add(ecs.submit(() -> callBrave(brave, query, topK)));
+                    submitted++;
+                } catch (RejectedExecutionException rejected) {
+                    braveRes = ProviderResult.empty("brave", "executor_saturated", 0L);
+                }
             }
 
             int remaining = submitted;

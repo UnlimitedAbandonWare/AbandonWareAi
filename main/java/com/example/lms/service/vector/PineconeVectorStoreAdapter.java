@@ -155,7 +155,7 @@ public final class PineconeVectorStoreAdapter implements EmbeddingStore<TextSegm
                 Map.of("namespace", namespace(), "ids", List.copyOf(ids)), "delete_ids");
     }
 
-    private String namespace() { return props.getNamespace() == null ? "" : props.getNamespace(); }
+    public String namespace() { return props.getNamespace() == null ? "" : props.getNamespace(); }
 
     static Map<String, Object> filter(Filter filter, boolean negated) {
         if (filter instanceof Not f) return filter(f.expression(), !negated);

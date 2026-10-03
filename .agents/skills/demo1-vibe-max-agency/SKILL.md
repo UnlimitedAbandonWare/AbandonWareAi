@@ -9,7 +9,7 @@ description: Use when the user asks for vibe coding, maximum agency, or autonomo
 
 ## Do
 
-1. Run `Vibe-Max-Agency.bat -Apply` from `C:\AbandonWare\demo-1\demo-1\src` (idempotent; `-Check` is report-only).
+1. Run `Vibe-Max-Agency.bat -Apply` from `<repo>` (idempotent; `-Check` is report-only).
 2. Share/inspect `var/debug/vibe-max-agency-status.json` — per-agent open/blocked read paths, `agent.db-context` local flag, meta_display_db `status`/`live status`, hard-block integrity.
 3. Follow the `DEMO1-VIBE-MAX-AGENCY` section in `AGENTS.md`: `agent_preflight.py` → `awx_device_bus.py start` → `$demo1-vibe-skill-router` (or `$demo1-core-request-router`); maximum reads of device-bus events/registry, `var/debug/**`, `logs/debug-events*.ndjson`, meta-display DB exports, `/agent/db-context/*` (local profile); writes only inside journal+checkpoint(+lease) scope.
 4. Overlapping lease scope → report blocked/wait. Verification claims keep tool-ran vs target-health vs build-ran vs full-verification distinct (403 = auth-blocked, not DOWN).
@@ -18,6 +18,6 @@ description: Use when the user asks for vibe coding, maximum agency, or autonomo
 
 - Never relax hard constraints: no `.secrets/`/`apikey.txt`/`.env*`/`shared.env*` reads or prints, no openssl key changes.
 - Never force-release, recover, or delete another agent's **live** lease (valid TTL / recent heartbeat / proven-alive owner). An expired stale lease is reclaimed only via `lease_conflict_autoflow.py reclaim` quarantine — never by hand.
-- No paid-provider calls or production-secret deploys without explicit user authorization.
+- No production-secret deploys. Paid-provider calls follow the `$demo1-agent-api-spend-guard` SSOT — ON by default (`codex_credits → external_paid_api → free_tier → local_ollama`), `AWX_AGENT_ALLOW_PAID_MODELS=0` is the kill switch.
 - Do not delete the skill catalog or broadly modify `.agents/skills/`; do not enable `agent.db-context` in public/base profiles.
 - Do not start/stop/ForceRestart the live runtime just to verify these rule/config changes (see `.clinerules/00-demo1-cline-bridge.md` Runtime protection).

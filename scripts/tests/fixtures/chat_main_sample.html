@@ -1,0 +1,20 @@
+<!doctype html>
+<!-- SYNTHETIC FIXTURE for test_main_chat_target_probe.py — hand-written minimal
+     copy of chat-ui.html markers. Not a real capture. No secrets. -->
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>AbandonWare AI</title>
+  <script defer src="/js/chat.js?v=fixture"></script>
+</head>
+<body>
+  <details class="conversation-sidebar" id="historyPanel" open>
+    <button id="newChatBtn" data-testid="chat-new-chat-button" type="button">새 대화</button>
+  </details>
+  <div id="chatWindow" role="log" aria-live="polite"></div>
+  <form id="chatForm" class="composer" method="post" action="/api/chat" data-testid="chat-composer">
+    <textarea id="messageInput" name="message" data-testid="chat-message-input"></textarea>
+    <button id="sendBtn" class="primary" type="button" data-testid="chat-send-button">↑</button>
+  </form>
+</body>
+</html>

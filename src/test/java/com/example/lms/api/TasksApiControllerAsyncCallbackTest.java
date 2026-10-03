@@ -61,6 +61,31 @@ class TasksApiControllerAsyncCallbackTest {
     }
 
     @Test
+    void acceptedMemoryTaskHidesExpiredIngressBudgetAndRestoresCallerScope() throws Exception {
+        var ingress = new com.abandonware.ai.addons.budget.TimeBudget(1L);
+        Thread.sleep(5L);
+        com.abandonware.ai.addons.budget.TimeBudgetContext.set(ingress);
+        ChatService chatService = mock(ChatService.class);
+        when(chatService.continueChat(any(ChatRequestDto.class))).thenAnswer(invocation -> {
+            org.junit.jupiter.api.Assertions.assertTrue(
+                    com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution());
+            assertNull(com.abandonware.ai.addons.budget.TimeBudgetContext.get());
+            return ChatResult.of("accepted", "synthetic", false);
+        });
+        try {
+            var controller = new TasksApiController(chatService, new InlineJobService(), new CapturingNotifier());
+            var response = controller.askAsync(new TasksApiController.TaskAskRequest(
+                    "synthetic task", null, null, null, 42L, null, null));
+            assertEquals(HttpStatus.ACCEPTED, response.getStatusCode());
+            org.junit.jupiter.api.Assertions.assertSame(ingress,
+                    com.abandonware.ai.addons.budget.TimeBudgetContext.get());
+            assertFalse(com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution());
+        } finally {
+            com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
+        }
+    }
+
+    @Test
     void asyncCallbackPayloadToleratesNullChatResponseFields() {
         ChatService chatService = mock(ChatService.class);
         when(chatService.continueChat(any(ChatRequestDto.class)))

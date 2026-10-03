@@ -133,6 +133,8 @@ public class HybridRetriever implements ContentRetriever {
     private final AnalyzeWebSearchRetriever analyzeRetriever;
     private final WebSearchRetriever webSearchRetriever;
     private final QueryComplexityGate gate;
+    @Autowired(required = false)
+    private com.example.lms.assist.JevCandidateSignal jevCandidateSignal;
 
     // (????? ?????濡ろ떟??????- ???源끹걬癲???딅텑??釉뚰????怨뚮옖?????????
     @Autowired(required = false)
@@ -2051,6 +2053,9 @@ public class HybridRetriever implements ContentRetriever {
                     providerFailures.get());
             if ((fused == null || fused.isEmpty()) && !"success".equals(terminalReason)) {
                 return emptyEvidence("hybrid_all", terminalReason, integrityStarted);
+            }
+            if (fused != null && !fused.isEmpty() && jevCandidateSignal != null) {
+                fused = jevCandidateSignal.rerank(queries.get(0), fused);
             }
             return fused == null ? java.util.List.of() : fused;
         } catch (java.util.concurrent.CancellationException cancelled) {

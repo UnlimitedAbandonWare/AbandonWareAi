@@ -1,0 +1,118 @@
+﻿{
+    "schemaVersion":  "devin-cwd-doctor.v1",
+    "action":  "check",
+    "srcRoot":  "C:\\AbandonWare\\demo-1\\demo-1\\src",
+    "homeDir":  "C:\\Users\\nninn",
+    "appData":  "C:\\Users\\nninn\\AppData\\Roaming",
+    "psVersion":  "5.1.19041.6456",
+    "cwd":  "C:\\AbandonWare\\demo-1\\demo-1\\src",
+    "checks":  [
+                   {
+                       "id":  "C1",
+                       "status":  "BAD",
+                       "detail":  "1 workspace(s) need attention",
+                       "items":  [
+                                     {
+                                         "id":  "1790248028020",
+                                         "status":  "OK",
+                                         "detail":  "folders ok",
+                                         "folders":  [
+                                                         "C:\\AbandonWare\\demo-1\\demo-1\\src"
+                                                     ],
+                                         "wsMtime":  "2026-09-30T10:45:17",
+                                         "stagedReason":  null,
+                                         "file":  "C:\\Users\\nninn\\AppData\\Roaming\\Devin\\Workspaces\\1790248028020\\workspace.json",
+                                         "badFolders":  [
+
+                                                        ]
+                                     },
+                                     {
+                                         "id":  "1790732690335",
+                                         "status":  "STAGED",
+                                         "detail":  "resolves to $HOME or empty: C:\\Users\\nninn [deferred: open-window]",
+                                         "folders":  [
+                                                         "C:\\Users\\nninn",
+                                                         "C:\\AbandonWare\\demo-1\\demo-1\\src"
+                                                     ],
+                                         "wsMtime":  "2026-10-02T10:13:29",
+                                         "stagedReason":  "open-window",
+                                         "file":  "C:\\Users\\nninn\\AppData\\Roaming\\Devin\\Workspaces\\1790732690335\\workspace.json",
+                                         "badFolders":  [
+                                                            "C:\\Users\\nninn"
+                                                        ]
+                                     },
+                                     {
+                                         "id":  "1790837425205",
+                                         "status":  "OK",
+                                         "detail":  "folders ok",
+                                         "folders":  [
+                                                         "C:\\AbandonWare\\demo-1\\demo-1\\src"
+                                                     ],
+                                         "wsMtime":  "2026-10-01T15:50:27",
+                                         "stagedReason":  null,
+                                         "file":  "C:\\Users\\nninn\\AppData\\Roaming\\Devin\\Workspaces\\1790837425205\\workspace.json",
+                                         "badFolders":  [
+
+                                                        ]
+                                     },
+                                     {
+                                         "id":  "1790837425442",
+                                         "status":  "OK",
+                                         "detail":  "folders ok",
+                                         "folders":  [
+                                                         "C:\\AbandonWare\\demo-1\\demo-1\\src"
+                                                     ],
+                                         "wsMtime":  "2026-10-02T10:50:41",
+                                         "stagedReason":  "newest-workspace",
+                                         "file":  "C:\\Users\\nninn\\AppData\\Roaming\\Devin\\Workspaces\\1790837425442\\workspace.json",
+                                         "badFolders":  [
+
+                                                        ]
+                                     }
+                                 ]
+                   },
+                   {
+                       "id":  "C2",
+                       "status":  "OK",
+                       "detail":  "terminal.integrated.cwd = src",
+                       "items":  [
+
+                                 ]
+                   },
+                   {
+                       "id":  "C3",
+                       "status":  "OK",
+                       "detail":  "DEMO1-CWD-GUARD block present",
+                       "items":  [
+
+                                 ]
+                   },
+                   {
+                       "id":  "C4",
+                       "status":  "OK",
+                       "detail":  "workspace folders = src",
+                       "items":  [
+
+                                 ]
+                   },
+                   {
+                       "id":  "C5",
+                       "status":  "INFO",
+                       "detail":  "cwd=C:\\AbandonWare\\demo-1\\demo-1\\src PS=5.1.19041.6456",
+                       "items":  [
+
+                                 ]
+                   }
+               ],
+    "fixed":  [
+
+              ],
+    "staged":  [
+
+               ],
+    "backups":  [
+
+                ],
+    "includeActive":  false,
+    "exitCode":  2
+}

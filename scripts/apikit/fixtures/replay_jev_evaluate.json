@@ -1,0 +1,7 @@
+{
+  "method": "POST",
+  "url": "https://ai-gateway.vercel.sh/v1/evaluate",
+  "headers": {"Content-Type": "application/json", "Authorization": "Bearer X"},
+  "body": {"model": "typesafe-ai/jev", "answer": {"type": "text", "text": "ping"}},
+  "note": "apikit replay fixture — app-shaped request sans real credential"
+}

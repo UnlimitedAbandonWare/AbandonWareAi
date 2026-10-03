@@ -34,6 +34,16 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 class TrainRagIngestServiceTest {
+    private static VectorStoreService successfulStore() {
+        VectorStoreService store = mock(VectorStoreService.class);
+        org.mockito.Mockito.when(store.flush()).thenReturn(
+                new VectorStoreService.VectorFlushOutcome(true, 1, 0, "complete"));
+        var receipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(receipt.durable()).thenReturn(true);
+        org.mockito.Mockito.when(receipt.reasonCode()).thenReturn("complete");
+        org.mockito.Mockito.when(store.enqueueWithReceipt(anyString(), anyString(), anyString(), any())).thenReturn(receipt);
+        return store;
+    }
 
     @TempDir
     Path tempDir;
@@ -50,7 +60,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void backgroundRagControlObservationNeverBlocksVectorWriteInEnforceMode() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_pgpc_shadow.json").toString());
@@ -74,7 +84,7 @@ class TrainRagIngestServiceTest {
 
         assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
         assertEquals(0, service.ingestNewSamples(jsonl, "ds", () -> false));
-        verify(vectorStoreService, times(1)).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService, times(1)).enqueueWithReceipt(anyString(), anyString(), anyString(), any());
         verify(vectorStoreService, times(1)).flush();
         assertEquals(true, TraceStore.get("ragControl.learning.shadowOnly"));
         assertEquals(false, TraceStore.get("ragControl.learning.holdWrites"));
@@ -85,7 +95,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void backgroundIngestWithoutGateRecordsUnavailableObservationButStillWrites() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_pgpc_missing_gate.json").toString());
@@ -99,7 +109,7 @@ class TrainRagIngestServiceTest {
         TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
 
         assertEquals(1, service.ingestNewSamples(jsonl, "ds", () -> false));
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), any());
         verify(vectorStoreService).flush();
         assertEquals(false, TraceStore.get("uaw.retrain.ragControl.present"));
         assertEquals("learning_gate_unavailable", TraceStore.get("uaw.retrain.ragControl.failureClass"));
@@ -107,7 +117,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestPreservesValidationMetadataForVectorQuarantine() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state.json").toString());
@@ -124,7 +134,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         verify(vectorStoreService).flush();
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals("causal", meta.get(VectorMetaKeys.META_LEARNING_QUESTION_TYPE));
@@ -158,7 +168,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestQuarantinesUnpromotedNeedleRoiCandidate() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_needle_roi.json").toString());
@@ -175,7 +185,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals(true, meta.get(VectorMetaKeys.META_LEARNING_ROI_NEEDLE_SIGNAL_CANDIDATE));
         assertEquals(false, meta.get(VectorMetaKeys.META_LEARNING_ROI_PROMOTED));
@@ -188,7 +198,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestQuarantinesHighContradictionSamples() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_contradiction.json").toString());
@@ -205,7 +215,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals(0.77, ((Number) meta.get(VectorMetaKeys.META_LEARNING_CONTRADICTION_SCORE)).doubleValue(), 0.0001);
         assertEquals("evidence_conflict", meta.get(VectorMetaKeys.META_LEARNING_CONTRADICTION_CAUSE));
@@ -215,7 +225,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestDoesNotFailOpenWhenLegacyValidationHasNoRejectReasons() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_legacy_missing_reasons.json").toString());
@@ -232,7 +242,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals("rejected", meta.get(VectorMetaKeys.META_LEARNING_VALIDATION_DECISION));
         assertEquals("QUARANTINE", meta.get(VectorMetaKeys.META_DELETE_DECISION));
@@ -241,7 +251,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestQuarantinesAnomalousAcceptedSamples() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_anomaly.json").toString());
@@ -258,7 +268,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals("spike", meta.get(VectorMetaKeys.META_LEARNING_ANOMALY_FLAGS));
         assertEquals(true, meta.get(VectorMetaKeys.META_LEARNING_ANOMALY_SPIKE));
@@ -269,7 +279,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestQuarantinesAcceptedValidationWithAfterFilterZero() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_after_filter.json").toString());
@@ -286,7 +296,7 @@ class TrainRagIngestServiceTest {
         assertEquals(1, count);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals(0, meta.get("afterFilterCount"));
         assertEquals("rejected", meta.get(VectorMetaKeys.META_LEARNING_VALIDATION_DECISION));
@@ -296,7 +306,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestSkipsInvalidLinesAndContinuesToLaterValidRows() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_invalid.json").toString());
@@ -307,13 +317,13 @@ class TrainRagIngestServiceTest {
                 "",
                 "not-json",
                 "{\"question\":\"skip\",\"sessionId\":\"s1\"}",
-                "{\"question\":\"q\",\"answer\":\"a\",\"sessionId\":\"s1\",\"validation\":{\"rejectReasons\":[],\"thresholds\":{\"contaminationMax\":0.30,\"contextContaminationMax\":0.35},\"anomalies\":{\"flags\":[]},\"feedback\":{\"vectorDecision\":\"SHADOW_REVIEW\"}}}"));
+                "{\"question\":\"q\",\"answer\":\"a\",\"sessionId\":\"s1\",\"validation\":{\"rejectReasons\":[],\"thresholds\":{\"contaminationMax\":0.30,\"contextContaminationMax\":0.35},\"anomalies\":{\"flags\":[]},\"feedback\":{\"vectorDecision\":\"SHADOW_REVIEW\"}}}") + "\n");
 
         TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
         int count = service.ingestNewSamples(jsonl, "ds", () -> false);
 
         assertEquals(1, count);
-        verify(vectorStoreService, times(1)).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService, times(1)).enqueueWithReceipt(anyString(), anyString(), anyString(), any());
         verify(vectorStoreService).flush();
         assertEquals(1L, TraceStore.getLong("uaw.retrain.ingest.count"));
         assertEquals(2L, TraceStore.getLong("uaw.retrain.ingest.parsed"));
@@ -327,7 +337,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void nonFiniteValidationNumbersDoNotReachVectorMetadata() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_nonfinite.json").toString());
@@ -343,7 +353,7 @@ class TrainRagIngestServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertFalse(meta.values().stream()
                 .map(String::valueOf)
@@ -358,7 +368,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestRecordsVectorUpsertFailureCounters() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_fail.json").toString());
@@ -368,13 +378,16 @@ class TrainRagIngestServiceTest {
         Files.writeString(jsonl, """
                 {"question":"q","answer":"a","sessionId":"s1","validation":{"rejectReasons":[],"thresholds":{"contaminationMax":0.30,"contextContaminationMax":0.35},"anomalies":{"flags":[]},"feedback":{"vectorDecision":"SHADOW_REVIEW"}}}
                 """);
+        var failedReceipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(failedReceipt.reasonCode()).thenReturn("store_failure");
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), any())).thenReturn(failedReceipt);
         doThrow(new RuntimeException("boom")).when(vectorStoreService).flush();
 
         TrainRagIngestService service = new TrainRagIngestService(vectorStoreService, vectorSidService, props);
         int count = service.ingestNewSamples(jsonl, "ds", () -> false);
 
         assertEquals(0, count);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), any());
         verify(vectorStoreService).flush();
         assertEquals(0L, TraceStore.getLong("uaw.retrain.ingest.count"));
         assertEquals(1L, TraceStore.getLong("uaw.retrain.ingest.parsed"));
@@ -387,7 +400,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void defaultMetadataProjectionDoesNotEnqueueRawQuestionAnswerText() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_metadata_only.json").toString());
@@ -410,7 +423,7 @@ class TrainRagIngestServiceTest {
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
         String text = textCaptor.getValue();
         assertTrue(text.contains("UAW AutoLearn metadata projection"));
         assertTrue(text.contains("validationDecision=accepted"));
@@ -438,7 +451,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void metadataProjectionPreservesCanonicalDiagnosticLabels() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_canonical_labels.json").toString());
@@ -454,7 +467,7 @@ class TrainRagIngestServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals("validation_rejected,sample_score_threshold,context_contamination_threshold,requery_unconfirmed",
                 meta.get(VectorMetaKeys.META_LEARNING_REJECT_REASONS));
@@ -465,7 +478,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void metadataProjectionRejectsTypeConfusionAndUsesSafeNumericDefaults() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_typed_domains.json").toString());
@@ -481,7 +494,7 @@ class TrainRagIngestServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertEquals(0, meta.get("afterFilterCount"));
         assertEquals(0.0d, ((Number) meta.get("contextDiversity")).doubleValue(), 0.0001d);
@@ -504,7 +517,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void invalidTimestampUsesCanonicalFallbackAndEmitsOnlyRedactedReason() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_invalid_timestamp.json").toString());
@@ -520,7 +533,7 @@ class TrainRagIngestServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         String projected = String.valueOf(meta.get("ts"));
         assertEquals(projected, java.time.Instant.parse(projected).toString());
@@ -534,7 +547,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void rawShadowProjectionKeepsLegacyRawContentOnlyWhenExplicitlyOptedIn() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_raw_shadow.json").toString());
@@ -553,7 +566,7 @@ class TrainRagIngestServiceTest {
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
         assertTrue(textCaptor.getValue().contains("legacy raw question"));
         assertTrue(textCaptor.getValue().contains("legacy raw answer"));
         assertEquals("RAW_SHADOW_QUARANTINE", metaCaptor.getValue().get("vector_projection_mode"));
@@ -561,7 +574,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void rawShadowProjectionRedactsSecretsBeforeVectorEnqueue() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_raw_shadow_redacted.json").toString());
@@ -583,7 +596,7 @@ class TrainRagIngestServiceTest {
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
         String text = textCaptor.getValue();
         assertTrue(text.contains("legacy raw question"));
         assertTrue(text.contains("legacy raw answer"));
@@ -595,7 +608,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void noneProjectionSkipsVectorEnqueue() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         props.getRetrain().setIngestStatePath(tempDir.resolve("ingest_state_none.json").toString());
@@ -611,7 +624,7 @@ class TrainRagIngestServiceTest {
         int count = service.ingestNewSamples(jsonl, "ds", () -> false);
 
         assertEquals(0, count);
-        verify(vectorStoreService, never()).enqueue(anyString(), anyString(), anyString(), any());
+        verify(vectorStoreService, never()).enqueueWithReceipt(anyString(), anyString(), anyString(), any());
         verify(vectorStoreService, never()).flush();
         @SuppressWarnings("unchecked")
         Map<String, Object> summary = (Map<String, Object>) TraceStore.get("uaw.retrain.ingest.summary");
@@ -622,7 +635,7 @@ class TrainRagIngestServiceTest {
 
     @Test
     void ingestStateStoresDatasetPathHashInsteadOfRawAbsolutePath() throws Exception {
-        VectorStoreService vectorStoreService = mock(VectorStoreService.class);
+        VectorStoreService vectorStoreService = successfulStore();
         VectorSidService vectorSidService = mock(VectorSidService.class);
         UawAutolearnProperties props = new UawAutolearnProperties();
         Path statePath = tempDir.resolve("ingest_state_redacted.json");

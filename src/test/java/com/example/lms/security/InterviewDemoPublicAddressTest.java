@@ -94,4 +94,20 @@ class InterviewDemoPublicAddressTest {
         Files.delete(receipt);
         assertEquals("", address.currentOrigin());
     }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"POST /api/chat/stream", "POST /api/chat/cancel",
+            "GET /api/chat/state", "GET /api/chat/sessions", "POST /api/chat/sessions"})
+    void interviewModeKeepsSessionCreationBlockedAndAdmitsOwnedChatRoutes(String route) throws Exception {
+        String[] parts = route.split(" ", 2);
+        var request = new MockHttpServletRequest(parts[0], parts[1]);
+        request.setRemoteAddr("127.0.0.1");
+        var response = new MockHttpServletResponse();
+        var called = new AtomicBoolean();
+        new ChatOpenSecurityConfig.InterviewDemoFilter(address(ORIGIN)::currentOrigin)
+                .doFilter(request, response, (req, res) -> called.set(true));
+        boolean blocked = route.equals("POST /api/chat/sessions");
+        assertEquals(blocked ? 404 : 200, response.getStatus());
+        assertEquals(!blocked, called.get());
+    }
 }

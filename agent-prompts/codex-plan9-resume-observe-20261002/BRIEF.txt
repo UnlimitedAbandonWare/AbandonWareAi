@@ -1,0 +1,166 @@
+# CODEX 재개 지시서 — Plan9 API 우선 라우팅: 남은 V1~V4 라이브 증거 마무리 (2026-10-02 23:0x KST)
+
+[ANTI-STOP] 이 파일을 읽은 뒤 계획만 세우고 멈추지 마라. 이 지시서로 한도를 새로 부여한다. R0부터 R6까지 진행하고, Acceptance 전 항목을 PASS / FAIL / NOT_RUN 으로 채운 뒤에만 끝내라. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정/부정/반례 → 중립 판정)로 정해 AUTO 로 진행한다.
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(`&&` 대신 `;`) · git = F:\git\cmd\git.exe · 검증 대상 = 로컬 http://127.0.0.1:18180/chat 만
+
+====================================================================
+0. 한 줄 목표
+====================================================================
+같은 ledger(data\agent-handoff\codex-plan9-api-first-routing-3da4fc89)를 이어 쓴다. 새 한도 안에서 다음 순서로 진행한다.
+① 실제 생성 모델이 증거로 남게 고친다(V1·V4).
+② OAuth timeout(V3)과 RAG canary(V2)의 원인을 찾아 고친다.
+③ V1~V4를 다시 라이브로 돌려 PASS 를 받는다.
+
+====================================================================
+1. 사용자 답변·새 한도 (이전 목표 파일의 한도를 대체)
+====================================================================
+- ASK_ONCE 답변: application-llm.yaml 의 LLMROUTER_API_FIRST 기본값은 **false 를 유지**한다.
+  V1~V4 가 라이브로 PASS 한 뒤 다시 묻는다. 로컬 검증 서버에서만 환경변수 LLMROUTER_API_FIRST=true 로 켠다.
+- 서버 재시작: 이번 재개에서 새로 최대 2회.
+- 자동 수정: "실패 종류"(관측/V3/V2)마다 새로 최대 2회.
+- 채팅 전송: 누적 25회 상한 유지(이미 7회 사용, 남은 18회).
+  그중 ChatGPT OAuth 직접 선택은 최대 3회. 공개 사이트(abandonwareai.kro.kr) 전송은 0회.
+- 401/403/429/400 은 재시도하지 말고 원인을 보고 맨 위에 적는다. Groq groq_tpm_exhausted 는 로컬 admission 차단이므로 정상 폴백으로 분류한다.
+- 재시작할 때 이전 회차처럼 HTTPS opt-in 이 상속돼 공개 TLS/page GET probe 가 나가지 않게 한다.
+  그 실행의 프로세스 환경에서만 HTTPS 를 끄거나, launcher 의 local-only 옵션을 쓴다. 사용자(User) 환경변수는 건드리지 마라.
+- GLM: native glm_worker(spawn) 사용 금지(ChatGPT 로그인 경로에서 HTTP 400 고정).
+  glm_agent MCP 가 MCP_READY 일 때만 쓰고, 아니면 GLM=SESSION_UNAVAILABLE 로 진행한다. 재시도 금지.
+
+====================================================================
+2. 이미 확인된 사실 (REPORT.md 기준)
+====================================================================
+- 통과한 것: WP-A/B/C 소스, WP-D internal trace, 집중 Java 151개, compileJava, Verify-RAG exit0, V5 PASS, V6 mock PASS.
+- V1/V4 실패 사유는 observed_model_not_proven 이다.
+  · 서버 final SSE 에는 modelUsed / sessionId / traceTurnId 가 있다.
+  · runner 는 observedModel / actualModel / 검증된 finalModel 만 인정한다.
+  · runner 가 response.text() 실패와 data-line JSON 파싱 실패를 버린다.
+  · 여러 줄 data: JSON 이면 metadata 가 {} 가 된다.
+  · modelUsed 에는 configured/requested 값으로 대체되는 경로가 있어 생성 증거가 아니다.
+- V2: 첨부 1개는 전달됐다. 하지만 canary "은하수-7"(2026-10-15 / A_project_codename.md)이 답변에 없었다(answer_unavailable). 검색 단계 증거가 없다.
+- V3: chatgpt-oauth:gpt-5.6-luna 를 strict 로 선택한 뒤 UI 90초 timeout. 공급자 HTTP 와 adapter 진입 여부는 관측되지 않았다.
+- 재시작 2회차 로그에 Hibernate constraint/index DDL 예외 132건이 있다 → HOLD(기록만).
+- trace 조회 /sessions/{id}/traces/{snapshotId} 는 owner 일치를 요구한다. 새 브라우저 context 에서는 조회되지 않았다.
+
+====================================================================
+공통 규칙
+====================================================================
+- 같은 ledger 에 RESUME-20261002-23.md 를 추가한다. 작업 저널은 resume 으로 시작한다. lease 를 새로 잡는다(만료 4h).
+- 다른 세션의 lease·hunk 는 보존한다(G0 에서 살아 있는 lease 를 다시 확인). Devin 의 GLM 작업 lease(scripts\glm_route_preflight.py, .agents\skills\demo1-glm-route-guard 등)는 건드리지 마라.
+- 수정 허용:
+  · 관측 경로 소스(final SSE DTO / ChatResponse metadata 투영 / gateway adapter lineage)
+  · OAuth adapter 진입·timeout 경로
+  · RAG 첨부→검색→프롬프트 경로 중 원인으로 확인된 곳
+  · 기존 browser runner 와 그 테스트
+  · 위 각각의 집중 테스트
+- 변경 금지: chat.js, DB 스키마/마이그레이션, 데이터셋 삭제, PROTO_OPEN/admin/CSRF, 전역 Codex 설정, application-llm.yaml 의 API-first 기본값.
+
+====================================================================
+작업
+====================================================================
+R0 재개 게이트
+- REPORT.md·observation-audit.json·owned-change.diff 를 다시 읽는다.
+- 집중 검증 소스 20개가 현재 파일과 일치하는지 digest 로 재확인한다.
+- 살아 있는 lease 를 확인한 뒤 RESUME 파일에 새 한도를 기록한다.
+
+R1 관측 도구 고치기 (전송 0회로 먼저)
+- 기존 runner 가 남겨야 할 것:
+  · 본문 수집 성공/실패와 오류 문자열
+  · 바이트 수
+  · SSE 이벤트 수
+  · data: 줄 결합 후 JSON 파싱 성공/실패 수
+- SSE 표준대로 여러 data: 줄은 \n 으로 합친 뒤 파싱한다.
+- modelUsed 는 "claimedModel" 로만 기록한다(증거 아님).
+- 합성 SSE 고정 입력으로 runner 테스트를 추가한다: 한 줄 JSON, 여러 줄 JSON, 잘린 스트림, 오류 이벤트. 레드에서 그린으로 확인.
+
+R2 서버가 실제 생성 모델을 내보내게 하기 (WP-D 마무리)
+- final SSE / 응답 DTO 에 observedProvider, observedModel, routeId, fallbackCount, fallbackReason 을 추가한다.
+- 값은 실제 공급자 응답(LangChain4j ChatResponse metadata 의 modelName, 성공한 adapter 의 route provider)에서만 가져온다.
+- 값이 없으면 null + observedReason 으로 둔다. configured/requested 값으로 채우지 않는다.
+- 집중 테스트 3종:
+  · 클라우드 A 성공
+  · A 실패 후 B 성공(fallbackCount=1)
+  · 공급자 응답에 modelName 이 없음(null + 사유)
+- runner 는 observedModel 이 있고 같은 traceTurnId 의 trace 와 일치할 때만 V1/V4 PASS 로 판정한다.
+  trace 조회는 같은 브라우저 context(owner 유지)에서 한다.
+
+R3 V3 OAuth timeout 원인
+- strict 선택 1회 요청에 대해 다음 단계별로 시각·카운트·request hash 를 남긴다:
+  컨트롤러 진입 → 라우터 → OAuth adapter 진입 → 공급자 HTTP 시작/첫 바이트 → SSE 첫 토큰.
+  토큰·쿠키 값은 출력 금지.
+- 멈춘 단계를 특정한다.
+- 수정 원칙: 무한 대기 대신 정해진 시간 안에 오류 이벤트(사유 코드 포함)를 UI 로 보낸다. 자동 폴백으로 다른 모델이 대신 답하게 하지 않는다(strict).
+- 401/403 이면 로그인 만료로 분류하고 보고만 한다. 재로그인은 사용자 몫.
+
+R4 V2 RAG canary 원인
+- 단계별로 확인한다: 업로드 → 청크/색인 → 질의 검색 결과(상위 k 개 문서명·점수) → 프롬프트에 들어간 컨텍스트 → 답변.
+- canary 가 어느 단계에서 사라지는지 특정하고, 그 단계만 최소 수정한다.
+- 고정 입력으로 집중 테스트를 추가한다(검색 결과에 canary 청크가 포함되는지).
+- 이전 attachment.bind 수정이 현재 JVM 에 반영됐는지도 확인한다.
+
+R5 재시작 1회 → 라이브 재검증
+- compileJava + 이번에 바꾼 집중 테스트만 돌린 뒤 재시작한다(LLMROUTER_API_FIRST=true, HTTPS off, 프로세스 범위).
+- 라이브 검증 항목:
+  · V1: 1회
+  · V4: 3회
+  · V2: 1회
+  · V3: 1회(실패하면 원인 수정 후 1회 더)
+- 필요하면 V5 를 재확인한다. 전송 수를 실시간으로 집계하고, 남은 18회를 넘기면 즉시 중단한다.
+
+R6 마무리
+- 집중 테스트 전체 재실행(관련 클래스만)과 Verify-RAG 를 돌린다.
+- REPORT.md·PROJECT_STATUS.md 를 갱신하고 lease 를 해제한다. 저널은 done 또는 partial 로 닫는다.
+
+====================================================================
+HOLD
+====================================================================
+- Hibernate DDL 예외 132건: 원인 분류만 기록하고 스키마 변경은 하지 않는다.
+- API-first 기본값 true 전환: V1~V4 PASS 후 다시 ASK_ONCE.
+- NEXT / NEXT_SECURITY 항목: AiPolicyEnvelope, session snapshot, daily budget, Graph purge, Meta boot.js, CSRF/admin.
+- 라이브 경합 실험(V6 live).
+
+====================================================================
+ASK_ONCE
+====================================================================
+- 없음. 막히면 NOT_RUN/FAIL 로 적고 다음 항목으로 넘어간다.
+
+====================================================================
+절대 금지
+====================================================================
+- push/pull/commit, git add -A, reset/checkout/restore/stash/clean, AbandonWare3 재추가
+- 전체 테스트 스위트
+- .env/.secrets/토큰·쿠키 열람 및 출력
+- DB 스키마 변경, 데이터셋 삭제
+- chat.js 수정
+- PROTO_OPEN/admin 강화
+- 다른 세션의 lease·hunk 수정
+- 공개 사이트 채팅 전송, 사용자 환경변수 변경
+- 401/403/429/400 재시도, native glm_worker spawn
+- modelUsed(설정값 대체 가능)를 실제 모델 증거로 인정하는 것, mock 통과를 라이브 PASS 로 적는 것
+
+====================================================================
+Acceptance (안 돌린 것은 NOT_RUN)
+====================================================================
+C1 R0 digest 일치 + 새 한도 기록
+C2 runner 개선 + 합성 SSE 테스트 레드→그린
+C3 observedProvider/observedModel 서버 투영 + 집중 테스트 3종 PASS(설정값 대체 없음)
+C4 V1 라이브 PASS: observedModel 이 같은 traceTurnId trace 와 일치
+C5 V4 라이브 3회 PASS: 3회 모두 observed 증거 있음
+C6 V3: 멈춘 단계 특정 + 정해진 시간 안 오류 이벤트 또는 정상 응답(라이브)
+C7 V2: canary 가 사라지는 단계 특정 + 수정 후 라이브에서 canary 포함
+C8 공개 probe 0, 공개 전송 0, 누적 전송 ≤ 25, OAuth ≤ 3
+C9 집중 테스트·compileJava·Verify-RAG 결과, 다른 세션 변경 보존, API-first 기본값 false 유지
+
+====================================================================
+보고 형식
+====================================================================
+외부 API: 이번 n회 / 누적 n/25회(OAuth n/3), HTTP 결과와 분류(400/401/403/429 는 근본 원인을 맨 위에)
+변경 파일: git status --short 중 내 것만 + 요약
+R0~R6 각각 PASS/FAIL/NOT_RUN + 핵심 1줄
+V1~V5 표: 판정 / observedProvider·observedModel / traceTurnId 일치 여부
+남은 문제 / HOLD / 다음 ASK_ONCE(API-first 기본값)
+GLM: MCP_READY / SESSION_UNAVAILABLE
+
+[ANTI-STOP] 멈추지 말고 R0부터 R6까지 진행하라. 막힌 항목은 FAIL/NOT_RUN 으로 적고 다음으로 넘어가라. C1~C9 판정 전에는 끝내지 마라.

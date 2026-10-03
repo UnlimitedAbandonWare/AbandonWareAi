@@ -5,6 +5,7 @@
 .DESCRIPTION
   Forwards to scripts\agent_port_lease.py. Stop and release only the owner/session
   lease. Does not accept a pid, image name, or port-kill switch.
+  SSOT: scripts/agent_port_lease.py — this file only forwards argv.
 #>
 [CmdletBinding()]
 param(

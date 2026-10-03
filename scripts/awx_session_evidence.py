@@ -38,7 +38,7 @@ import sqlite3
 import sys
 import time
 
-CODEX_HOME = Path(os.environ.get("CODEX_HOME", r"C:\Users\nninn\.codex"))
+CODEX_HOME = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
 INDEX = Path("data/agent-handoff/session-evidence/index.sqlite")
 SNIPPET = 160
 SCHEMA = """

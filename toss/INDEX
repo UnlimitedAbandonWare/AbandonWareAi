@@ -1,0 +1,4 @@
+# toss/INDEX — Devin → Codex handoff ledger
+# Format: TOSS-<nn> | status | scope | updated
+
+TOSS-01 | IMPLEMENTED-BY-CODEX-SESSION | Jev /v1/evaluate ZDR default-off + plan-gate classification (product seam) | 2026-09-29

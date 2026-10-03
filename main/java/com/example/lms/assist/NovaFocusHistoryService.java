@@ -93,7 +93,7 @@ public class NovaFocusHistoryService {
         return transaction(()->{var p=locked(owner,channel);
             if(p.getSettingsVersion()!=expected)throw new IllegalArgumentException("focus_settings_conflict");
             var merged=value;
-            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null){ // Omitted optional blocks preserve server-owned values.
+            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null){ // Omitted optional blocks preserve server-owned values.
                 var stored=decode(p.getSettingsJson());
                 var selection=value.answerSelection()==null?stored.answerSelection():value.answerSelection();
                 if(value.answerSelection()!=null&&value.answerSelection().routing()==null&&stored.answerSelection()!=null)
@@ -101,7 +101,8 @@ public class NovaFocusHistoryService {
                 merged=new NovaFocusSettings(value.enabled(),value.wakeWord(),value.utteranceQuietMs(),value.followupIdleMs(),
                     value.wakeListenTimeoutMs(),value.presentation(),value.recallEnabled(),value.rememberFactsEnabled(),
                     value.snapshot()==null?stored.snapshot():value.snapshot(),
-                    selection,value.recentContext()==null?stored.recentContext():value.recentContext());
+                    selection,value.recentContext()==null?stored.recentContext():value.recentContext(),
+                    value.memory()==null?stored.memory():value.memory());
             }
             try{p.setSettingsJson(mapper.writeValueAsString(merged));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
             p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),merged);});

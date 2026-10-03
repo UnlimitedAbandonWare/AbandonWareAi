@@ -91,7 +91,7 @@ class ChatRunRegistryNonTerminalExpiryTest {
     }
 
     @Test
-    void idleRunningRunTimesOutDisposesWorkerAndPreservesReplayUntilTerminalTtl() throws Exception {
+    void idleRunningRunRetainsWorkerAndEvictsOnlyAfterCompletion() throws Exception {
         try (Harness harness = new Harness()) {
             ChatRunRegistry.BeginResult first = harness.registry.beginOrJoin(42L);
             String oldToken = first.context().clientToken();
@@ -107,15 +107,14 @@ class ChatRunRegistryNonTerminalExpiryTest {
             harness.clock.advanceSeconds(31);
             harness.registry.runStaleSweepNow();
 
-            assertTrue(completed.await(2, TimeUnit.SECONDS));
-            assertEquals(1, handle.disposeCalls.get());
-            assertEquals(1, terminalEvents.size());
+            assertEquals(1, completed.getCount());
+            assertEquals(0, handle.disposeCalls.get());
+            assertTrue(terminalEvents.isEmpty());
             ChatRunRegistry.RunView timedOut = harness.registry.describeExact(42L, oldToken).orElseThrow();
-            assertEquals(ChatRunRegistry.Status.CANCELLED, timedOut.status());
-            assertEquals("timed_out", timedOut.outcome().generationOutcome());
-            assertEquals("stale_timeout", timedOut.outcome().terminalReason());
-            assertEquals("stale_timeout", timedOut.outcome().finalDeliveryFailureReason());
-            assertEquals(1, timedOut.outcome().terminalEventCount());
+            assertEquals(ChatRunRegistry.Status.RUNNING, timedOut.status());
+            assertTrue(harness.scheduler.oneShots.isEmpty());
+            assertTrue(harness.registry.markDone(first.context()));
+            assertTrue(completed.await(2, TimeUnit.SECONDS));
             assertTrue(harness.registry.attachExact(42L, oldToken).isPresent());
 
             ChatRunRegistry.BeginResult replacement = harness.registry.beginOrJoin(42L);
@@ -134,7 +133,7 @@ class ChatRunRegistryNonTerminalExpiryTest {
     }
 
     @Test
-    void idleCommittingRunCannotPersistEmitOrCompleteAfterTimeout() {
+    void idleCommittingRunCanPersistEmitAndCompleteAfterDiagnosticAge() {
         try (Harness harness = new Harness()) {
             ChatRunRegistry.BeginResult first = harness.registry.beginOrJoin(43L);
             assertTrue(first.context().tryBeginTranscriptCommit());
@@ -142,13 +141,12 @@ class ChatRunRegistryNonTerminalExpiryTest {
             harness.clock.advanceSeconds(31);
             harness.registry.runStaleSweepNow();
 
-            assertFalse(first.context().markGenerationSucceeded());
-            assertFalse(first.context().markPersisted());
-            assertFalse(first.context().claimTerminalEvent("late_terminal"));
-            assertFalse(first.context().recordFinalEmit("ok", false));
-            assertFalse(first.context().recordTerminalWithoutFinal("late"));
-            assertFalse(harness.registry.emit(first.context(), progressEvent()));
-            assertFalse(harness.registry.markDone(first.context()));
+            assertTrue(first.context().markGenerationSucceeded());
+            assertTrue(first.context().markPersisted());
+            assertTrue(first.context().claimTerminalEvent("completed"));
+            assertTrue(first.context().recordFinalEmit("ok", false));
+            assertTrue(harness.registry.emit(first.context(), progressEvent()));
+            assertTrue(harness.registry.markDone(first.context()));
             ChatRunRegistry.BeginResult replacement = harness.registry.beginOrJoin(43L);
             assertTrue(replacement.owner());
             assertFalse(first.context().sameRun(replacement.context()));
@@ -173,15 +171,14 @@ class ChatRunRegistryNonTerminalExpiryTest {
 
             harness.clock.setMillis(60_001L);
             harness.registry.runStaleSweepNow();
-            assertFalse(run.context().permitsEmission());
-            assertEquals("stale_timeout",
-                    harness.registry.describeExact(44L, run.context().clientToken())
-                            .orElseThrow().outcome().terminalReason());
+            assertTrue(run.context().permitsEmission());
+            assertEquals(ChatRunRegistry.Status.RUNNING,
+                    harness.registry.describeExact(44L, run.context().clientToken()).orElseThrow().status());
         }
     }
 
     @Test
-    void staleSweepBreaksStalledCancellingWithoutLateDuplicateTerminal() throws Exception {
+    void staleSweepKeepsStalledCancellationFencedUntilItsCallbackExits() throws Exception {
         ExecutorService canceller = Executors.newSingleThreadExecutor();
         try (Harness harness = new Harness()) {
             ChatRunRegistry.BeginResult first = harness.registry.beginOrJoin(45L);
@@ -208,15 +205,17 @@ class ChatRunRegistryNonTerminalExpiryTest {
             harness.clock.advanceSeconds(31);
             harness.registry.runStaleSweepNow();
 
-            assertTrue(completed.await(2, TimeUnit.SECONDS));
-            ChatRunRegistry.BeginResult replacement = harness.registry.beginOrJoin(45L);
-            assertTrue(replacement.owner());
+            assertEquals(1, completed.getCount());
+            assertEquals(ChatRunRegistry.Status.CANCELLING,
+                    harness.registry.describeExact(45L, first.context().clientToken()).orElseThrow().status());
+            assertFalse(harness.registry.beginOrJoin(45L).owner());
             releaseAction.countDown();
-            assertFalse(cancellation.get(2, TimeUnit.SECONDS));
+            assertTrue(cancellation.get(2, TimeUnit.SECONDS));
+            assertTrue(completed.await(2, TimeUnit.SECONDS));
             assertEquals(1, handle.disposeCalls.get());
             assertEquals(1, terminalEvents.size());
             assertEquals(1, harness.scheduler.oneShots.size());
-            assertEquals(replacement.context().clientToken(), harness.registry.currentRunToken(45L).orElseThrow());
+            assertEquals(first.context().clientToken(), harness.registry.currentRunToken(45L).orElseThrow());
         } finally {
             canceller.shutdownNow();
             assertTrue(canceller.awaitTermination(2, TimeUnit.SECONDS));
@@ -246,18 +245,18 @@ class ChatRunRegistryNonTerminalExpiryTest {
             harness.clock.advanceSeconds(31);
             harness.registry.runStaleSweepNow();
 
-            assertTrue(completed.await(2, TimeUnit.SECONDS));
+            assertEquals(1, completed.getCount());
             assertTrue(terminalEvents.isEmpty(), "an already claimed terminal slot cannot be emitted twice");
-            assertFalse(run.context().recordFinalEmit("ok", false));
-            assertFalse(harness.registry.markDone(run.context()));
+            assertTrue(run.context().recordFinalEmit("ok", false));
+            assertTrue(harness.registry.markDone(run.context()));
             ChatRunRegistry.RunOutcomeView outcome = harness.registry
                     .describeExact(46L, run.context().clientToken())
                     .orElseThrow()
                     .outcome();
-            assertEquals("timed_out", outcome.generationOutcome());
-            assertEquals("stale_timeout", outcome.terminalReason());
-            assertEquals(0, outcome.terminalEventCount());
-            assertEquals(1, outcome.duplicateSuppressed());
+            assertEquals(ChatRunRegistry.Status.DONE,
+                    harness.registry.describeExact(46L, run.context().clientToken()).orElseThrow().status());
+            assertEquals(1, outcome.terminalEventCount());
+            assertEquals(0, outcome.duplicateSuppressed());
             assertEquals(1, harness.scheduler.oneShots.size());
         }
     }
@@ -352,7 +351,7 @@ class ChatRunRegistryNonTerminalExpiryTest {
 
             clock.advanceSeconds(1L);
             registry.runStaleSweepNow();
-            assertFalse(run.context().permitsEmission());
+            assertTrue(run.context().permitsEmission());
             assertEquals(300, registry.ttlSeconds);
         } finally {
             registry.shutdown();

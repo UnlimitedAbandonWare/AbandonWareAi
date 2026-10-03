@@ -1,0 +1,3 @@
+[ASSIST] 브라우저 확인·원인 추적·라우팅 정리·패치 검토는 .agents/skills/demo1-codex-assist-subagents 순서로 서브에이전트에 맡겨도 된다.
+동시 2개까지, 서브에이전트는 소스 수정 금지, 결과는 codex_assist.py collect + codex_assist_guard.py verify를 통과한 것만 증거로 쓴다.
+최종 판단과 소스 수정은 본체가 직접 재확인 후에만 한다.

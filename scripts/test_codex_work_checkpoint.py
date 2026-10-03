@@ -52,6 +52,31 @@ class WorkCheckpointTest(unittest.TestCase):
             CP.secret_free((label + '"fixture-private-value"').encode(),
                            "main/resources/application.yml")
 
+    def test_python_none_and_bool_kwarg_labels_carry_no_credential(self):
+        snippet = "\n".join([
+            "shim = SimpleNamespace(token=None, base_url=None)",
+            "opts = dict(enabled=True, token=False)",
+            "call(password=None)",
+        ])
+        CP.secret_free(snippet.encode(), "scripts/example.py")
+        label = "to" + "ken="
+        with self.assertRaises(CP.CheckpointError):
+            CP.secret_free((label + "fixture-private-value").encode(), "scripts/example.py")
+        with self.assertRaises(CP.CheckpointError):
+            CP.secret_free((label + "None_x").encode(), "scripts/example.py")
+        with self.assertRaises(CP.CheckpointError):
+            CP.secret_free(snippet.encode(), "scripts/example.js")
+
+    def test_python_query_param_empty_quote_binding_is_a_reference(self):
+        label = "api" + "_key" + "="
+        CP.secret_free(('u = "https://x/account?api_' + 'key=" + val').encode(),
+                       "scripts/example.py")
+        with self.assertRaises(CP.CheckpointError):
+            CP.secret_free((label + '"fixture-private-value"').encode(),
+                           "scripts/example.py")
+        with self.assertRaises(CP.CheckpointError):
+            CP.secret_free((label + '""').encode(), "scripts/example.py")
+
     def setUp(self):
         self.assertIsNotNone(CP, "checkpoint recovery helper is not implemented")
         self.tmp = tempfile.TemporaryDirectory()

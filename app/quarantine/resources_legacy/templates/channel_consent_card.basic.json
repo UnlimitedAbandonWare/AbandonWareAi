@@ -1,0 +1,47 @@
+{
+  "version": "2.0",
+  "template": {
+    "outputs": [
+      {
+        "basicCard": {
+          "title": "Permission Request",
+          "description": "This task needs the following scopes: ${scopes_csv}\\nValid for ${ttl_minutes} minutes.",
+          "buttons": [
+            {
+              "action": "block",
+              "label": "Allow",
+              "blockId": "${CONSENT_GRANT_BLOCK_ID}",
+              "extra": {
+                "grants": "${scopes_array}",
+                "ttl": "${ttl_seconds}",
+                "sessionId": "${sessionId}",
+                "roomId": "${roomId}"
+              }
+            },
+            {
+              "action": "block",
+              "label": "Deny",
+              "blockId": "${CONSENT_DENY_BLOCK_ID}",
+              "extra": {
+                "reason": "user_denied",
+                "sessionId": "${sessionId}"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "quickReplies": [
+      {
+        "action": "message",
+        "label": "Allow",
+        "messageText": "[CONSENT GRANT] scopes=${scopes_csv} ttl=${ttl_seconds}"
+      },
+      {
+        "action": "message",
+        "label": "Deny",
+        "messageText": "[CONSENT DENY]"
+      }
+    ]
+  }
+}

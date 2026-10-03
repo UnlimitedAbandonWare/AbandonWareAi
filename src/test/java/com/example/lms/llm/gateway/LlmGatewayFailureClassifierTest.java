@@ -18,6 +18,30 @@ class LlmGatewayFailureClassifierTest {
 
     private final LlmGatewayFailureClassifier classifier = new LlmGatewayFailureClassifier();
 
+    @Test void numericIdentifiersAreNotHttpRateLimits() {
+        for (String text : List.of("request id 1429", "abc429def", "port=4299")) {
+            assertEquals(LlmFailureClass.UNKNOWN, classifier.classify(new RuntimeException(text)), text);
+        }
+        assertEquals(LlmFailureClass.RATE_LIMIT_COOLDOWN,
+                classifier.classify(new RuntimeException("HTTP_429")));
+    }
+
+    @Test void ordinaryVramTelemetryAndRoomTextAreNotOutOfMemory() {
+        for (String text : List.of("vram used=4096 free=8192", "room unavailable")) {
+            assertEquals(LlmFailureClass.UNKNOWN, classifier.classify(new RuntimeException(text)), text);
+        }
+        assertEquals(LlmFailureClass.VRAM_OOM,
+                classifier.classify(new RuntimeException("CUDA out of memory")));
+    }
+
+    @Test void typedCauseWinsOverOuterDiagnosticText() {
+        assertEquals(LlmFailureClass.TIMEOUT_SOFT, classifier.classify(
+                new RuntimeException("request=1429 vram=8192", new java.net.SocketTimeoutException())));
+        assertEquals(LlmFailureClass.AUTH_MISSING, classifier.classify(
+                new RuntimeException("outer rate limit telemetry", WebClientResponseException.create(
+                        401, "Unauthorized", HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8))));
+    }
+
     @Test
     void operatorOffReasonIsTerminalWithoutMakingEveryGpuOrDisabledFailureTerminal() {
         Throwable off = new LlmGatewayException("synthetic operator OFF", LlmFailureClass.DISABLED, "route_disabled");
@@ -92,6 +116,43 @@ class LlmGatewayFailureClassifierTest {
         assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(
                 new dev.langchain4j.exception.HttpException(503, quota)));
         assertFalse(LlmGatewayFailureClassifier.hasNonReplayableReason(new RuntimeException(quota)));
+    }
+
+    @Test
+    void chatGptPlanErrorsNeverReplayOntoAnotherBillingRoute() {
+        for (String code : List.of("subscription_sharing_user_not_eligible",
+                "subscription_sharing_usage_limit_exceeded", "subscription_sharing_usage_unavailable",
+                "subscription_sharing_unsupported_capability", "subscription_sharing_route_not_supported",
+                "subscription_sharing_invalid_user", "subscription_sharing_user_unavailable",
+                "chatpass_v2_scope_not_authorized", "invalid_authorization_context")) {
+            String body = "{\"error\":{\"code\":\"" + code + "\"}}";
+            for (int status : List.of(400, 401, 403, 429, 503)) {
+                Throwable http = new dev.langchain4j.exception.HttpException(status, body);
+                Throwable web = WebClientResponseException.create(status, "synthetic",
+                        HttpHeaders.EMPTY, body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+                Throwable gateway = new LlmGatewayException("synthetic plan failure",
+                        LlmFailureClass.AUTH_MISSING, code);
+                for (Throwable failure : List.of(http, web, gateway, new RuntimeException("outer", http))) {
+                    assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure), code);
+                    assertFalse(com.example.lms.llm.LlmErrorClassifier.classify(failure).retryable(), code);
+                    assertFalse(LlmGatewayFailureClassifier.hasQuotaFailure(failure),
+                            "Subscription admission must stay separate from API spend accounting");
+                }
+            }
+        }
+    }
+
+    @Test
+    void chatGptPlanErrorLookalikesDoNotChangeGenericRetryPolicy() {
+        for (String body : List.of("subscription_sharing_usage_limit_exceeded",
+                "{\"error\":{\"message\":\"subscription_sharing_usage_limit_exceeded\"}}",
+                "{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded_extra\"}}",
+                "{\"error\":{\"code\":\"rate_limit_exceeded\"}}",
+                "{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\"}} trailing",
+                "{\"error\":{\"code\":\"rate_limit_exceeded\",\"code\":\"subscription_sharing_usage_limit_exceeded\"}}")) {
+            Throwable failure = new dev.langchain4j.exception.HttpException(429, body);
+            assertFalse(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+        }
     }
 
     @Test

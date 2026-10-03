@@ -156,6 +156,7 @@ class ChatStreamDisconnectHttpTest {
             when(owners.ownerKey()).thenReturn("fixture-owner");
             ChatSession session = new ChatSession("fixture", "fixture-owner", "ANON"); session.setId(42L);
             when(history.getSessionWithMessages(42L)).thenReturn(session);
+            when(history.getSessionForRequest(42L)).thenReturn(session);
             when(history.getSessionWithMessages(42L, 1)).thenReturn(session);
             when(history.startNewSession(any(), any(), any(), any(), any())).thenReturn(Optional.of(session));
             when(history.appendMessageReturningId(anyLong(), eq("assistant"), anyString())).thenReturn(4201L);

@@ -1,6 +1,6 @@
 ---
 name: demo1-work-ledger
-description: "Local-first work ledger: task journal, per-change preimage, verify, recover"
+description: "demo-1 작업의 완료·보류 상태를 작업대장에 반영하거나 파일 변경의 journal·preimage·검증 기록을 남길 때. 지시서 작성·완료 주장 심사·일반 질문에는 쓰지 않음."
 ---
 
 # demo1 Work Ledger (Git-free work/backup/handoff procedure)
@@ -15,7 +15,7 @@ SHA-256, and `difflib.unified_diff` in the cycle dir are the restore/diff eviden
 ## When
 
 - Use for any task that creates/modifies/deletes/moves files under the project
-  root `C:\AbandonWare\demo-1\demo-1\src`, by any agent (Codex, Devin, Grok,
+  root `<repo>`, by any agent (Codex, Devin, Grok,
   Notebook producers).
 - Skip for read-only explanation, search, or status checks — no journal, no
   preimage needed.
@@ -189,3 +189,14 @@ python -B scripts/work_journal.py note --root . --task <taskId> --kind change `
 - `scoped-blocker-recovery` (`references/lease-lifecycle.md`) — lease details.
 - `demo1-artifact-trace-curator` — bounded inventory of handoff traces.
 - `demo1-goal-complete-stop` — end the turn when the goal is verified.
+
+## Parallel-lane preflight (additive)
+
+When multiple chats may work this goal, run
+`python -B scripts/codex_parallel_preflight.py --root . --goal-key <key>
+--scope <paths> --agent <name> --json` before registering/changing anything —
+same-goal duplicates come back as `VERIFIER`/`TAKEOVER`, and `UNCLAIMED_EDIT`
+marks files changed recently with no claim, writer, or lease. Handoff packets
+follow `work_journal.py handoff`; schema example in
+`scripts/fixtures/parallel_lanes/handoff-packet-example.json`. See
+`.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.

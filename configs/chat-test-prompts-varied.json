@@ -1,0 +1,49 @@
+{
+  "version": "2026-10-03",
+  "schema": "awx.chat-test-prompts-varied.v1",
+  "note": "Varied text corpus for the auth-model browser matrix. Rows carry text OR generator (never both required). purposeHint feeds tier planning; gestureIds bind to configs/browser-gesture-catalog.yaml. Answer text is never stored.",
+  "generators": {
+    "korean_paragraph_repeat": "Repeat a fixed Korean paragraph until reaching the requested char count. Deterministic; no lorem, no secrets."
+  },
+  "prompts": [
+    { "id": "GS1", "category": "greeting_short", "text": "안녕?", "purposeHint": "smoke", "gestureIds": ["G01"] },
+    { "id": "GS2", "category": "greeting_short", "text": "ㅎㅇ", "purposeHint": "smoke", "gestureIds": ["G01", "G07"] },
+    { "id": "GS3", "category": "greeting_short", "text": "hi", "purposeHint": "smoke", "gestureIds": ["G01"] },
+    { "id": "GS4", "category": "greeting_short", "text": "안녕하세요, 지금 누구랑 얘기하고 있나요?", "purposeHint": "smoke", "gestureIds": ["G01"] },
+
+    { "id": "TK1", "category": "typo_korean", "text": "하이젠 버그버그가 뭐야", "purposeHint": "regression", "gestureIds": ["G01", "G02"], "videoSource": true },
+    { "id": "TK2", "category": "typo_korean", "text": "메타레이밴안경에 힌트뜨는주기 어떻게바꿔", "purposeHint": "regression", "gestureIds": ["G01"] },
+    { "id": "TK3", "category": "typo_korean", "text": "ㄹㅇㄱㄷ 알고리즘이뭔지 설명좀", "purposeHint": "regression", "gestureIds": ["G01"] },
+    { "id": "TK4", "category": "typo_korean", "text": "띄어쓰기가 다깨진질문인데도 답할수있어?", "purposeHint": "regression", "gestureIds": ["G01"] },
+
+    { "id": "GK1", "category": "general_knowledge", "text": "지구에서 가장 깊은 바다는 어디야?", "purposeHint": "smoke", "gestureIds": ["G01"] },
+    { "id": "GK2", "category": "general_knowledge", "text": "한국의 수도와 인구를 알려줘", "purposeHint": "smoke", "gestureIds": ["G01"] },
+    { "id": "GK3", "category": "general_knowledge", "text": "HTTP 401과 403의 차이를 설명해줘", "purposeHint": "regression", "gestureIds": ["G01"] },
+    { "id": "GK4", "category": "general_knowledge", "text": "광합성이 뭔지 중학생에게 설명하듯 알려줘", "purposeHint": "regression", "gestureIds": ["G01"] },
+
+    { "id": "ER1", "category": "evidence_rag", "text": "이 프로젝트의 RAG 라우팅 순서를 근거와 함께 알려줘", "purposeHint": "quality", "gestureIds": ["G01", "G02"] },
+    { "id": "ER2", "category": "evidence_rag", "text": "Meta Display 힌트 TTL 기본값이 몇 초인지 출처를 들어 답해줘", "purposeHint": "quality", "gestureIds": ["G01"] },
+    { "id": "ER3", "category": "evidence_rag", "text": "최근 chat timeout 수정의 원인이 뭐였는지 evidence 기준으로 요약해줘", "purposeHint": "quality", "gestureIds": ["G01"] },
+    { "id": "ER4", "category": "evidence_rag", "text": "api-routing.yaml에서 LLM 호출 우선순위를 citation과 함께 보여줘", "purposeHint": "quality", "gestureIds": ["G01"] },
+
+    { "id": "CR1", "category": "code_reasoning", "text": "```js\nconst a = fetch('/api/chat/stream');\n```\n이 코드가 스트림을 끝까지 읽지 못하는 이유를 설명해줘", "purposeHint": "practice_reasoning", "gestureIds": ["G01"] },
+    { "id": "CR2", "category": "code_reasoning", "text": "Python에서 dict를 정렬된 키 순서로 순회하는 법을 예시와 함께 알려줘", "purposeHint": "practice_reasoning", "gestureIds": ["G01"] },
+    { "id": "CR3", "category": "code_reasoning", "text": "Traceback: RecursionError maximum recursion depth exceeded 가 왜 나는지와 고치는 법", "purposeHint": "practice_reasoning", "gestureIds": ["G01", "G02"] },
+    { "id": "CR4", "category": "code_reasoning", "text": "Java CompletableFuture.cancel(true)가 실행 중 작업에 주는 실제 효과를 설명해줘", "purposeHint": "practice_reasoning", "gestureIds": ["G01"] },
+
+    { "id": "LI1", "category": "long_input", "generator": { "kind": "korean_paragraph_repeat", "chars": 2000 }, "purposeHint": "practice_reasoning", "gestureIds": ["G01", "G08"] },
+    { "id": "LI2", "category": "long_input", "generator": { "kind": "korean_paragraph_repeat", "chars": 4000 }, "purposeHint": "practice_reasoning", "gestureIds": ["G08"] },
+    { "id": "LI3", "category": "long_input", "generator": { "kind": "korean_paragraph_repeat", "chars": 8000 }, "purposeHint": "practice_reasoning", "gestureIds": ["G08"] },
+    { "id": "LI4", "category": "long_input", "generator": { "kind": "korean_paragraph_repeat", "chars": 4000, "suffix": "위 내용을 세 줄로 요약해줘." }, "purposeHint": "practice_reasoning", "gestureIds": ["G01", "G08"] },
+
+    { "id": "MT1", "category": "multi_turn", "text": "스프링 부트에서 SSE를 구현하는 법을 알려줘", "turns": ["스프링 부트에서 SSE를 구현하는 법을 알려줘", "방금 답변에서 타임아웃 처리 부분만 더 자세히", "그럼 클라이언트 재연결은?"], "purposeHint": "practice_reasoning", "gestureIds": ["G01"] },
+    { "id": "MT2", "category": "multi_turn", "text": "간단한 파이썬 퀴즈 하나 내줘", "turns": ["간단한 파이썬 퀴즈 하나 내줘", "모르겠어, 힌트 줘", "정답 알려줘"], "purposeHint": "practice_reasoning", "gestureIds": ["G01", "G07"] },
+    { "id": "MT3", "category": "multi_turn", "text": "오늘 할 일 세 가지를 정해줘", "turns": ["오늘 할 일 세 가지를 정해줘", "첫 번째만 30분 안에 끝내는 방법은?"], "purposeHint": "practice_reasoning", "gestureIds": ["G01"] },
+    { "id": "MT4", "category": "multi_turn", "text": "REST와 gRPC 차이를 표로 정리해줘", "turns": ["REST와 gRPC 차이를 표로 정리해줘", "우리 프로젝트엔 뭐가 맞을지 근거 들어 추천해줘"], "purposeHint": "quality", "gestureIds": ["G01"] },
+
+    { "id": "MX1", "category": "mixed", "text": "hello, 오늘 기분 어때? 😊 간단히 small talk 하자", "purposeHint": "smoke", "gestureIds": ["G01"] },
+    { "id": "MX2", "category": "mixed", "text": "Markdown 표로 | 모델 | 용도 | 정리해줘: gpt-5.6, qwen3.5", "purposeHint": "regression", "gestureIds": ["G01", "G03"] },
+    { "id": "MX3", "category": "mixed", "text": "code block으로 bash 스크립트 하나 짜줘: find large files > 1GB", "purposeHint": "practice_reasoning", "gestureIds": ["G01", "G02"] },
+    { "id": "MX4", "category": "mixed", "text": "한영混ぜで 설명해줘: what is a websocket 그리고 왜 쓰는지", "purposeHint": "regression", "gestureIds": ["G01"] }
+  ]
+}

@@ -19,27 +19,38 @@ public final class AgentApiSpendGuard {
             String caller,
             String probeId,
             boolean explicitPaidOverride) {
+        return beforeCall(new ApiRoutingPolicySnapshot(new org.springframework.core.env.StandardEnvironment()),
+                purpose, provider, model, caller, probeId, explicitPaidOverride);
+    }
+
+    public static Decision beforeCall(ApiRoutingPolicySnapshot policy, String purpose, String provider,
+            String model, String caller, String probeId, boolean explicitPaidOverride) {
         String fp = ApiSpendAttribution.fingerprint(purpose, provider, model, caller, probeId);
-        if (!ApiSpendAttribution.agentModeActive()) {
+        if (!policy.agentModeActive()) {
             ApiSpendAttribution.record(purpose, provider, model, "n/a", "user_request", caller, "miss",
                     null, null, null, null, estimateTier(provider, model));
             return new Decision(true, "user_request", "miss");
         }
-        if (ApiSpendAttribution.shouldSkipSuccessfulReplay(fp)) {
+        if (verificationPurpose(purpose) && policy.dedupeVerification()
+                && ApiSpendAttribution.shouldSkipSuccessfulReplay(fp)) {
             ApiSpendAttribution.record(purpose, provider, model, "n/a", "verification_replay_blocked", caller,
                     "hit_skip", null, "skipped", null, null, "local0");
             return new Decision(false, "verification_replay_blocked", "hit_skip");
         }
-        if (!explicitPaidOverride && ApiSpendAttribution.isStalePaidAutoModel(model)) {
+        if (!explicitPaidOverride && !policy.explicitPaidOverride() && policy.staleAutoModel(model)) {
             ApiSpendAttribution.record(purpose, provider, model, "paid_quality", "model_auto_blocked_stale", caller,
                     "forced", null, "blocked", null, null, "llm_paid");
             return new Decision(false, "model_auto_blocked_stale", "forced");
+        }
+        if (!explicitPaidOverride && !policy.explicitPaidOverride()
+                && "paid_quality".equals(policy.tierName(policy.tier("llm", provider)))) {
+            return new Decision(false, "paid_model_override_required", "forced");
         }
         String why = "verification_required";
         if ("connectivity_min".equalsIgnoreCase(purpose) || "probe".equalsIgnoreCase(purpose)) {
             why = "connectivity_min";
         }
-        ApiSpendAttribution.record(purpose, provider, model, estimateTier(provider, model), why, caller, "miss",
+        ApiSpendAttribution.record(purpose, provider, model, policy.tierName(policy.tier("llm", provider)), why, caller, "miss",
                 null, null, null, null, estimateTier(provider, model));
         return new Decision(true, why, "miss");
     }
@@ -47,7 +58,7 @@ public final class AgentApiSpendGuard {
     public static void afterSuccess(String purpose, String provider, String model, String caller, String probeId,
                                     Integer promptTokens, Integer completionTokens, String estCostClass) {
         String fp = ApiSpendAttribution.fingerprint(purpose, provider, model, caller, probeId);
-        ApiSpendAttribution.markSuccess(fp);
+        if (verificationPurpose(purpose)) ApiSpendAttribution.markSuccess(fp);
         ApiSpendAttribution.record(purpose, provider, model, estimateTier(provider, model), "verification_required",
                 caller, "miss", 200, "ok", promptTokens, completionTokens, estCostClass);
     }
@@ -56,6 +67,10 @@ public final class AgentApiSpendGuard {
                                     Integer httpStatus, String errorClass) {
         ApiSpendAttribution.record(purpose, provider, model, estimateTier(provider, model), "verification_required",
                 caller, "miss", httpStatus, errorClass, null, null, estimateTier(provider, model));
+    }
+
+    private static boolean verificationPurpose(String purpose) {
+        return purpose != null && java.util.Set.of("verify", "verification", "connectivity_min", "probe").contains(purpose);
     }
 
     private static String estimateTier(String provider, String model) {

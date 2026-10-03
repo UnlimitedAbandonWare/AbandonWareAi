@@ -42,6 +42,11 @@ class ConversationArchiveIngestServiceTest {
     void setUp() {
         TraceStore.clear();
         vectorStoreService = mock(VectorStoreService.class);
+        var accepted = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(accepted.durable()).thenReturn(true);
+        org.mockito.Mockito.when(accepted.reasonCode()).thenReturn("complete");
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap()))
+                .thenReturn(accepted);
         service = new ConversationArchiveIngestService(vectorStoreService, provider(null));
     }
 
@@ -99,7 +104,7 @@ class ConversationArchiveIngestServiceTest {
 
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService, atLeastOnce()).enqueue(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
+        verify(vectorStoreService, atLeastOnce()).enqueueWithReceipt(anyString(), anyString(), textCaptor.capture(), metaCaptor.capture());
 
         assertThat(textCaptor.getAllValues().toString())
                 .contains("***@***", "********")
@@ -139,7 +144,7 @@ class ConversationArchiveIngestServiceTest {
         assertThat(report.counts().getOrDefault("quarantined", 0)).isZero();
         assertThat(report.ingestedCount()).isEqualTo(1);
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), textCaptor.capture(), anyMap());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), textCaptor.capture(), anyMap());
         assertThat(textCaptor.getValue()).contains(message);
     }
 
@@ -154,7 +159,7 @@ class ConversationArchiveIngestServiceTest {
 
         assertThat(report.ingestedCount()).isZero();
         assertThat(report.counts()).containsEntry("quarantined", 2);
-        verify(vectorStoreService, never()).enqueue(anyString(), anyString(), anyString(), anyMap());
+        verify(vectorStoreService, never()).enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap());
     }
 
     @Test
@@ -188,7 +193,7 @@ class ConversationArchiveIngestServiceTest {
 
         assertThat(report.ingestedCount()).isEqualTo(1);
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(vectorStoreService).enqueue(anyString(), anyString(), anyString(), metaCaptor.capture());
+        verify(vectorStoreService).enqueueWithReceipt(anyString(), anyString(), anyString(), metaCaptor.capture());
         Map<String, Object> meta = metaCaptor.getValue();
         assertThat(meta)
                 .containsEntry(VectorMetaKeys.META_ORIGIN, "USER")
@@ -245,7 +250,7 @@ class ConversationArchiveIngestServiceTest {
 
         ArgumentCaptor<String> idCaptor = ArgumentCaptor.forClass(String.class);
         verify(vectorStoreService, atLeastOnce())
-                .enqueue(idCaptor.capture(), anyString(), anyString(), anyMap());
+                .enqueueWithReceipt(idCaptor.capture(), anyString(), anyString(), anyMap());
         assertThat(idCaptor.getAllValues()).hasSize(1).doesNotHaveDuplicates();
     }
 
@@ -268,7 +273,7 @@ class ConversationArchiveIngestServiceTest {
 
         assertThat(report.ingestedCount()).isPositive();
         verify(vectorStoreService, atLeastOnce())
-                .enqueue(anyString(), anyString(), anyString(), anyMap());
+                .enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap());
     }
 
     @Test
@@ -294,6 +299,59 @@ class ConversationArchiveIngestServiceTest {
                 .hasMessageContaining("invalid_zip_archive");
 
         verifyNoInteractions(vectorStoreService);
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"source_rejected", "store_failure", "UNKNOWN_COMMIT", "receipt_pending"})
+    void unconfirmedReceiptDoesNotIncreaseIngestedCount(String reason) throws Exception {
+        var receipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(receipt.reasonCode()).thenReturn(reason);
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap()))
+                .thenReturn(receipt);
+        var report = service.ingest(List.of(zipFile("receipt.zip", "ConversationExport.txt",
+                "Alice : synthetic receipt record")), "sid-receipt");
+        assertThat(report.ingestedCount()).isZero();
+        assertThat(report.trace()).containsEntry("rejectedCount", 1);
+        assertThat(TraceStore.get("conversation.archive.ingestedCount")).isEqualTo(0);
+    }
+
+    @Test
+    void missingReceiptDoesNotIncreaseIngestedCount() throws Exception {
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap()))
+                .thenReturn(null);
+        var report = service.ingest(List.of(zipFile("missing.zip", "ConversationExport.txt",
+                "Alice : synthetic missing receipt")), "sid-receipt");
+        assertThat(report.ingestedCount()).isZero();
+        assertThat(report.trace()).containsEntry("rejectedCount", 1);
+    }
+
+    @Test
+    void originalReceiptIsCountedOnlyAfterFlushConfirmsIt() throws Exception {
+        var receipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap()))
+                .thenReturn(receipt);
+        org.mockito.Mockito.doAnswer(invocation -> {
+            org.mockito.Mockito.when(receipt.durable()).thenReturn(true);
+            return null;
+        }).when(vectorStoreService).flush();
+        var report = service.ingest(List.of(zipFile("durable.zip", "ConversationExport.txt",
+                "Alice : synthetic durable receipt")), "sid-receipt");
+        assertThat(report.ingestedCount()).isEqualTo(1);
+        assertThat(report.trace()).containsEntry("rejectedCount", 0);
+        verify(vectorStoreService).flush();
+    }
+
+    @Test
+    void quarantineReceiptIsNotPromotedAsAcceptedIngestion() throws Exception {
+        var receipt = mock(VectorStoreService.VectorRecordReceipt.class);
+        org.mockito.Mockito.when(receipt.durable()).thenReturn(true);
+        org.mockito.Mockito.when(receipt.policyExcluded()).thenReturn(true);
+        org.mockito.Mockito.when(vectorStoreService.enqueueWithReceipt(anyString(), anyString(), anyString(), anyMap()))
+                .thenReturn(receipt);
+        var report = service.ingest(List.of(zipFile("quarantine.zip", "ConversationExport.txt",
+                "Alice : synthetic quarantine receipt")), "sid-receipt");
+        assertThat(report.ingestedCount()).isZero();
+        assertThat(report.trace()).containsEntry("rejectedCount", 1);
     }
 
     private static MockMultipartFile zipFile(String fileName, String entryName, String body) throws Exception {

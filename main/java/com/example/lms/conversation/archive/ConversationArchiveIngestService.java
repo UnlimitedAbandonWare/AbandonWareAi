@@ -63,10 +63,20 @@ public class ConversationArchiveIngestService {
             readZip(file, sid, stats, stagedChunks);
         }
 
+        List<VectorStoreService.VectorRecordReceipt> receipts = new ArrayList<>();
         for (StagedChunk chunk : stagedChunks) {
-            vectorStoreService.enqueue(
-                    chunk.id(), chunk.sessionId(), chunk.text(), chunk.metadata());
-            stats.ingestedCount++;
+            receipts.add(vectorStoreService.enqueueWithReceipt(
+                    chunk.id(), chunk.sessionId(), chunk.text(), chunk.metadata()));
+        }
+        if (!receipts.isEmpty()) {
+            vectorStoreService.flush();
+        }
+        for (VectorStoreService.VectorRecordReceipt receipt : receipts) {
+            if (receipt != null && receipt.durable() && !receipt.policyExcluded()) {
+                stats.ingestedCount++;
+            } else {
+                stats.rejectedCount++;
+            }
         }
 
         Map<String, Integer> counts = counts(stats.counts);
@@ -236,6 +246,7 @@ public class ConversationArchiveIngestService {
         trace.put("linkArtifactCount", counts.get(ConversationMessageKind.LINK_ARTIFACT.wireName()));
         trace.put("quarantineCount", counts.get(ConversationMessageKind.QUARANTINED.wireName()));
         trace.put("ingestedCount", stats.ingestedCount);
+        trace.put("rejectedCount", stats.rejectedCount);
         trace.put("skippedCount", counts.get(ConversationMessageKind.QUARANTINED.wireName()));
         trace.put("truncated", stats.truncated);
         trace.put("tookMs", tookMs);
@@ -302,6 +313,7 @@ public class ConversationArchiveIngestService {
         int txtEntryCount;
         int recordCount;
         int ingestedCount;
+        int rejectedCount;
         long decompressedBytes;
         boolean truncated;
     }

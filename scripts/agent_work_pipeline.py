@@ -14,9 +14,15 @@ Actions:
        [--out plan.json] [--summary plan.md]
   update --plan <plan.json> --done <phaseId>[,<phaseId>...]
       Recomputes remaining phases and budget after completed phases.
+  done-check [--task <taskId>] [--text "<claim>"]
+      Completion-claim gate (contract DEMO1-DEVIN-QUARANTINE-AGENT-GRAFT-
+      20260929 §C1): wraps agent_done_evidence_guard so a pipeline caller
+      lints a Done/PARTIAL claim against claim text AND the task journal's
+      verify events before reporting it. Exit 0 evidence ok, 2 blocked,
+      3 task-or-text-required.
 
-Exit codes: 0 ok, 2 usage/io. Read-only over the repo; --out/--summary
-write only where asked.
+Exit codes: 0 ok, 2 usage/io, 3 no input. Read-only over the repo;
+--out/--summary write only where asked.
 """
 from __future__ import annotations
 
@@ -77,6 +83,12 @@ def build_plan(brief: str) -> dict:
         "phases": phases,
         "totalBudgetTurns": sum(p["budgetTurns"] for p in phases),
         "humanSummary": _summary(phases),
+        "doneGuard": {
+            "beforeClaimingDone": "python -B scripts/agent_work_pipeline.py "
+                                  "done-check --task <taskId> --text "
+                                  "\"<completion claim>\"",
+            "exitBlocked": 2,
+        },
     }
 
 
@@ -131,6 +143,29 @@ def cmd_update(args) -> tuple[dict, int]:
     }, 0
 
 
+def cmd_done_check(args) -> tuple[dict, int]:
+    try:
+        import agent_done_evidence_guard as guard
+    except ImportError as exc:
+        return {"schemaVersion": SCHEMA, "ok": False,
+                "reason": f"guard-unavailable:{type(exc).__name__}"}, 2
+    if not args.task and not args.text:
+        return {"schemaVersion": SCHEMA, "ok": False,
+                "reasons": ["task-or-text-required"]}, 3
+    reasons, detail = [], {"via": "agent_work_pipeline.done-check"}
+    if args.text:
+        reasons += guard.lint_text(args.text)
+        detail["textLinted"] = True
+    if args.task:
+        jreasons, jdetail = guard.journal_reasons(
+            Path(args.root).resolve(), args.task, args.text)
+        reasons += jreasons
+        detail.update(jdetail)
+    reasons = list(dict.fromkeys(reasons))
+    return {"schemaVersion": SCHEMA, "ok": not reasons,
+            "reasons": reasons, "detail": detail}, (2 if reasons else 0)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -142,11 +177,18 @@ def main(argv=None) -> int:
     p = sub.add_parser("update")
     p.add_argument("--plan", required=True)
     p.add_argument("--done", action="append", default=[])
+    p = sub.add_parser("done-check")
+    p.add_argument("--task")
+    p.add_argument("--text")
+    p.add_argument("--root", default=".")
     args = parser.parse_args(argv)
 
     try:
-        result, code = (cmd_plan(args) if args.action == "plan"
-                        else cmd_update(args))
+        if args.action == "done-check":
+            result, code = cmd_done_check(args)
+        else:
+            result, code = (cmd_plan(args) if args.action == "plan"
+                            else cmd_update(args))
     except (OSError, ValueError, KeyError, TypeError) as error:
         result, code = {"schemaVersion": SCHEMA, "status": "error",
                         "reason": str(error)}, 2

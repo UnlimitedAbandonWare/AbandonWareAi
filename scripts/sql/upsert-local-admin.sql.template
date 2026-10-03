@@ -1,0 +1,25 @@
+-- Upsert a local admin row into the Start-RAG file H2 store
+-- (var/meta-display-db/lmsdb, profile local,meta-display).
+--
+-- Preferred runner: scripts/create-local-admin.ps1 fills the placeholders,
+-- generates __BCRYPT_HASH__ with Spring Security BCryptPasswordEncoder,
+-- applies this script via org.h2.tools.RunScript, then verifies.
+--
+-- Rules:
+--   * __BCRYPT_HASH__ must be a bcrypt hash ($2a$/$2b$/$2y$...), never plaintext.
+--   * role must be ROLE_ADMIN for the form-login admin lane (hasRole("ADMIN")).
+--   * Values are SQL string literals: embed the single quotes by replacing
+--     __USERNAME__ / __BCRYPT_HASH__ / __ROLE__ / __NAME__ with 'value'
+--     (single quotes inside the value must be doubled '').
+--
+-- MERGE .. KEY(username): INSERT when the username is absent,
+-- UPDATE password/role/name when it already exists. Unlike the
+-- AdminService.createIfAbsent bootstrap, an existing row IS repaired.
+
+MERGE INTO administrators (username, password, role, name)
+    KEY(username)
+    VALUES (__USERNAME__, __BCRYPT_HASH__, __ROLE__, __NAME__);
+
+-- Read-back (hash prefix only; never export the full hash or plaintext):
+--   SELECT username, role, LEFT(password, 7) AS hash_prefix
+--     FROM administrators WHERE username = __USERNAME__;

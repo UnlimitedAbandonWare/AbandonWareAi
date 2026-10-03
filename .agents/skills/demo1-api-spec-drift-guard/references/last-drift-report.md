@@ -1,7 +1,7 @@
 # API drift report
 
 generated: 2026-09-17T16:21:21.4522984+09:00
-repoRoot: C:\AbandonWare\demo-1\demo-1\src
+repoRoot: <repo>
 
 ## Files
 - configs/api-routing.yaml present: True

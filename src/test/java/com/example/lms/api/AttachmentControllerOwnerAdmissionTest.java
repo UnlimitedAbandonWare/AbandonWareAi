@@ -74,6 +74,29 @@ class AttachmentControllerOwnerAdmissionTest {
         verify(fixture.ownerKeyResolver(), never()).ownerKey();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"proto-open", "admin-token"})
+    void operationalAuthorityUsesTheSameAnonymousUploadOwnerAsChat(String principal) {
+        Fixture fixture = fixture(null, "owner-a");
+        var auth = new TestingAuthenticationToken(principal, null, "ROLE_ADMIN");
+        List<MultipartFile> files = List.of(file("canary.md"));
+        fixture.controller().upload(files, null, auth);
+        verify(fixture.attachments()).saveAll(files, AttachmentOwnerIdentity.forAnonymous("owner-a"));
+        org.junit.jupiter.api.Assertions.assertTrue(auth.isAuthenticated());
+        org.junit.jupiter.api.Assertions.assertEquals("ROLE_ADMIN", auth.getAuthorities().iterator().next().getAuthority());
+    }
+
+    @Test
+    void userDetailsAccountKeepsAdministratorUploadOwnership() {
+        Fixture fixture = fixture(null, "owner-a");
+        var account = org.springframework.security.core.userdetails.User.withUsername("admin-a")
+                .password("synthetic").roles("ADMIN").build();
+        var auth = new TestingAuthenticationToken(account, null, "ROLE_ADMIN");
+        List<MultipartFile> files = List.of(file("account.md"));
+        fixture.controller().upload(files, null, auth);
+        verify(fixture.attachments()).saveAll(files, AttachmentOwnerIdentity.forAdministrator("admin-a"));
+    }
+
     @Test
     void seventeenFilesRejectBeforeOwnerResolutionOrAnyWrite() {
         Fixture fixture = fixture(null, "owner-a");

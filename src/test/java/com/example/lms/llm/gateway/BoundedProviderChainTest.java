@@ -21,21 +21,22 @@ class BoundedProviderChainTest {
     @AfterEach void clear() { TimeBudgetContext.clear(); TraceStore.clear(); }
 
     @Test
-    void revokedFirstApiCredentialUsesNextAuthorizedRouteWithoutRetryingIt() {
+    void preDispatchAdmissionUsesNextAuthorizedRouteWithoutRetryingIt() {
         var calls=new AtomicInteger();var chain=chain(model(messages->{throw failure();}),(failure,used)->used.contains("api-a")?
             route(model(messages->{calls.incrementAndGet();return answer("next [doc-7]");}),"api-b"):
-            route(model(messages->{calls.incrementAndGet();throw new LlmGatewayException("synthetic denied",LlmFailureClass.AUTH_MISSING);}),"api-a"),2);
+            route(model(messages->{calls.incrementAndGet();throw failure();}),"api-a"),2);
         assertEquals("next [doc-7]",chain.chat(List.of(UserMessage.from("synthetic"))).aiMessage().text());assertEquals(2,calls.get());
     }
 
     @Test
-    void blankCloudResponseContinuesWithTheSameEvidence() {
+    void blankCloudResponseStopsBeforeAnotherProvider() {
         var calls=new AtomicInteger();
         var chain=chain(model(messages->{calls.incrementAndGet();throw failure();}), (failure,used)->
                 used.contains("api-a")?route(model(messages->{calls.incrementAndGet();return answer("valid [doc-7]");}),"api-b"):
                     route(model(messages->{calls.incrementAndGet();return null;}),"api-a"),2);
-        assertEquals("valid [doc-7]",chain.chat(List.of(UserMessage.from("synthetic [doc-7]"))).aiMessage().text());
-        assertEquals(3,calls.get());
+        var failure=assertThrows(RuntimeException.class,()->chain.chat(List.of(UserMessage.from("synthetic [doc-7]"))));
+        assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+        assertEquals(2,calls.get());
     }
 
     @Test
@@ -127,6 +128,6 @@ class BoundedProviderChainTest {
     private static ChatModel model(Function<List<ChatMessage>, ChatResponse> operation) {
         return new ChatModel() { @Override public ChatResponse chat(List<ChatMessage> messages) { return operation.apply(messages); } };
     }
-    private static RuntimeException failure() { return new LlmGatewayException("synthetic timeout", LlmFailureClass.TIMEOUT_SOFT); }
+    private static RuntimeException failure() { return new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST,"local_endpoint_open"); }
     private static ChatResponse answer(String text) { return ChatResponse.builder().aiMessage(AiMessage.from(text)).build(); }
 }

@@ -60,6 +60,25 @@ public final class ApiRoutingDebug {
                 safe(fallbackTo));
     }
 
+    public static void credential(
+            String purpose,
+            String provider,
+            String endpointClass,
+            boolean keyPresent,
+            String keySource) {
+        if (!LOG.isLoggable(System.Logger.Level.INFO)) {
+            return;
+        }
+        LOG.log(
+                System.Logger.Level.INFO,
+                "[AWX][api-route] credential purpose={0} provider={1} endpointClass={2} keyPresent={3} keySource={4}",
+                safe(purpose),
+                safe(provider),
+                safe(endpointClass),
+                keyPresent,
+                safe(keySource));
+    }
+
     public static String classify(String errorClass, Integer httpStatus) {
         if (errorClass != null && !errorClass.isBlank()) {
             return errorClass.trim().toLowerCase(Locale.ROOT);
@@ -99,12 +118,10 @@ public final class ApiRoutingDebug {
             return "n/a";
         }
         String t = value.trim();
-        // Defense-in-depth: never echo long opaque tokens if a caller mistakes a key for a label.
-        if (t.length() > 96) {
-            return t.substring(0, 24) + "…len=" + t.length();
-        }
-        if (looksLikeSecret(t)) {
-            return "redacted_len=" + t.length();
+        // Defense-in-depth: classify before any shortening so a caller that
+        // mistakes a key for a label never leaks a prefix, length, or newline.
+        if (looksLikeSecret(t) || t.length() > 96 || t.indexOf('\n') >= 0 || t.indexOf('\r') >= 0) {
+            return "redacted";
         }
         return t;
     }
@@ -117,6 +134,8 @@ public final class ApiRoutingDebug {
                 || lower.startsWith("pcsk_")
                 || lower.startsWith("snx_")
                 || lower.startsWith("vck_")
-                || lower.startsWith("bearer ");
+                || lower.startsWith("bearer ")
+                || lower.startsWith("basic ")
+                || lower.startsWith("authorization" + ":");
     }
 }

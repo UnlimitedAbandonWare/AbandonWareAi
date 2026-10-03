@@ -1,3 +1,6 @@
+# Thin launcher for scripts/awx_mcp_toolbox.py — tool semantics and exit codes
+# live in the Python toolbox.
+# SSOT: scripts/awx_mcp_toolbox.py
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]

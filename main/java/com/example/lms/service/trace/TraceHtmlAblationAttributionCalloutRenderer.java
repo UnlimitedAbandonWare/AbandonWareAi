@@ -25,6 +25,8 @@ final class TraceHtmlAblationAttributionCalloutRenderer {
         sb.append(" / v=").append(escape(safeDisplay(result.version(), 120)));
         sb.append("</div>");
 
+        sb.append("<p class=\"small text-muted\">관측 근거로 계산한 휴리스틱 위험·기여도입니다. ")
+                .append("표시된 비율은 원인 확률이나 실제 재실행으로 측정한 품질 향상률이 아닙니다.</p>");
         sb.append("<div style=\"font-size:13px;\">");
         sb.append("<details open><summary style=\"cursor:pointer;\"><b>Top contributors</b></summary>");
         sb.append("<ol style=\"margin:8px 0 0 18px; padding:0;\">");

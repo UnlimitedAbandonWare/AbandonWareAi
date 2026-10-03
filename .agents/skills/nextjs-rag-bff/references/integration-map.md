@@ -2,7 +2,7 @@
 
 ## Verified Local Next Project
 
-- Existing project path: `C:\Users\nninn\OneDrive\Desktop\travel-graphrag-chatbot`
+- Existing project path: `%USERPROFILE%\OneDrive\Desktop\travel-graphrag-chatbot`
 - Current `package.json` observed during skill creation:
   - `next`: `16.2.6`
   - `react`: `19.2.4`

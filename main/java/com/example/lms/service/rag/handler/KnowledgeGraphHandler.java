@@ -86,15 +86,21 @@ public class KnowledgeGraphHandler implements ContentRetriever {
             BrainStateService brain = brainStateProvider == null ? null : brainStateProvider.getIfAvailable();
             if (brain != null) candidates.addAll(brain.privateSources(scope, text, 16));
             Set<String> seen = new LinkedHashSet<>();
-            for (var reference : candidates.stream().sorted(java.util.Comparator.comparingLong(
-                    (com.example.lms.service.rag.graph.KgChunk.SourceRef r) ->
+            Set<String> selectedAttachments = new LinkedHashSet<>(sourceAuthority.selectedAttachmentIds(scope));
+            for (var reference : candidates.stream().sorted(java.util.Comparator
+                    .comparingInt((com.example.lms.service.rag.graph.KgChunk.SourceRef r) ->
+                        selectedAttachments.contains(com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.sourceAttachmentId(r.sourceId())) ? 0 : 1)
+                    .thenComparing(java.util.Comparator.comparingLong(
+                        (com.example.lms.service.rag.graph.KgChunk.SourceRef r) ->
                             com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.sourceMessageId(r.sourceId()))
-                    .reversed()).toList()) {
+                        .reversed())).toList()) {
                 if (out.size() >= 8) break;
                 try {
                     var evidence = sourceAuthority.source(scope, reference);
                     if (evidence.isPresent() && seen.add(evidence.get().sourceId())) {
-                        out.add(sourceAuthority.evidenceContent(evidence.get()));
+                        if(com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.sourceAttachmentId(reference.sourceId())!=null)
+                            out.addAll(sourceAuthority.attachmentContents(evidence.get()).stream().limit(8-out.size()).toList());
+                        else out.add(sourceAuthority.evidenceContent(evidence.get()));
                     }
                 } catch (RuntimeException unavailable) {
                     TraceStore.put("retrieval.kg.private.disabledReason", "source_authority_unavailable");

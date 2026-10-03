@@ -1,0 +1,331 @@
+# DEMO1 agent path registry (SSOT). Read/write ONLY through the resolver:
+#   python -B scripts/awx_paths.py where <key>
+#   . scripts/AwxPaths.ps1 ; Resolve-AwxPath -Key <key>
+# Rules: new paths register here first; moves leave an alias (junction or
+# pointer) plus one line in data/agent-handoff/_path-moves/moved.jsonl.
+# status: FROZEN=never move without human approval | ALIASED=name registered,
+# physical move deferred | MOVE-SAFE=eligible under the 5-condition gate |
+# STABLE=correct as-is. env overrides the stored path when set.
+# Restricted YAML subset (2-space indent, inline [a, b] lists, null scalars).
+version: 1
+paths:
+  repo.root:
+    path: .
+    env: AWX_ROOT
+    status: FROZEN
+    owner: all-agents
+    consumers: [scripts/awx_paths.py, scripts/AwxPaths.ps1]
+    old_paths: []
+    moved_at: null
+  scripts.dir:
+    path: scripts
+    env: AWX_PATH_SCRIPTS_DIR
+    status: STABLE
+    owner: tooling
+    consumers: [scripts/work_journal.py, scripts/agent_preflight.py]
+    old_paths: []
+    moved_at: null
+  configs.dir:
+    path: configs
+    env: AWX_PATH_CONFIGS_DIR
+    status: STABLE
+    owner: tooling
+    consumers: [configs/api-routing.yaml, configs/agent-paths.yaml]
+    old_paths: []
+    moved_at: null
+  docs.agents_rules:
+    path: docs/agents-rules
+    env: AWX_PATH_DOCS_AGENTS_RULES
+    status: STABLE
+    owner: docs
+    consumers: [AGENTS.md, docs/agents-rules/DEMO1-PATH-REGISTRY-SSOT.md]
+    old_paths: []
+    moved_at: null
+  docs.diagnostics:
+    path: docs/diagnostics
+    env: AWX_PATH_DOCS_DIAGNOSTICS
+    status: STABLE
+    owner: docs
+    consumers: [scripts/work_journal.py, docs/PROJECT_STATUS.md]
+    old_paths: []
+    moved_at: null
+  agent_prompts.dir:
+    path: agent-prompts
+    env: AWX_PATH_AGENT_PROMPTS
+    status: STABLE
+    owner: agents
+    consumers: [agent-prompts/nova-focus]
+    old_paths: []
+    moved_at: null
+  handoff.root:
+    path: data/agent-handoff
+    env: AWX_PATH_HANDOFF_ROOT
+    status: FROZEN
+    owner: multi-agent
+    consumers: [scripts/work_journal.py, scripts/codex_work_checkpoint.py, main/java/com/example/lms/tools/DbEvidenceScanTool.java]
+    old_paths: []
+    moved_at: null
+  journal.base:
+    path: data/agent-handoff/codex-autonomy
+    env: AWX_PATH_JOURNAL_BASE
+    status: FROZEN
+    owner: work_journal
+    consumers: [scripts/work_journal.py, scripts/agent_scope_lease.py]
+    old_paths: []
+    moved_at: null
+  state.chatgpt_oauth:
+    path: data/agent-handoff/chatgpt-oauth
+    env: CHATGPT_OAUTH_MODELS
+    status: FROZEN
+    owner: product-runtime
+    consumers: [main/java/com/example/lms/llm/ChatGptOAuthRegistration.java, main/resources/application-meta-display.yml]
+    old_paths: []
+    moved_at: null
+  state.interview_tunnel:
+    path: data/agent-handoff/interview-tunnel
+    env: DEMO_PUBLIC_URL_FILE
+    status: FROZEN
+    owner: product-runtime
+    consumers: [main/java/com/example/lms/api/InterviewDemoPublicAddress.java]
+    old_paths: []
+    moved_at: null
+  state.codex_handoff:
+    path: data/agent-handoff/codex
+    env: UAW_AUTOLEARN_AGENT_HANDOFF_ROOT
+    status: FROZEN
+    owner: product-runtime
+    consumers: [main/resources/application.yml]
+    old_paths: []
+    moved_at: null
+  pathmoves.log:
+    path: data/agent-handoff/_path-moves/moved.jsonl
+    env: AWX_PATH_MOVED_LOG
+    status: FROZEN
+    owner: path-registry
+    consumers: [scripts/awx_paths.py]
+    old_paths: []
+    moved_at: null
+  device.resources:
+    path: data/device-resources
+    env: AWX_PATH_DEVICE_RESOURCES
+    status: STABLE
+    owner: device-bus
+    consumers: [scripts/awx_device_bus.py]
+    old_paths: []
+    moved_at: null
+  patch_drop.root:
+    path: __patch_drop__
+    env: AWX_PATH_PATCH_DROP
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1]
+    old_paths: []
+    moved_at: null
+  lease.locks:
+    path: __patch_drop__/source-edit-locks
+    env: AWX_PATH_LEASE_LOCKS
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1, scripts/agent_scope_lease.py]
+    old_paths: []
+    moved_at: null
+  lease.events:
+    path: __patch_drop__/source-edit-events
+    env: AWX_PATH_LEASE_EVENTS
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1]
+    old_paths: []
+    moved_at: null
+  lease.heartbeats:
+    path: __patch_drop__/source-edit-heartbeats
+    env: AWX_PATH_LEASE_HEARTBEATS
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1]
+    old_paths: []
+    moved_at: null
+  lease.scopes:
+    path: __patch_drop__/source-edit-scopes
+    env: AWX_PATH_LEASE_SCOPES
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1]
+    old_paths: []
+    moved_at: null
+  lease.quarantine:
+    path: __patch_drop__/source-edit-quarantine
+    env: AWX_PATH_LEASE_QUARANTINE
+    status: FROZEN
+    owner: lease-system
+    consumers: [__patch_drop__/source_edit_session.ps1]
+    old_paths: []
+    moved_at: null
+  hooks.dir:
+    path: .codex/hooks
+    env: AWX_PATH_HOOKS_DIR
+    status: FROZEN
+    owner: codex-hooks
+    consumers: [.codex/hooks.json, .codex/hooks/project_capabilities_hook.ps1]
+    old_paths: []
+    moved_at: null
+  codex.dir:
+    path: .codex
+    env: AWX_PATH_CODEX_DIR
+    status: STABLE
+    owner: codex
+    consumers: [.codex/hooks.json]
+    old_paths: []
+    moved_at: null
+  config.project_resources:
+    path: config/project-resources.json
+    env: AWX_PATH_PROJECT_RESOURCES
+    status: FROZEN
+    owner: codex-hooks
+    consumers: [.codex/hooks/source_edit_triage.sh]
+    old_paths: []
+    moved_at: null
+  var.root:
+    path: var
+    env: AWX_PATH_VAR_ROOT
+    status: STABLE
+    owner: runtime
+    consumers: [scripts/debug_rag_stack.ps1]
+    old_paths: []
+    moved_at: null
+  var.debug:
+    path: var/debug
+    env: AWX_PATH_VAR_DEBUG
+    status: STABLE
+    owner: runtime
+    consumers: [scripts/devin_task_orchestrate.py]
+    old_paths: []
+    moved_at: null
+  var.rag_launcher:
+    path: var/rag-launcher
+    env: AWX_PATH_RAG_LAUNCHER
+    status: FROZEN
+    owner: rag-launcher
+    consumers: [scripts/start_rag_stack.ps1]
+    old_paths: []
+    moved_at: null
+  var.codex_runtime:
+    path: var/codex-runtime
+    env: LOCAL_LLM_LOG_DIR
+    status: FROZEN
+    owner: product-runtime
+    consumers: [main/resources/application-llm.yaml]
+    old_paths: []
+    moved_at: null
+  db.meta_display:
+    path: var/meta-display-db
+    env: AWX_PATH_META_DISPLAY_DB
+    status: FROZEN
+    owner: product-runtime
+    consumers: [main/resources/application-meta-display.yml, scripts/db_agent.py]
+    old_paths: []
+    moved_at: null
+  port_lease.dir:
+    path: var/agent-port-lease
+    env: AWX_PATH_PORT_LEASE
+    status: FROZEN
+    owner: port-lease
+    consumers: [scripts/agent_port_lease.py]
+    old_paths: []
+    moved_at: null
+  assist.output_root:
+    path: var/codex-assist
+    env: AWX_PATH_ASSIST_OUTPUT
+    status: ALIASED
+    owner: codex-assist
+    consumers: [.grok/rules/demo1-api-first-routing-assist.md, .grok/rules/demo1-codex-oauth-route-assist.md]
+    old_paths: []
+    moved_at: null
+  main.resources:
+    path: main/resources
+    env: AWX_PATH_MAIN_RESOURCES
+    status: STABLE
+    owner: product
+    consumers: [main/resources/application.yml]
+    old_paths: []
+    moved_at: null
+  main.java:
+    path: main/java
+    env: AWX_PATH_MAIN_JAVA
+    status: STABLE
+    owner: product
+    consumers: []
+    old_paths: []
+    moved_at: null
+  frontend.dir:
+    path: frontend
+    env: AWX_PATH_FRONTEND
+    status: STABLE
+    owner: product
+    consumers: [frontend/src/lib/bff.js]
+    old_paths: []
+    moved_at: null
+  runtime_state.proposed:
+    path: data/runtime-state
+    env: AWX_PATH_RUNTIME_STATE
+    status: ALIASED
+    owner: product-runtime
+    consumers: []
+    old_paths: []
+    moved_at: null
+  rescue.root:
+    path: C:/AbandonWare/_rescue
+    env: AWX_PATH_RESCUE_ROOT
+    status: STABLE
+    owner: quarantine-tools
+    consumers: [scripts/codex_home_quarantine.py, scripts/quarantine_seed_mine.py]
+    old_paths: []
+    moved_at: null
+  worktree.macmini:
+    path: C:/AbandonWare/worktrees/awx-macmini
+    env: AWX_PATH_WORKTREE_MACMINI
+    status: STABLE
+    owner: multi-machine
+    consumers: [scripts/awx_mcp_toolbox_tests.ps1, scripts/awx_mcp_toolbox.py]
+    old_paths: []
+    moved_at: null
+  worktree.notebook:
+    path: C:/AbandonWare/worktrees/awx-notebook
+    env: AWX_PATH_WORKTREE_NOTEBOOK
+    status: STABLE
+    owner: multi-machine
+    consumers: [scripts/awx_mcp_toolbox_tests.ps1, scripts/awx_mcp_toolbox.py]
+    old_paths: []
+    moved_at: null
+  git.exe:
+    path: F:/git/cmd/git.exe
+    env: AWX_GIT_EXE
+    status: FROZEN
+    owner: local-toolchain
+    consumers: [scripts/conditional_local_git.py, scripts/agent_git_vibe_commit.py]
+    old_paths: []
+    moved_at: null
+  user.home:
+    path: "%USERPROFILE%"
+    env: USERPROFILE
+    status: FROZEN
+    owner: os-user
+    consumers: []
+    old_paths: []
+    moved_at: null
+  user.downloads:
+    path: "%USERPROFILE%/Downloads"
+    env: AWX_PATH_USER_DOWNLOADS
+    status: FROZEN
+    owner: os-user
+    consumers: [scripts/dot_brief_save.py]
+    old_paths: []
+    moved_at: null
+  python.venv:
+    path: "%USERPROFILE%/AppData/Local/hermes/hermes-agent/venv/Scripts/python.exe"
+    env: AWX_PYTHON_EXE
+    status: FROZEN
+    owner: local-toolchain
+    consumers: []
+    old_paths: []
+    moved_at: null

@@ -76,6 +76,23 @@ public class StrategyConflictResolver {
         knobs.put("specialMode.priority", "EXTREMEZ>HYPERNOVA>OVERDRIVE");
         knobs.put("specialMode.conflict.suppressed", suppressed);
 
+        // 동적 스테이지 힌트: 신호 조합에 따라 스킵/병렬/지연 가능한 단계를 조언만 기록한다.
+        // 실제 stages·suppressed·primaryMode 계약은 유지하고 실행기가 힌트를 참고해 유연화한다.
+        List<String> stageSkip = new ArrayList<>(2);
+        if (!requestedExtremeZ) {
+            stageSkip.add("ExtremeZBurst");
+        }
+        if (!requestedOverdrive) {
+            stageSkip.add("OverdriveNarrow");
+        }
+        int modeRequests = (requestedExtremeZ ? 1 : 0) + (requestedOverdrive ? 1 : 0) + (requestedHypernova ? 1 : 0);
+        knobs.put(ExecutionPlan.KNOB_STAGE_HINT_SKIP, List.copyOf(stageSkip));
+        knobs.put(ExecutionPlan.KNOB_STAGE_HINT_DEFERRED, excludedModeList(suppressed));
+        knobs.put(ExecutionPlan.KNOB_STAGE_HINT_PARALLEL_VERIFY, modeRequests >= 2);
+        // 무신호(일반/개념 질의, 검색 근거 0건 허용)는 재시도 없이 빠른 방출로 즉시 전이한다.
+        knobs.put(ExecutionPlan.KNOB_STAGE_HINT_FAST_EMIT, triggers.isEmpty());
+        knobs.put(ExecutionPlan.KNOB_STAGE_HINT_RETRY_ON_EMPTY, !triggers.isEmpty());
+
         ExecutionPlan plan = new ExecutionPlan(
                 mode,
                 extremeZ,

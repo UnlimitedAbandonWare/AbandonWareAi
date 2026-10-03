@@ -1,13 +1,22 @@
 """demo-1 vibe skill router: resolve one user ask to ONE primary skill (+<=1 optional).
 
 SSOT is .agents/skills-intent-index.yaml (intents, match patterns, forbid families).
+When every precision `match` pattern misses, per-intent `soft` cues (paraphrase/
+typo words) get one fuzzy pass; a total miss falls back to `fallback.primary_skill`
+(default demo1-vibe-max-agency) instead of stopping on null.
 Default forbid families (counter-evidence, macsrc-patchdrop, triad) stay off the
-default path unless the user text itself matches a family's `unlock` pattern.
+default path unless the user text itself matches a family's `unlock` pattern;
+a family declaring `veto: soft` keeps its skills with a `veto_relaxed` warning
+instead of dropping them — `veto: hard` (macsrc-patchdrop) still removes.
 
 Usage:
     python -B scripts/demo1_vibe_skill_router.py resolve "<user text>"
     python -B scripts/demo1_vibe_skill_router.py resolve --root . --index .agents/skills-intent-index.yaml "<user text>"
+    python -B scripts/demo1_vibe_skill_router.py resolve --text-file <utf8 path>   # "-" = stdin
     python -B scripts/demo1_vibe_skill_router.py --list-intents
+
+    --text-file reads the ask as UTF-8 from a file (or stdin for "-"); use it for
+    Korean/non-ASCII asks on PS 5.1 where argv may be codepage-mangled.
 
 Output: one JSON object {intent, primary, optional, forbidden_skipped, ...}.
 Resolved skill names follow `redirect:` frontmatter on deprecated alias SKILL.md
@@ -229,33 +238,69 @@ def resolve(index, user_text, root="."):
     # (e.g. "PatchDrop" must not lose to source-write's `patch` substring).
     pool = [pair for pair in scored if pair[1].get("explicit")] or scored
     best = max(pool, key=lambda pair: pair[0])[1] if pool else None
+    score = max((s for s, _ in scored), default=0)
+    soft_score = 0
+
+    if best is None:
+        # Soft/fuzzy pass: low-precision `soft` cues (paraphrase/typo words)
+        # rescue an ask that missed every `match` pattern. Only fires on a
+        # total precision miss — it never reorders a scored result.
+        soft_scored = []
+        for entry in intents:
+            if not isinstance(entry, dict):
+                continue
+            hits = _match_count(entry.get("soft"), text)
+            if hits:
+                soft_scored.append((hits, entry))
+        soft_pool = [pair for pair in soft_scored if pair[1].get("explicit")] or soft_scored
+        if soft_pool:
+            soft_score, best = max(soft_pool, key=lambda pair: pair[0])
 
     if best is None:
         fallback = index.get("fallback") or {}
+        signals = fallback.get("development_signals")
+        use_fallback = signals is None or _match_count(signals, text) > 0
         return {
             "schemaVersion": SCHEMA,
             "intent": None,
-            "primary": fallback.get("primary_skill"),
+            "primary": fallback.get("primary_skill") if use_fallback else None,
             "optional": None,
             "forbidden_skipped": sorted(set(defaults) - set(unlocked)),
             "unlocked_families": unlocked,
             "score": 0,
-            "notes": fallback.get("notes"),
+            "via": "fallback" if use_fallback else "none",
+            "notes": fallback.get("notes") if use_fallback else None,
         }
 
     forbidden = (set(defaults) | set(best.get("forbid_families") or [])) - set(unlocked)
-    forbidden_skills = {
-        skill for fam in forbidden
-        for skill in ((families.get(fam) or {}).get("skills") or [])
+    # `veto: hard` (default) drops the family's skills; `veto: soft` keeps them
+    # and only reports `veto_relaxed` — advisory/deliberation skills may stay
+    # routed, destructive pipelines (macsrc-patchdrop) stay hard.
+    hard_fams = {
+        fam for fam in forbidden
+        if (families.get(fam) or {}).get("veto", "hard") != "soft"
     }
+    soft_fams = forbidden - hard_fams
+
+    def _family_skills(fams):
+        return {
+            skill for fam in fams
+            for skill in ((families.get(fam) or {}).get("skills") or [])
+        }
+
+    hard_skills, soft_skills = _family_skills(hard_fams), _family_skills(soft_fams)
     primary, optional = best.get("primary_skill"), best.get("optional_skill")
-    vetoed = []
-    if primary in forbidden_skills:
+    vetoed, veto_relaxed = [], []
+    if primary in hard_skills:
         vetoed.append(primary)
         primary = None
-    if optional in forbidden_skills:
+    elif primary in soft_skills:
+        veto_relaxed.append(primary)
+    if optional in hard_skills:
         vetoed.append(optional)
         optional = None
+    elif optional in soft_skills:
+        veto_relaxed.append(optional)
 
     redirects = {}
     if primary:
@@ -270,8 +315,11 @@ def resolve(index, user_text, root="."):
         "optional": optional,
         "forbidden_skipped": sorted(forbidden),
         "unlocked_families": unlocked,
-        "score": max(s for s, _ in scored),
+        "score": score,
+        "soft": soft_score > 0,
+        "softScore": soft_score,
         "vetoed": vetoed,
+        "veto_relaxed": veto_relaxed,
         "redirects": redirects,
         "notes": best.get("notes"),
     }
@@ -308,13 +356,22 @@ def main():
     parser.add_argument("--index", default=DEFAULT_INDEX)
     parser.add_argument("--list-intents", action="store_true",
                         help="Print the intent table as JSON and exit")
+    parser.add_argument("--text-file", default=None,
+                        help="Read the ask from a UTF-8 file ('-' = stdin); "
+                             "takes precedence over positional text")
     args = parser.parse_args()
     try:
         index = load_index(args.root, args.index)
         if args.list_intents:
             result = _list_intents(index)
         else:
-            result = resolve(index, args.text, args.root)
+            text = args.text
+            if args.text_file is not None:
+                if args.text_file == "-":
+                    text = sys.stdin.read()
+                else:
+                    text = Path(args.text_file).read_text(encoding="utf-8")
+            result = resolve(index, text, args.root)
     except (OSError, ValueError, KeyError, TypeError) as error:
         result = {"schemaVersion": SCHEMA, "status": "error",
                   "reason": str(error) or "index-load-failed"}

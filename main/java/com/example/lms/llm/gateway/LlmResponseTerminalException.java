@@ -15,7 +15,7 @@ public final class LlmResponseTerminalException extends LlmGatewayException {
             String incompleteReason, String providerCode) {
         super("Responses terminal: " + reason, failureClass, reason);
         this.partialText = partialText;
-        this.metadata = metadata;
+        this.metadata = metadata != null ? metadata : ChatResponseMetadata.builder().build();
         this.status = status;
         this.incompleteReason = incompleteReason;
         this.providerCode = providerCode;

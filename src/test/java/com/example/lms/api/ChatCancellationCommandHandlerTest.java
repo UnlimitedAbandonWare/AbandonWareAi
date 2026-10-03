@@ -17,6 +17,25 @@ import static org.mockito.Mockito.when;
 
 class ChatCancellationCommandHandlerTest {
 
+    @Test void durableExactCancelWorksAfterRegistryLossWithoutWritingStoppedMarker() {
+        AtomicInteger marker = new AtomicInteger(), derived = new AtomicInteger();
+        var result = new ChatCancellationCommandHandler().cancel(42L, "original-run", () -> true, null,
+                marker::incrementAndGet, () -> { derived.incrementAndGet(); return true; });
+        assertTrue(result.cancelled());
+        assertEquals(0, marker.get());
+        assertEquals(1, derived.get());
+    }
+    @Test void unauthorizedAndTokenlessRequestsNeverReachDerivedCancellation() {
+        AtomicInteger derived = new AtomicInteger();
+        java.util.function.BooleanSupplier cancel = () -> { derived.incrementAndGet(); return true; };
+        var handler = new ChatCancellationCommandHandler();
+        assertFalse(handler.cancel(42L, null, () -> true, null, () -> {}, cancel).cancelled());
+        assertFalse(handler.cancel(42L, "run", () -> false, null, () -> {}, cancel).cancelled());
+        assertFalse(handler.cancel(null, "run", () -> true, null, () -> {}, cancel).cancelled());
+        assertEquals(0, derived.get());
+        assertFalse(handler.cancel(42L, "wrong-token", () -> true, null, () -> {}, () -> false).cancelled());
+    }
+
     private final ChatCancellationCommandHandler handler = new ChatCancellationCommandHandler();
 
     @Test

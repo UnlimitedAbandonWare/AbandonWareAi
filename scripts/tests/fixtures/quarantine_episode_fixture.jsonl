@@ -1,0 +1,5 @@
+{"timestamp":"2026-09-12T08:00:00Z","type":"session_meta","payload":{"session_id":"eeeeeeee-0000-0000-0000-000000000000","id":"eeeeeeee-1111-2222-3333-444444444444","parent_thread_id":"eeeeeeee-0000-0000-0000-000000000000","source":{"subagent":{"thread_spawn":{"agent_nickname":"FixtureNick","agent_role":"worker"}}},"thread_source":"subagent"}}
+{"timestamp":"2026-09-12T08:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1"}}
+{"timestamp":"2026-09-12T08:01:00Z","type":"response_item","payload":{"type":"custom_tool_call","name":"exec","call_id":"c1","input":"{\"cmd\": \"Get-Content scripts/missing.py\"}"}}
+{"timestamp":"2026-09-12T08:01:10Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Cannot find path 'scripts/missing.py'"}}
+{"timestamp":"2026-09-12T08:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Read goal-objective.md — Done."}]}}

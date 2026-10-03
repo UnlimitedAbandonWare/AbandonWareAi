@@ -14,6 +14,61 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ResponsesTerminalStatusContractTest {
+    @Test void nullMetadataBecomesEmptyNotNull() {
+        var terminal = new com.example.lms.llm.gateway.LlmResponseTerminalException("fixture_failed",
+                com.example.lms.llm.gateway.LlmFailureClass.PROVIDER_ERROR, null, null, "failed", null, null);
+        assertNotNull(terminal.metadata());
+        assertNull(terminal.metadata().tokenUsage());
+        assertNull(terminal.metadata().modelName());
+    }
+
+    @ParameterizedTest @CsvSource({"401,invalid_api_key", "429,subscription_sharing_usage_limit_exceeded"})
+    void oauthAuthFailureSurfacesOriginalReasonNotNpe(int status, String code) throws Exception {
+        try (var f = new ChatGptOAuthRedTeamContractTest.Fixture(
+                "{\"error\":{\"code\":\"" + code + "\"}}", status, "application/json")) {
+            var terminal = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> f.oauthModel(() -> "synthetic-credential").chat(List.of(UserMessage.from("fixture"))));
+            var dto = assertDoesNotThrow(() -> com.example.lms.dto.ChatResponseDto.terminal(terminal, 1L));
+            assertEquals("chatgpt_oauth_http_" + status, dto.getGenerationTermination().reason());
+            assertEquals(code, dto.getGenerationTermination().providerCode());
+            assertNull(dto.getGenerationTermination().inputTokens());
+            assertEquals("failed", dto.getGenerationTermination().status());
+            assertEquals(1, f.calls.get());
+        }
+    }
+
+    @ParameterizedTest @CsvSource({"failed,", "incomplete,max_output_tokens", "cancelled,"})
+    void failedSseUsageIsPreserved(String status, String incomplete) throws Exception {
+        String event = ChatGptOAuthRedTeamContractTest.sseEvent("response." + status,
+                "\"response\":{\"id\":\"resp_fixture\",\"status\":\"" + status + "\",\"model\":\"fixture-model\","
+                + "\"incomplete_details\":{\"reason\":\"" + (incomplete == null ? "" : incomplete) + "\"},"
+                + "\"usage\":{\"input_tokens\":3,\"output_tokens\":2,\"total_tokens\":5}}");
+        try (var f = new ChatGptOAuthRedTeamContractTest.Fixture(event, 200, "text/event-stream")) {
+            var terminal = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> f.oauthModel(() -> "synthetic-credential").chat(List.of(UserMessage.from("fixture"))));
+            var dto = com.example.lms.dto.ChatResponseDto.terminal(terminal, 1L);
+            assertEquals(status, dto.getGenerationTermination().status());
+            assertEquals("chatgpt_oauth_response_" + status, dto.getGenerationTermination().reason());
+            assertEquals(3, dto.getGenerationTermination().inputTokens());
+            assertEquals(2, dto.getGenerationTermination().outputTokens());
+            assertEquals(5, dto.getGenerationTermination().totalTokens());
+            assertEquals("resp_fixture", dto.getGenerationTermination().responseId());
+            assertEquals("fixture-model", dto.getModelUsed());
+            assertNull(terminal.partialText());
+            assertEquals(1, f.calls.get());
+        }
+    }
+
+    @Test void unknownUsageStaysNullNotZero() {
+        var terminal = new com.example.lms.llm.gateway.LlmResponseTerminalException("fixture_failed",
+                com.example.lms.llm.gateway.LlmFailureClass.PROVIDER_ERROR, null,
+                dev.langchain4j.model.chat.response.ChatResponseMetadata.builder().build(), "failed", null, null);
+        var dto = com.example.lms.dto.ChatResponseDto.terminal(terminal, 1L);
+        assertNull(dto.getGenerationTermination().inputTokens());
+        assertNull(dto.getGenerationTermination().outputTokens());
+        assertNull(dto.getGenerationTermination().totalTokens());
+    }
+
     static class Fixture implements AutoCloseable {
         final HttpServer server;
         final AtomicInteger calls = new AtomicInteger();

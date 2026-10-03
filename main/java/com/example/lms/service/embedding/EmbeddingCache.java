@@ -45,6 +45,23 @@ public interface EmbeddingCache {
      */
     float[] getOrCompute(String key, Supplier<float[]> computer, Duration ttl);
 
+
+    enum ReservationState { HIT, OWNER, JOIN, REJECTED }
+
+    /** A claim on the existing per-key flight; closing a JOIN never cancels its owner. */
+    interface Reservation extends AutoCloseable {
+        ReservationState state();
+        float[] await(long waitMillis);
+        float[] complete(float[] value, Duration ttl, boolean cacheable);
+        @Override void close();
+    }
+
+    Map<String, Reservation> reserveBatch(java.util.Collection<String> keys, long waitMillis);
+
+    default float[] getOrCompute(String key, Supplier<float[]> computer, Duration ttl, long waitMillis) {
+        return getOrCompute(key, computer, ttl);
+    }
+
     /**
      * Best-effort invalidation.
      *
@@ -146,7 +163,7 @@ public interface EmbeddingCache {
             final long expireAtMillis;
 
             Entry(float[] value, long expireAtMillis) {
-                this.value = value;
+                this.value = value.clone();
                 this.expireAtMillis = expireAtMillis;
             }
         }
@@ -178,6 +195,11 @@ public interface EmbeddingCache {
 
         @Override
         public float[] getOrCompute(String key, Supplier<float[]> computer, Duration ttl) {
+            return getOrCompute(key, computer, ttl, 30_000L);
+        }
+
+        @Override
+        public float[] getOrCompute(String key, Supplier<float[]> computer, Duration ttl, long waitMillis) {
             if (key == null || key.isBlank()) {
                 float[] value = compute(computer, true);
                 return value == null ? new float[0] : value;
@@ -191,19 +213,23 @@ public interface EmbeddingCache {
                 if (entry != null && entry.expireAtMillis >= startedAt) {
                     TraceStore.inc("embeddingCache.hit.count");
                     traceSize();
-                    return entry.value;
+                    return entry.value.clone();
                 }
                 TraceStore.inc("embeddingCache.miss.count");
                 if (entry != null) {
                     map.remove(key);
                     TraceStore.inc("embeddingCache.expired.count");
                 }
+                if (boundedWaitMillis(waitMillis) <= 0) {
+                    traceSize();
+                    return entry == null ? new float[0] : entry.value.clone();
+                }
                 flight = inflight.get(key);
                 leader = flight == null;
                 if (leader) {
                     if (inflight.size() >= maxEntries) {
                         traceSize();
-                        return entry == null ? new float[0] : entry.value;
+                        return entry == null ? new float[0] : entry.value.clone();
                     }
                     flight = new Flight(entry);
                     inflight.put(key, flight);
@@ -213,14 +239,14 @@ public interface EmbeddingCache {
 
             if (!leader) {
                 try {
-                    float[] v = flight.result.get(30, TimeUnit.SECONDS);
-                    return (v == null) ? new float[0] : v;
+                    float[] v = flight.result.get(boundedWaitMillis(waitMillis), TimeUnit.MILLISECONDS);
+                    return (v == null) ? new float[0] : v.clone();
                 } catch (Exception ex) {
                     if (ex instanceof InterruptedException) {
                         Thread.currentThread().interrupt();
                     }
                     LOG.log(System.Logger.Level.DEBUG, "[EmbeddingCache] fail-soft stage={0}", "singleFlight.wait");
-                    return flight.stale;
+                    return flight.stale.clone();
                 }
             }
 
@@ -250,13 +276,123 @@ public interface EmbeddingCache {
                 synchronized (lock) {
                     inflight.remove(key, flight);
                     try {
-                        flight.result.complete(ret);
+                        flight.result.complete(ret.clone());
                     } catch (Exception ignored) {
                         LOG.log(System.Logger.Level.DEBUG, "[EmbeddingCache] fail-soft stage={0}", "singleFlight.complete");
                     }
                     traceSize();
                 }
             }
+        }
+
+
+        /** Reserve all keys under one cache lock; no provider work runs here. */
+        @Override
+        public Map<String, Reservation> reserveBatch(java.util.Collection<String> keys, long waitMillis) {
+            Map<String, Reservation> claims = new LinkedHashMap<>();
+            synchronized (lock) {
+                long now = clock.millis();
+                for (String key : keys) {
+                    if (claims.containsKey(key)) continue;
+                    Entry entry = map.get(key);
+                    ReservationState state;
+                    Flight flight = null;
+                    float[] ready = entry == null ? new float[0] : entry.value;
+                    if (entry != null && entry.expireAtMillis >= now) {
+                        state = ReservationState.HIT;
+                        TraceStore.inc("embeddingCache.hit.count");
+                    } else {
+                        TraceStore.inc("embeddingCache.miss.count");
+                        if (entry != null) {
+                            map.remove(key);
+                            TraceStore.inc("embeddingCache.expired.count");
+                        }
+                        if (key == null || key.isBlank() || boundedWaitMillis(waitMillis) <= 0) {
+                            state = ReservationState.REJECTED;
+                        } else if ((flight = inflight.get(key)) != null) {
+                            state = ReservationState.JOIN;
+                        } else if (inflight.size() >= maxEntries) {
+                            state = ReservationState.REJECTED;
+                        } else {
+                            flight = new Flight(entry);
+                            inflight.put(key, flight);
+                            state = ReservationState.OWNER;
+                        }
+                    }
+                    claims.put(key, new Claim(key, state, flight, ready, now));
+                    TraceStore.inc("embeddingCache.reservation." + state.name().toLowerCase(java.util.Locale.ROOT));
+                }
+                traceSize();
+            }
+            return claims;
+        }
+
+        private final class Claim implements Reservation {
+            private final String key;
+            private final ReservationState state;
+            private final Flight flight;
+            private final float[] ready;
+            private final long startedAt;
+            private boolean settled;
+            Claim(String key, ReservationState state, Flight flight, float[] ready, long startedAt) {
+                this.key = key; this.state = state; this.flight = flight;
+                this.ready = ready; this.startedAt = startedAt;
+            }
+            @Override public ReservationState state() { return state; }
+            @Override public float[] await(long waitMillis) {
+                if (flight == null) return ready.clone();
+                try {
+                    float[] value = flight.result.get(boundedWaitMillis(waitMillis), TimeUnit.MILLISECONDS);
+                    return value == null ? new float[0] : value.clone();
+                } catch (Exception failure) {
+                    if (failure instanceof InterruptedException) Thread.currentThread().interrupt();
+                    LOG.log(System.Logger.Level.DEBUG, "[EmbeddingCache] fail-soft stage={0}", "singleFlight.wait");
+                    return flight.stale.clone();
+                }
+            }
+            @Override public float[] complete(float[] value, Duration ttl, boolean cacheable) {
+                if (state != ReservationState.OWNER) throw new IllegalStateException("cache_claim_not_owner");
+                float[] result = value == null || value.length == 0 ? flight.stale : value;
+                synchronized (lock) {
+                    if (settled) return result;
+                    settled = true;
+                    if (inflight.get(key) == flight) {
+                        if (cacheable && value != null && value.length > 0
+                                && ttl != null && !ttl.isZero() && !ttl.isNegative()) {
+                            long now = clock.millis(), until = expiry(startedAt, ttl);
+                            if (until >= now) {
+                                removeExpired(now);
+                                if (map.size() >= maxEntries) {
+                                    map.remove(map.keySet().iterator().next());
+                                    TraceStore.inc("embeddingCache.evicted.count");
+                                }
+                                map.put(key, new Entry(value, until));
+                            }
+                        }
+                        inflight.remove(key, flight);
+                    }
+                    // A backup-model result belongs only to its computing caller, not this fingerprint's joiners.
+                    flight.result.complete((cacheable ? result : flight.stale).clone());
+                    traceSize();
+                }
+                return result;
+            }
+            @Override public void close() {
+                if (state != ReservationState.OWNER) return;
+                synchronized (lock) {
+                    if (settled) return;
+                    settled = true;
+                    inflight.remove(key, flight);
+                    flight.result.complete(flight.stale.clone());
+                    traceSize();
+                }
+            }
+        }
+
+        private static long boundedWaitMillis(long requested) {
+            long limit = Math.min(30_000L, Math.max(0L, requested));
+            var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            return budget == null ? limit : Math.min(limit, budget.remainingMillis());
         }
 
         @Override

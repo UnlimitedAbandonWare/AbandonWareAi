@@ -1,6 +1,14 @@
 package com.example.lms.config;
 
 import com.acme.aicore.adapters.search.CachedWebSearch;
+import com.acme.aicore.adapters.ranking.WeightedRrfRanking;
+import com.acme.aicore.domain.ports.RankingPort;
+import com.acme.aicore.domain.ports.WebSearchProvider;
+import com.abandonware.ai.agent.integrations.AcmeAICoreGateway;
+import com.abandonware.ai.agent.integrations.WebSearchGateway;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.annotation.Bean;
+import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.ComponentScan;
 import org.springframework.context.annotation.Configuration;
@@ -24,4 +32,17 @@ import org.springframework.context.annotation.FilterType;
         }
 )
 public class AcmeWebSearchAdapterConfig {
+    @Bean
+    @ConditionalOnMissingBean(RankingPort.class)
+    public RankingPort acmeWebSearchRanking() {
+        return new WeightedRrfRanking();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean(WebSearchGateway.class)
+    public WebSearchGateway agentWebSearchGateway(List<WebSearchProvider> providers, RankingPort ranking,
+            com.example.lms.routing.ApiRoutingPolicySnapshot policy,
+            com.example.lms.guard.ProviderCredentialResolver credentials) {
+        return new AcmeAICoreGateway(providers, ranking, policy, credentials);
+    }
 }

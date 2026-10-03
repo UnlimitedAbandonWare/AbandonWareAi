@@ -1,0 +1,153 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate
+
+# Devin — 사용자 전용 "GPT Pro에 보낼 소스 zip" 만들기 (bat 한 번 → zipHome에 zip)
+[Contract: DEMO1-DEVIN-GPTPRO-ZIP-PACK-20261002]
+
+[ANTI-STOP] 이 파일을 읽은 건 intake일 뿐이다. 완료 = 아래 Acceptance가 PASS인 상태. 계획만 쓰고 멈추지 말고 DV0부터 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용). git은 `F:\git\cmd\git.exe`. Python은 표준 라이브러리만(`zipfile`, `fnmatch`, `re`, `subprocess`, `hashlib`). 새 패키지는 설치하지 않는다.
+
+## 0) 한 줄 목표
+사용자가 `Pack-GPTPro.bat`를 더블클릭하면, demo-1 소스의 핵심이 비밀값 없이 골라져 `C:\Users\nninn\OneDrive\Desktop\zipHome\`에 zip 한 개로 만들어진다. 사용자는 그 zip을 ChatGPT 웹의 GPT Pro에 올려 분석을 맡긴다. **이 도구는 사용자 전용이다.** 에이전트는 사용자가 직접 시키지 않으면 실행하지도, 고치지도, 자동으로 부르지도 않는다.
+
+## 1) 확인된 사실 (Grok Bot이 18:5x에 PC에서 확인)
+- `C:\Users\nninn\OneDrive\Desktop\zipHome\`는 있고, 지금 비어 있다(항목 0). OneDrive 동기화 폴더라 zip이 클라우드에도 올라간다. 그래서 크기와 비밀값 제외가 특히 중요하다.
+- 크기(전체 파일 기준):
+  - `main\`: 2,418개, 21.4 MB (`java` 17.8 MB, `resources` 3.6 MB, 하위에 `__patch_drop__`도 있음)
+  - git 추적 2,322개, 추적 안 되는 파일(ignore 제외) 57개
+  - `frontend\`: 423 MB이지만 `node_modules`·`.next`를 빼면 23개, 0.1 MB
+  - `scripts\`: 1,070개, 22.8 MB / `docs\`: 495개, 6.7 MB / `configs\`: 14개
+- 사용자가 지금까지 GPT Pro에 보낸 건 `src\main` 안의 내용이다.
+- **비밀값 파일이 소스 옆에 있다. 반드시 빼야 한다:**
+  - 루트의 `.env`, `.env.shared`, `shared.env`, `apikey.txt`, `.secrets\`
+  - `main\resources\application-secrets.yml`
+  - 이 파일들은 **열지도, 읽지도, 내용을 출력하지도 않는다.** 이름 규칙으로만 뺀다.
+- 기존 비밀값 검사 도구 `scripts\git_secret_guard.ps1`, `scripts\awx_project_secrets.py`, `scripts\test_agent_prompt_secret_patterns.py`가 있다. 패턴은 여기서 가져다 재사용하고, 새로 처음부터 만들지 않는다. 비밀값 파일을 직접 여는 게 아니라 **스크립트 소스의 패턴 정의만** 읽는다.
+- 이름에 secret이 들어간 정상 소스도 있다(`SettingsControllerSecretMaskAspect.java`, `SecretFixtures.java` 등). 이름에 "secret"이 있다고 다 빼면 안 된다.
+- 비슷한 zip 도구는 아직 없다(`.agents\skills\demo1-macsrc-patch-postprocessor\scripts\new_postprocess_packet.ps1`는 다른 용도다).
+
+## 2) 만들 것
+### 2-1. `Pack-GPTPro.bat` (레포 루트, 새 파일)
+- 맨 위 주석: `REM [USER-ONLY] 사용자 전용 수동 도구. 에이전트는 사용자가 명시적으로 요청하지 않는 한 실행/수정/자동호출 금지.`
+- `chcp 65001`. Python은 `python`, 없으면 `py -3`으로 찾고, 둘 다 없으면 한국어로 안내한 뒤 `pause`.
+- 사용법:
+  - 더블클릭: 기본 프로필 `core`
+  - `Pack-GPTPro.bat main`: 예전처럼 `main\`만
+  - `Pack-GPTPro.bat full`: `core` + scripts·docs 가벼운 버전
+  - `Pack-GPTPro.bat core --dry-run`: zip 없이 목록과 크기만
+- 끝나면 결과 요약(파일 수, 크기, 뺀 파일 수, 비밀값 의심 제외 수, zip 경로)을 보여 주고, `explorer /select,"<zip>"`으로 탐색기에서 zip을 선택해 띄운 다음 `pause`한다.
+
+### 2-2. `scripts\gptpro_pack.py` (새 파일, 실제 로직)
+- 맨 위 docstring에 `[USER-ONLY]` 설명(2-1과 같은 뜻)
+- **파일 고르기:** `git ls-files -co --exclude-standard -- <경로들>`로 고른다. 추적 파일과 ignore 안 된 새 파일, 즉 지금 작업 중인 내용이 들어가고 `.gitignore`된 비밀값·빌드 산출물은 자연히 빠진다. git이 안 되면 같은 제외 규칙으로 직접 훑는 방식으로 대신하고 경고한다.
+- **프로필** (정의는 `configs\gptpro-pack.yaml` 또는 같은 내용의 JSON. 표준 라이브러리로 읽을 수 있게 JSON을 권장하고, 고른 이유를 AUTO_DECISION으로 남긴다):
+  - `main`: `main\java\**`, `main\resources\**`
+  - `core` (기본): `main`에 더해 `build.gradle.kts`, `settings.gradle*`, `gradle.properties`, `gradle\wrapper\gradle-wrapper.properties`, `configs\**`, `frontend\src\**`, `frontend\scripts\**`, `frontend\package.json`, `frontend\next.config.mjs`, `frontend\jsconfig.json`, `agents.md`, `README.md`, `docs\PROJECT_STATUS.md`, `docs\API_ROUTING_SPEC.md`, `docs\architecture\**`
+  - `full`: `core`에 더해 `scripts\**\*.py|*.js|*.ps1|*.bat`, `docs\**\*.md`, `src\test\**`. 50 MB를 넘으면 경고한다.
+- **항상 제외 (이름·경로 규칙, 내용은 안 읽음):**
+  - `.git\`, `.gradle*\`, `build\`, `bin\`, `out\`, `output\`, `node_modules\`, `.next\`, `data\`, `logs\`, `uploads\`, `var\`, `scratch\`, `__patch_drop__\`(main 아래 포함), `_patch_artifacts\`, `__reports__\`, `agent-prompts\`, `.secrets\`, `.codex\`, `.devin\`, `.grok\`, `.cline\`, `.windsurf\`, `.playwright-cli\`, `db-ledger\`, `verification\`
+  - `.env`, `.env.*` (단 `.env.example`은 포함), `shared.env`, `apikey*`, `application-secrets*.*`, `*.secret*`, `auth.json`, `credentials*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`
+  - `*.db`, `*.mv.db`, `*.h2.db`, `*.trace.db`, `*.log`, `*.zip`, `*.jar`, `*.class`, `*.onnx`, `*.bin`, `*.safetensors`, 이미지·영상(필요하면 프로필에서 켤 수 있게)
+  - 한 파일이 2 MB를 넘으면 기본으로 제외하고 목록에 적는다(`--max-file-mb`).
+- **내용 검사 (넣기 직전):** 텍스트 파일만 검사한다. 키처럼 생긴 문자열(`sk-…`, `sk-proj-…`, `gsk_…`, `ghp_…`, `github_pat_…`, `xox[bap]-…`, `AKIA…`, `AIza…`, `-----BEGIN … PRIVATE KEY-----`, `Bearer <긴 토큰>` 등. 기존 guard 패턴 재사용)이 나오면 **그 파일을 zip에서 빼고**, 파일 경로와 줄 번호와 패턴 이름만 보고한다. **값은 절대 출력하지 않는다**(마스킹도 앞 4자까지만).
+  - 알려진 가짜 fixture는 `configs\gptpro-pack.json`의 `allow_files` 목록으로만 예외 처리한다. 처음엔 비워 두고, 걸린 파일은 보고만 한다.
+- **zip 안에 같이 넣을 안내 파일 2개 (자동 생성):**
+  - `_MANIFEST.md`: 만든 시각(KST), 프로필, git HEAD 짧은 sha, dirty 여부와 바뀐 파일 목록(이름만), 넣은 파일 수와 크기, 제외 사유별 개수, 비밀값 의심으로 뺀 파일 목록(값 없이)
+  - `_README_FOR_GPTPRO.md`: GPT Pro가 바로 이해하도록 프로젝트 한 장 요약. 스택(Java 17, Spring Boot 3.3.4, Gradle 8.7, LangChain4j 1.0.1, H2, Next 16 BFF), 주요 진입점, 폴더 지도, "비밀값은 빠져 있음", 그리고 사용자가 붙여 쓸 질문 틀 3줄(예: "이 zip 기준으로 X를 분석하고 수정안을 파일:줄로 제시해 줘"). 사실은 `PROJECT_STATUS.md`, `build.gradle.kts`에서 읽어서 쓰고, 모르는 건 쓰지 않는다.
+- **출력 이름:** `zipHome\demo1_<profile>_<yyyyMMdd-HHmm>_<sha7>[-dirty].zip`. 같은 이름이 있으면 `-2`, `-3`을 붙인다. **덮어쓰기 금지.** 같은 폴더에 `…_MANIFEST.md` 사본도 둔다.
+- **쓰기 위치:** 출력 폴더와 `%TEMP%`만. 레포에는 아무것도 쓰지 않는다. git은 읽기 명령(`ls-files`, `rev-parse`, `status --porcelain`)만 쓴다.
+- **오래된 zip:** 자동 삭제하지 않는다. zip이 10개를 넘으면 "오래된 zip 정리를 고려하세요"만 출력한다.
+- 옵션: `--profile`, `--out <폴더>`(기본 zipHome), `--dry-run`, `--max-file-mb`, `--max-zip-mb`(기본값은 DV1 근거로 정함), `--list`(넣을 파일 목록만 출력)
+
+### 2-3. GPT Pro 업로드 한도 (DV1에서 확인)
+- ChatGPT 웹의 파일 업로드 한도(파일당 크기, zip 지원 여부, 한 번에 올릴 수 있는 파일 수)를 공식 도움말(help.openai.com)에서 확인하고 URL·날짜를 남긴다.
+- 근거로 `--max-zip-mb` 기본값을 정하고, 넘으면 경고와 함께 `main` 프로필이나 나눠 올리는 방법을 안내한다. 나눠 담는 기능(`--split-mb`)은 근거상 필요할 때만 만든다.
+- 근거를 못 찾으면 `UNVERIFIED`로 두고 기본 경고선을 50 MB로 한다.
+
+### 2-4. "사용자 전용" 표시 (에이전트가 알도록)
+- `docs\user-tools\PACK_GPTPRO_KO.md` (새 파일, 한 화면): 용도, 사용법 3줄, 프로필 차이, 빠지는 것, 결과 위치, "사용자 전용, 에이전트 자동 실행 금지".
+- 레포 `agents.md`에 표시 블록 2줄을 넣는다. 다른 세션이 lease를 잡고 있으면 생략하고 AUTO_DECISION으로 남긴다.
+  ```
+  <!-- AWX-USER-ONLY-TOOLS:BEGIN -->
+  - `Pack-GPTPro.bat` / `scripts/gptpro_pack.py`: 사용자 전용(GPT Pro 업로드용 zip). 사용자가 명시적으로 요청하지 않으면 실행·수정·자동호출 금지. 상세 docs/user-tools/PACK_GPTPRO_KO.md
+  <!-- AWX-USER-ONLY-TOOLS:END -->
+  ```
+- 전역 `~/.codex`, `~/.gemini`, Devin 전역 설정에는 넣지 않는다.
+
+## 공통 규칙
+- 장부: `data\agent-handoff\devin-gptpro-zip-pack-<8hex>\`. 순서는 journal → checkpoint → verify. 만들거나 고치기 전에 `agent_scope_lease.py claim`으로 잡는다.
+- 수정 허용 목록:
+  - 새 파일: `Pack-GPTPro.bat`, `scripts\gptpro_pack.py`, `configs\gptpro-pack.json`, `scripts\test_gptpro_pack.py`, `docs\user-tools\PACK_GPTPRO_KO.md`
+  - 기존 파일: `agents.md` 표시 블록 2줄
+- 변경 금지: `main\**`, `frontend\**`, 기존 bat·스크립트, `.gitignore`, `scripts\git_secret_guard.ps1` 등 기존 guard(읽기만), 전역 설정
+
+## DV0 — 현재 상태
+- HEAD, `agent_scope_lease.py who`, `agents.md` 크기·sha12, `zipHome` 항목 수를 `BASELINE.md`에 적는다.
+
+## DV1 — 공식 근거 (`OFFICIAL.md`)
+- 2-3의 업로드 한도를 확인한다. 근거가 없으면 UNVERIFIED.
+
+## DV2 — 테스트 먼저 (RED → GREEN), `scripts\test_gptpro_pack.py`
+**임시 폴더에 만든 가짜 레포로만 테스트한다. 실제 비밀값 파일은 쓰지 않는다.**
+1. `.env`, `.env.local`, `shared.env`, `apikey.txt`, `application-secrets.yml`, `.secrets\x`는 zip에 없고, `.env.example`은 있다.
+2. `SettingsControllerSecretMaskAspect.java`처럼 이름에 Secret이 든 정상 소스는 들어간다.
+3. 가짜 `sk-proj-` 문자열이 든 파일은 빠지고, 보고에 경로·줄·패턴 이름만 있고 값은 없다(출력 전체에 원문 0회).
+4. `node_modules`, `.next`, `build`, `__patch_drop__`, `data`, `agent-prompts`는 없다.
+5. 프로필 `main`, `core`, `full`의 파일 목록 차이가 정의대로다.
+6. 같은 이름의 zip이 있으면 `-2`가 붙고 덮어쓰지 않는다.
+7. `--dry-run`이면 zip이 생기지 않는다.
+8. `_MANIFEST.md`, `_README_FOR_GPTPRO.md`가 zip 안에 있다.
+9. 2 MB를 넘는 파일은 빠지고 목록에 적힌다.
+10. 실행 전후로 레포 `git status --porcelain` 결과가 같다(레포 쓰기 0).
+11. ignore 안 된 새 파일(작업 중 파일)도 들어간다.
+12. zip 안 경로가 `/` 구분자이고 한글 파일명이 깨지지 않는다(UTF-8 플래그).
+
+## DV3 — 실제 확인 (출력은 `%TEMP%`로만)
+- `python -B scripts\gptpro_pack.py --profile core --out $env:TEMP\gptpro-pack-check`로 1회, `--profile main --dry-run`으로 1회 실행한다.
+- 확인: 파일 수, 크기, 제외 수, 비밀값 의심 제외 목록(값 없이). zip 안에 `.env*`(example 제외), `apikey*`, `application-secrets*`, `.secrets/`가 0개인지 zip 목록으로 검사한다.
+- **`zipHome`에는 만들지 않는다.** 첫 실행은 사용자가 한다. 확인이 끝나면 `%TEMP%`의 확인용 zip은 지워도 된다(우리가 만든 파일만).
+- `Pack-GPTPro.bat`는 대화형(`pause`, explorer)이므로, `--no-pause --no-explorer`에 해당하는 환경변수나 인자로 1회 비대화 실행해 종료 코드 0만 확인한다(출력은 `%TEMP%`).
+
+## HOLD
+- zip을 ChatGPT에 자동으로 올리는 기능(브라우저 자동화) — 만들지 않는다. 사용자가 직접 올린다.
+- 예약 실행이나 자동 실행 — 만들지 않는다.
+
+## ASK_ONCE
+- 없음. 새 파일과 2줄 블록뿐이라 되돌릴 수 있다.
+
+## 절대 금지
+- `.env*`, `apikey.txt`, `shared.env`, `.secrets\`, `application-secrets.yml`, `auth.json`을 열거나 읽기, 내용 출력. 비밀값 원문을 로그·보고·테스트 출력에 남기기
+- zipHome에 확인용 zip 만들기, zipHome의 기존 파일 지우거나 덮어쓰기
+- 레포에 쓰기(허용 목록 밖), push, pull, commit, `git add -A`, reset, checkout, restore, stash, clean
+- 전체 suite, Gradle 빌드, Verify-RAG, 서버 재기동
+- AbandonWare3 재추가, PROTO_OPEN이나 admin 강화, 다른 세션 lease·hunk 손대기, 데이터셋 삭제
+- skip-permissions나 full-access 권장
+
+## Acceptance (실행 안 한 항목은 NOT_RUN과 사유)
+- [ ] AC1 `BASELINE.md`, `OFFICIAL.md`(업로드 한도 근거 또는 UNVERIFIED)
+- [ ] AC2 테스트 1~12 RED→GREEN
+- [ ] AC3 `Pack-GPTPro.bat`, `gptpro_pack.py`, `gptpro-pack.json` 생성, `[USER-ONLY]` 표시 있음
+- [ ] AC4 실제 확인: core zip을 `%TEMP%`에 생성, 비밀값 파일 0개, MANIFEST·README 포함, 크기와 파일 수 보고
+- [ ] AC5 bat 비대화 실행 종료 코드 0
+- [ ] AC6 `docs\user-tools\PACK_GPTPRO_KO.md`, `agents.md` 2줄 블록(또는 생략 AUTO_DECISION)
+- [ ] AC7 레포 쓰기는 허용 목록뿐, `main\**` sha 불변, zipHome 항목 수 불변(0)
+
+## 보고 형식
+```
+외부 API: 0회 (웹 조회 <n>회: 업로드 한도 근거)
+DEVIN-GPTPRO-ZIP-PACK: DONE | PARTIAL | HOLD
+사용법: Pack-GPTPro.bat [main|core|full] [--dry-run]
+확인 실행(core, %TEMP%): 파일 <n>개 / <n> MB / 제외 <n> / 비밀값 의심 제외 <n>(경로만)
+확인 실행(main, dry-run): 파일 <n>개 / <n> MB
+업로드 한도: <값과 URL / UNVERIFIED> → --max-zip-mb 기본 <n>
+테스트: <n>/12 GREEN
+사용자 전용 표시: bat·py 헤더 / 문서 / agents.md 블록 <넣음·생략 사유>
+AUTO_DECISION: …
+FILES_TOUCHED: …
+되돌리는 법: <명령 1줄>
+AC1~AC7: PASS | FAIL | NOT_RUN(사유)
+사용자 할 일: Pack-GPTPro.bat 더블클릭 → zipHome의 zip을 GPT Pro에 업로드
+```
+
+[ANTI-STOP] 읽기 = intake. DV0부터 바로 시작한다. 완료 증거는 테스트 GREEN, `%TEMP%` 확인 zip에 비밀값 0개, bat 종료 코드 0, 사용자 전용 표시다.

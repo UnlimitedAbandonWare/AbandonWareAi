@@ -22,12 +22,14 @@ grants no new authority over them.
 - **Stale `index.lock`**: handled inside
   `python -B scripts/agent_git_vibe_commit.py` (or directly via
   `python -B scripts/conditional_local_git.py lock --repo . --backup-dir data/agent-handoff/<taskId>`).
-  The lock is moved to `index.lock.bak-<yyyymmdd>` only when it is 0 bytes,
-  past the age threshold (orchestrator `--stale-lock-days` default 0.25 = 6h;
-  standalone `lock` keeps `--days` default 1.0), no confirmed `git.exe`
-  writer exists, and the index hash is unchanged. Any unmet condition →
-  `action: preserved` + reason → `deferred=index-lock` — report BLOCKED,
-  never force-delete.
+  The lock is moved to `index.lock.bak-<yyyymmdd>` only when it is 0 bytes
+  and past the age threshold (`lock --days` and `--stale-lock-days` share
+  one default `DEFAULT_STALE_LOCK_DAYS` = 0.25 = 6h), or when it carries
+  the gate's own `conditional-local-git:` marker — a selected-commit whose
+  writer died mid-flight. Both shapes still require no confirmed `git.exe`
+  writer and an unchanged index hash, and the marker path adds a short
+  settle window first. Any unmet condition → `action: preserved` + reason →
+  `deferred=index-lock` — report BLOCKED, never force-delete.
 - **Foreign staging stays staged**: commit only this session's paths with
   `python -B scripts/agent_git_vibe_commit.py --repo . --path <p> [--path ...] --message-file <file>`
   — preserve-foreign-staged is the orchestrator's default (low-level:

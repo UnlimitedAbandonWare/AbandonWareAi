@@ -13,7 +13,7 @@ description: >-
 사고가 최악이다. allowlist + WhatIf 기본 스크립트로 좁게만 정리한다.
 
 ## Do
-1. Project root: `C:\AbandonWare\demo-1\demo-1\src`
+1. Project root: `<repo>`
 2. 먼저 보고만:
 ```powershell
 Safe-Cleanup.bat                    # = scripts\demo1_safe_cleanup.ps1 (WhatIf 기본)

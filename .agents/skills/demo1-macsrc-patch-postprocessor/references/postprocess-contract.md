@@ -25,7 +25,7 @@ The neutral reviewer writes `awx.patch-tri-query.final.v1` with:
 
 Positive and Negative see the same immutable input hashes and cannot read each
 other. Neutral runs only after both packets exist and may not add new facts.
-Use `prepare_patch_tri_query.ps1` to create the subject manifest and staged
+Use `.\.agents\skills\demo1-macsrc-patch-postprocessor\scripts\prepare_patch_tri_query.ps1` to create the subject manifest and staged
 requests. The finalizer requires the fixed ready-last subject manifest,
 verifies its SHA-256 and frozen input map, recomputes every listed request-file
 hash, and requires each packet to bind its own prepared request SHA-256.

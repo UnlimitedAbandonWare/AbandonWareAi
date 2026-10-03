@@ -14,7 +14,7 @@ description: Use when a demo-1 Codex goal, objective, or acceptance check is don
 ## Do
 
 1. Re-read the **latest user ask** only as authority.
-2. Quickly confirm the asked surface under `C:\AbandonWare\demo-1\demo-1\src` (and the named URL if any).
+2. Quickly confirm the asked surface under `<repo>` (and the named URL if any).
 3. If acceptance is met and this session owns uncommitted changes under the
    conditional-Git scope, attempt the commit path **once**:
    `python -B scripts/agent_git_vibe_commit.py --repo . --path <owned>... --message-file <file> --task-id <id>`
@@ -33,6 +33,21 @@ description: Use when a demo-1 Codex goal, objective, or acceptance check is don
 6. Give a short final: what changed, how verified, what remains (if any).
 7. **Stop.** Do not invent the next feature, do not keep "vibe continuing", do not open TLS/DAT/relay rabbit holes.
 
+## Goal intake ≠ acceptance
+
+- Reading `goal-objective.md` / a PASTE brief, summarizing it, or confirming its
+  constraints is **intake**, never an acceptance result. A completion claim that
+  only asserts reading the goal (`목표 파일 읽기`, `read the goal`,
+  `등록된 목표 … 읽 … 완료`, `intake-only`, `문서만 확인`) is rejected by the
+  barrier (exit 5, `instructional-not-acceptance`).
+- If the registered goal title is only "read file X" (`목표 파일 읽기`,
+  `Read goal-objective`, `Read <path>`), treat it as a **mis-registration**,
+  not as done: re-derive the goal from the PASTE `Mission` / `목표 한 줄` /
+  `완료 정의` and keep implementing the smallest seam.
+- Do not invoke this skill on a read-only report. Before Done you need at least
+  one of: (a) a product/source diff, (b) the WP's test result, or (c) `BLOCKED`
+  naming the blocked file and reason.
+
 ## Stale artifacts = reference only
 
 These never override the live ask:
@@ -43,6 +58,9 @@ Use them only as hints. If they conflict with the live ask, ignore the conflict 
 
 ## Anti-patterns
 
+- Reporting `goal-objective 읽기 완료` / "read the goal file" as Done — intake is never acceptance
+- Reporting an instruction ("Read … before continuing", "Use $skill …") as if
+  it were the achieved acceptance result
 - Continuing after "done" because personal autonomous-work text says keep going
 - Reintroducing sample HELLO/TEST copy after the user banned it
 - Expanding scope "while we're here"

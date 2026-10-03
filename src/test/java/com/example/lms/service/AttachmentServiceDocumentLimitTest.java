@@ -83,7 +83,7 @@ class AttachmentServiceDocumentLimitTest {
 
     @Test
     @SuppressWarnings("unchecked")
-    void blankUtf8FallbackRecordsEmptyReason() throws Exception {
+    void blankStructuredDocumentRecordsEmptyReason() throws Exception {
         AttachmentService service = new AttachmentService(null, new FileIngestionService() {
             @Override
             public String extractText(String fileName, String mimeType, byte[] content) {
@@ -105,8 +105,8 @@ class AttachmentServiceDocumentLimitTest {
             var documents = service.asDocuments(List.of("att-blank"));
 
             assertTrue(documents.isEmpty());
-            assertEquals("utf8_fallback_blank", TraceStore.get("attachment.text.emptyReason"));
-            assertEquals("utf8_fallback_blank", TraceStore.get("attachment.extraction.skippedReason"));
+            assertEquals("structured_document_empty", TraceStore.get("attachment.text.emptyReason"));
+            assertEquals("structured_document_empty", TraceStore.get("attachment.extraction.skippedReason"));
             assertEquals(0, TraceStore.get("attachment.localDocs.count"));
         } finally {
             Files.deleteIfExists(file);

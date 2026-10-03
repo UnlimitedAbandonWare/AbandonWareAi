@@ -1,6 +1,6 @@
 ---
 name: demo1-devin-directive-loop
-description: Use when the user pastes an external agent (Devin) report asking how to reply, or asks to draft a demo-1 source-fix directive for handoff; delta-only follow-ups, evidence tiers, anti-regression close-out
+description: "demo-1 Devin 등 외부 에이전트 구현 보고서의 완료 주장·증거를 검토해 판정 또는 후속 답장 지시서를 작성할 때. 보고서 없는 신규 지시서·목표 계약·일반 테스트 로그 판정에는 쓰지 않음."
 ---
 
 # Demo1 Devin Directive Loop
@@ -51,8 +51,11 @@ skill), Meta Display lens content, or PatchDrop bundle ingestion.
 - `degraded_honest`: insufficient-evidence/fallback returned honestly.
 - `provider_direct_only`: direct provider call succeeded; Java adapter/router
   path unproven.
-- `auth_blocked`: owner session or credential required; never resolve by
-  weakening security.
+- `auth_blocked`: owner session or credential required (local/owner lane);
+  never resolve by weakening security. External provider API 401/403 are not
+  this tier — classify per `docs/API_ROUTING_SPEC.md` §External API failure
+  classification (401=`KEY_INVALID_OR_EXPIRED`; 403 body → `PLAN_GATE` vs
+  `FORBIDDEN_REGION_OR_IP`).
 - `not_observed`: cause undetermined; leave as-is instead of guessing.
 - Side labels: `billing_unverified` (billing not proven either way),
   `baseline_missing` (no comparison baseline), `historical` (ran before the

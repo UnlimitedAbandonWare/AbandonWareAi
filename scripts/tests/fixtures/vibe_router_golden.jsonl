@@ -1,0 +1,52 @@
+{"id": "g01-cleanup-done", "ask": "완료된 지시서 클린업해서 세션 닫아", "primary": "demo1-completed-directive-cleanup"}
+{"id": "g02-desktop-directive", "ask": "desktop canonical goal source directive intake 처리", "primary": "demo1-desktop-canonical-goal-intake"}
+{"id": "g03-git-autocontinue", "ask": "vibe git 브랜치 작업 이어서 자동 계속 진행해", "primary": "demo1-vibe-git-auto-continue"}
+{"id": "g04-coop-verify", "ask": "공유 워크트리에서 중간 빌드 반복 막는 deferred verification 티켓", "primary": "awx-cooperative-verification"}
+{"id": "g05-spend-guard", "ask": "프로브가 API 크레딧 과금하지 않게 spend guard 걸어", "primary": "demo1-agent-api-spend-guard"}
+{"id": "g06-cond-git-policy", "ask": "커밋 정책 git 허용 범위 어디까지인지", "primary": "demo1-conditional-local-git"}
+{"id": "g07-gpu-fallback", "ask": "로컬 gpu 실패하면 api 폴백 정책", "primary": "demo1-gpu-power-fallback"}
+{"id": "g08-git-commit-flow", "ask": "내가 고친 것만 스캔해서 커밋해줘", "primary": "demo1-git-vibe-workflow"}
+{"id": "g09-blocker-recovery", "ask": "같은 에러 반복 no progress 진행이 막혀", "primary": "scoped-blocker-recovery"}
+{"id": "g10-secret-scan", "ask": "커밋 전에 시크릿 스캔 돌려줘", "primary": "demo1-git-secret-guard"}
+{"id": "g11-3090-watch", "ask": "3090 팬소음 알림 떴는데 원인 가설 보여줘", "primary": "demo1-rtx3090-health-watch"}
+{"id": "g12-toolchain", "ask": "이 작업에 어떤 툴체인 쓰는지 골라줘", "primary": "demo1-toolchain-auto-select"}
+{"id": "g13-maxagency", "ask": "vibe max agency로 4에이전트 자율 운영해줘", "primary": "demo1-vibe-max-agency"}
+{"id": "g14-display-verify", "ask": "meta display verification 싱크 검증 시뮬레이터 증거", "primary": "demo1-meta-display-verification"}
+{"id": "g15-mutable-spec", "ask": "모델명 바뀌면 어디 SSOT 보고 바꾸는지 스펙 정책", "primary": "demo1-mutable-spec-policy"}
+{"id": "g16-threeway", "ask": "소스 쓰기 전에 three-way preflight 확인", "primary": "demo1-source-edit-three-way-preflight"}
+{"id": "g17-chat-trace", "ask": "채팅 세션 트레이스 뽑아서 왜 이 모델로 갔는지 보고", "primary": "demo1-chat-session-debug"}
+{"id": "g18-artifact-curator", "ask": "agent-handoff 정리 — 핸드오프 흔적 큐레이션", "primary": "demo1-artifact-trace-curator"}
+{"id": "g19-watchdog", "ask": "에이전트 세션 좀비 감시 watchdog 진단해줘", "primary": "agent-session-watchdog"}
+{"id": "g20-buildminer", "ask": "빌드 로그 빌드 에러 분류해줘", "primary": "build-error-miner"}
+{"id": "g21-nextjs-bff", "ask": "Next.js App Router BFF 프론트 설계해줘", "primary": "nextjs-rag-bff"}
+{"id": "g22-resilience", "ask": "RAG 장애 학습 resilience observability 작업", "primary": "demo1-rag-resilience-observability"}
+{"id": "g23-spec-drift", "ask": "api spec drift — 스펙 문서가 실제 동작과 다른지 확인", "primary": "demo1-api-spec-drift-guard"}
+{"id": "g24-gitdoctor", "ask": "git 작업 불가 — index.lock 때문에 막혀", "primary": "demo1-git-doctor"}
+{"id": "g25-subsystem", "ask": "Overdrive 서브시스템 패치 지시 방식", "primary": "demo1-subsystem-patch-directive"}
+{"id": "g26-project-root", "ask": "데빈 경로가 c:\\users\\nninn 홈으로 잡혀있어 프로젝트 루트 고쳐", "primary": "demo1-project-root"}
+{"id": "g27-nova", "ask": "노바 웨이크워드 집중 대화 구현", "primary": "demo1-nova-focus"}
+{"id": "g28-rag", "ask": "RAG 검색이 이상해 rerank 확인해줘", "primary": "demo1-rag-platform"}
+{"id": "g29-lens-caption", "ask": "렌즈에 띄울 캡션 길이 바꿔줘", "primary": "demo1-meta-display-simple-caption"}
+{"id": "g30-db-export", "ask": "대화 db export 해줘", "primary": "demo1-meta-display-db-export"}
+{"id": "g31-db-lock", "ask": "db 락 걸렸는지 상태 확인", "primary": "demo1-db-agent-cli"}
+{"id": "g32-source-patch", "ask": "소스 패치 전에 journal 열어 작업 기록해", "primary": "demo1-work-ledger"}
+{"id": "g33-trace-dock", "ask": "상시 트레이스 독 always-on trace dock", "primary": "demo1-trace-dock-assist"}
+{"id": "g34-llm-routing", "ask": "ollama 프로바이더 모델 라우팅 바꿔", "primary": "demo1-api-routing-inventory"}
+{"id": "g35-debug", "ask": "로그인이 안 돼 디버깅 도와줘", "primary": "demo1-evidence-debugging"}
+{"id": "g36-uaw", "ask": "uaw 장기 바이브 자율 오토 돌려", "primary": "demo1-uaw-vibe-longrun"}
+{"id": "g37-reload", "ask": "자바 소스 바꿨으니 재기동 리로드해", "primary": "demo1-dev-reload"}
+{"id": "g38-cleanup", "ask": "디스크 잔여물 정리해줘", "primary": "demo1-safe-cleanup"}
+{"id": "g39-triad", "ask": "triad 심의 돌려줘 긍정 부정 중립 교차 검증", "primary": "demo1-triad-deliberation"}
+{"id": "g40-patchdrop", "ask": "patchdrop SMB 핸드오프 패치 적용", "primary": "patchdrop-safe-patch-orchestrator"}
+{"id": "g41-counter-evidence", "ask": "반증 증거 triangulate 해줘 counter-evidence", "primary": "demo1-triangulating-counter-evidence"}
+{"id": "g42-agy-entry", "ask": "agy cli 진입 절차 알려줘", "primary": "demo1-agy-cli-entry"}
+{"id": "g43-agy-directive", "ask": "코덱스한테 지시서 만들어줘 agy 세션", "primary": "demo1-agy-directive-writer"}
+{"id": "g44-generic-directive", "ask": "소스수정 지시서 써줘", "primary": "demo1-devin-directive-loop"}
+{"id": "g45-selfask", "ask": "selfask 자동 판정 승인 퀴즈 줄 처리", "primary": "demo1-vibe-selfask-judge-auto"}
+{"id": "g46-change-plane", "ask": "병렬 세션 changeintent 보드 선언해줘", "primary": "demo1-agent-change-plane"}
+{"id": "g47-machine-ctx", "ask": "머신 컨텍스트 환경변수 설치경로 한번에 뽑아", "primary": "demo1-agent-machine-context"}
+{"id": "g48-goal-intake", "ask": "goal-objective 파일 읽고 목표 intake 처리", "primary": "demo1-codex-goal-intake-continue"}
+{"id": "g49-plugin-roles", "ask": "플러그인 역할 제한 매트릭스 적용", "primary": "demo1-codex-plugin-roles"}
+{"id": "g50-port-lease", "ask": "개발 서버 포트 리스 잡아줘", "primary": "agent-scope-lease", "optional": "demo1-agent-port-lease"}
+{"id": "g51-scope-lease", "ask": "병렬 에이전트 작업 범위 리스 누가 잡았는지", "primary": "agent-scope-lease"}
+{"id": "g52-nomatch", "ask": "아무 의미 없는 임의 문자열 xyzzy123", "primary": "demo1-vibe-max-agency"}

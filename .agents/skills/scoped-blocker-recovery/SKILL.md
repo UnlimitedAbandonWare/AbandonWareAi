@@ -63,3 +63,4 @@ and affected existing lease/goal/harness tests. Use
 live acceptance. Report applied paths, active-code hashes, test counts, held scope,
 next deciding observation, and `not_observed` for missing inference/fallback proof.
 Skill validation and explicit invocation do not prove automatic discovery in a new session.
+Repeated identical goal blocker / 계속 loop → see ../demo1-goal-blocked-loop-breaker/SKILL.md

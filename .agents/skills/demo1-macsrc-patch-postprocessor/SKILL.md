@@ -33,7 +33,7 @@ scanning and its tri-query isolation pattern.
 
 ## Prepare the Three Reviews
 
-Run `scripts/prepare_patch_tri_query.ps1` before dispatch. It hashes the exact
+Run `.\.agents\skills\demo1-macsrc-patch-postprocessor\scripts\prepare_patch_tri_query.ps1` before dispatch. It hashes the exact
 intent, session, outcome, GREEN verification, paired integrity records, and
 optional Docker/Supabase evidence. It writes isolated Positive/Negative requests for
 parallel execution and a dependent Neutral request. The finalizer accepts only

@@ -164,6 +164,46 @@ class ChatUiViewConfigTest {
         assertTrue(document.select("#messageInput, #sendBtn, #stopBtn, #useRagToggle").size() == 4);
     }
 
+    @Test
+    void traceDockShellSurvivesNonAdminAndCompactProjection() throws Exception {
+        var view = new ChatUiViewConfig().chatUiResourceViewResolver().resolveViewName("chat-ui", Locale.KOREA);
+        var response = new MockHttpServletResponse();
+        view.render(Map.of("chatSurface", "compact", "chatDiagnosticsEnabled", false,
+                "chatDiagnosticsReadAllowed", false), new MockHttpServletRequest("GET", "/chat"), response);
+        var document = Jsoup.parse(response.getContentAsString());
+        assertTrue(document.select("[data-trace-dock]").size() == 1);
+        assertTrue(document.select("[data-testid=trace-dock-toggle], [data-testid=trace-dock-current], [data-testid=trace-dock-history]").size() == 3);
+        assertTrue(document.select("[data-admin-diagnostics], .conversation-sidebar").isEmpty());
+        assertTrue(document.selectFirst("[data-trace-dock]").attr("data-diagnostics-read").equals("false"));
+    }
+
+    @Test
+    void traceDockReadFlagFollowsServerAdminDecision() throws Exception {
+        var view = new ChatUiViewConfig().chatUiResourceViewResolver().resolveViewName("chat-ui", Locale.KOREA);
+        for (boolean allowed : List.of(false, true)) {
+            var response = new MockHttpServletResponse();
+            view.render(Map.of("chatDiagnosticsReadAllowed", allowed, "chatDiagnosticsEnabled", allowed),
+                    new MockHttpServletRequest("GET", "/chat"), response);
+            var dock = Jsoup.parse(response.getContentAsString()).selectFirst("[data-trace-dock]");
+            assertTrue(dock != null);
+            assertTrue(dock.attr("data-diagnostics-read").equals(Boolean.toString(allowed)));
+        }
+        var disabled = new MockHttpServletResponse();
+        view.render(Map.of("chatTraceDockShell", false), new MockHttpServletRequest("GET", "/chat"), disabled);
+        assertTrue(Jsoup.parse(disabled.getContentAsString()).select("[data-trace-dock]").isEmpty());
+    }
+
+    @Test
+    void traceDockNeverCarriesAdminDiagnosticsMarker() throws Exception {
+        var view = new ChatUiViewConfig().chatUiResourceViewResolver().resolveViewName("chat-ui", Locale.KOREA);
+        var response = new MockHttpServletResponse();
+        view.render(Map.of("chatDiagnosticsEnabled", true, "chatDiagnosticsReadAllowed", true),
+                new MockHttpServletRequest("GET", "/chat"), response);
+        var dock = Jsoup.parse(response.getContentAsString()).selectFirst("[data-trace-dock]");
+        assertTrue(dock != null && !dock.hasAttr("data-admin-diagnostics"));
+        assertTrue(dock.parents().stream().noneMatch(parent -> parent.hasAttr("data-admin-diagnostics")));
+    }
+
     private static ModelEntity model(String id) {
         ModelEntity entity = new ModelEntity();
         entity.setModelId(id);

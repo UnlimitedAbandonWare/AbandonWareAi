@@ -59,7 +59,7 @@ the intent never stores a project ref, access token, SQL, or query result.
 
 ## Autograder Probe Contract
 
-`prepare_autograder_probe.ps1` consumes only bounded
+`.\.agents\skills\demo1-macsrc-defect-intake\scripts\prepare_autograder_probe.ps1` consumes only bounded
 `awx.autograder.evidence.v1`: run ID, exit code, failing-test count, reason
 class, output SHA-256, and `mutationAllowed=false`. Raw logs or extra fields
 fail closed. It emits a ready-last probe manifest and an exact dispatch order:

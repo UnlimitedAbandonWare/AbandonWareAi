@@ -614,7 +614,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                     anyString(), nullable(String.class), nullable(String.class),
                     anyString(), anyString(), anyBoolean());
             verify(fixture.attachmentService()).asDocumentsForSession(
-                    List.of("release-gate-local"), null, owner);
+                    List.of("release-gate-local"), null, owner, request.getMessage());
             verify(fixture.attachmentService(), never()).asDocumentsForSession(
                     anyList(), nullable(String.class));
             verifyNoInteractions(
@@ -694,7 +694,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
             fixture.workflow().continueChat(request, ignored -> List.of());
 
             verify(fixture.attachmentService()).asDocumentsForSession(
-                    List.of("release-gate-local"), null, foreign);
+                    List.of("release-gate-local"), null, foreign, request.getMessage());
             verify(fixture.attachmentService(), never()).asDocumentsForSession(
                     anyList(), nullable(String.class));
             org.mockito.ArgumentCaptor<List<Document>> localDocs = org.mockito.ArgumentCaptor.forClass(List.class);
@@ -906,7 +906,9 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 assertEquals(true, TraceStore.get("finalAnswer.memorySaveAllowed"));
                 verify(fixture.learningWriteInterceptor()).ingest(anyString(), anyString(), anyString(), any(Double.class));
                 verify(fixture.memoryWriteInterceptor()).save(anyString(), anyString(), anyString(), any(Double.class));
-                verify(understanding).afterVerified(anyString(), anyString(), anyString(), anyBoolean(), any());
+                verify(understanding).prepare(anyString(), anyString(), anyBoolean());
+                verify(understanding).commitPrepared(anyString(), anyString(),
+                        nullable(com.example.lms.dto.answer.AnswerUnderstanding.class), any());
                 verify(reinforcement).reinforceWithSnippet(
                         anyString(), anyString(), anyString(), anyString(), any(Double.class), any(), any());
             }
@@ -1014,6 +1016,78 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         } finally { clearWorkflowState(); }
     }
 
+    @Test
+    void understandingPreparationDoesNotHoldRunGateOrCommitAfterCancellation() throws Exception {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        var entered = new java.util.concurrent.CountDownLatch(1);
+        var release = new java.util.concurrent.CountDownLatch(1);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        var registry = new com.example.lms.service.chat.ChatRunRegistry();
+        ReflectionTestUtils.setField(registry, "replayCapacity", 16);
+        ReflectionTestUtils.setField(registry, "ttlSeconds", 60);
+        var run = registry.beginOrJoin(9101L).context();
+        var summaryService = mock(com.example.lms.service.understanding.AnswerUnderstandingService.class,
+                invocation -> {
+                    if (!invocation.getMethod().getName().equals("understand")) return null;
+                    entered.countDown();
+                    assertTrue(release.await(5, java.util.concurrent.TimeUnit.SECONDS));
+                    return new com.example.lms.dto.answer.AnswerUnderstanding(
+                            "synthetic summary", List.of(), List.of(), List.of(), List.of(),
+                            List.of(), List.of(), List.of(), List.of(), 0.9);
+                });
+        var memory = mock(MemoryReinforcementService.class);
+        var emitter = mock(com.example.lms.service.chat.ChatStreamEmitter.class);
+        var history = mock(ChatHistoryService.class);
+        ReflectionTestUtils.setField(fixture.workflow(), "chatHistoryService", mock(ChatHistoryService.class));
+        var interceptor = new UnderstandAndMemorizeInterceptor(summaryService, memory, emitter, history);
+        ReflectionTestUtils.setField(interceptor, "globalEnabled", true);
+        ReflectionTestUtils.setField(fixture.workflow(), "understandAndMemorizeInterceptor", interceptor);
+        String answer = "Synthetic verified fixture response with sufficient detail for the memory policy control.";
+        when(fixture.verifier().verifyDetailed(anyString(), nullable(String.class), nullable(String.class),
+                anyString(), anyString(), anyBoolean()))
+                .thenReturn(new FactVerifierService.DetailedVerificationResult(answer, "pass", true, true));
+        when(fixture.attribution().promoteForPromptDetailed(
+                anyString(), nullable(List.class), nullable(List.class), anyList(), any(), anyBoolean()))
+                .thenReturn(promoted(List.of(evidence("L1", "LOCAL_DOC", "release-gate-local", "docs/fixture.txt")),
+                        0, 0, 0, 0, 1, 1));
+        when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        var request = ChatRequestDto.builder().sessionId(9101L).message("Explain the synthetic fixture.")
+                .model("release-gate-recording-fake").maxTokens(256).mode("FACT").memoryMode("FULL")
+                .searchMode(SearchMode.OFF).useWebSearch(false).useRag(false).useVerification(true)
+                .understandingEnabled(true).attachmentIds(List.of("release-gate-local"))
+                .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false, false)).build();
+        request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+        try {
+            var result = executor.submit(() -> {
+                try (var scope = com.example.lms.service.chat.ChatRunExecutionContext.bind(run)) {
+                    return fixture.workflow().continueChat(request, ignored -> List.of());
+                } finally { clearWorkflowState(); }
+            });
+            if (!entered.await(5, java.util.concurrent.TimeUnit.SECONDS)) {
+                result.get(1, java.util.concurrent.TimeUnit.SECONDS);
+                org.junit.jupiter.api.Assertions.fail("summary preparation must run");
+            }
+            var cancelled = executor.submit(() -> registry.cancelExact(9101L, run.clientToken()));
+            assertTrue(org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                    () -> cancelled.get(1, java.util.concurrent.TimeUnit.SECONDS),
+                    "cancellation must finish while summary preparation is still blocked"));
+            assertEquals(1L, release.getCount());
+            release.countDown();
+            var failure = org.junit.jupiter.api.Assertions.assertThrows(java.util.concurrent.ExecutionException.class,
+                    () -> result.get(3, java.util.concurrent.TimeUnit.SECONDS));
+            assertTrue(failure.getCause() instanceof java.util.concurrent.CancellationException);
+            verifyNoInteractions(memory, history, emitter,
+                    fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS));
+            ReflectionTestUtils.invokeMethod(registry, "shutdown");
+            clearWorkflowState();
+        }
+    }
+
     private static MemoryHoldFixture memoryHoldFixture() {
         ChatModel model = mock(ChatModel.class);
         when(model.chat(anyList())).thenReturn(ChatResponse.builder()
@@ -1039,7 +1113,8 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 anyList(),
                 nullable(String.class),
                 org.mockito.ArgumentMatchers.eq(
-                        AttachmentOwnerIdentity.forAnonymous("release-gate-owner"))))
+                        AttachmentOwnerIdentity.forAnonymous("release-gate-owner")),
+                anyString()))
                 .thenReturn(List.of(Document.from("trusted local verification context")));
 
         RagEvidenceAttributionService attribution = mock(RagEvidenceAttributionService.class);
@@ -1080,6 +1155,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         ReflectionTestUtils.setField(workflow, "ragEvidenceAttributionService", attribution);
         ReflectionTestUtils.setField(workflow, "learningWriteInterceptor", learningWriter);
         ReflectionTestUtils.setField(workflow, "memoryWriteInterceptor", memoryWriter);
+        ReflectionTestUtils.setField(workflow, "understandAndMemorizeInterceptor", mock(UnderstandAndMemorizeInterceptor.class));
         ReflectionTestUtils.setField(workflow, "finalAnswerPostProcessor",
                 new FinalAnswerPostProcessor(new OutputSanitizer()));
         ReflectionTestUtils.setField(workflow, "chatUsageLedger", new ChatUsageLedger());
@@ -1242,8 +1318,11 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
     void scopeBoundEvidencePresentStillReleases() {
         var promotion = promoted(
                 List.of(evidence("L1", "LOCAL_DOC", "src", "docs/a.txt")), 0, 0, 0, 0, 1, 1);
+        var state = ChatWorkflow.deriveEvidenceReleaseState(
+                promotion, promotion.evidence(), false, ragOnlyContract());
+        assertEquals(ChatWorkflow.EvidenceReleaseState.EVIDENCE_PRESENT, state);
         var d = ChatWorkflow.applyEvidenceReleasePolicy(
-                releasedBase(), ChatWorkflow.EvidenceReleaseState.EVIDENCE_PRESENT,
+                releasedBase(), state,
                 false, false, true, promotion, ragOnlyContract());
         assertTrue(d.releaseAllowed());
         assertEquals("\uc77c\ubc18 \uc9c0\uc2dd \ucd08\uc548", d.content());

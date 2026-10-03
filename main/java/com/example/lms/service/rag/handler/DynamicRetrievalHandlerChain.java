@@ -276,6 +276,8 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
             effectiveQuery = query;
         }
 
+        JevRetrievalGateHandler.prefetch(effectiveQuery);
+
         // Dynamic K-Allocation: fill per-source topK hints into Query metadata if
         // missing.
         // This makes retrieval orchestration consistent with
@@ -407,10 +409,15 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
                 mask("[Lore]", e, qText);
             }
         }
+        effectiveQuery = JevRetrievalGateHandler.applyHints(effectiveQuery);
+        boolean jevHintsApplied = JevRetrievalGateHandler.hasApplied(effectiveQuery);
+        QueryComplexityGate.Level jevComplexity = JevRetrievalGateHandler.complexityLevel(effectiveQuery, gate);
+
         // 3. Self-Ask stage (only when gate signals it)
         boolean needSelf = false;
         try {
-            needSelf = gate != null && gate.needsSelfAsk(qText);
+            needSelf = jevComplexity != null ? jevComplexity == QueryComplexityGate.Level.COMPLEX
+                    : gate != null && gate.needsSelfAsk(qText);
         } catch (Exception e) {
             log.warn("[SelfAskGate] fail-soft errorHash={} errorLength={}",
                     SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
@@ -419,7 +426,8 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
         }
         // OrchestrationHints: per-request override
         try {
-            java.util.Map<String, Object> md = toMap(effectiveQuery != null ? effectiveQuery.metadata() : null);
+            java.util.Map<String, Object> md = jevHintsApplied ? toMap(QueryUtils.metadata(effectiveQuery))
+                    : toMap(effectiveQuery != null ? effectiveQuery.metadata() : null);
             boolean nightmareMode = metaBool(md, "nightmareMode", false);
             boolean auxLlmDown = metaBool(md, "auxLlmDown", false);
             boolean strikeMode = metaBool(md, "strikeMode", false);
@@ -445,7 +453,8 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
         // 4. Analyze stage (only when gate signals it)
         boolean needAnalyze = false;
         try {
-            needAnalyze = gate != null && gate.needsAnalyze(qText);
+            needAnalyze = jevComplexity != null ? jevComplexity != QueryComplexityGate.Level.SIMPLE
+                    : gate != null && gate.needsAnalyze(qText);
         } catch (Exception e) {
             log.warn("[AnalyzeGate] fail-soft errorHash={} errorLength={}",
                     SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length());
@@ -454,7 +463,8 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
         }
         // OrchestrationHints: per-request override
         try {
-            java.util.Map<String, Object> md = toMap(effectiveQuery != null ? effectiveQuery.metadata() : null);
+            java.util.Map<String, Object> md = jevHintsApplied ? toMap(QueryUtils.metadata(effectiveQuery))
+                    : toMap(effectiveQuery != null ? effectiveQuery.metadata() : null);
             boolean nightmareMode = metaBool(md, "nightmareMode", false);
             boolean auxLlmDown = metaBool(md, "auxLlmDown", false);
             boolean strikeMode = metaBool(md, "strikeMode", false);

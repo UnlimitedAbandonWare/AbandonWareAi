@@ -42,7 +42,10 @@ their 확인일.
    Close with: requestId match required before claiming delivery.
 10. **auth_required lanes.** `/api/diagnostics/*`, `/api/chat/sync`,
     `/api/router/status` need an owner session by design. Anonymous 403 is not
-    a defect; classify `auth_blocked`, never weaken security to pass.
+    a defect; classify `auth_blocked`, never weaken security to pass. Provider
+    API 401/403 are a different question — `docs/API_ROUTING_SPEC.md` §External
+    API failure classification (401 `KEY_INVALID_OR_EXPIRED`; 403 body →
+    `PLAN_GATE`/`FORBIDDEN_REGION_OR_IP`).
 
 ## D. Domain contracts already verified — do not re-litigate
 

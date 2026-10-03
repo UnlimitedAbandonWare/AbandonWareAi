@@ -6,7 +6,7 @@
 
 ## 1. 호출과 범위
 
-현재 Desktop의 확인된 `C:\AbandonWare\demo-1\demo-1\src`에서:
+현재 Desktop의 확인된 `<repo>`에서:
 
 ```powershell
 python .\.agents\skills\demo1-meta-display-webapp\scripts\next_step.py --root .

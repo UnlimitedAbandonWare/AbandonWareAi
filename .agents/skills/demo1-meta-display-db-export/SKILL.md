@@ -25,7 +25,7 @@ Shared agent context for Display state is a **read-only** surface, not live
 mutators.
 
 ## Do
-1. Project root: `C:\AbandonWare\demo-1\demo-1\src`
+1. Project root: `<repo>`
 2. Status / offline snapshot:
 ```powershell
 python -B scripts/meta_display_db_export.py status
@@ -52,7 +52,9 @@ python -B scripts/meta_display_db_export.py live export   # pull tables over HTT
    Auth: existing admin guard on `/api/internal/**` — header `X-Admin-Token`
    (or `X-Owner-Token`); the script auto-reads `var/dev-admin-token.txt` or
    env `META_DB_ADMIN_TOKEN`/`DOMAIN_ALLOWLIST_ADMIN_TOKEN`, or pass `--token`.
-   `403` = auth-blocked (fix token), not a DB outage.
+   `403` = auth-blocked (local endpoint token missing — fix token), not a DB
+   outage. That is the **local server** verdict; provider-API 401/403 classify
+   per `docs/API_ROUTING_SPEC.md` §External API failure classification.
    **Proto-open note** (AGENTS.md `DEMO1-PROTOTYPE-AUTH-LIGHT`, vibe default
    `demo.auth.proto-open=true` in `local,meta-display`): `/api/internal/**` answers
    `200` with **no token at all**, so a missing `X-Admin-Token` is not a blocker and

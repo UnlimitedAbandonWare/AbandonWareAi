@@ -1,0 +1,142 @@
+{
+  "main/java/com/example/lms/service/rag/handler/JevRetrievalGateHandler.java": {
+    "sha256": "5af11f53e5e4adb7d7158f9ec110a22e0caa36e8d8d9738bc809aef7a90c28dd",
+    "lines": 272
+  },
+  "main/java/com/example/lms/service/rag/JevComplexityClassifier.java": {
+    "sha256": "f893af0250836f9b07b165d27532ab45fe7344ff445358831cc272e6bff4bced",
+    "lines": 24
+  },
+  "main/java/com/example/lms/service/rag/QueryComplexityClassifier.java": {
+    "sha256": "6d30aa07aa269e6f09b7bad6c7e709ddd13ee286b568d077634dd405efaa105f",
+    "lines": 5
+  },
+  "main/java/com/example/lms/assist/JevSurfacePolicy.java": {
+    "sha256": "77cec415ffe2bb91f0ed26aa310584c90135ee7b4c5b9a51f91422f111fa2992",
+    "lines": 31
+  },
+  "main/java/com/example/lms/assist/JevRuntimeConfiguration.java": {
+    "sha256": "d69f00c7c5640d064176ef01e3eaa82e1460a05fea63f40b8c2adacd6e860e59",
+    "lines": 22
+  },
+  "main/java/com/example/lms/assist/JevEvaluationRuntime.java": {
+    "sha256": "a4a8af4e6e1d576d64ad90db7b8f724fd601417d84f913e893eb0a4ec5041ed3",
+    "lines": 460
+  },
+  "main/java/com/example/lms/plan/PlanHintApplier.java": {
+    "sha256": "c3587c0def1c4f91e84611fbb0753cfc558436f9a17c76774db4128396a87900",
+    "lines": 1363
+  },
+  "main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java": {
+    "sha256": "86d03677e7e31cf6b91e28e1cdb228b96b11f2354954510832e4580d4749b944",
+    "lines": 4739
+  },
+  "main/java/com/example/lms/fusion/MatrixTransformer.java": {
+    "sha256": "159690bd068529ec828f5e10aaa45140d977f563f9ee4ae2fb72ef316bae481c",
+    "lines": 49
+  },
+  "main/java/com/example/lms/matrix/MatrixTransformer.java": {
+    "sha256": "3c87a4c24f0fb85121d734583730047378e5d80e650ed5a3d2078cd942a5ca19",
+    "lines": 390
+  },
+  "main/java/com/example/lms/service/rag/RagChainConfig.java": {
+    "sha256": "478df97669c81ecc22179b2713c135b77bde6502e48115fd82bf885b3e544a29",
+    "lines": 115
+  },
+  "main/java/com/example/lms/plan/PlanExecutionSpec.java": {
+    "sha256": "ab8bccbf2650a57466418dcc3d748a955fc7a625e62d8973b1eab97e5ce060c3",
+    "lines": 505
+  },
+  "main/java/com/example/lms/service/rag/budget/RetrievalBudgetDecision.java": {
+    "sha256": "24a274df7148bd8522ec7626ce3a93728a43e958e2b4638933dd5f58e262b0c1",
+    "lines": 19
+  },
+  "main/java/com/example/lms/service/rag/budget/RetrievalBudgetProperties.java": {
+    "sha256": "4a5c63349bd98d189638ef50447e0727ce9e4f746caf80867c2695cf4566e3ff",
+    "lines": 45
+  },
+  "main/java/com/example/lms/service/rag/budget/RetrievalBudgetGovernor.java": {
+    "sha256": "766973fbef5553c0652311f369db1a120fade3375f92d60117397c6d479eaef7",
+    "lines": 175
+  },
+  "main/java/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java": {
+    "sha256": "79d26b79189e9d50b7fc33f67d23054d5efa2c0e69f4ed4119cb95914dc77b0d",
+    "lines": 2099
+  },
+  "main/java/com/example/lms/gptsearch/decision/JevSearchNeedAdvisor.java": {
+    "sha256": "a7c9866b47b36adf12dad29f12058ef6dc16a422a066a90cd4caed4638eec765",
+    "lines": 44
+  },
+  "main/java/com/example/lms/config/RetrieverChainConfig.java": {
+    "sha256": "fc7a37cf6f0344e3dae0fc350b0b7d23720291261da0e2f9dd85d525d762b82c",
+    "lines": 111
+  },
+  "main/java/com/example/lms/service/ChatWorkflow.java": {
+    "sha256": "8c92f544692f57bd0603ec11807d3bd6e3eaa30072219ad81f79c62572b65da4",
+    "lines": 14089
+  },
+  "main/java/com/example/lms/api/ChatStreamSignalBuilder.java": {
+    "sha256": "22783bb6538ff22f0e50c4161bde68507c8f76852ff9998834a3abba8f5e7a8a",
+    "lines": 1827
+  },
+  "main/java/com/example/lms/artplate/NineArtPlateGate.java": {
+    "sha256": "30e2d5bd89148ba7c9f008f956ab120ac3a414e32c761524bfdfacc39d3f4a77",
+    "lines": 454
+  },
+  "main/java/com/example/lms/assist/FocusMemoryScope.java": {
+    "sha256": "714e78f82c20c598f96d8c956d5a911dec4124735a37ed27d69a5b813649190e",
+    "lines": 11
+  },
+  "main/java/com/example/lms/service/chat/FinalizedMemoryPersistence.java": {
+    "sha256": "5beb3c43842d849ca16c7ea758a0c3e63bdd0a8a504c1e4a3acedf515fae18e6",
+    "lines": 95
+  },
+  "main/java/com/example/lms/llm/OpenAiModelParamMatrix.java": {
+    "sha256": "d6669ef37c8c66d061d6bf5d595edb7facaa53896db1ae89024bb353754fb506",
+    "lines": 280
+  },
+  "main/java/com/example/lms/vector/EmbeddingFingerprint.java": {
+    "sha256": "7836a02ef63e63b7f6b96592693350dd3db34484475fd09a759525db60b100ca",
+    "lines": 134
+  },
+  "main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java": {
+    "sha256": "0080f342b3430d7b5d31e162c9129d106007eb13ba54cc9a8e87137af85cb0d8",
+    "lines": 2418
+  },
+  "main/java/com/example/lms/uaw/autolearn/UawAutolearnProperties.java": {
+    "sha256": "631cc84bf4e25ad03672fb30997851faa92926b04bd9573cf1a9c31606b05e5a",
+    "lines": 664
+  },
+  "main/java/com/example/lms/uaw/autolearn/UawDatasetFilterProperties.java": {
+    "sha256": "d6b1b5acb3842bf6105bfbb444eb4199ce3cbb0d1260125ab9807f9ca0afe8bf",
+    "lines": 251
+  },
+  "main/java/com/example/lms/llm/ModelCapabilities.java": {
+    "sha256": "1626784f571be28fe308c1879fa8976caf62618c60034bfa93fb2b93dfc34744",
+    "lines": 252
+  },
+  "main/java/com/example/lms/debug/ChatSessionTraceRecorder.java": {
+    "sha256": "2f0e77c689cfcf1b45ad88f6b758989910f1722972579ca1018be3b222a34071",
+    "lines": 295
+  },
+  "main/java/com/example/lms/service/routing/PolicyBasedModelRouter.java": {
+    "sha256": "98d380182333682f50d55c1dfa0b3057a607dd86d643c5883f45a74aafad45cd",
+    "lines": 821
+  },
+  "main/java/com/example/lms/service/rag/SelfAskPlanner.java": {
+    "sha256": "500c33a0645907a604a40e2d89faea32ed05980f2bc4a50ca1dc1132f6e878eb",
+    "lines": 933
+  },
+  "main/java/com/example/lms/config/AppSecurityConfig.java": {
+    "sha256": "afba451076ece6f0f81094d86837f1ca6c5819821ee580e6baff1a81f46df50d",
+    "lines": 262
+  },
+  "main/java/com/example/lms/config/WebMvcConfig.java": {
+    "sha256": "99730157e6d742dfc8ed738c0140187dab361c695fe83948177b83cb00f981c8",
+    "lines": 147
+  },
+  "main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports": {
+    "sha256": "b174a4b220901f4e240663c093661b795b75b9632b4117968132f64feb5d981b",
+    "lines": 8
+  }
+}

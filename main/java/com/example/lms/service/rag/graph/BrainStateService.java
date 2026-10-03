@@ -169,8 +169,9 @@ public class BrainStateService {
         String namespace = scope.indexNamespace();
         List<StoredChunk> candidates = chunks.values().stream()
                 .filter(c -> namespace.equals(c.scopeKey()))
-                .sorted(Comparator.comparingLong((StoredChunk c) ->
-                        GeneralGraphSourceAuthority.sourceMessageId(c.sourceRef().sourceId())).reversed())
+                .sorted(Comparator.comparing(StoredChunk::capturedAt).reversed()
+                        .thenComparing(Comparator.comparingLong((StoredChunk c) ->
+                            GeneralGraphSourceAuthority.sourceMessageId(c.sourceRef().sourceId())).reversed()))
                 .limit(256).toList();
         String lower = query == null ? "" : query.toLowerCase(Locale.ROOT);
         List<String> seeds = candidates.stream()

@@ -22,6 +22,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 
 @Aspect
@@ -157,7 +158,20 @@ public class Zero100WebTimeboxAspect {
             }
         };
 
-        Future<Object> f = ex.submit(task);
+        Future<Object> f;
+        try {
+            f = ex.submit(task);
+        } catch (RejectedExecutionException rejected) {
+            try {
+                TraceStore.put("zero100.webTimebox.applied", false);
+                TraceStore.put("zero100.webTimebox.hit", false);
+                TraceStore.put("zero100.webTimebox.reason", "executor_saturated");
+                TraceStore.inc("zero100.webTimebox.rejected.count");
+            } catch (Throwable ignore) {
+                traceSuppressed("trace.rejected");
+            }
+            return timeoutFallback;
+        }
         try {
             Object out = f.get(timeoutMs, TimeUnit.MILLISECONDS);
             try {

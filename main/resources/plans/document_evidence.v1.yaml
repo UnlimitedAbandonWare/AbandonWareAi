@@ -3,6 +3,11 @@
 
 plan:
   id: document_evidence.v1
+  # Still requires master ON, evidence_pack, explicit per-request opt-in and live admission.
+  context_prepare:
+    enabled: true
+    purpose: attachment_comparison
+    max_inference_attempts: 2
   description: "Use uploaded document evidence as first-class local context, then apply existing vector/rerank gates."
   overrides:
     properties:

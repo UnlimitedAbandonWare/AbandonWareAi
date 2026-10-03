@@ -316,7 +316,7 @@ public class LangChainConfig {
             com.example.lms.vector.EmbeddingFingerprint embeddingFingerprint,
             SoakMetricRegistry metricRegistry,
             @Value("${vector.store:memory}") String vectorStoreChoice) {
-        return new EmbeddingStore<>() {
+        class RoutedEmbeddingStore implements EmbeddingStore<TextSegment>, com.example.lms.vector.FederatedEmbeddingStore.ReceiptWriter {
             private final EmbeddingStore<TextSegment> pineconeOrMemory = pineconeProvider
                     .getIfAvailable(() -> new InMemoryEmbeddingStore<>());
 
@@ -645,16 +645,23 @@ public class LangChainConfig {
 
             @Override
             public void addAll(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
+                addAllWithReceipt(ids, embeddings, segments);
+            }
+
+            @Override
+            public List<com.example.lms.vector.FederatedEmbeddingStore.WriteTarget> addAllWithReceipt(
+                    List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
+                List<com.example.lms.vector.FederatedEmbeddingStore.WriteTarget> targets = List.of();
                 try {
                     if (ids == null || embeddings == null)
-                        return;
+                        return List.of();
 
                     boolean segmentsEmpty = (segments == null || segments.isEmpty());
 
                     int n0 = Math.min(ids.size(), embeddings.size());
                     int n = segmentsEmpty ? n0 : Math.min(n0, segments.size());
                     if (n <= 0)
-                        return;
+                        return List.of();
 
                     // Filter invalid ids / empty vectors to avoid vector-store validation failures.
                     java.util.List<String> idOk = new java.util.ArrayList<>(n);
@@ -697,13 +704,13 @@ public class LangChainConfig {
                     }
 
                     if (idOk.isEmpty() || embOk.isEmpty())
-                        return;
+                        return List.of();
 
                     // Allow stores that can handle null/empty segments (some callers may only
                     // persist vectors).
                     if (segmentsEmpty) {
                         writer.addAll(idOk, embOk, segments);
-                        return;
+                        return com.example.lms.vector.FederatedEmbeddingStore.primaryTargets(writer, idOk, idOk);
                     }
 
                     java.util.List<TextSegment> stamped = new java.util.ArrayList<>(segOk.size());
@@ -714,6 +721,7 @@ public class LangChainConfig {
                     try {
                         // Primary write path with stable ids.
                         writer.addAll(idOk, embOk, stamped);
+                        targets = com.example.lms.vector.FederatedEmbeddingStore.primaryTargets(writer, idOk, idOk);
 
                         // Upstash mirror (fail-soft, opt-in).
                         if (upstash != null && upstash.isWriteEnabled()) {
@@ -727,6 +735,7 @@ public class LangChainConfig {
                         log.warn("vector upsert degraded: writer does not support addAll(ids,...); falling back");
 
                         java.util.List<String> genIds = writer.addAll(embOk, stamped);
+                        targets = com.example.lms.vector.FederatedEmbeddingStore.primaryTargets(writer, idOk, genIds);
                         if (genIds != null && !genIds.isEmpty() && upstash != null && upstash.isWriteEnabled()) {
                             int m = Math.min(genIds.size(), Math.min(embOk.size(), stamped.size()));
                             for (int i = 0; i < m; i++) {
@@ -754,6 +763,7 @@ public class LangChainConfig {
                     log.warn("vector upsert degraded (stable-ids). errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
                 }
+                return targets;
             }
 
             @Override
@@ -819,7 +829,8 @@ public class LangChainConfig {
                     return false;
                 }
             }
-        };
+        }
+        return new RoutedEmbeddingStore();
     }
 
     /* ??誘딆궠已??誘딆궠已??誘딆궠已??誘딆궠已??2. ???살씁?????ャ뀖????誘딆궠已??誘딆궠已??誘딆궠已??誘딆궠已??*/

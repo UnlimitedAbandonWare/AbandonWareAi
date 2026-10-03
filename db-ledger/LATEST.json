@@ -1,0 +1,249 @@
+{
+  "schemaVersion": "awx.db-migration-ledger.v1",
+  "contractId": "DEMO1-DEVIN-F01B-POST-TOOLS-20260929",
+  "generatedAtUtc": "2026-09-29T08:01:54+00:00",
+  "root": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "migrationsDir": "main/resources/db/migration",
+  "via": "live-http",
+  "reachable": true,
+  "historyTables": [],
+  "basis": "객체 실재 추론 — flyway_schema_history/liquibase 로그가 아님. constraints 는 미확인(not_observed)",
+  "liveErrors": {},
+  "ledger": [
+    {
+      "file": "V20260912_02__chat_requests.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260912_02__chat_requests.sql",
+      "sha256": "70cecad5551c8b5172285680947ff374a8627ef94c49c1d6e4232c5c4fd0841d",
+      "bytes": 471,
+      "mtimeUtc": "2026-09-12T03:14:03+00:00",
+      "objects": {
+        "tables": [
+          "awx_chat_requests"
+        ],
+        "indexes": [
+          {
+            "name": "idx_awx_chat_requests_expiry",
+            "table": "awx_chat_requests"
+          }
+        ],
+        "columns": [],
+        "constraints": []
+      },
+      "status": "missing",
+      "presentParts": 0,
+      "missingParts": [
+        "table:awx_chat_requests",
+        "index:idx_awx_chat_requests_expiry"
+      ],
+      "constraintsNotChecked": []
+    },
+    {
+      "file": "V20260912_03__job_idempotency.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260912_03__job_idempotency.sql",
+      "sha256": "784b9c766145cc54908d3dc8907fd8a10f146bea2df12720b57f5187377984c0",
+      "bytes": 446,
+      "mtimeUtc": "2026-09-12T05:32:39+00:00",
+      "objects": {
+        "tables": [],
+        "indexes": [
+          {
+            "name": "awx_jobs_admission_key",
+            "table": "awx_jobs"
+          }
+        ],
+        "columns": [
+          {
+            "table": "awx_jobs",
+            "name": "admission_key"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "request_fingerprint"
+          }
+        ],
+        "constraints": []
+      },
+      "status": "applied",
+      "presentParts": 3,
+      "missingParts": [],
+      "constraintsNotChecked": [],
+      "handoffClaim": {
+        "applied": true,
+        "approvedSha256": "784b9c766145cc54908d3dc8907fd8a10f146bea2df12720b57f5187377984c0",
+        "statementCount": 3,
+        "evidence": "migration-idempotency-applied.json"
+      }
+    },
+    {
+      "file": "V20260912_04__chat_request_results.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260912_04__chat_request_results.sql",
+      "sha256": "664c02c3d32e33ad9df3ceb86d53b7108beb3d58ac7d77d331d0606b67dfc340",
+      "bytes": 393,
+      "mtimeUtc": "2026-09-12T06:04:06+00:00",
+      "objects": {
+        "tables": [
+          "awx_chat_request_results"
+        ],
+        "indexes": [],
+        "columns": [],
+        "constraints": [
+          {
+            "name": "fk_awx_chat_request_result",
+            "table": "awx_chat_request_results"
+          }
+        ]
+      },
+      "status": "missing",
+      "presentParts": 0,
+      "missingParts": [
+        "table:awx_chat_request_results"
+      ],
+      "constraintsNotChecked": [
+        "fk_awx_chat_request_result"
+      ]
+    },
+    {
+      "file": "V20260912_05__chat_run_owners.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260912_05__chat_run_owners.sql",
+      "sha256": "ba77e54e385aca93e3bf93b8df665a10ef6faf4c6d7d2f3b2790a769badf2670",
+      "bytes": 716,
+      "mtimeUtc": "2026-09-12T06:38:27+00:00",
+      "objects": {
+        "tables": [
+          "awx_chat_run_slots",
+          "awx_chat_run_owners"
+        ],
+        "indexes": [
+          {
+            "name": "idx_awx_chat_run_owner_expiry",
+            "table": "awx_chat_run_owners"
+          }
+        ],
+        "columns": [],
+        "constraints": []
+      },
+      "status": "missing",
+      "presentParts": 0,
+      "missingParts": [
+        "table:awx_chat_run_slots",
+        "table:awx_chat_run_owners",
+        "index:idx_awx_chat_run_owner_expiry"
+      ],
+      "constraintsNotChecked": []
+    },
+    {
+      "file": "V20260912__durable_jobs.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260912__durable_jobs.sql",
+      "sha256": "b575731f241548755d59953d28536f08fcf0dd0da8645a17b52fe05f37a023b3",
+      "bytes": 1157,
+      "mtimeUtc": "2026-09-12T02:49:59+00:00",
+      "objects": {
+        "tables": [
+          "awx_jobs",
+          "awx_job_results"
+        ],
+        "indexes": [
+          {
+            "name": "awx_jobs_pending",
+            "table": "awx_jobs"
+          },
+          {
+            "name": "awx_jobs_expiry",
+            "table": "awx_jobs"
+          },
+          {
+            "name": "awx_jobs_callback",
+            "table": "awx_jobs"
+          }
+        ],
+        "columns": [],
+        "constraints": []
+      },
+      "status": "applied",
+      "presentParts": 5,
+      "missingParts": [],
+      "constraintsNotChecked": [],
+      "handoffClaim": {
+        "applied": true,
+        "approvedSha256": "b575731f241548755d59953d28536f08fcf0dd0da8645a17b52fe05f37a023b3",
+        "statementCount": 2,
+        "evidence": "migration-durable-applied.json"
+      }
+    },
+    {
+      "file": "V20260929__f01_understanding_receipt.sql",
+      "path": "C:/AbandonWare/demo-1/demo-1/src/main/resources/db/migration/V20260929__f01_understanding_receipt.sql",
+      "sha256": "d2bdd10a494b5bc109fe0693351cd476699ffa6d656b8e0b41d02e4149d63b7f",
+      "bytes": 1765,
+      "mtimeUtc": "2026-09-29T05:39:42+00:00",
+      "objects": {
+        "tables": [
+          "awx_understanding_receipts"
+        ],
+        "indexes": [
+          {
+            "name": "awx_jobs_source_run",
+            "table": "awx_jobs"
+          },
+          {
+            "name": "awx_jobs_derived_retry",
+            "table": "awx_jobs"
+          },
+          {
+            "name": "awx_understanding_source",
+            "table": "awx_understanding_receipts"
+          }
+        ],
+        "columns": [
+          {
+            "table": "awx_jobs",
+            "name": "effect_key"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "original_run_id"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "source_session_id"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "phase"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "compute_attempts"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "commit_attempts"
+          },
+          {
+            "table": "awx_jobs",
+            "name": "next_attempt_at"
+          }
+        ],
+        "constraints": [
+          {
+            "name": "awx_understanding_receipt_state",
+            "table": "awx_understanding_receipts"
+          }
+        ]
+      },
+      "status": "applied",
+      "presentParts": 11,
+      "missingParts": [],
+      "constraintsNotChecked": [
+        "awx_understanding_receipt_state"
+      ]
+    }
+  ],
+  "verdict": "executed",
+  "exitCode": 0,
+  "never": [
+    "ddl apply",
+    "schema write",
+    "print_secrets"
+  ]
+}

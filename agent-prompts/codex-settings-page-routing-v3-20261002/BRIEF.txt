@@ -1,0 +1,88 @@
+# CODEX 지시서: /settings 설정 페이지 + 역할 라우팅(v1·v2·v3 통합) 소스 반영
+작성: 2026-10-02 08:05 KST (Grok Bot) / Project Root: C:\AbandonWare\demo-1\demo-1\src
+목표 제목: 설정 페이지와 역할 라우팅을 기본 OFF로 구현하고 테스트로 증명하기
+
+## 0. 한 줄 목표
+메인 채팅(/chat) 옆에 새 /settings 페이지를 만들고, 그 페이지가 "설정값(configured) / 실제 적용값(effective) / 관측값(observed)"을 구분해 보이게 한다. 여섯 역할 라우팅(v2)은 chat.settings.routing.enabled=false 기본값으로 붙인다. 완료 기준은 아래 Acceptance 전부 PASS다. 읽기·계획만 하고 끝내면 완료가 아니다.
+
+## 1. 확인한 사실 (2026-10-02 08:00 KST 라이브 트리)
+- 아직 적용된 게 없다: main/resources/templates/settings.html, static/js/settings-page.js, static/js/chat-settings-bridge.js, static/js/settings-routing.js, web/SettingsPageController.java, RoutingProfile*/RoutingSettings*/RunRoutingSnapshot 모두 없음 → v1·v2 전부 NEW.
+- 페이지 /settings 매핑은 없다. /api/settings는 이미 SettingsController.java:16과 ModelSettingsController.java:19 두 곳이 쓴다 → 계약 변경 금지, 새 endpoint는 /api/settings/routing/* 아래로만.
+- sourceSet: main/java, main/resources, 테스트는 src/test/java (build.gradle.kts:775-790). Node 테스트는 src/test/js/*.test.cjs. GPT Pro 문서의 src/main·tests/ 경로는 이 기준으로 바꿔 쓴다.
+- seam 라인: PolicyBasedModelRouter.routeMain :244, SelfAskPlanner.modelIdForLane :457 / providerForLane :465, ChatStreamSignalBuilder.buildPipelineSnapshot :95 / planStages :192, RetrieverChainConfig.retrievalHandler :44, ConfigurationSetting(domain)·ConfigurationSettingRepository 있음, JevRuntimeConfiguration(assist), PlanExecutionSpec(plan), ChatRunRegistry(service/chat), LlmRouterAspect(ai/abandonware/nova/orch/aop), DynamicChatModelFactory(llm).
+- chat-ui.html(365줄): 네 컨트롤 #modelSelect :279, #modelSelectionMode :293, #searchModeSelect :317, #useRagToggle :324. 메뉴 링크 /model-settings :39, </body> :364.
+- 다른 세션의 미커밋 변경이 있다(M): chat-ui.html, PolicyBasedModelRouter, ChatWorkflow, ChatStreamSignalBuilder, ChatRunRegistry, DynamicChatModelFactory, LlmRouterAspect, ChatApiController. 이 hunk들은 보존 대상이다.
+- 리스: __patch_drop__\source-edit-locks 에는 09-27 오래된 clean-* 1건뿐. 리스 도구는 __patch_drop__\source_edit_lease_contract.ps1.
+
+## 2. 참고 자료 (이 폴더의 파일만 직접 열 것, agent-prompts 전체 검색 금지)
+agent-prompts\codex-settings-page-routing-v3-20261002\ref\
+- v1.md: 페이지 v1 코드 초안(settings.html/js/css, bridge, SettingsPageController, 테스트)
+- v2.md: 여섯 역할(MAIN_DEFAULT/FAST/HIGH, SELFASK_BQ/ER/RC), 후보 허용목록, RunRoutingSnapshot, revision·409
+- FIND_X_settings_uaw_harmony_v3_ko.md: 최신 v3. §12 파일 표, §13 WP1~5, §14 테스트, §16.3 ASK_ONCE
+- contracts\v3-test-matrix.json(32), reference\v2-test-matrix.json(64), evidence\source-anchors-v3.json(S01~S44), inventory.csv
+주의: 문서들은 FIND_X 스냅숏 기준이다. 라인 번호·클래스 존재는 반드시 라이브 트리로 다시 확인한다. 96개 테스트 명세는 assertion 설계 목록이지 전부 새 클래스로 만들 목록이 아니다.
+
+## 3. 공통 규칙
+- 수정 전 리스 획득: topic codex-settings-routing-v3. 이미 M인 파일은 수정 직전 sha256을 기록하고, 다른 세션 hunk는 그대로 둔 채 내 hunk만 추가한다. git checkout/restore/stash 금지.
+- 한 원인씩 RED → 최소 수정 → GREEN. 테스트 0건 실행은 PASS가 아니다.
+- 새 기능은 기본 OFF, 추가 유료 호출 0, 실호출 0(전부 mock). 외부 API 오류는 보고서 맨 위에 원인과 함께.
+- 되돌릴 수 있는 로컬 판단은 Self-Ask(긍정/부정/반례 → 중립 판정)로 정하고 AUTO 진행. 묻는 건 아래 ASK_ONCE만.
+- 새 오케스트레이터·정책 DSL·작업 큐·새 DB 테이블 금지. 정책은 기존 ConfigurationSetting 한 키에 JSON으로(v2 §6).
+
+## 4. 작업 순서 (Phase A를 GREEN으로 끝낸 뒤 Phase B)
+### Phase A: 페이지와 읽기 투영
+WP-A1 페이지 껍데기(v1)
+- 새 파일: templates/settings.html, static/css/settings-page.css, static/js/settings-page.js, web/SettingsPageController.java(GET /settings → settings 뷰만). PageController는 건드리지 않는다.
+- 데이터는 기존 GET /api/settings 읽기 + 브라우저 기본값(localStorage awx.settings.v1.preferences). 401/403이면 잠금 카드만 보이고 보안 설정은 바꾸지 않는다.
+WP-A2 bridge
+- static/js/chat-settings-bridge.js: 네 컨트롤에 저장된 기본값을 적용하고 change만 기록. chat.js 전역 접근·fetch 가로채기 금지.
+- chat-ui.html은 최대 2줄: 메뉴에 /settings 링크 1줄, </body> 앞 bridge script 1줄. 2줄을 넘기면 중단하고 보고.
+WP-A3 = v3 WP1 (지원 범위·설정 출처·Plan 의미 투영)
+- 별도 실행기 없이 descriptor와 기존 ledger(PlanExecutionSpec.evaluateWhen/stageLedger, buildPipelineSnapshot) 재사용. "클래스 존재 / 설정 ON / 단계 선언 / 실행 완료"를 다른 값으로 유지. planDsl=not_used와 when=true 공존 fixture 포함. raw Plan 식·Environment 전체 노출 금지.
+- 테스트: SettingsCapabilityProjectionTest, SettingsPlanProjectionTest(V3-01~06), SettingsPageControllerTest(MockMvc: /settings 200, 뷰명), src/test/js/settings-core.test.cjs.
+Phase A 정지 게이트: 위 테스트 GREEN + chat.js diff 0 + chat-ui.html 내 추가분 2줄 이하. 하나라도 실패하면 Phase B로 가지 말고 PARTIAL 보고.
+
+### Phase B: 역할 라우팅 (전부 chat.settings.routing.enabled=false 기본)
+WP-B1 = v3 WP2: RoutingProfile(여섯 역할), RoutingSettingsService, RoutingProfileResolver, api/RoutingSettingsController(POST 3개, v2 기준), RunRoutingSnapshot(ChatRunRegistry.Run에 불변으로 귀속). revision 불일치 409, 저장 요청의 설명 필드 거부, flag off일 때 새 DB 조회 0.
+  테스트: RoutingSettingsControllerTest, RoutingSettingsPersistenceTest, RoutingRunSnapshotTest, SettingsSnapshotCompatibilityTest.
+WP-B2 = v3 WP3: routeMain :244, modelIdForLane :457/providerForLane :465, DynamicChatModelFactory·LlmRouterAspect에 활성 역할만 전달. 기존 exact/OAuth 우선순위 유지, 후보 밖 호출 0, Jev 중복 호출 0, 기능 OFF가 몰래 ON 되면 실패.
+  테스트: RoleRoutingConsumptionTest, RoutingFallbackBoundaryTest, RoutingFactoryArgumentsTest, SettingsRoutingIntegrationTest(호출 인자·횟수 mock 검증).
+WP-B3 = v3 WP4: RoutingOutcomeProjector. 같은 Run의 정제 관측만, 기존 권한 확인 뒤에만 반환. fallback 마지막 보조 모델을 최종 모델로 표시 금지, modelUsed 재정의 금지, 원문·비밀값 0.
+  테스트: RoutingOutcomeProjectionTest, RoutingOutcomeAccessTest, RoutingRedactionTest, SettingsOutcomeProjectionTest.
+WP-B4 = v3 WP5: static/js/settings-routing.js(settings 페이지에서만 로드). 역할 카드, 실행 구성 탭(읽기 전용), configured/effective/observed, locked, 409 충돌, 늦은 응답 무시, 키보드·모바일.
+  테스트: src/test/js/settings-routing.test.cjs, settings-harmony.test.cjs, SettingsRoutingPageTest.
+WP 하나가 막히면 그 WP만 BLOCKED로 남기고 원인과 다음 한 걸음을 적은 뒤, 의존 없는 다음 WP로 간다(B2~B3는 B1 필요).
+
+## 5. HOLD (이번에 손대지 않음)
+chat.js, 디버그 스튜디오·인터뷰 페이지, ChatOpenSecurityConfig·AdminTokenGuardFilter 등 보안 파일, DB 엔티티·스키마, 기존 /api/settings 두 컨트롤러 계약, Jev transport·가드, retrieval 체인 재설계, context_prepare 승인 조건, PromptBuilder 교체, 세션 소유권 로직(ChatApiController canAccessSession·/sessions — 별도 Codex 작업 진행 중), 원본 UAW/Abandon_X 문서.
+
+## 6. ASK_ONCE (기본 구현에 넣지 말고, 필요해지면 한 번만 묻기)
+Q1 일반 인증 모드에서도 /settings 익명 공개? (보안 diff 필요 → 지금은 HOLD)
+Q2 Jev 활성·예산·timeout을 페이지에서 즉시 변경? (지금은 읽기 전용)
+Q3 Plan 순서·검색 K·품질 임계값 전면 편집? (지금은 읽기 전용)
+Q4 chat.settings.routing.enabled 기본값을 true로? (이번엔 false 고정, 자동 변경 금지)
+개인 OAuth를 서버 역할에 전역 배정하는 건 질문 없이 금지.
+
+## 7. 절대 금지
+push/pull/commit, git add -A, reset --hard, force-push, global clean, 전체 테스트 스위트, .secrets/.env 읽기·비밀값 출력, AbandonWare3 재추가, admin/PROTO_OPEN 강화, 다른 세션 리스·스테이징·hunk 건드리기, 데이터셋 삭제(백업만), 새 환경변수·비밀값, 실서비스 유료 호출.
+
+## 8. Acceptance (전부 PASS여야 DONE, 안 돌린 건 NOT_RUN)
+A1 Phase A 테스트(SettingsCapabilityProjectionTest, SettingsPlanProjectionTest, SettingsPageControllerTest, settings-core.test.cjs) GREEN, 실행 건수 > 0.
+A2 git diff --numstat -- main/resources/static/js/chat.js 출력 없음.
+A3 chat-ui.html에서 내가 추가한 줄 ≤ 2, 기존 다른 세션 hunk 보존(수정 전후 비교로 증명).
+A4 로컬 127.0.0.1:18180/settings 200, /chat 200·제목 AbandonWare AI 유지(서버 재기동이 필요하면 하고, 재기동 불가면 NOT_RUN과 이유).
+A5 Phase B WP별 테스트 GREEN, flag false에서 새 DB 조회 0·기존 라우팅 결과 불변을 테스트로 증명.
+A6 WP-B2: 여섯 역할 target/provider 일치, 후보 밖 호출 0, Jev 중복 호출 0.
+A7 git diff --check 통과, 새 파일 목록과 수정 파일 목록 보고.
+A8 targeted 테스트만 실행(.\gradlew.bat test --tests ... 형식), 전체 스위트 실행 0.
+
+## 9. 보고 형식
+1) 맨 위: 외부/빌드 오류와 원인(없으면 "없음")
+2) 판정: DONE / PARTIAL / BLOCKED, WP별 상태 표(A1~A3, B1~B4)
+3) Acceptance A1~A8 각각 PASS/FAIL/NOT_RUN + 증거(명령, 건수, 출력 요약)
+4) 수정·신규 파일 목록과 각 파일 diff 줄 수, 이미 M이던 파일의 수정 전 sha256
+5) ASK_ONCE에 걸린 게 있으면 질문 한 줄씩
+6) 남은 일과 다음 한 걸음
+
+## [ANTI-STOP]
+이 지시서와 ref 문서를 읽은 것만으로는 완료가 아니다. 읽은 직후 바로 리스를 잡고 WP-A1부터 코드를 쓴다. 질문할 것이 ASK_ONCE 목록에 없으면 묻지 말고 Self-Ask로 정한 뒤 계속 진행한다. Acceptance를 모두 판정하기 전에는 멈추지 않는다.

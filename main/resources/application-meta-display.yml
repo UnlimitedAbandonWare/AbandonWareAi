@@ -51,7 +51,7 @@ conversate:
     # supply verified-balance-usd / verified-requests-remaining; absence is unknown.
     accounts:
       openai:
-        daily-budget-usd: ${CONVERSATE_OPENAI_DAILY_USD:0.50}
+        daily-budget-usd: ${CONVERSATE_OPENAI_DAILY_USD:5.00}
         observed-at-ms: ${CONVERSATE_OPENAI_QUOTA_OBSERVED_AT_MS:0}
         verified-free-requests-remaining: ${CONVERSATE_OPENAI_VERIFIED_FREE_REMAINING:0}
       gemini:
@@ -140,9 +140,11 @@ demo:
     proto-open: ${DEMO_AUTH_PROTO_OPEN:true}
   # Jev (typesafe-ai/jev) fast decision signal on Vercel AI Gateway native /v1/evaluate.
   # Lifecycle: off -> mock -> shadow(log only, routing untouched) -> on(restricted).
-  # Live auth is currently auth-blocked (HTTP 401, 2026-09-26); keep mode off until a
-  # fresh smoke PASS plus explicit paid/budget admission exists. Fail-open: every gap
+  # 401 means an invalid/expired key; a ZDR-related 403 can be a plan gate. Keep mode off
+  # until a verified smoke and explicit paid/budget admission. Fail-open: every gap
   # defers to the deterministic local rules path. Never on PCM/beginVoice/reconnect.
+  # Surface overrides (focus/cue/main): set via env/-D only — never a ${X:} default,
+  # which resolves to "" and forces that surface off. Rollout order: focus -> cue -> main.
   jev:
     mode: ${DEMO_JEV_MODE:off}
     endpoint: ${AWX_JEV_ENDPOINT:https://ai-gateway.vercel.sh/v1/evaluate}
@@ -156,9 +158,16 @@ demo:
     max-response-bytes: ${DEMO_JEV_MAX_RESPONSE_BYTES:65536}
     # Free promo ended ~2026-09-25; unknown budget skips the call. allow-paid is the
     # explicit paid opt-in; free-only=false also admits (operator-owned budget).
-    free-only: ${DEMO_JEV_FREE_ONLY:true}
-    allow-paid: ${DEMO_JEV_ALLOW_PAID:false}
+    # Jev charges Vercel AI Gateway (AI_GATEWAY_API_KEY) credits independently
+    # of the ChatGPT OAuth plan/credits; DEMO_JEV_* env still overrides.
+    free-only: ${DEMO_JEV_FREE_ONLY:false}
+    allow-paid: ${DEMO_JEV_ALLOW_PAID:true}
     free-window-end: ${DEMO_JEV_FREE_WINDOW_END:2026-09-26T00:00:00Z}
+
+# Pro/Enterprise only; enabling this on Hobby can return HTTP 403 plan_gate.
+jev:
+  gateway:
+    zero-data-retention: ${DEMO_JEV_ZDR:false}
 
 # Existing routes remain fallback-only for unrelated llmrouter.auto consumers.
 # Conversate explicitly selects these API roles after credential/health checks.
@@ -228,3 +237,21 @@ groq:
 agent:
   db-context:
     enabled: true
+
+# ChatGPT OAuth ("Sign in with ChatGPT") foundation. Token values live only in
+# the gitignored .secrets store; this file carries paths/endpoints/policy only.
+# Runtime harness: scripts/chatgpt_oauth_flow.py (login|status|refresh|
+# get-token|sync-models|test-smoke). Java contract:
+# data/agent-handoff/chatgpt-oauth/CONTRACT.md
+chatgpt:
+  oauth:
+    enabled: ${CHATGPT_OAUTH_ENABLED:true}
+    credentials-file: ${CHATGPT_OAUTH_CREDENTIALS:.secrets/chatgpt_oauth_credentials.json}
+    models-file: ${CHATGPT_OAUTH_MODELS:data/agent-handoff/chatgpt-oauth/models.json}
+    token-endpoint: https://auth.openai.com/api/accounts/oauth/token
+    refresh-buffer-seconds: 300
+    # User report only; remaining balance and exact expiry remain unobserved.
+    benefit:
+      reported-grant-credits: 62500
+      reported-expires-on: "2026-12-31"
+      operational-cutoff: ${CHATGPT_OAUTH_BENEFIT_OPERATIONAL_CUTOFF:}

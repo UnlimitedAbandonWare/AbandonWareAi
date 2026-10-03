@@ -342,8 +342,10 @@ public class ChatWorkflow {
 
     @Value("${llm.timeout-seconds:12}")
     private int llmTimeoutSeconds;
-    @Value("${llm.requested-model.timeout-seconds:180}")
+    @Value("${llm.requested-model.timeout-seconds:30}")
     private int requestedModelTimeoutSeconds;
+    @Value("${chat.run.max-duration-seconds:600}")
+    private int chatRunMaxDurationSeconds;
     @Value("${interaction.evidence-neutral.mode:off}")
     private String interactionPolicyMode;
     @Value("${conversation.harmony.mode:off}")
@@ -575,6 +577,10 @@ public class ChatWorkflow {
     private final com.example.lms.ensemble.EnsembleFinalAnswerService ensembleFinalAnswerService;
     @Value("${prompt.context.refiner.enabled:false}")
     private boolean promptContextRefinerEnabled;
+    @org.springframework.beans.factory.annotation.Value("${prompt.context.refiner.strategy:legacy}")
+    private String promptContextRefinerStrategy="legacy";
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.example.lms.service.rag.graph.GeneralGraphSourceAuthority contextSourceAuthority;
     // ??Memory evidence I/O
     private final com.example.lms.service.rag.handler.MemoryHandler memoryHandler;
     private final com.example.lms.service.rag.handler.MemoryWriteInterceptor memoryWriteInterceptor;
@@ -582,6 +588,8 @@ public class ChatWorkflow {
     private final com.example.lms.learning.gemini.LearningWriteInterceptor learningWriteInterceptor;
     // ?좉퇋: ?댄빐 ?붿빟 諛?湲곗뼲 紐⑤뱢 ?명꽣?됲꽣
     private final com.example.lms.service.chat.interceptor.UnderstandAndMemorizeInterceptor understandAndMemorizeInterceptor;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.example.lms.service.understanding.UnderstandingCommitService> understandingCommits;
     @Autowired(required = false)
     private com.example.lms.debug.ai.DebugAiMetricsService debugAiMetricsService;
     @Autowired(required = false)
@@ -934,6 +942,21 @@ public class ChatWorkflow {
         return safeConversationFrame(frame).allowsOptionalExpansion();
     }
 
+    private static void bindRenderedAttachmentSources(ChatRequestDto request,
+            java.util.List<dev.langchain4j.data.document.Document> documents,java.util.List<ChatMessage> messages){
+        if(request==null||documents==null)return;
+        String sent=messages.stream().map(message->message instanceof SystemMessage s?s.text()
+                :message instanceof UserMessage u&&u.contents().size()==1&&u.contents().get(0) instanceof dev.langchain4j.data.message.TextContent?u.singleText():"")
+            .collect(java.util.stream.Collectors.joining("\n"));
+        var refs=new java.util.LinkedHashSet<com.example.lms.service.rag.graph.KgChunk.SourceRef>();
+        for(var document:documents){
+            var provenance=RagEvidenceMetadata.AttachmentProvenance.from(document.metadata().toMap());
+            if(provenance!=null&&sent.contains(provenance.label()))
+                refs.add(new com.example.lms.service.rag.graph.KgChunk.SourceRef(provenance.sourceId(),provenance.revision()));
+        }
+        request.bindUsedAttachmentSources(refs.stream().limit(16).toList());
+    }
+
     static boolean deniesConversationMemoryWrite(
             boolean interactionPolicyDenied,
             ConversationFrameV1 frame) {
@@ -1276,9 +1299,15 @@ public class ChatWorkflow {
     @org.springframework.beans.factory.annotation.Autowired(required=false)
     private com.example.lms.llm.spec.ModelSpecRegistry focusModelSpecs;
 
+    @Value("${chat.loadout.enabled:false}")
+    private boolean loadoutEnabled;
+
     public ChatResult continueChat(ChatRequestDto req,
             Function<String,List<String>> externalCtxProvider,ChatConversationContext conversationContext) {
         Objects.requireNonNull(conversationContext);
+        // An explicit OAuth route always retains exact selection, regardless of the browser's flag.
+        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req.getModel()))
+            req.setStrictModelSelection(true);
         boolean ownsGuardContext = GuardContextHolder.get() == null;
         if (ownsGuardContext) {
             GuardContextHolder.set(GuardContext.defaultContext());
@@ -1336,10 +1365,11 @@ public class ChatWorkflow {
                                 || Boolean.TRUE.equals(req.getUseRag()))));
 
         ChatWorkflowRequestTraceEnvelope.seed(req, sessionKey);
-        com.example.lms.llm.RequestedModelSelection.begin(req.isStrictModelSelection() ? req.getModel() : null);
+        com.example.lms.llm.RequestedModelSelection.begin(req.isStrictModelSelection() ? req.getModel() : null,
+                req.getVerifiedRequestOwnerHash());
         if (req.isStrictModelSelection()) {
             var choice = chatModelCatalogService == null ? null
-                    : chatModelCatalogService.resolve(req.getModel()).orElse(null);
+                    : chatModelCatalogService.resolve(req.getModel(), req.getVerifiedRequestOwnerHash()).orElse(null);
             if (choice == null || !choice.selectable()) {
                 throw new com.example.lms.llm.ModelSelectionException(
                         chatModelCatalogService == null
@@ -1855,6 +1885,8 @@ public class ChatWorkflow {
         List<String> planned = List.of();
         SearchPolicyDecision searchPolicyDecision = null;
         List<dev.langchain4j.rag.content.Content> fused = List.of();
+        // Ownership survives a skipped/failed tool call: later search must not bypass its budget.
+        List<Content> approvedToolWebEvidence = externalCtxProvider instanceof WebEvidenceSupplier ? List.of() : null;
         // Needle probe (2-pass) state (used for trace + outcome reward)
         EvidenceSignals needleBeforeSignals = EvidenceSignals.empty();
         EvidenceSignals needleAfterSignals = EvidenceSignals.empty();
@@ -2260,7 +2292,16 @@ public class ChatWorkflow {
             if (!preLlmRetrievalBudgetLow && (hints.isAllowWeb() || forceLightSearchMode) && externalCtxProvider != null) {
                 try {
                     String q0 = (planned != null && !planned.isEmpty()) ? planned.get(0) : finalQuery;
-                    List<String> prefetched = externalCtxProvider.apply(q0);
+                    List<String> prefetched;
+                    if (externalCtxProvider instanceof WebEvidenceSupplier supplier) {
+                        // Keep Content metadata request-local; never round-trip provenance through text.
+                        approvedToolWebEvidence = List.of();
+                        List<Content> supplied = supplier.evidence(q0);
+                        approvedToolWebEvidence = supplied == null ? List.of() : List.copyOf(supplied);
+                        prefetched = List.of();
+                    } else {
+                        prefetched = externalCtxProvider.apply(q0);
+                    }
                     if (prefetched != null && !prefetched.isEmpty()) {
                         metaHints.put("prefetch.web.query", q0);
                         metaHints.put("prefetch.web.snippets", prefetched);
@@ -2349,6 +2390,10 @@ public class ChatWorkflow {
                     TraceStore.put("retrieval.preLlm.heavyRetrieval.skipped", true);
                     TraceStore.put("retrieval.preLlm.heavyRetrieval.skipReason", "request_budget_low");
                 } catch (Exception ignore) { ChatWorkflowTraceSuppressions.traceSuppressed("retrieval.preLlmHeavySkipTrace", ignore); }
+            } else if (approvedToolWebEvidence != null) {
+                // This request's approved supplier owns web search, including empty results.
+                // Vector documents retain their separate existing retrieval path below.
+                fused = approvedToolWebEvidence;
             } else if (futureTech && latestTechAutoDisableVector) {
                 // Web-only retrieval (still plate-scoped via metadata hints)
                 var qObj = QueryUtils.buildQuery(finalQuery, sessionIdLong, null, metaHints);
@@ -2433,7 +2478,8 @@ public class ChatWorkflow {
                 ChatWorkflowTraceSuppressions.traceSuppressed("webHardDown.fallbackCheck", ignore); webHardDownNow = (hints != null && hints.isWebRateLimited());
             }
 
-            if (!preLlmRetrievalBudgetLow && useWeb && (fused == null || fused.isEmpty()) && hints != null && hints.isAllowWeb()
+            if (approvedToolWebEvidence == null
+                    && !preLlmRetrievalBudgetLow && useWeb && (fused == null || fused.isEmpty()) && hints != null && hints.isAllowWeb()
                     && !webHardDownNow) {
                 try {
                     TraceStore.put("fallback.webOnly", true);
@@ -2587,7 +2633,7 @@ public class ChatWorkflow {
         // ?? (Needle Probe) 2-pass merge/rerank
         // When pass-1 evidence quality looks weak, run a tiny second-pass web detour
         // (1~2 high-authority site-filtered queries), then merge + rerank again.
-        if (useWeb && needleProbeEngine != null
+        if (approvedToolWebEvidence == null && useWeb && needleProbeEngine != null
                 && sig != null
                 && !sig.strikeMode() && !sig.bypassMode()
                 && !sig.webRateLimited()) {
@@ -2935,6 +2981,14 @@ public class ChatWorkflow {
             }
         }
 
+        // Freeze the main route before projecting context and output budgets.
+        ChatModel model = modelRouter.routeMain(intent, detectRisk(userQuery), vp.hint(),
+                vp.targetTokenBudgetOut(), effectiveRequestedModel, userQuery, false);
+        var mainDecision = com.example.lms.llm.RequestedModelSelection.mainDecision();
+        if (mainDecision != null) req.bindMainRouteDecision(mainDecision);
+        final String resolvedModelName = mainDecision == null
+                ? modelRouter.resolveModelName(model) : mainDecision.selectedKey();
+
         var ctxBuilder = com.example.lms.prompt.PromptContext.builder()
                 // Use the rewritten/final query so retrieval signals, section templates and
                 // follow-up checks stay consistent.
@@ -2987,7 +3041,8 @@ public class ChatWorkflow {
                     var localDocs = attachmentService.asDocumentsForSession(
                             __ids,
                             sessionIdLong == null ? null : String.valueOf(sessionIdLong),
-                            attachmentOwnerIdentity);
+                            attachmentOwnerIdentity,
+                            userQuery);
                     localDocs = filterSuspectPromptDocuments(localDocs, interactionSuspectEvidenceIds);
                     if (localDocs != null && !localDocs.isEmpty()) {
                         promptLocalDocs = localDocs;
@@ -3050,7 +3105,54 @@ public class ChatWorkflow {
             promotionResult = com.example.lms.service.rag.RagEvidenceAttributionService.PromotionResult.callerFailure();
             citableEvidence = java.util.Collections.emptyList();
         }
-        if (allowsConversationRefinement(promptContextRefinerEnabled, conversationFrame)) {
+        boolean evidencePack="evidence_pack".equals(promptContextRefinerStrategy);
+        boolean legacyRefinement=promptContextRefinerStrategy==null||"legacy".equals(promptContextRefinerStrategy);
+        if(evidencePack&&allowsConversationRefinement(promptContextRefinerEnabled,conversationFrame)){
+            boolean approved=req!=null&&req.isContextPreparationRequested()&&!req.isStrictModelSelection()
+                &&(req.getImageBase64()==null||req.getImageBase64().isBlank())
+                &&com.example.lms.llm.ModelCapabilities.isLocalChatModelId(effectiveRequestedModel)
+                &&planExecSpec!=null&&planExecSpec.contextPreparationAllowed()
+                &&planWhen!=null&&planWhen.state()==com.example.lms.plan.PlanExecutionSpec.TriState.TRUE;
+            TraceStore.put("contextPrepareStatus","SKIPPED");
+            TraceStore.put("contextPrepareReason",approved?"preflight":"explicit_server_approval_required");
+            if(approved&&ensembleFinalAnswerService!=null){
+                try{
+                    var seed=ctxBuilder.build().toBuilder().userQuery(userQuery).build();
+                    if(seed.contextRefinementSignals().getOrDefault("contextContamination",0.0)<0.65){
+                        var run=com.example.lms.service.chat.ChatRunExecutionContext.current();
+                        var scope=req.getGeneralGraphScope();
+                        String identity=(run==null?String.valueOf(TraceStore.get(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY)):run.redactedRunIdentity())
+                            +":"+sessionIdLong+":"+(req.getAttachmentOwnerIdentity()==null?"none":req.getAttachmentOwnerIdentity().hash())
+                            +":"+(scope==null?"none":scope.indexNamespace())+":"+promptContextRefinerStrategy
+                            +":"+req.getUseRag()+":"+req.getUseWebSearch()+":"+req.getModel();
+                        var originals=com.example.lms.ensemble.PreparedContextPacket.originals(seed,identity);
+                        TraceStore.put("contextPrepareEvidenceCount",originals.spans().size());
+                        var owner=req.getAttachmentOwnerIdentity();
+                        Runnable check=()->{
+                            throwIfCancelled(sessionIdLong);
+                            var budget=TimeBudgetContext.get();
+                            if(budget!=null&&budget.expired())throw new CancellationException("context_prepare_parent_expired");
+                            if((scope!=null&&(contextSourceAuthority==null||!contextSourceAuthority.currentReadPolicy(scope)))
+                                    ||attachmentService==null||!attachmentService.contextSourcesCurrent(originals,owner,
+                                        sessionIdLong==null?null:sessionIdLong.toString()))
+                                throw new CancellationException("context_prepare_source_invalidated");
+                        };
+                        check.run();
+                        var prepared=ensembleFinalAnswerService.prepareContext(seed,originals,true,check);
+                        check.run();
+                        ctxBuilder.preparedContextPacket(prepared==null?originals:prepared);
+                        llmReq=llmReq.toBuilder().contextSourceCheck(check).build();
+                    }
+                }catch(CancellationException cancelled){throw cancelled;
+                }catch(RuntimeException unavailable){
+                    TraceStore.put("contextPrepareStatus","DISCARDED");TraceStore.put("contextPrepareReason","snapshot_unavailable");
+                    TraceStore.put("contextPrepareFailureType",unavailable.getClass().getSimpleName());
+                }
+            }
+        }else if(!legacyRefinement&&!evidencePack){
+            TraceStore.put("contextPrepareStatus","SKIPPED");TraceStore.put("contextPrepareReason","unknown_strategy");
+        }
+        if (legacyRefinement && allowsConversationRefinement(promptContextRefinerEnabled, conversationFrame)) {
             try {
                 var refinerSeedCtx = ctxBuilder.build();
                 double contamination = 0.0d;
@@ -3310,6 +3412,19 @@ public class ChatWorkflow {
                 dd.put("ragCount", (ctx.rag() != null) ? ctx.rag().size() : 0);
                 dd.put("localDocsCount", (ctx.localDocs() != null) ? ctx.localDocs().size() : 0);
                 dd.put("citableEvidenceCount", (ctx.evidence() != null) ? ctx.evidence().size() : 0);
+                dd.put("attachmentIdCount", __ids == null ? 0 : __ids.size());
+                dd.put("attachmentOwnerBound", req != null && req.getAttachmentOwnerIdentity() != null);
+                for (String key : java.util.List.of("attachment.ownerFilter.applied", "attachment.ownerFilter.reason",
+                        "attachment.bind.sessionCreated", "attachment.bind.attempted",
+                        "attachment.bind.applied", "attachment.bind.reason",
+                        "attachment.sessionFilter.applied", "attachment.sessionFilter.reason",
+                        "attachment.sessionFilter.allowedCount", "attachment.sessionFilter.blockedCount",
+                        "attachment.localDocs.count", "attachment.extraction.skippedReason", "attachment.text.emptyReason")) {
+                    Object value = TraceStore.get(key);
+                    if (value instanceof Number || value instanceof Boolean) dd.put(key, value);
+                    else if (value instanceof String reason)
+                        dd.put(key, SafeRedactor.traceLabelOrFallback(reason, "unknown"));
+                }
                 dd.put("memoryPresent", ctx.memory() != null && !ctx.memory().isBlank());
                 dd.put("learningRole", ragSupportRoleLabel);
                 dd.put("learningSignalCount", ctx.learningSignals() != null ? ctx.learningSignals().size() : 0);
@@ -3382,14 +3497,6 @@ public class ChatWorkflow {
             return finishEarlyResult(ChatResult.of(agentDebugDirectAnswer, "agent-debug:fallback:evidence", useRag));
         }
 
-        ChatModel model = modelRouter.route(
-                intent,
-                detectRisk(userQuery), // "HIGH"|"LOW"|etc. (湲곗〈 ?ы띁)
-                vp.hint(), // brief|standard|deep|ultra
-                vp.targetTokenBudgetOut(), // 異쒕젰 ?좏겙 ?덉궛 ?뚰듃
-                effectiveRequestedModel);
-
-        final String resolvedModelName = modelRouter.resolveModelName(model);
         if (vp.minWordCount() > 0
                 && OpenAiTokenParamCompat.usesMaxCompletionTokens(resolvedModelName)) {
             outputPolicy = buildOutputLengthPolicy(resolvedModelName, vp.hint(), answerMode, vp.targetTokenBudgetOut());
@@ -3401,7 +3508,9 @@ public class ChatWorkflow {
         // context.
         // Otherwise the model may follow the context formatting first and drift from
         // the template.
+        int instructionMessageIndex = -1;
         if (org.springframework.util.StringUtils.hasText(instrTxt)) {
+            instructionMessageIndex = msgs.size();
             msgs.add(dev.langchain4j.data.message.SystemMessage.from(instrTxt));
         }
 
@@ -3437,12 +3546,56 @@ public class ChatWorkflow {
 
         // Context (evidence) should come last among system messages.
         int conversationContextIndex=msgs.size();
-        msgs.add(dev.langchain4j.data.message.SystemMessage.from(unifiedCtx));
+        msgs.add(ctx.preparedContextPacket()==null?dev.langchain4j.data.message.SystemMessage.from(unifiedCtx)
+                :dev.langchain4j.data.message.UserMessage.from(unifiedCtx));
         msgs.addAll(conversationContext.roleMessages());
         // The original current question remains last; rewritten queries are retrieval inputs.
 
         // ???ъ슜??吏덈Ц
         msgs.add(primaryUserMessage(userQuery, llmReq, conversationFrame));
+        if (loadoutEnabled) {
+            long inputTokens = com.example.lms.util.TokenCounter.estimateTextChatInput(msgs);
+            var role = com.example.lms.llm.RequestedModelSelection.mainRole();
+            var features = new java.util.HashSet<String>();
+            String queryFeatures = userQuery == null ? "" : userQuery.toLowerCase(java.util.Locale.ROOT);
+            boolean corpusAllowed = !promptWebDocs.isEmpty() || !promptVectorDocs.isEmpty() || !promptLocalDocs.isEmpty();
+            if (corpusAllowed) features.add("evidence");
+            features.add("factual");
+            if (queryFeatures.contains("비교") || queryFeatures.contains("compare")) features.add("compare");
+            if (queryFeatures.contains("모순") || queryFeatures.contains("contradict")) features.add("contradiction");
+            if (queryFeatures.contains("심층 분석") || queryFeatures.contains("difficult analysis")) features.add("difficult_analysis");
+            if (queryFeatures.matches("(?iu)\\s*(?:안녕(?:하세요)?|hello|hi)[!?.\\s]*")) {
+                features.clear(); features.add("greeting");
+            }
+            int outputReserve = Math.max(llmReq.getMaxTokens() == null ? 1024 : llmReq.getMaxTokens(),
+                    ctx.targetTokenBudgetOut() == null ? 1024 : ctx.targetTokenBudgetOut());
+            int remainingAllowance = ctx.preparedContextPacket() != null || promptLocalDocs.stream().anyMatch(d ->
+                    "attachment".equals(d.metadata().getString("source"))) ? 10000 : Integer.MAX_VALUE;
+            var loadout = role == null ? null : modelRouter.selectLoadout(
+                    new com.example.lms.prompt.pose.ModelLoadoutResolver.Request(role, features, java.util.Set.of(), false,
+                            corpusAllowed, inputTokens > Integer.MAX_VALUE ? -1 : (int) inputTokens, outputReserve, remainingAllowance), model);
+            boolean unsafeEndpointFallback = openAiFallbackToCompletions || openAiFallbackToResponses;
+            boolean applied = loadout != null && loadout.eligible() && !loadout.skillRefs().isEmpty() && !unsafeEndpointFallback;
+            if (applied) {
+                ctx = ctx.toBuilder().resolvedLoadout(loadout).build();
+                instrTxt = promptBuilder.buildInstructions(ctx);
+                if (instructionMessageIndex >= 0) msgs.set(instructionMessageIndex, dev.langchain4j.data.message.SystemMessage.from(instrTxt));
+                else { msgs.add(0, dev.langchain4j.data.message.SystemMessage.from(instrTxt)); conversationContextIndex++; }
+                TraceStore.put("prompt.instr.len", instrTxt.length());
+                TraceStore.put("prompt.instr.sha1", TextUtils.sha1(instrTxt));
+            }
+            TraceStore.put("prompt.loadout.role", role == null ? "UNKNOWN" : role.name());
+            TraceStore.put("prompt.loadout.id", loadout == null ? "safe-default" : loadout.id());
+            TraceStore.put("prompt.loadout.version", loadout == null ? "1" : loadout.version());
+            TraceStore.put("prompt.loadout.skills", applied ? loadout.skillRefs() : java.util.List.of());
+            TraceStore.put("prompt.loadout.policy", loadout == null ? "existing" : loadout.evidencePolicyRef());
+            TraceStore.put("prompt.loadout.retrieval", "CURRENT");
+            TraceStore.put("prompt.loadout.reasons", unsafeEndpointFallback ? java.util.List.of("ENDPOINT_FALLBACK_UNVERIFIED")
+                    : loadout == null ? java.util.List.of("MISSING_LOADOUT_CONTEXT") : loadout.selectionReasons());
+            TraceStore.put("prompt.loadout.inputTokens", inputTokens);
+            TraceStore.put("prompt.loadout.countMethod", "CL100K_ESTIMATE");
+            TraceStore.put("prompt.loadout.applied", applied);
+        }
         if(conversationContext.present()){
             var cap=focusModelSpecs==null?java.util.OptionalInt.empty():focusModelSpecs.snapshots().stream()
                 .filter(spec->resolvedModelName.equalsIgnoreCase(spec.model())&&spec.contextTokens()!=null&&spec.contextTokens()>0
@@ -3455,6 +3608,39 @@ public class ChatWorkflow {
                     Math.max(llmReq.getMaxTokens()==null?1024:llmReq.getMaxTokens(),vp.targetTokenBudgetOut()));
                 msgs.clear();msgs.addAll(bounded);
             }
+        }
+        if (promptLocalDocs.stream().anyMatch(doc ->
+                "attachment".equals(doc.metadata().getString("source")))) {
+            long attachmentInputTokens = com.example.lms.util.TokenCounter.estimateTextChatInput(msgs);
+            TraceStore.put("attachment.input.countMethod", "CL100K_ESTIMATE");
+            TraceStore.put("attachment.input.guarantee", "estimate");
+            TraceStore.put("attachment.input.tokens", attachmentInputTokens);
+            TraceStore.put("attachment.input.limit", 10_000);
+            TraceStore.put("attachment.input.model", resolvedModelName);
+            // Model-specific counting has not been verified; semantic extraction remains skipped.
+            TraceStore.put("attachment.semanticExtraction.reason", "TOKEN_COUNT_UNVERIFIED");
+            if (attachmentInputTokens > 10_000) {
+                TraceStore.put("attachment.input.reason", "attachment_input_budget_exceeded");
+                throw new IllegalArgumentException("attachment_input_budget_exceeded");
+            }
+            if (attachmentInputTokens < 0) {
+                TraceStore.put("attachment.input.reason", "multimodal_count_not_observed");
+            }
+        }
+        if(ctx.preparedContextPacket()!=null){
+            long tokens=com.example.lms.util.TokenCounter.estimateTextChatInput(msgs);
+            int cap=10000;
+            final int preparedOutputReserve=Math.max(llmReq.getMaxTokens()==null?1024:llmReq.getMaxTokens(),ctx.targetTokenBudgetOut()==null?1024:ctx.targetTokenBudgetOut());
+            if(focusModelSpecs!=null){
+                var observed=focusModelSpecs.snapshots().stream().filter(s->resolvedModelName.equals(s.model())
+                    &&s.contextTokens()!=null&&s.contextTokens()>0&&s.observedAt().isAfter(java.time.Instant.now().minusSeconds(86400)))
+                    .mapToInt(s->Math.max(0,s.contextTokens()-preparedOutputReserve)).min();
+                if(observed.isPresent())cap=Math.min(cap,observed.getAsInt());
+            }
+            TraceStore.put("contextPrepare.finalInput.countMethod","CL100K_ESTIMATE");
+            TraceStore.put("contextPrepare.finalInput.tokens",tokens);TraceStore.put("contextPrepare.finalInput.limit",cap);
+            if(tokens<0||tokens>cap)throw new IllegalArgumentException("context_prepare_final_input_budget");
+            llmReq.getContextSourceCheck().run();
         }
         recordCostZone(
                 "prompt_context",
@@ -3547,7 +3733,7 @@ public class ChatWorkflow {
             if (ctx.ensembleCandidates() != null && !ctx.ensembleCandidates().isEmpty()) {
                 TraceStore.put("ensemble.judge.skipped", "reference_only");
             }
-            boolean strictSingleAttempt = hasThreeRoleRefinementCandidates(ctx);
+            boolean strictSingleAttempt = ctx.preparedContextPacket()!=null || hasThreeRoleRefinementCandidates(ctx);
             TraceStore.put(
                     "conversation.frame.primaryModelCallCount",
                     TraceStore.getLong("conversation.frame.primaryModelCallCount") + 1L);
@@ -3559,13 +3745,15 @@ public class ChatWorkflow {
                         finalReq,
                         primarySuccessRef::set,
                         strictSingleAttempt,
-                        vp == null ? null : vp.targetTokenBudgetOut());
+                        vp == null ? null : vp.targetTokenBudgetOut(),
+                        mainDecision);
             } finally {
                 refreshConversationFrameAttemptCoverage(
                         conversationFrame,
                         "conversationFrame.requestAttemptBreadcrumb");
             }
             throwIfCancelled(sessionIdLong);
+            bindRenderedAttachmentSources(req,promptLocalDocs,msgs);
             traceS8Integrity("primary", finalQuery, draft);
             TraceStore.put("ensemble.finalAnswerOwner", "primary_model");
             LlmCallSuccess primarySuccess = primarySuccessRef.get();
@@ -3620,7 +3808,9 @@ public class ChatWorkflow {
                 }
             }
 
-            if (req.isStrictModelSelection() || TimedChatModelCaller.isHardTimeout(e)
+            if (req.isStrictModelSelection()
+                    || com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req.getModel())
+                    || TimedChatModelCaller.isHardTimeout(e)
                     || com.example.lms.llm.gateway.LlmGatewayFailureClassifier.hasNonReplayableReason(e)
                     || "TIMEOUT".equals(com.example.lms.llm.LlmErrorClassifier.classify(e).code())) {
                 throw com.example.lms.llm.ModelSelectionException.failure(e);
@@ -4336,6 +4526,13 @@ public class ChatWorkflow {
             String finalAnswerForMemory = finalized.memoryContent();
             GuardProfile terminalGuardProfile = guardProfile;
             MemoryMode terminalMemoryMode = memoryMode;
+            var deferredService = understandingCommits == null ? null : understandingCommits.getIfAvailable();
+            boolean deferredUnderstanding = deferredService != null && deferredService.stageDeferred(exactRun,
+                    req.getGeneralGraphScope(), userQuery, finalAnswerForMemory, terminalGuardProfile,
+                    terminalMemoryMode, finalized.memorySaveAllowed(), req.isUnderstandingEnabled());
+            var preparedUnderstanding = deferredUnderstanding ? null : understandAndMemorizeInterceptor.prepare(
+                    userQuery, finalAnswerForMemory, req.isUnderstandingEnabled());
+            throwIfCancelled(sessionIdLong);
             FinalizedMemoryPersistence.persist(
                     exactRun,
                     ClientCancellationException::new,
@@ -4350,12 +4547,11 @@ public class ChatWorkflow {
                                     sessionKey, userQuery, finalAnswerForMemory, /* score */ 0.5)),
                     new FinalizedMemoryPersistence.Stage(
                             "memory.understandAndMemorize",
-                            () -> understandAndMemorizeInterceptor.afterVerified(
+                            () -> { if (!deferredUnderstanding) understandAndMemorizeInterceptor.commitPrepared(
                                     sessionKey,
                                     userQuery,
-                                    finalAnswerForMemory,
-                                    req.isUnderstandingEnabled(),
-                                    exactRun)),
+                                    preparedUnderstanding,
+                                    exactRun); }),
                     new FinalizedMemoryPersistence.Stage(
                             "memory.reinforce",
                             () -> reinforce(
@@ -4456,6 +4652,12 @@ public class ChatWorkflow {
                         releaseDecision.evidencePolicyApplied() || !releaseDecision.releaseAllowed(),
                         true,
                         verifyAnswer));
+        LlmCallSuccess finalGeneration = primarySuccessRef.get();
+        (finalGeneration == null ? new com.example.lms.dto.GenerationObservation(
+                null, null, null, null, null, "response_not_observed") : finalGeneration.observation()).publish();
+        if (loadoutEnabled) {
+            TraceStore.put("prompt.loadout.observation", TraceStore.get("observedModel") == null ? "NO_OBSERVATION" : "OBSERVED");
+        }
         return ChatResult.of(out, modelUsed, ragUsed,
                 java.util.Collections.unmodifiableSet(evidence),
                 visibleEvidenceMetadata == null ? java.util.List.of() : visibleEvidenceMetadata);
@@ -5135,7 +5337,8 @@ public class ChatWorkflow {
                     regenReq.getModel(),
                     regenReq.getModel(),
                     llmTimeoutSeconds,
-                    requestedModelTimeoutSeconds);
+                    requestedModelTimeoutSeconds,
+                    chatRunMaxDurationSeconds);
             Duration regenTimeout = requestBudgetBoundedLlmTimeout(
                     TimeUnit.SECONDS.toMillis(Math.max(1, regenTimeoutSeconds)),
                     "guard_detour_regen");
@@ -6750,7 +6953,11 @@ public class ChatWorkflow {
                 success -> recordModelSuccess(success.modelId(), success.endpoint()));
     }
 
-    private record LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint) {
+    private record LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint,
+            com.example.lms.dto.GenerationObservation observation) {
+        private LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint) {
+            this(modelId, endpoint, com.example.lms.dto.GenerationObservation.current());
+        }
     }
 
     private ChatUsageLedger.ModelAttempt beginChatUsageAttempt(
@@ -6792,11 +6999,18 @@ public class ChatWorkflow {
             Consumer<LlmCallSuccess> successSink,
             boolean strictSingleAttempt,
             Integer profileTarget) {
+        return callWithRetryReportingSuccess(model, msgs, dto, successSink, strictSingleAttempt, profileTarget, null);
+    }
+    private String callWithRetryReportingSuccess(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs, ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink, boolean strictSingleAttempt, Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision) {
         boolean finalSamplingCall = creativeProviderSamplingPending();
         try {
             String out = callWithRetryReportingSuccessCore(
                     model, msgs, dto, successSink,
-                    strictSingleAttempt || llmStrictSingleAttempt || (dto != null && dto.isStrictModelSelection()), profileTarget);
+                    strictSingleAttempt || llmStrictSingleAttempt || (dto != null && dto.isStrictModelSelection()),
+                    profileTarget, mainDecision);
             if (finalSamplingCall) {
                 if (out == null || out.isBlank()) {
                     markCreativeSamplingUnprovenPreservingReason("provider-blank-response");
@@ -6824,14 +7038,29 @@ public class ChatWorkflow {
             Consumer<LlmCallSuccess> successSink,
             boolean strictSingleAttempt,
             Integer profileTarget) {
+        return callWithRetryReportingSuccessCore(model, msgs, dto, successSink, strictSingleAttempt, profileTarget, null);
+    }
+    private static String requestedModelForAttempt(ChatRequestDto dto,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision) {
+        return mainDecision != null ? mainDecision.selectedKey()
+                : dto != null && dto.getModel() != null ? dto.getModel().trim() : null;
+    }
+    private String callWithRetryReportingSuccessCore(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs, ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink, boolean strictSingleAttempt, Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision) {
         if (model == null) {
             throw new IllegalStateException("ChatModel is not configured");
         }
 
-        String requestedModel = (dto != null && dto.getModel() != null) ? dto.getModel().trim() : null;
+        String requestedModel = requestedModelForAttempt(dto, mainDecision);
         if (requestedModel != null && requestedModel.isBlank()) {
             requestedModel = null;
         }
+        final boolean oauthRequested = com.example.lms.llm.ChatGptOAuthRegistration.isRoute(requestedModel);
+        strictSingleAttempt = strictSingleAttempt || oauthRequested;
+        if (oauthRequested && dynamicChatModelFactory == null)
+            throw com.example.lms.llm.ChatGptOAuthRegistration.unavailable("chatgpt_oauth_not_configured");
         requestedModel = localSafeModelOrNull(requestedModel, "requested");
 
         String routedModel = (modelRouter == null) ? null : modelRouter.resolveModelName(model);
@@ -6868,7 +7097,7 @@ public class ChatWorkflow {
         final int callTimeoutSeconds = dto == null
                 ? llmTimeoutSeconds
                 : RequestedModelTimeoutPolicy.timeoutSeconds(dto.getModel(), resolved, llmTimeoutSeconds,
-                        requestedModelTimeoutSeconds);
+                        requestedModelTimeoutSeconds, chatRunMaxDurationSeconds);
         TimeBudget requestBudget = TimeBudgetContext.get();
         final long callerRemainingMs = requestBudget == null ? Long.MAX_VALUE : requestBudget.remainingMillis();
         final long defaultCallTimeoutMs = Math.max(1L, TimeUnit.SECONDS.toMillis(Math.max(1, callTimeoutSeconds)));
@@ -6884,7 +7113,7 @@ public class ChatWorkflow {
                 TraceStore.put("llm.call.timeout.appliedMs", callTimeoutBudgetMs);
             } catch (Exception ignore) { ChatWorkflowTraceSuppressions.traceSuppressed("llm.callTimeoutRequestBudgetTrace", ignore); }
         }
-        if (isLocalProvider() && ModelCapabilities.isRemoteLookingModelId(resolved)
+        if (!oauthRequested && isLocalProvider() && ModelCapabilities.isRemoteLookingModelId(resolved)
                 && (dynamicChatModelFactory == null || !dynamicChatModelFactory.canServeQuietly(resolved))) {
             log.warn("[AWX2AF2][model-policy] ignored {} modelHash={} provider={} reason=local_provider",
                     "resolved", SafeRedactor.hashValue(resolved), llmProvider);
@@ -6913,19 +7142,30 @@ public class ChatWorkflow {
         } catch (Exception ignore) { ChatWorkflowTraceSuppressions.traceSuppressed("llm.callModelTrace", ignore); }
 
         ChatModel modelForCall = model;
+        final String contextModel = resolved;
+        com.example.lms.llm.spec.ModelSpecSnapshot observedContext = focusModelSpecs == null ? null
+                : focusModelSpecs.snapshots().stream()
+                    .filter(spec -> contextModel.equalsIgnoreCase(spec.model()) && spec.contextTokens() != null
+                            && spec.contextTokens() > 0 && spec.observedAt().isAfter(java.time.Instant.now().minusSeconds(86400)))
+                    .min(java.util.Comparator.comparingInt(com.example.lms.llm.spec.ModelSpecSnapshot::contextTokens))
+                    .orElse(null);
         if (dto != null && dynamicChatModelFactory != null) {
             TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY, true);
             try {
-                modelForCall = strictSingleAttempt
+                modelForCall = dto.getContextSourceCheck()!=null
+                        ? dynamicChatModelFactory.lcForPreparedAnswer(resolved,dto.getTemperature(),dto.getTopP(),
+                                dto.getFrequencyPenalty(),dto.getPresencePenalty(),
+                                com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),callTimeoutBudgetSeconds,observedContext)
+                        : strictSingleAttempt
                         ? dynamicChatModelFactory.lcWithTimeout(
                                 resolved,
                                 dto.getTemperature(),
                                 dto.getTopP(),
                                 dto.getFrequencyPenalty(),
                                 dto.getPresencePenalty(),
-                                dto.getMaxTokens(),
+                                com.example.lms.llm.RequestedModelSelection.outputLimit(resolved, dto.getMaxTokens()),
                                 callTimeoutBudgetSeconds,
-                                0)
+                                0,observedContext)
                         : dynamicChatModelFactory.lcWithTimeout(
                                 resolved,
                                 dto.getTemperature(),
@@ -6933,7 +7173,7 @@ public class ChatWorkflow {
                                 dto.getFrequencyPenalty(),
                                 dto.getPresencePenalty(),
                                 dto.getMaxTokens(),
-                                callTimeoutBudgetSeconds);
+                                callTimeoutBudgetSeconds,null,observedContext);
             } catch (IllegalStateException guard) {
                 // Fail-soft: ProviderGuard(?? OpenAI ???놁쓬)濡??숈쟻 ?ъ깮?깆씠 ?ㅽ뙣?섎㈃ ?먮낯 紐⑤뜽 ?좎?
                 log.warn("[ChatWorkflow] dynamic model rebuild blocked: reason={} originalModelHash={} originalModelLength={}",
@@ -7026,6 +7266,9 @@ public class ChatWorkflow {
         int callInputChars = estimateChatMessageChars(msgs);
         final int maxAttempts = strictSingleAttempt ? 0 : llmMaxAttempts;
         for (int attempt = 0; attempt <= maxAttempts; attempt++) {
+            if(dto!=null&&dto.getContextSourceCheck()!=null){
+                dto.getContextSourceCheck().run();TraceStore.put("contextPrepareStatus","DISPATCHED");
+            }
             requestBudgetBoundedLlmTimeout(defaultCallTimeoutMs, "retry_attempt_guard");
             try {
                 recordCostZone(
@@ -7052,11 +7295,13 @@ public class ChatWorkflow {
                         chatDraftTimeout,
                         "chat_draft",
                         resolved,
-                        usageAttempt);
+                        usageAttempt,
+                        dynamicChatModelFactory == null ? null : dynamicChatModelFactory.requestModelWarmup(resolved));
                 String out = ai == null ? "" : (ai.text() == null ? "" : ai.text());
                 Object responseModel = TraceStore.get("llm.call.responseModel");
                 successSink.accept(new LlmCallSuccess(responseModel instanceof String name && !name.isBlank() ? name : resolved,
-                        OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS));
+                        oauthRequested ? OpenAiEndpointCompatibility.Endpoint.RESPONSES
+                                : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS));
                 return out;
             } catch (CancellationException cancelled) {
                 throw cancelled;
@@ -7068,6 +7313,9 @@ public class ChatWorkflow {
                 rethrowIfRequestBudgetExhausted("chat_draft", e);
                 if (TimedChatModelCaller.isHardTimeout(e)
                         || "TIMEOUT".equals(com.example.lms.llm.LlmErrorClassifier.classify(e).code())) {
+                    recordModelFailure(resolved, oauthRequested
+                            ? OpenAiEndpointCompatibility.Endpoint.RESPONSES
+                            : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS, "timeout");
                     // The gateway already owns eligible provider failover. A
                     // transport timeout is not proof that backend work stopped.
                     throw new LlmFastBailoutException("LLM timeout after routing; no replay", e,
@@ -7512,7 +7760,8 @@ public class ChatWorkflow {
                 || (safeContract.webRequested() && !safeContract.effectiveWeb())
                 || (safeContract.ragRequested() && !safeContract.effectiveRag())
                 || (safeContract.webRequested() && promotionResult.webCitableLocatorCount() <= 0)
-                || (safeContract.ragRequested() && promotionResult.vectorCitableLocatorCount() <= 0)) {
+                || (safeContract.ragRequested() && promotionResult.vectorCitableLocatorCount() <= 0
+                && promotionResult.localCitableLocatorCount() <= 0)) {
             return EvidenceReleaseState.METADATA_INCOMPLETE;
         }
 
@@ -7523,11 +7772,11 @@ public class ChatWorkflow {
             boolean webPresent = evidence.stream()
                     .filter(Objects::nonNull)
                     .anyMatch(item -> "WEB".equals(item.kind()));
-            boolean vectorPresent = evidence.stream()
+            boolean ragPresent = evidence.stream()
                     .filter(Objects::nonNull)
-                    .anyMatch(item -> "VECTOR".equals(item.kind()));
+                    .anyMatch(item -> "VECTOR".equals(item.kind()) || "LOCAL_DOC".equals(item.kind()));
             if ((safeContract.webRequested() && !webPresent)
-                    || (safeContract.ragRequested() && !vectorPresent)) {
+                    || (safeContract.ragRequested() && !ragPresent)) {
                 return EvidenceReleaseState.METADATA_INCOMPLETE;
             }
             return EvidenceReleaseState.EVIDENCE_PRESENT;
@@ -8192,7 +8441,15 @@ public class ChatWorkflow {
         TraceStore.put("ensemble.refiner.wiredOfficialSourceCount", officialSources.size());
     }
 
-    private static String canonicalEnsembleCitationSource(String value) {
+    /** Internal admitted-request supplier; typed evidence never enters diagnostic maps. */
+    public interface WebEvidenceSupplier extends Function<String, List<String>> {
+        List<Content> evidence(String query);
+        @Override default List<String> apply(String query) {
+            return evidence(query).stream().map(item -> item.textSegment().text()).toList();
+        }
+    }
+
+    public static String canonicalEnsembleCitationSource(String value) {
         if (value == null || value.isBlank()) {
             return null;
         }
@@ -8703,6 +8960,7 @@ public class ChatWorkflow {
     }
 
     private String localSafeModelOrNull(String modelId, String stage) {
+        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(modelId)) return modelId;
         if (!isLocalProvider() || modelId == null || modelId.isBlank()) {
             return modelId;
         }
@@ -8743,6 +9001,9 @@ public class ChatWorkflow {
             ChatUsageLedger.ConfiguredCap fallbackCap,
             Consumer<LlmCallSuccess> successSink,
             String... order) {
+        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(modelId)
+                || dto != null && com.example.lms.llm.ChatGptOAuthRegistration.isRoute(dto.getModel()))
+            throw com.example.lms.llm.ChatGptOAuthRegistration.unavailable("chatgpt_oauth_fallback_forbidden");
         ArrayList<String> attempted = new ArrayList<>();
         if (order == null || order.length == 0) {
             return null;

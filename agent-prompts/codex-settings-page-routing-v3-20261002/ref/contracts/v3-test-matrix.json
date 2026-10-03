@@ -1,0 +1,444 @@
+[
+  {
+    "id": "V3-01",
+    "work_package": 1,
+    "test_class": "SettingsCapabilityProjectionTest",
+    "test_name": "conditionalBeanIsNotLiveSupport",
+    "given": "클래스는 존재하지만 조건부 Jev 빈이 생성되지 않은 context",
+    "expected": "조건부 빈 부재가 확인된 fixture는 runtimeAvailable=false; 상태 조회 자체가 미확인인 별도 fixture만 null; 클래스 존재만으로 ready 표기 금지; 새 빈 생성 0",
+    "source_refs": [
+      "S04"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-02",
+    "work_package": 1,
+    "test_class": "SettingsCapabilityProjectionTest",
+    "test_name": "configuredValueIsNotObservedExecution",
+    "given": "onnx.enabled 구성은 true이나 실행 관측 없음",
+    "expected": "configured=true; executed=null; 사용됨 배지 없음",
+    "source_refs": [
+      "S29"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-03",
+    "work_package": 1,
+    "test_class": "SettingsCapabilityProjectionTest",
+    "test_name": "missingValueStaysUnknown",
+    "given": "관측된 값·속성 출처가 없음",
+    "expected": "value=null·source=unknown; 가짜 0·false·기본 모델 없음",
+    "source_refs": [
+      "S22"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-04",
+    "work_package": 1,
+    "test_class": "SettingsPlanProjectionTest",
+    "test_name": "conditionalPlanPreservesLegacyDslStatus",
+    "given": "planDsl=not_used와 when=true 및 ledger가 함께 존재",
+    "expected": "legacy 필드 보존; 제한 조건 적용·단계 기록 별도 표시",
+    "source_refs": [
+      "S11",
+      "S15",
+      "S27"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-05",
+    "work_package": 1,
+    "test_class": "SettingsPlanProjectionTest",
+    "test_name": "delegatedIsNotExecuted",
+    "given": "prompt.build·answer.generate ledger 상태가 delegated",
+    "expected": "호출자 위임으로 표시; 별도 생성 증거 없으면 실행됨 아님",
+    "source_refs": [
+      "S14"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-06",
+    "work_package": 1,
+    "test_class": "SettingsPlanProjectionTest",
+    "test_name": "unknownDoesNotStartExpansion",
+    "given": "when=UNKNOWN인 Plan과 BQ 배정이 있음",
+    "expected": "배정 유지·확장 실행 없음·when_unknown 이유",
+    "source_refs": [
+      "S15",
+      "S42"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-07",
+    "work_package": 2,
+    "test_class": "SettingsSnapshotCompatibilityTest",
+    "test_name": "v2ProfileRoundTripsUnchanged",
+    "given": "기존 v2 schemaVersion=1 역할 문서를 읽고 변경 없이 저장",
+    "expected": "기존 의미 동일; 설명 descriptor·Jev·Plan 데이터가 bindings로 유입되지 않음",
+    "source_refs": [
+      "S41",
+      "S42"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-08",
+    "work_package": 2,
+    "test_class": "SettingsSnapshotCompatibilityTest",
+    "test_name": "profileOffAddsNoNewDependency",
+    "given": "신규 runtime gate false 상태에서 기존 채팅 실행",
+    "expected": "라우팅 설정용 DB 조회·정책 변경 0; 기존 선택 유지",
+    "source_refs": [
+      "S41"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-09",
+    "work_package": 2,
+    "test_class": "SettingsSnapshotCompatibilityTest",
+    "test_name": "pinnedPolicyDoesNotFreezeRevocation",
+    "given": "실행 스냅숏 고정 후 owner 동의 또는 소스 revision이 무효화",
+    "expected": "모델 정책은 고정하되 취소/권한 재검증은 현재 값; 뒤늦은 문맥 인계·저장 없음",
+    "source_refs": [
+      "S20",
+      "S35",
+      "S36"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-10",
+    "work_package": 2,
+    "test_class": "SettingsSnapshotCompatibilityTest",
+    "test_name": "previewBasisDriftRequiresRecheck",
+    "given": "미리보기 이후 역할 정책 또는 catalog/config 지문 변경",
+    "expected": "UI 차이 알림·재검증; 이전 결과를 현재 실행 보장으로 표시하지 않음",
+    "source_refs": [
+      "S09",
+      "S41"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-11",
+    "work_package": 2,
+    "test_class": "SettingsSnapshotCompatibilityTest",
+    "test_name": "recipeIsDraftOnly",
+    "given": "브라우저에서 역할 조합 초안을 선택",
+    "expected": "폼만 변경; DB write·API call·기존 기본값 변화 0",
+    "source_refs": [
+      "S41",
+      "S42"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-12",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "strictMainSurvivesRoleProfile",
+    "given": "strict 모델 지정과 MAIN_HIGH override가 동시에 있음",
+    "expected": "기존 exact 선택 유지; profile이 다른 모델 호출로 대체하지 않음",
+    "source_refs": [
+      "S41"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-13",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "noJevDoubleDispatch",
+    "given": "같은 교정 질의에서 search-need·complexity 소비자가 둘 다 실행",
+    "expected": "기존 같은 handle 사용; 설정 기능이 두 번째 transport 호출을 추가하지 않음",
+    "source_refs": [
+      "S01",
+      "S03"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-14",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "surfacePolicyDoesNotBleed",
+    "given": "main 역할 정책을 변경하고 focus/cue 설정은 그대로 둠",
+    "expected": "focus/cue 선택·기한·scope 변경 없음",
+    "source_refs": [
+      "S02",
+      "S05"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-15",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "explicitSearchChoiceWinsOverSignal",
+    "given": "명시 검색 OFF 또는 명시 검색 깊이와 상충하는 Jev 결과",
+    "expected": "기존 AUTO 한정 적용 경계를 유지",
+    "source_refs": [
+      "S06"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-16",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "budgetSuggestionNotAppliedTopK",
+    "given": "Governor가 web/vector/kg와 burst 후보를 반환",
+    "expected": "현재 consumer에서 반영된 burst만 applied; 다른 K는 suggested",
+    "source_refs": [
+      "S25",
+      "S26"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-17",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "evidencePreparationKeepsRequestGate",
+    "given": "설정 조합은 고성능이지만 contextPreparationRequested=false",
+    "expected": "prepareContext 호출 0; 기존 일반 PromptBuilder 경로 유지",
+    "source_refs": [
+      "S20",
+      "S21"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-18",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "evidencePreparationCannotBypassStrictOrLocalCheck",
+    "given": "strict/원격/이미지/when_unknown 중 하나의 기존 제한에 걸림",
+    "expected": "evidence_pack 추가 준비는 실행 안 함; 제한을 고성능 이름으로 우회하지 않음",
+    "source_refs": [
+      "S13",
+      "S20"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-19",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "modelParamsUseExistingNormalizer",
+    "given": "고정 sampling 규칙을 가진 source 모델에 다른 temperature를 요청",
+    "expected": "기존 ModelCapabilities 정규화 결과를 effective로 표시; requested와 구분",
+    "source_refs": [
+      "S39"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-20",
+    "work_package": 3,
+    "test_class": "SettingsRoutingIntegrationTest",
+    "test_name": "frozenBudgetMatchesMainBinding",
+    "given": "역할 배정과 출력 토큰 예산을 계산하는 중 새 정책 저장",
+    "expected": "같은 Run의 main binding과 예산 계산이 같은 정책 기준",
+    "source_refs": [
+      "S18",
+      "S41"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-21",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "estimateIsNotActualCount",
+    "given": "web/vector만 관측되고 finalContextCount는 없음",
+    "expected": "기존 web_vector_estimate 출처 보존; 실제 최종 근거 건수로 표시하지 않음",
+    "source_refs": [
+      "S22"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-22",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "jevSignalIsNotAnswerOrigin",
+    "given": "Jev 평가 성공 후 메인 생성 실패",
+    "expected": "Jev succeeded와 final failed를 분리; 최종 생성 모델에 Jev를 넣지 않음",
+    "source_refs": [
+      "S03",
+      "S18"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-23",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "lateActivationDoesNotReplay",
+    "given": "실행 후 when이 unknown에서 true로 변경됐다는 trace 존재",
+    "expected": "lateActivation 관측만 표시; 브라우저/API에서 재실행 0",
+    "source_refs": [
+      "S16"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-24",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "persistenceIsNotModelSuccess",
+    "given": "생성 성공 후 저장 stage 실패 또는 취소",
+    "expected": "생성 성공·저장 실패/취소 분리; 정상 답변/기억에 진단 문자열 추가 없음",
+    "source_refs": [
+      "S36",
+      "S44"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-25",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "boundedAllowedProjectionOnly",
+    "given": "unknown stage·raw expr·secret·원문을 meta에 주입",
+    "expected": "기존 allowlist 외 값 제거; raw expr 미출력; 최대 32단계; 범위 권한 먼저 검사",
+    "source_refs": [
+      "S12",
+      "S23"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-26",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "previewDoesNotMutateAdaptiveState",
+    "given": "미리보기에서 상태ful bandit/ArtPlate/Plan loader가 spy로 연결됨",
+    "expected": "decide/propose/observe·로드 cache/trace mutation·model 생성·write 호출 0",
+    "source_refs": [
+      "S09",
+      "S32"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-27",
+    "work_package": 4,
+    "test_class": "SettingsOutcomeProjectionTest",
+    "test_name": "sameRunOnlyNoGlobalTraceFallback",
+    "given": "다른 runId·삭제된 실행 또는 저장된 관측이 없는 실행 조회",
+    "expected": "기존 접근 계약 유지; 조회 요청의 ThreadLocal trace나 전역 로그로 대체하지 않음",
+    "source_refs": [
+      "S23",
+      "S35",
+      "S44"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-28",
+    "work_package": 5,
+    "test_class": "SettingsHarmonyUiTest",
+    "test_name": "registeredAndExecutedBadgesDiffer",
+    "given": "등록된 경로가 역할 조건 때문에 생략됨",
+    "expected": "등록됨/선택 가능/조건부 생략 구분; 기본값으로 처리한 척하지 않음",
+    "source_refs": [
+      "S02",
+      "S42"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-29",
+    "work_package": 5,
+    "test_class": "SettingsHarmonyUiTest",
+    "test_name": "unwiredControlCannotAutosave",
+    "given": "재시작 필요·소비 미확인 설정 카드를 클릭",
+    "expected": "읽기 전용 안내; 저장 호출 없음; localStorage에 동작 설정으로 저장하지 않음",
+    "source_refs": [
+      "S04",
+      "S10"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-30",
+    "work_package": 5,
+    "test_class": "SettingsHarmonyUiTest",
+    "test_name": "browserBridgeRemainsFourControls",
+    "given": "settings-routing.js와 bridge가 포함된 정적 페이지",
+    "expected": "bridge는 modelSelect/modelSelectionMode/searchModeSelect/useRagToggle만 반영; chat.js 수정 0",
+    "source_refs": [
+      "S41",
+      "S42"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-31",
+    "work_package": 5,
+    "test_class": "SettingsHarmonyUiTest",
+    "test_name": "adminGetSuccessDoesNotUnlock",
+    "given": "기존 settings GET은 200, 새 ADMIN POST read는 403",
+    "expected": "서버 역할 카드 잠금; 브라우저 기본값은 사용 가능",
+    "source_refs": [
+      "S43"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  },
+  {
+    "id": "V3-32",
+    "work_package": 5,
+    "test_class": "SettingsHarmonyUiTest",
+    "test_name": "reportActionsNeverStartWork",
+    "given": "기존 실행 보기·미리보기·내보내기 버튼 실행",
+    "expected": "새 chat run·sync·bootstrap·training·warmup 호출 0",
+    "source_refs": [
+      "S03",
+      "S20",
+      "S36",
+      "S44"
+    ],
+    "status": "NOT_RUN",
+    "execution_type": "mock_or_isolated_test_only"
+  }
+]

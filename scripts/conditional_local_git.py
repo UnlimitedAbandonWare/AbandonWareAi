@@ -15,15 +15,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-CANONICAL = Path(r"C:\AbandonWare\demo-1\demo-1\src")
+from awx_paths import resolve as _awx_resolve
+
+CANONICAL = _awx_resolve("repo.root")
 POLICY_REL = Path(".grok/rules/demo1-conditional-local-git.md")
 MAX_BLOB = 1_000_000
 MAX_COMMIT_PATHS = 40
 MAX_COMMIT_DELETIONS = 15
 INTENDED_REMOTE = "AbandonWareAi"
 INTENDED_REMOTE_URL = "https://github.com/UnlimitedAbandonWare/AbandonWareAi"
-DISCARDED_REMOTE_MARKERS = ("abandonware3",)
+ALLOWED_REMOTE_NAME = "origin"
 SCHEMA = "awx.conditional-local-git.v1"
+LOCK_MARKER_PREFIX = b"conditional-local-git:"  # commit_selected가 index.lock에 쓰는 소유 marker
+MARKER_LOCK_SETTLE_SECONDS = 1.0  # marker lock 회수 전 관찰 정착 창(진행 중 publish 노출용)
+DEFAULT_STALE_LOCK_DAYS = 0.25  # 6h: lock 서브커맨드와 오케스트레이터가 공유하는 TTL SSOT
 
 READ_ONLY = {"status", "diff", "rev-parse", "ls-files", "show", "log", "version", "help"}
 FORBIDDEN_CMDS = {
@@ -52,7 +57,7 @@ def emit(payload: dict, code: int) -> int:
 
 
 GIT_FALLBACKS = (
-    r"F:\git\cmd\git.exe",
+    str(_awx_resolve("git.exe")),
     r"C:\Program Files\Git\cmd\git.exe",
     r"C:\Program Files (x86)\Git\cmd\git.exe",
 )
@@ -194,6 +199,11 @@ def path_forbidden(path: str) -> bool:
     if name.endswith((".pem", ".key", ".pfx", ".p12", ".jks")):
         return True
     if "lmsdb" in name or lowered.startswith(".git/") or "/.git/" in f"/{lowered}":
+        return True
+    parts = lowered.split("/")
+    if "__pycache__" in parts:
+        return True
+    if name.endswith(".pyc") or (name.endswith(".class") and "build" in parts):
         return True
     return False
 
@@ -363,33 +373,30 @@ def worktree_counts(repo: Path) -> dict:
 def remote_status(repo: Path) -> dict:
     """Remote observation feeding the commit gate; emits flags only, never URLs.
 
-    Any remote (any name, fetch or push URL) carrying a discarded-upstream
-    marker sets `forbiddenRemote`; an `origin` that differs from the sole
-    intended remote sets `originMismatch`. Observation only — never mutates
-    config.
+    Sole-remote allowlist: the only permitted remote is `origin` pointing at
+    the intended upstream URL. Any other remote (any name, fetch or push)
+    sets `forbiddenRemote`; an `origin` whose fetch or push URL differs from
+    the sole intended remote sets `originMismatch`. Observation only —
+    never mutates config.
     """
     proc = git(repo, ["remote"])
     names = ([line.strip() for line in text(proc.stdout).splitlines() if line.strip()]
              if proc.returncode == 0 else [])
-    urls: list[str] = []
-    origin_url = ""
-    for name in names:
+    origin_urls: list[str] = []
+    if ALLOWED_REMOTE_NAME in names:
         for extra in ([], ["--push"]):
-            got = git(repo, ["remote", "get-url", *extra, name])
+            got = git(repo, ["remote", "get-url", *extra, ALLOWED_REMOTE_NAME])
             if got.returncode != 0:
                 continue
             url = text(got.stdout).rstrip("/").lower()
             if url.endswith(".git"):
                 url = url[:-4]
-            urls.append(url)
-            if name == "origin" and not extra:
-                origin_url = url
+            origin_urls.append(url)
     return {
         "intendedRemote": INTENDED_REMOTE,
-        "forbiddenRemote": any(
-            marker in url for url in urls for marker in DISCARDED_REMOTE_MARKERS
-        ),
-        "originMismatch": bool(origin_url) and origin_url != INTENDED_REMOTE_URL.lower(),
+        "forbiddenRemote": any(name != ALLOWED_REMOTE_NAME for name in names),
+        "originMismatch": bool(origin_urls) and any(
+            url != INTENDED_REMOTE_URL.lower() for url in origin_urls),
     }
 
 
@@ -470,7 +477,9 @@ def do_commit(repo: Path, message_file: Path, paths: list[str]) -> dict:
         return {"ok": False, "exit": 4, "reason": "index-changed-during-scan"}
     proc = git(repo, ["commit", "-F", str(message_file)])
     if proc.returncode != 0:
-        return {"ok": False, "exit": 2, "reason": "commit-failed", "gitExit": proc.returncode}
+        return {"ok": False, "exit": 2, "reason": "commit-failed",
+                "gitExit": proc.returncode,
+                "errorDetail": git_stderr_tail(proc.stderr)}
     head = git(repo, ["rev-parse", "HEAD"])
     remaining = inspect_index(repo, [])
     if remaining.get("stagedPaths"):
@@ -493,6 +502,23 @@ def do_commit(repo: Path, message_file: Path, paths: list[str]) -> dict:
         "originMismatch": first["originMismatch"],
     }
 
+
+
+def redact_snippet(data: bytes, limit: int = 300) -> str:
+    """짧은 진단 스니펫: 시크릿 패턴 치환 + 공백 압축 + 길이 상한."""
+    for _name, pattern in SECRET_PATTERNS:
+        data = pattern.sub(b"<redacted>", data)
+    return " ".join(data.decode("utf-8", errors="replace").split())[:limit]
+
+
+def index_sha256(directory: Path) -> str | None:
+    index = directory / "index"
+    return hashlib.sha256(index.read_bytes()).hexdigest() if index.exists() else None
+
+
+def git_stderr_tail(data: bytes, limit: int = 240) -> str:
+    """git stderr 꼬리 redact 스니펫(진단 필드용). 미기록 외부 편집이 참조하는 이름."""
+    return redact_snippet(data[-4096:] if data else b"", limit)
 
 
 def commit_selected(repo: Path, message_file: Path, paths: list[str]) -> dict:
@@ -552,7 +578,10 @@ def commit_selected(repo: Path, message_file: Path, paths: list[str]) -> dict:
         proc = subprocess.run([git_exe(), "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-C", str(repo), *args], input=data, env=env,
                               capture_output=True, timeout=120, check=False)
         if proc.returncode:
-            raise RuntimeError("selected-git-command-failed")
+            detail = git_stderr_tail(proc.stderr)
+            raise RuntimeError("selected-git-command-failed(exit="
+                               + str(proc.returncode) + ")"
+                               + (":" + detail if detail else ""))
         return proc.stdout
 
     def entries(index=None):
@@ -591,11 +620,26 @@ def commit_selected(repo: Path, message_file: Path, paths: list[str]) -> dict:
             scanned = subprocess.run([sys.executable, "-B", str(scanner), "--root", str(repo),
                                       "--expected-paths-file", str(expected)],
                                      env=scan_env, capture_output=True, timeout=120, check=False)
-            if scanned.returncode:
-                return fail("selected-staged-scan-failed", 2)
-            scan_result = json.loads(scanned.stdout)
-            if not scan_result.get("ok"):
-                return fail("selected-staged-scan-failed", 2)
+            try:
+                scan_result = json.loads(scanned.stdout)
+            except ValueError:
+                scan_result = None
+            if scanned.returncode or not (scan_result or {}).get("ok"):
+                # 불투명 실패 방지: reason/findings(경로는 sha256 해시만) + redact된 stderr 꼬리만 싣는다.
+                detail: dict = {}
+                if scanned.returncode:
+                    detail["scanExit"] = scanned.returncode
+                if isinstance(scan_result, dict):
+                    detail["scanReason"] = scan_result.get("reason") or "guard-findings"
+                    detail["scanFindings"] = scan_result.get("findings", [])[:20]
+                    if scan_result.get("changedCount") is not None:
+                        detail["scanChangedCount"] = scan_result.get("changedCount")
+                else:
+                    detail["scanReason"] = "scanner-output-unreadable"
+                hint = redact_snippet(scanned.stderr)
+                if hint:
+                    detail["scanStderr"] = hint
+                return fail("selected-staged-scan-failed", 2, **detail)
             candidate_tree = text(run(["write-tree"], candidate))
             selected = entries(candidate)
             if original is None:
@@ -649,7 +693,9 @@ def commit_selected(repo: Path, message_file: Path, paths: list[str]) -> dict:
     except FileExistsError:
         return fail("index-lock")
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
-        return fail("selected-commit-failed", commit=committed, errorType=type(error).__name__)
+        return fail("selected-commit-failed", commit=committed,
+                    errorType=type(error).__name__,
+                    errorDetail=redact_snippet(str(error).encode("utf-8", "replace")))
     finally:
         if acquired and lock.exists() and lock.read_bytes() == marker:
             lock.unlink()  # This invocation's lock only; never a stale/foreign lock.
@@ -709,8 +755,13 @@ def git_writers(repo: Path) -> int | None:
 
 
 def clear_stale_lock(repo: Path, days: float, backup_dir: Path) -> dict:
-    """Move a proven-stale 0-byte index.lock into backup_dir; preserve otherwise."""
-    import os  # noqa: F401  (kept for parity with sibling helpers)
+    """Move a proven-stale index.lock into backup_dir; preserve otherwise.
+
+    회수 가능한 형태는 두 가지: 나이가 `days`를 넘은 0-byte lock, 그리고
+    본 도구의 `conditional-local-git:` marker를 담은 nonempty lock(작성자가
+    commit 도중 죽은 자가고아)으로 writer=0 + index 해시 안정이 확인된 경우.
+    그 외 nonempty lock은 기존대로 preserved.
+    """
     import shutil
     import time
 
@@ -722,14 +773,21 @@ def clear_stale_lock(repo: Path, days: float, backup_dir: Path) -> dict:
     if directory is None:
         return {"ok": False, "exit": 3, "action": "preserved", "reason": "not-a-git-repo"}
     lock = directory / "index.lock"
-    index = directory / "index"
     if not lock.exists():
         return {"ok": True, "exit": 0, "action": "absent", "reason": "no-lock"}
     stat = lock.stat()
+    marker = False
     if stat.st_size != 0:
-        return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-nonempty"}
+        try:
+            with lock.open("rb") as handle:
+                head = handle.read(64)
+        except OSError:
+            return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-unreadable"}
+        if not head.startswith(LOCK_MARKER_PREFIX):
+            return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-nonempty"}
+        marker = True
     age_seconds = time.time() - stat.st_mtime
-    if age_seconds < days * 86400:
+    if not marker and age_seconds < days * 86400:
         return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-fresh",
                 "ageSeconds": int(age_seconds)}
     writers = git_writers(repo)
@@ -738,13 +796,19 @@ def clear_stale_lock(repo: Path, days: float, backup_dir: Path) -> dict:
     if writers:
         return {"ok": False, "exit": 4, "action": "preserved", "reason": "git-writer-active",
                 "writers": writers}
-    index_before = hashlib.sha256(index.read_bytes()).hexdigest() if index.exists() else None
+    index_before = index_sha256(directory)
+    if marker:
+        # 진행 중인 selected-commit은 이 lock으로 index를 republish한다.
+        # 정착 창 동안 index/lock 변화가 보이면 살아있는 writer로 간주해 보존.
+        time.sleep(MARKER_LOCK_SETTLE_SECONDS)
     try:
         again = lock.stat()
     except OSError:
         return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-vanished"}
-    if again.st_size != 0 or again.st_mtime != stat.st_mtime:
+    if again.st_size != stat.st_size or again.st_mtime != stat.st_mtime:
         return {"ok": False, "exit": 4, "action": "preserved", "reason": "lock-changed"}
+    if index_sha256(directory) != index_before:
+        return {"ok": False, "exit": 4, "action": "preserved", "reason": "index-changed"}
     stamp = time.strftime("%Y%m%d", time.gmtime())
     backup_dir.mkdir(parents=True, exist_ok=True)
     dest = backup_dir / f"index.lock.bak-{stamp}"
@@ -754,8 +818,9 @@ def clear_stale_lock(repo: Path, days: float, backup_dir: Path) -> dict:
         shutil.move(str(lock), str(dest))
     except OSError:
         return {"ok": False, "exit": 3, "action": "preserved", "reason": "move-failed"}
-    index_after = hashlib.sha256(index.read_bytes()).hexdigest() if index.exists() else None
-    return {"ok": True, "exit": 0, "action": "moved", "reason": "stale-lock-archived",
+    index_after = index_sha256(directory)
+    return {"ok": True, "exit": 0, "action": "moved",
+            "reason": "self-orphaned-marker-lock-archived" if marker else "stale-lock-archived",
             "backup": str(dest), "indexUnchanged": index_before == index_after}
 
 
@@ -778,7 +843,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="explicit exact-match staged-set contract (the default mode)")
     lock = sub.add_parser("lock")
     lock.add_argument("--repo", required=True)
-    lock.add_argument("--days", type=float, default=1.0)
+    lock.add_argument("--days", type=float, default=DEFAULT_STALE_LOCK_DAYS)
     lock.add_argument("--backup-dir", default=None)
     return parser
 

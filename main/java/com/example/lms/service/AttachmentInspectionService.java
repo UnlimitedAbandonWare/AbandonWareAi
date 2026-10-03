@@ -157,7 +157,10 @@ public class AttachmentInspectionService {
         out.put("size", file.getSize());
         out.put("contentType", contentType);
         out.put("type", type);
-        out.put("sha256", SafeRedactor.hash12(name + ":" + file.getSize() + ":" + contentType));
+        out.put("schemaVersion", "attachment-inspect.v2");
+        out.put("sha256", bytes == null || bytes.length == 0 ? null
+                : org.apache.commons.codec.digest.DigestUtils.sha256Hex(bytes));
+        out.put("legacyMetadataFingerprint", SafeRedactor.hash12(name + ":" + file.getSize() + ":" + contentType));
         if (!image.isEmpty()) {
             out.putAll(image);
         }

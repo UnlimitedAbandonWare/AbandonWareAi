@@ -6,15 +6,21 @@
 #
 # match: substring patterns (case-insensitive). Prefix a pattern with `re:` for regex.
 # score = count of matched patterns; highest score wins; ties keep file order.
+# soft: low-precision paraphrase cues scored ONLY when every `match` misses —
+#   a soft hit picks one intent before the `fallback:` block is used.
 # forbid_families: suppressed unless the user text matches a family `unlock` pattern.
 # explicit: true on an intent = it only wins when the user names that gated flow,
 # and any scored explicit intent outranks generic intents (score 무관).
+# family `veto: hard` (default) drops the family's skills from the result;
+# `veto: soft` keeps them and reports `veto_relaxed` — advisory-only skills may
+# stay routed; destructive pipelines (macsrc-patchdrop) stay hard.
 
 schemaVersion: 1
 
 # Suppressed by default on every intent (Grok audit: entry sprawl + ceremony).
 families:
   counter-evidence:
+    veto: soft
     note: falsifiable→retrieve→triangulate→verify→minority chain; only on explicit ask
     unlock:
       - counter-evidence
@@ -30,6 +36,7 @@ families:
       - demo1-verifying-evidence-coherence
       - demo1-forecasting-minority-signals
   macsrc-patchdrop:
+    veto: hard
     note: MacSrc/PatchDrop/SMB intake→guard→postprocess maze; only when user names it
     unlock:
       - patchdrop
@@ -50,6 +57,7 @@ families:
       - desktop-smb-ack
       - notebook-smb-handoff
   triad:
+    veto: soft
     note: positive/negative/neutral deliberation; only on explicit 심의/cross-check ask
     unlock:
       - triad
@@ -68,6 +76,26 @@ default_forbid_families:
   - macsrc-patchdrop
   - triad
 
+# Skills intentionally NOT routed by intent patterns: deprecated `redirect:`
+# aliases (resolved through their target) and explicit-call-only helpers whose
+# own description gates them (PROTO-LIGHT / "ONLY when the user explicitly
+# asks"). Listed here so coverage audits do not count them as index gaps.
+direct_call_only:
+  - source-inspection            # redirect alias -> demo1-project-root
+  - start-rag-reload             # redirect alias -> demo1-dev-reload
+  - force-restart-meta-display   # explicit user ask only
+  - compile-verify-smoke         # explicit user ask only
+  - demo1-docker-autograder      # PROTO-LIGHT: default skip unless named
+  - demo1-macsrc-defect-intake   # PROTO-LIGHT + family member
+  - demo1-macsrc-guarded-patch-session  # PROTO-LIGHT + family member
+  - demo1-macsrc-patch-postprocessor    # PROTO-LIGHT + family member
+  - demo1-macsrc-smb-direct-patch       # PROTO-LIGHT + family member
+  - demo1-patchdrop-manual-default      # PROTO-LIGHT + family member
+  - macmini-safe-patch-assistant        # PROTO-LIGHT + family member
+  - patchdrop-safe-patch-orchestrator   # family member + explicit intent
+  - desktop-smb-ack              # PROTO-LIGHT + family member
+  - notebook-smb-handoff         # PROTO-LIGHT + family member
+
 intents:
   # --- explicit-ask intents first: `explicit: true` makes a scored one win over
   #     generic intents like source-write even at lower raw score ---
@@ -85,6 +113,23 @@ intents:
     optional_skill: null
     forbid_families: []
     notes: 사용자가 PatchDrop/SMB/MacSrc를 명시한 경우에만 도달(가족 unlock과 같은 키워드)
+
+  - intent: codex-selfask-triad
+    explicit: true
+    match:
+      - codex-selfask-triad
+      - selfask triad
+      - self-ask triad
+      - codex selfask
+      - selfask_definer
+      - selfask_aliaser
+      - selfask_challenger
+      - 3축 서브에이전트
+      - 하위 에이전트 3축
+    primary_skill: demo1-codex-selfask-triad
+    optional_skill: demo1-vibe-selfask-judge-auto
+    forbid_families: []
+    notes: Codex 하위 에이전트 UAW 3축(정의/별칭/반례) 자동 부착 절차; 판정은 agent_vibe_auto_decision 규칙 미러
 
   - intent: triad-review
     explicit: true
@@ -129,6 +174,126 @@ intents:
     forbid_families: []
     notes: 작업 타입별 플러그인 허용 매트릭스 SSOT; 장문 플러그인 페이스트 대체, 전부 켜기 금지
 
+  - intent: codex-tool-router
+    explicit: true
+    match:
+      - codex 핫픽스 도구
+      - 핫픽스 도구
+      - hotfix toolkit
+      - hotfix r2
+      - hotfix-r2
+      - codex tool router
+      - 칼집
+      - baseline_sync_probe
+      - zip_path_to_sourceset
+      - gradle_truth_gate
+      - web_repro_matrix
+      - log_redact
+    primary_skill: demo1-codex-tool-router
+    optional_skill: demo1-codex-plugin-roles
+    forbid_families: []
+    notes: R2/Jev 핫픽스 감사 시 단계별 판정 도구 한 자루 선택; 명령 인덱스는 docs/codex/HOTFIX_R2_TOOLKIT.md
+
+  - intent: glm-route-guard
+    explicit: true
+    match:
+      - glm_worker
+      - glm-offload
+      - glm_agent
+      - glm route
+      - glm-route-guard
+      - glm 보조
+      - glm 반박
+      - glm 검토
+      - glm 위임
+      - glm offload
+    primary_skill: demo1-glm-route-guard
+    optional_skill: null
+    forbid_families: []
+    notes: GLM 보조 진입 게이트; native glm_worker = ChatGPT 로그인 400, glm_route_preflight.py → glm_agent MCP 또는 SESSION_UNAVAILABLE
+
+  - intent: agy-directive-writer
+    explicit: true
+    match:
+      - PASTE_
+      - 데빈한테 지시서
+      - 코덱스한테 지시서
+      - 그록한테 지시서
+      - 클린한테 지시서
+      - directive writer
+      - directive write
+      - re:지시서\s*만(?=\s|$)
+      - re:지시서(?:만|를)?\s*(?:써\s*(?:주|줘)|작성)
+      - re:(?:codex|코덱스).*(?:devin|데빈).*(?:겹치지|분담|나눌|나눠)
+      - re:(?:겹치지|분담|나눌|나눠).*지시서
+    primary_skill: demo1-agy-directive-writer
+    optional_skill: demo1-devin-directive-loop
+    forbid_families: []
+    notes: 사용자/GPT Pro 출력을 검증하여 Korean paste-ready 지시서(PASTE_*.txt)를 Downloads에 작성; 한국어 직접 지시 우선 매칭(U-2a)
+
+  - intent: grokbot-role
+    explicit: true
+    match:
+      - grokbot
+      - grok bot
+      - 그록봇
+      - 그록 봇
+      - unlimitedabandon
+      - 코덱스 비서
+      - 지시서 써
+      - 끝난거야
+      - 끝난 거야
+      - 더 할거
+      - 더 할 거
+      - 이대로 내도
+      - 이대로내도
+      - 뭔 상황이냐
+      - 내가 나서야
+      - 멈췄는데
+      - top10
+      - top 10
+      - 톱10
+    primary_skill: demo1-grokbot-role
+    optional_skill: demo1-agy-grokbot-mode
+    forbid_families: []
+    notes: Codex 비서(점/dot)·Codex 채팅에 Grok Bot 대타 역할 부여 — 지시서 작성·보고서 판정·Top10; agy 세션은 형제 demo1-agy-grokbot-mode가 같은 팩을 씀(내용 복제 금지)
+
+  - intent: uaw-vibe-longrun
+    match:
+      - uaw
+      - 장기바이브
+      - 장기 바이브
+      - 오토바이브
+      - 오토 바이브
+      - 장기 오토
+      - longrun
+      - long-run
+      - multi-hour
+      - autonomous vibe
+      - 장기 자율
+      - 자율 바이브
+    primary_skill: demo1-uaw-vibe-longrun
+    optional_skill: demo1-autonomous-patch-conductor
+    forbid_families: []
+    notes: 수 시간~장기 자동 바이브 + UAW/감사 첨부 혼합; 위임형 메타 루프 — 스킬 복제·@폭주 금지, phase당 delegate 1개
+
+  - intent: uaw-harmony-foundation
+    match:
+      - uaw harmony
+      - uaw-harmony
+      - harmony foundation
+      - 조화 밑밥
+      - 조화 아티팩트
+      - uaw 밑밥
+      - spine matrix
+      - 스파인 매트릭스
+      - spine probe
+      - uaw_spine_probe
+    primary_skill: demo1-uaw-harmony-foundation
+    optional_skill: demo1-ablation-harmony-tracker
+    forbid_families: []
+    notes: UAW 큰 그림 조화 밑밥 — spine probe+매트릭스+셋업 순서 docs/diagnostics/uaw-harmony-foundation-0928; 제품 패치는 Codex 소유, 읽기 전용 관측만
+
   - intent: goal-switch
     match:
       - goal switch
@@ -139,10 +304,46 @@ intents:
       - objective rotation
       - superseded journal
       - reject-complete
+    soft:
+      - 완료 거부
+      - 완료 인정
+      - 완료 보고
+      - completion claim
+      - reject complete
     primary_skill: demo1-goal-switch-barrier
     optional_skill: demo1-work-ledger
     forbid_families: []
     notes: 목표 회전/재라우팅 시 소유 journal close+lease 해제+재resolve 게이트; 완료 오인 차단 reject-complete 포함
+
+  - intent: codex-goal-intake
+    match:
+      - goal-objective
+      - goal objective
+      - goal intake
+      - 목표 파일 읽기
+      - 목표 파일
+      - 읽고 씹기
+    primary_skill: demo1-codex-goal-intake-continue
+    optional_skill: demo1-goal-complete-stop
+    forbid_families: []
+    notes: goal-objective/첨부 PASTE 읽기는 intake — 구현·검증 증거 없는 Done 차단; 등록 목표 제목은 구현 결과
+
+  - intent: vibe-selfask-judge-auto
+    match:
+      - selfask
+      - self-ask judge
+      - selfask-judge
+      - 승인 퀴즈
+      - approval quiz
+      - 퀴즈 줄
+      - ask_once
+      - judge auto
+      - 자동 판정
+      - self-ask auto
+    primary_skill: demo1-vibe-selfask-judge-auto
+    optional_skill: null
+    forbid_families: []
+    notes: 사용자 ASK 전 POSITIVE/NEGATIVE/COUNTEREXAMPLE + NEUTRAL JUDGE → AUTO|ASK_ONCE|HOLD; journal SELFASK_JUDGE 1행; hard constraint 약화 금지
 
   - intent: meta-display
     match:
@@ -193,6 +394,47 @@ intents:
     forbid_families: []
     notes: 라이브 H2 직접 JDBC 금지; snapshot/live SELECT-only export 경로
 
+  - intent: db-agent-cli
+    match:
+      - db_agent
+      - db-agent
+      - db agent
+      - local admin
+      - create-local-admin
+      - upsert-admin
+      - verify-admin
+      - lockprobe
+      - lock probe
+      - db query
+      - db 쿼리
+      - admin 계정
+      - db 상태
+      - db lock
+      - db 락
+    primary_skill: demo1-db-agent-cli
+    optional_skill: null
+    forbid_families: []
+    notes: 로컬 lmsdb file-H2 읽기/관리 단일 진입 SSOT(scripts/db_agent.py); lock=exit3은 kill 아님; export/snapshot 문맥은 db-export intent가 먼저 매칭
+
+  - intent: work-lease
+    match:
+      - scope lease
+      - scope-lease
+      - agent_scope_lease
+      - port lease
+      - port-lease
+      - agent_port_lease
+      - lease conflict
+      - lease_conflict
+      - work scope claim
+      - 작업 리스
+      - 범위 리스
+      - 포트 리스
+    primary_skill: agent-scope-lease
+    optional_skill: demo1-agent-port-lease
+    forbid_families: []
+    notes: 소스/범위 리스·동적 포트 리스 진입(py가 SSOT, ps1은 thin proxy); 'release request'/change-plane 문맥은 change-plane intent 유지
+
   - intent: nova-focus
     match:
       - 노바
@@ -241,8 +483,11 @@ intents:
     notes: allowlist+WhatIf 기본 클리너; lease 강제 해제·handoff 대량 삭제는 범위 밖
 
   - intent: handoff-reply
+    explicit: true
     match:
       - devin report
+      - re:(?:devin|데빈).*보고서
+      - re:(?:보고서|완료\s*주장|증거).*(?:검토|리뷰)
       - 보고서 답변
       - 어떻게 답
       - reply directive
@@ -255,7 +500,7 @@ intents:
     primary_skill: demo1-devin-directive-loop
     optional_skill: null
     forbid_families: []
-    notes: 외부 에이전트 보고서 답변/지시서 초안; DRAFT·REVIEW·CLOSE 한 번 분류
+    notes: 외부 에이전트 보고서 답변/지시서 초안; DRAFT·REVIEW·CLOSE 한 번 분류. 보고서 문맥 지시서는 agy-directive-writer보다 우선(explicit+다중 히트)
 
   - intent: multi-seam-brief
     match:
@@ -269,6 +514,61 @@ intents:
     optional_skill: null
     forbid_families: []
     notes: 독립 seam이 섞인 붙여넣기 브리프 → devin_task_orchestrate.py plan이 phase 시퀀싱
+
+  - intent: f01b-narrow-jdbc-assist
+    match:
+      - f01b
+      - f01-b
+      - narrow jdbc
+      - understanding_summary_v1
+      - schema gate probe
+      - f01b_schema_gate_probe
+      - awx_jobs
+    primary_skill: demo1-f01b-narrow-jdbc-assist
+    optional_skill: demo1-db-agent-cli
+    forbid_families: []
+    notes: Codex F01-B 계약 지원 레일(GATE-0 프로브/증거 패킷/핸드오프); 제품 enablement·DDL 적용은 Codex/ops 몫, TRACE와 병합 금지
+
+  - intent: trace-dock-assist
+    match:
+      - trace dock
+      - trace-dock
+      - always-on dock
+      - always on trace
+      - 트레이스 독
+      - 상시 트레이스
+    primary_skill: demo1-trace-dock-assist
+    optional_skill: mgain-debug-trace-restore
+    forbid_families: []
+    notes: Codex always-on dual trace dock 지원(cost/a11y 가드레일); 제품 UI는 Codex, mgain per-answer·F01B와 병합 금지
+
+  - intent: codex-oauth-route-assist
+    match:
+      - oauth route assist
+      - oauth complex route
+      - terminal metadata assist
+      - codex_r5_verify
+      - codex_anchor_map
+      - chatgpt-oauth assist
+    primary_skill: demo1-codex-oauth-route-assist
+    optional_skill: null
+    forbid_families: []
+    notes: Codex OAuth complex-route assist rail. Product Java stays Codex-owned. Tool PASS is not application completion.
+
+  - intent: api-first-routing-assist
+    match:
+      - api first routing
+      - api-first routing
+      - API 우선 라우팅
+      - 모델명 추측
+      - model name guess
+      - Ollama 무대기
+      - api_first_order_preview
+    primary_skill: demo1-api-first-routing-assist
+    optional_skill: demo1-api-routing-inventory
+    forbid_families: []
+    notes: Codex Plan9 API-first assist. Tool PASS is not app completion. Provider from config or catalog. Cap 25. 401/403/429 stops. OAuth stays manual.
+
 
   - intent: change-plane
     match:
@@ -314,6 +614,8 @@ intents:
       - implement
       - 구현
       - 바꿔
+      - 작업대장
+      - re:ledger.*(?:반영|기록|update)
     primary_skill: demo1-work-ledger
     optional_skill: null
     forbid_families: []
@@ -328,6 +630,13 @@ intents:
       - promptbuilder
       - graphrag
       - search pipeline
+    soft:
+      - 전처리
+      - preprocess
+      - 인용 게이트
+      - citation gate
+      - evidence gate
+      - 근거 게이트
     primary_skill: demo1-rag-platform
     optional_skill: demo1-rag-strategy-orchestration
     forbid_families: []
@@ -379,6 +688,8 @@ intents:
       - 에러
       - error
       - not working
+      - 타임아웃
+      - timeout
     primary_skill: demo1-evidence-debugging
     optional_skill: null
     forbid_families: []
@@ -399,8 +710,654 @@ intents:
     forbid_families: []
     notes: 닫힌 지시서/targets만 WhatIf→Apply archive; safe-cleanup·completed-directive-cleanup 대체 금지
 
-# Fallback when no intent scores: proceed without a skill. Do not force one.
+  - intent: agent-machine-context
+    match:
+      - agent machine context
+      - agent_machine_context
+      - agent-machinecontext
+      - machine context
+      - 머신 컨텍스트
+      - 환경변수
+      - 설치경로
+      - 설치 경로
+      - 머신 정보
+      - db status
+    primary_skill: demo1-agent-machine-context
+    optional_skill: demo1-db-agent-cli
+    forbid_families: []
+    notes: 원샷 머신 컨텍스트 JSON 진입 (scripts/agent_machine_context.py); env는 이름만·값 금지, DB 쓰기는 db-agent-cli 위임
+
+  - intent: agy-cli-entry
+    match:
+      - agy cli
+      - antigravity cli
+      - antigravity-cli
+      - agy entry
+      - agy 진입
+      - agy skill
+      - agy 스킬
+      - agy 작업
+      - agy 도구
+      - start-agy
+    primary_skill: demo1-agy-cli-entry
+    optional_skill: null
+    forbid_families: []
+    notes: Antigravity CLI(agy) 자체의 demo-1 진입 절차·tools/agents 키트·비용 규칙 전용; 제품 소스 의도에는 라우팅하지 않음
+
+  - {intent: p6-r2-debug-kit, explicit: true, match: [p6-r2-debug-kit, p6r2dbg, codex r2 debug], primary_skill: demo1-p6-r2-debug-kit, optional_skill: null, forbid_families: [], notes: "R2 지원 킷 진입(증상→도구→출력표); 상세 명령은 data/agent-handoff/devin-p6-r2/FOR_CODEX_R2.md"}
+
+  # --- high-traffic coverage additions (2026-10-02 skill-upgrade pass) -------
+  # Appended last: generic intents keep losing ties to the established intents
+  # above; each entry earns its golden ask by distinct phrase patterns.
+  - intent: goal-complete
+    match:
+      - 다 끝났
+      - 다 끝난
+      - 끝난거야
+      - 끝난 거야
+      - 더 할 거
+      - 더 할거
+      - all done
+      - 완료됐는지
+      - goal complete
+      - 목표 완료
+    primary_skill: demo1-goal-complete-stop
+    optional_skill: demo1-completed-directive-cleanup
+    forbid_families: []
+    notes: 완료 판정+종료 게이트; 검증된 작업의 클린업 훅과 쌍
+
+  - intent: directive-cleanup
+    explicit: true
+    match:
+      - 완료된 지시서
+      - 지시서들
+      - 끝난 지시서
+      - 자동으로 정리하고
+      - 지시서 클린업
+      - 지시서 삭제
+      - directive cleanup
+      - completed directive
+      - task cleanup
+      - task-cleanup
+      - cleanup_completed
+      - 완료 청소
+    primary_skill: demo1-completed-directive-cleanup
+    optional_skill: demo1-goal-complete-stop
+    forbid_families: []
+    notes: 검증 완료 지시서/리포트의 자동 종료+정리 훅; "지시서 정리"(agent-prompts 아카이브)는 ops-surface-thin 소유로 둠
+
+  - intent: desktop-goal-intake
+    explicit: true
+    match:
+      - desktop canonical
+      - 데스크탑 canonical
+      - 데스크톱 canonical
+      - canonical directive
+      - canonical intake
+      - directive intake
+      - sourcedirective
+      - source directive
+      - 정식 지시서
+      - 데스크탑 지시서
+      - 데스크톱 지시서
+    primary_skill: demo1-desktop-canonical-goal-intake
+    optional_skill: null
+    forbid_families: []
+    notes: Desktop canonical 정식 SourceDirective 수신 시 intake 절차
+
+  - intent: vibe-git-commit
+    match:
+      - 커밋해
+      - 커밋 해
+      - git 커밋
+      - 로컬 커밋
+      - local commit
+      - git 정리
+      - commit tidy
+      - 커밋 정리
+      - git status
+      - git 상태
+      - 스테이징
+    primary_skill: demo1-git-vibe-workflow
+    optional_skill: demo1-conditional-local-git
+    forbid_families: []
+    notes: "'커밋해'/'git 정리' 바이브 Git — 소유 경로만+스캔+로컬 커밋 1회; 정책 SSOT는 conditional-local-git optional"
+
+  - intent: conditional-git-policy
+    match:
+      - 커밋 규칙
+      - 로컬 커밋 규칙
+      - 커밋 정책
+      - 커밋 가능
+      - 정책상
+      - conditional local git
+      - git 허용 범위
+      - conditional-local-git
+    primary_skill: demo1-conditional-local-git
+    optional_skill: demo1-git-vibe-workflow
+    forbid_families: []
+    notes: 로컬 Git allow/forbid 정책 자체를 묻는 ask; 실행 ask는 vibe-git-commit
+
+  - intent: git-auto-continue
+    match:
+      - git 이어서
+      - 커밋 이어서
+      - 이어서 커밋
+      - 작업 이어서
+      - 이어서 진행
+      - auto-continue
+      - 자동 이어
+      - git auto
+      - vibe git 계속
+    primary_skill: demo1-vibe-git-auto-continue
+    optional_skill: demo1-git-vibe-workflow
+    forbid_families: []
+    notes: vibe Git/lease 소프트 브랜치 auto-continue
+
+  - intent: git-doctor
+    match:
+      - index.lock
+      - git lock
+      - git 막혔
+      - git blocked
+      - 깃 잠김
+      - git doctor
+      - git remote
+      - remote access
+      - remote 접근 안
+      - 인덱스가 꼬
+      - 인덱스 꼬
+      - git 작업 불가
+    primary_skill: demo1-git-doctor
+    optional_skill: null
+    forbid_families: []
+    notes: index.lock/외부 스테이징/remote 오류 등 Git workflow 차단 진단(비파괴)
+
+  - intent: git-secret-guard
+    match:
+      - secret scan
+      - 시크릿 스캔
+      - 비밀값 스캔
+      - git secret
+      - 커밋 전 스캔
+      - secret guard
+      - 시크릿 검사
+      - staged blob scan
+    primary_skill: demo1-git-secret-guard
+    optional_skill: null
+    forbid_families: []
+    notes: 커밋/발행 전 staged-blob·tree·history 시크릿 스캔
+
+  - intent: rtx3090-health
+    match:
+      - 3090 팬
+      - 팬소음
+      - fan noise
+      - gpu 소음
+      - 드라이버 리셋
+      - driver reset
+      - health watch
+      - 그래픽카드 팬
+      - 3090 소리
+      - gpu 온도 이상
+    primary_skill: demo1-rtx3090-health-watch
+    optional_skill: null
+    forbid_families: []
+    notes: RTX3090 팬소음/드라이버 리셋/워치 알럿 — latest·alert JSON 읽고 가설 보고
+
+  - intent: gpu-power-fallback
+    match:
+      - api 폴백
+      - api로 폴백
+      - 폴백
+      - 폴백 정책
+      - gpu fallback
+      - power fallback
+      - 전원 이슈
+      - 3090 전원
+      - 로컬 실패 폴백
+      - gpu 죽으면
+      - 로컬 gpu 실패
+    primary_skill: demo1-gpu-power-fallback
+    optional_skill: demo1-local-llm-gpu-gateway
+    forbid_families: []
+    notes: 로컬 GPU 우선+분류된 로컬 실패 시 재시도<=1 후 api-routing 순서 폴백
+
+  - intent: project-root
+    match:
+      - project root
+      - 프로젝트 루트
+      - cwd 리셋
+      - cwd reset
+      - 'c:\users\nninn'
+      - 'users\nninn'
+      - 경로가 잘못
+      - 작업 경로
+      - 루트 잡아
+      - 루트 경로
+      - 프로젝트 경로
+    primary_skill: demo1-project-root
+    optional_skill: null
+    forbid_families: []
+    notes: cwd가 C:\Users\nninn 등으로 리셋된 경우 포함; devin_cwd_doctor.ps1 안내는 스킬 본문
+
+  - intent: chat-session-debug
+    match:
+      - 왜 이 모델
+      - 왜 이 경고
+      - chat session debug
+      - 채팅 세션 디버그
+      - session trace
+      - 세션 트레이스
+      - chat-session-trace
+      - chat_session_debug
+    primary_skill: demo1-chat-session-debug
+    optional_skill: null
+    forbid_families: []
+    notes: var/debug/chat-session-traces 읽고 export 경로 공유
+
+  - intent: artifact-trace
+    match:
+      - 작업 흔적
+      - 인벤토리 정리
+      - artifact trace
+      - handoff 흔적
+      - agent-handoff
+      - handoff 아래
+      - 아티팩트
+      - trace 정리
+      - 핸드오프 정리
+      - trace curator
+      - 흔적 큐레이션
+    primary_skill: demo1-artifact-trace-curator
+    optional_skill: null
+    forbid_families: []
+    notes: data/agent-handoff 잔여 흔적의 bounded 인벤토리/큐레이션
+
+  - intent: session-watchdog
+    match:
+      - session watchdog
+      - 세션 감시
+      - 에이전트 세션
+      - agent session
+      - 세션 건강
+      - 세션 죽었
+      - watchdog
+      - 세션 스캔
+    primary_skill: agent-session-watchdog
+    optional_skill: null
+    forbid_families: []
+    notes: 에이전트 세션 저장소의 검증된 실패 패턴 스캔+bounded 진단
+
+  - intent: build-error-miner
+    match:
+      - build log
+      - 빌드 로그
+      - build error
+      - 빌드 에러
+      - 에러 패턴
+      - 로그 분류
+      - error pattern
+      - 컴파일 에러 분류
+      - 빌드 실패 분류
+      - boot log
+      - error miner
+    primary_skill: build-error-miner
+    optional_skill: null
+    forbid_families: []
+    notes: MCP 타워 경유 빌드/부트 로그 분류
+
+  - intent: nextjs-bff
+    match:
+      - nextjs
+      - next.js
+      - next js
+      - bff
+      - app router
+      - 프론트엔드 bff
+    primary_skill: nextjs-rag-bff
+    optional_skill: null
+    forbid_families: []
+    notes: Dynamic RAG용 Next.js App Router 프론트/BFF 설계·구현
+
+  - intent: rag-resilience
+    match:
+      - resilience
+      - 복원력
+      - failure learning
+      - 실패 학습
+      - 장애 학습
+      - resilience observability
+      - 관측성
+    primary_skill: demo1-rag-resilience-observability
+    optional_skill: demo1-rag-platform
+    forbid_families: []
+    notes: 실패 학습/복원력/관측성 작업
+
+  - intent: api-spec-drift
+    match:
+      - spec drift
+      - 스펙 드리프트
+      - 문서 불일치
+      - docs disagree
+      - api 명세 차이
+      - 명세 어긋
+      - spec guard
+    primary_skill: demo1-api-spec-drift-guard
+    optional_skill: demo1-mutable-spec-policy
+    forbid_families: []
+    notes: docs/skills vs live vendor API·Ollama 인벤토리 불일치 점검
+
+  - intent: subsystem-patch
+    match:
+      - overdrive
+      - cfvm
+      - extremez
+      - extreme-z
+      - 서브시스템 패치
+      - subsystem patch
+    primary_skill: demo1-subsystem-patch-directive
+    optional_skill: null
+    forbid_families: []
+    notes: Overdrive/CFVM/MoE/ExtremeZ 서브시스템 변경 지시
+
+  - intent: toolchain-auto
+    match:
+      - toolchain
+      - 툴체인
+      - 빌드 도구 선택
+      - which toolchain
+      - 도구 자동 선택
+      - tool auto select
+      - 어떤 툴체인
+    primary_skill: demo1-toolchain-auto-select
+    optional_skill: null
+    forbid_families: []
+    notes: 기존 툴체인 감지 후 빌드/테스트 진입 선택
+
+  - intent: vibe-max-agency
+    match:
+      - vibe max
+      - 바이브 맥스
+      - maximum agency
+      - max agency
+      - 최대 자율
+      - 풀 자율
+      - four-agent
+      - 4개 에이전트
+      - 4 에이전트
+    primary_skill: demo1-vibe-max-agency
+    optional_skill: null
+    forbid_families: []
+    notes: Devin/Grok/Codex/Cline 동일 root·evidence·restart 계약 최대 자율 운영
+
+  - intent: meta-display-verify
+    match:
+      - 메타 디스플레이 검증
+      - display verify
+      - meta display verification
+      - sync 검증
+      - 싱크 검증
+      - sync simulator
+      - simulator evidence
+      - 시뮬레이터 증거
+      - 시뮬레이터
+      - 디스플레이 서버 시작
+      - meta display 서버
+      - display 서버 켜
+    primary_skill: demo1-meta-display-verification
+    optional_skill: null
+    forbid_families: []
+    notes: Meta Display 서버 기동/sync/Simulator 증거 검증 전용
+
+  - intent: mutable-spec
+    match:
+      - mutable spec
+      - spec value
+      - 스펙 값
+      - 사양 다시
+      - ssot 다시
+      - spec policy
+      - spec 재확인
+      - 값 바뀌었
+      - 모델 바뀐
+      - 스펙 정책
+    primary_skill: demo1-mutable-spec-policy
+    optional_skill: null
+    forbid_families: []
+    notes: 모델/포트/타이밍 등 스펙 값은 SSOT 재독 — 상수 취급 금지
+
+  - intent: three-way-preflight
+    match:
+      - three-way
+      - 3-way
+      - 3way preflight
+      - 쓰리웨이
+      - 프리플라이트
+      - source edit preflight
+      - 3자 비교
+    primary_skill: demo1-source-edit-three-way-preflight
+    optional_skill: null
+    forbid_families: []
+    notes: 소스 쓰기 전 three-way preflight 게이트
+
+  - intent: coop-verification
+    match:
+      - edit_batch
+      - edit batch
+      - deferred verification
+      - deferred-verification
+      - 중간 빌드
+      - mid-edit build
+      - 검증 티켓
+      - verification ticket
+      - cooperative verification
+      - 빌드 미뤄
+      - 빌드 유예
+    primary_skill: awx-cooperative-verification
+    optional_skill: null
+    forbid_families: []
+    notes: 공유 worktree 편집 중 중간 빌드 억제 — writer edit_batch 마커+지연 검증 티켓
+
+  - intent: api-spend-guard
+    match:
+      - api 비용
+      - api cost
+      - spend guard
+      - 과금
+      - 크레딧
+      - credit burn
+      - 유료 api
+      - paid api
+      - 비용 가드
+      - 토큰 비용
+      - api spend
+      - 비용 나가
+      - api spend guard
+    primary_skill: demo1-agent-api-spend-guard
+    optional_skill: null
+    forbid_families: []
+    notes: API 크레딧/과금 번 방지 가드; 라우팅 변경 자체는 llm-provider intent
+
+  - intent: lease-conflict
+    match:
+      - 리스 충돌
+      - 리스 막혀
+      - 리스 블록
+      - lease blocked
+      - lease가 잡혀
+      - 리스 잡혀있
+      - 세션 리스
+    primary_skill: demo1-lease-conflict-autoflow
+    optional_skill: agent-scope-lease
+    forbid_families: []
+    notes: 충돌 분류 live/stale/orphan → stale 회수+진행+release 요청 1회
+
+  - intent: scoped-blocker
+    match:
+      - hold 반복
+      - 홀드 반복
+      - no_progress
+      - no progress
+      - 진행이 막혀
+      - 계속 막혀
+      - 막혀 반복
+      - 반복 차단
+      - 같은 에러 반복
+      - blocker recovery
+      - scoped blocker
+      - 막힌 작업 복구
+    primary_skill: scoped-blocker-recovery
+    optional_skill: null
+    forbid_families: []
+    notes: 반복 HOLD/no_progress/partial block의 범위 한정 복구
+
+  - intent: skill-router-self
+    match:
+      - 스킬 라우터
+      - skill router
+      - 어떤 스킬
+      - 스킬 골라
+      - 스킬 라우팅
+      - intent index
+      - 스킬 인덱스
+    soft:
+      - 스킬 매칭
+      - 스킬 추천
+      - 스킬 선택
+      - skill match
+      - 퍼지 매칭
+      - fuzzy match
+    primary_skill: demo1-vibe-skill-router
+    optional_skill: null
+    forbid_families: []
+    notes: 라우터 자체 사용법/인덱스 편집 문의
+
+  - intent: codex-parallel-lanes
+    match:
+      - parallel lanes
+      - parallel-lanes
+      - 병렬 레인
+      - 레인 분할
+      - lane plan
+      - lane_plan
+      - 통합 게이트
+      - integration gate
+      - duplicate goal
+      - 중복 목표
+      - 중복 실행
+      - 병렬 채팅
+      - 여러 채팅
+      - 여러 codex
+      - 채팅 동시
+      - 동시에 돌
+      - codex 병렬
+      - 인계 패킷
+      - lane violation
+      - 레인으로
+      - 레인별
+    primary_skill: demo1-codex-parallel-lanes
+    optional_skill: demo1-agent-change-plane
+    forbid_families: []
+    notes: 여러 Codex/Devin 채팅 동시 운영 — lane plan/quota/preflight/board/integrate; change-plane intent(병렬 세션 선언)와 역할 분리
+
+# Fallback: no precision match AND no soft cue -> default vibe executor
+# (demo1-vibe-max-agency). The router reports via=fallback so callers can tell
+# it apart from a matched intent; it never hard-stops on null anymore.
 # Display/RAG/LLM scope가 불명확하게 섞인 요청만 사람이 demo1-core-request-router로 분류.
+  - intent: agy-grokbot-mode
+    match:
+      - agy grok
+      - agy 그록
+      - 지시서 만들어
+      - 지시서 하나
+      - 제일 큰 문제
+    primary_skill: demo1-agy-grokbot-mode
+    optional_skill: demo1-agy-report-review
+    forbid_families: []
+    notes: agy 세션의 Grok Bot 대타 모드 진입 — grokbot-current 인계 팩 레시피 라우터; grokbot-role 인텐트가 이미 잡는 공용 표현은 제외
+
+  - intent: goal-contract
+    match:
+      - re:목표.*범위.*acceptance.*(?:정리|계약)
+    primary_skill: demo1-long-think-goal-composer
+    optional_skill: null
+    forbid_families: []
+    notes: 구현 전 목표·범위·Acceptance 계약 작성; source directive 실행 intake와 구분
+
+  - intent: agy-report-review
+    explicit: true
+    match:
+      - re:(?:테스트|검증).*로그.*(?:acceptance|충족|판정)
+      - 보고서 판정
+      - 보고서 봐줘
+      - 이 보고서
+      - 무슨 상황
+      - 재개 문장
+      - 세션 재개
+      - 멈췄는데
+      - 멈춘 세션
+    primary_skill: demo1-agy-report-review
+    optional_skill: demo1-agy-grokbot-mode
+    forbid_families: []
+    notes: 에이전트 보고서/초안 판정·답장·재개 문장 (agy Grok Bot 모드); grokbot-current/demo1-agent-report-review.md 기반
+
+  # --- soft/fuzzy coverage additions (2026-10-02 dynamic guardrail pass) -----
+  - intent: guardrail-relax
+    match:
+      - 가드레일 완화
+      - 가드 완화
+      - guardrail relax
+      - guardrail-relax
+      - dynamic guardrail
+      - 다이나믹 가드
+      - 다이나믹 완화
+      - 소프트 폴백 레일
+    soft:
+      - 가드레일
+      - guardrail
+      - 완화
+      - relax
+      - 다이나믹
+      - dynamic
+      - 폴백
+      - fallback
+    primary_skill: demo1-core-request-router
+    optional_skill: null
+    forbid_families: []
+    notes: 가드레일/전처리/인용 게이트의 다이나믹 완화 요청 — 단계별 분류는 core-request-router 소유; soft cues는 paraphrase 구조 패턴 전용
+
+  - intent: cloud-zip-answer-intake
+    match:
+      - cloud zip answer
+      - zip snapshot answer
+      - sandbox:/mnt/data
+      - 클라우드 답변
+      - ZIP 답변
+      - ZIP 기준
+      - 코덱스 웹
+      - GPT Pro 답변
+      - Plan13
+      - re:Plan\s*\d+.*cloud
+    primary_skill: demo1-cloud-zip-answer-intake
+    optional_skill: demo1-source-edit-three-way-preflight
+    forbid_families: []
+    notes: 클라우드가 demo1_*.zip만 보고 쓴 답변은 가설 — cloud_answer_intake.py로 분할·재앵커·범위검사 후에만 채택; 실행 주장은 CLOUD_CLAIM
+
 fallback:
-  primary_skill: null
-  notes: no intent matched — work directly; skill 선택을 억지로 하지 않는다
+  primary_skill: demo1-vibe-max-agency
+  development_signals:
+    - re:\b(?:demo-?1|codex|devin|rag|skill|lease|ledger|source|patch|build|test|directive|debug|git|gradle|ollama)\b
+    - demo-1
+    - 소스
+    - 패치
+    - 빌드
+    - 테스트
+    - 지시서
+    - 스킬
+    - 작업대장
+    - 개발
+    - 코드
+    - 코덱스
+    - 데빈
+  notes: precision/soft 모두 미스 — 기본 바이브 실행 스킬로 연결; 라우터가 via=fallback으로 표기

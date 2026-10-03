@@ -2,7 +2,7 @@
 
 `@objective-executor @demo1-devin-source-orchestrator`
 
-작업 루트는 `C:\AbandonWare\demo-1\demo-1\src`다. 애플리케이션 소스만 고친다. 이 프롬프트와 작업 카드는 이미 있다.
+작업 루트는 `<repo>`다. 애플리케이션 소스만 고친다. 이 프롬프트와 작업 카드는 이미 있다.
 
 1. `agent-prompts/devin-20260924-answer-hold-assist/devin_operating_card.md`를 읽는다.
 2. `python -B scripts/devin_task_orchestrate.py plan --brief-file agent-prompts/devin-20260924-answer-hold-assist/brief.txt`를 실행한다. Downloads 지시서 원문으로 plan 하지 않는다.

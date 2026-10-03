@@ -3,4 +3,6 @@ ai.abandonware.nova.autoconfig.NovaFailurePatternAutoConfiguration
 ai.abandonware.nova.autoconfig.NovaOrchestrationAutoConfiguration
 ai.abandonware.nova.autoconfig.NovaOpsStabilizationAutoConfiguration
 ai.abandonware.nova.autoconfig.NovaZero100AutoConfiguration
+com.abandonware.ai.addons.config.AddonsAutoConfiguration
 com.example.lms.agent.context.AgentDbContextAutoConfiguration
+com.nova.protocol.config.NovaProtocolConfig

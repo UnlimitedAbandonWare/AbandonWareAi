@@ -18,6 +18,34 @@ import com.example.lms.service.guard.GuardContextHolder;
 
 class ChatSessionAccessGuardInteractionPolicyTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {10, 1000, 5000})
+    @org.junit.jupiter.api.Timeout(90)
+    void settingsProjectionReadsNoTranscriptRows(int count) throws Exception {
+        try (HistoryJdbcFixture fixture = new HistoryJdbcFixture()) {
+            long sessionId = fixture.seed(count);
+            fixture.entityManager.getTransaction().begin();
+            fixture.entityManager.find(ChatSession.class, sessionId)
+                    .setSessionMeta("{\"model\":\"synthetic-stored-model\",\"useRag\":false,\"searchMode\":\"OFF\"}");
+            fixture.entityManager.getTransaction().commit();
+            fixture.resetReadCounts();
+            var controller = mock(ChatApiController.class, org.mockito.Mockito.CALLS_REAL_METHODS);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "historyService", fixture.history);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "objectMapper",
+                    new com.fasterxml.jackson.databind.ObjectMapper());
+            var request = com.example.lms.dto.ChatRequestDto.builder().sessionId(sessionId).message("synthetic").build();
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    controller, "applyStoredSessionMetaForProjection", request);
+            assertEquals("synthetic-stored-model", request.getModel());
+            assertEquals(Boolean.FALSE, request.getUseRag());
+            assertEquals(com.example.lms.gptsearch.dto.SearchMode.OFF, request.getSearchMode());
+            System.out.println("F08_SETTINGS_ROWS seeded=" + count + " messageRows=" + fixture.data.messageRows.get()
+                    + " messageQueries=" + fixture.data.messageQueries.get());
+            assertEquals(0L, fixture.data.messageRows.get(), "settings restoration must not materialize the transcript");
+            assertEquals(0L, fixture.data.messageQueries.get());
+        }
+    }
+
     @AfterEach
     void clearContext() {
         GuardContextHolder.clear();
@@ -350,6 +378,112 @@ class ChatSessionAccessGuardInteractionPolicyTest {
         } finally {
             GuardContextHolder.clear();
             com.example.lms.search.TraceStore.clear();
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void pendingUnderstandingPreservesNextTurnTranscriptSummaryAndSettings(boolean stream) throws Exception {
+        try (var fixture = new HistoryJdbcFixture(true)) {
+            long sid = fixture.seed(1);
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var tm = new org.springframework.orm.jpa.JpaTransactionManager(fixture.factory);
+            tm.setDataSource(fixture.data);
+            var sql = new org.springframework.jdbc.core.JdbcTemplate(fixture.data);
+            new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                    new org.springframework.core.io.FileSystemResource("main/resources/db/migration/V20260912__durable_jobs.sql"),
+                    new org.springframework.core.io.FileSystemResource("main/resources/db/migration/V20260912_03__job_idempotency.sql"),
+                    new org.springframework.core.io.FileSystemResource("main/resources/db/migration/V20260929__f01_understanding_receipt.sql")).execute(fixture.data);
+            var shared = org.springframework.orm.jpa.SharedEntityManagerCreator.createSharedEntityManager(fixture.factory);
+            var repositories = new org.springframework.data.jpa.repository.support.JpaRepositoryFactory(shared);
+            var sessions = repositories.getRepository(com.example.lms.repository.ChatSessionRepository.class);
+            var sourceTarget = new com.example.lms.service.rag.graph.GeneralGraphSourceAuthority(sessions, fixture.messages, mapper);
+            org.springframework.test.util.ReflectionTestUtils.setField(sourceTarget, "entityManager", shared);
+            var sourceProxy = new org.springframework.aop.framework.ProxyFactory(sourceTarget);
+            sourceProxy.addAdvice(new org.springframework.transaction.interceptor.TransactionInterceptor(tm,
+                    new org.springframework.transaction.annotation.AnnotationTransactionAttributeSource()));
+            var sources = (com.example.lms.service.rag.graph.GeneralGraphSourceAuthority) sourceProxy.getProxy();
+            var memory = mock(com.example.lms.service.MemoryReinforcementService.class);
+            when(memory.understandingMemoryApproved()).thenReturn(true);
+            var summaries = mock(com.example.lms.service.understanding.AnswerUnderstandingService.class);
+            when(summaries.isEnabled()).thenReturn(true);
+            when(summaries.configuredModelId()).thenReturn("synthetic");
+            when(summaries.configuredBudgetMillis()).thenReturn(500L);
+            var legacy = mock(com.example.lms.service.chat.interceptor.UnderstandAndMemorizeInterceptor.class);
+            var jobs = new com.example.lms.jobs.JdbcJobService(fixture.data, mapper, java.time.Clock.systemUTC(),
+                    tm, java.util.Set.of(com.example.lms.jobs.JobService.UNDERSTANDING_TYPE), java.util.Set.of());
+            var commits = new com.example.lms.service.understanding.UnderstandingCommitService(jobs, sources, fixture.history,
+                    new com.example.lms.service.understanding.UnderstandingReceiptRepository(fixture.data, fixture.messages),
+                    memory, mapper, tm);
+            org.springframework.test.util.ReflectionTestUtils.setField(commits, "deferredEnabled", true);
+            org.springframework.test.util.ReflectionTestUtils.setField(commits, "understanding", summaries);
+            org.springframework.test.util.ReflectionTestUtils.setField(commits, "legacy", legacy);
+            jobs.registerDerivedHandler(com.example.lms.jobs.JobService.UNDERSTANDING_TYPE,
+                    new com.example.lms.jobs.JobService.DerivedJobHandler() {
+                        public String compute(String p) { throw new AssertionError("worker must remain pending"); }
+                        public void commit(com.example.lms.jobs.JobService.DerivedClaim c, String p, String r) { throw new AssertionError(); }
+                    });
+            var runs = new com.example.lms.service.chat.ChatRunRegistry();
+            org.springframework.test.util.ReflectionTestUtils.setField(runs, "replayCapacity", 32);
+            org.springframework.test.util.ReflectionTestUtils.setField(runs, "ttlSeconds", 60);
+            var chat = mock(com.example.lms.service.ChatService.class);
+            var settings = mock(com.example.lms.service.SettingsService.class);
+            var owner = mock(com.example.lms.web.ClientOwnerKeyResolver.class);
+            when(settings.getAllSettings()).thenReturn(java.util.Map.of());
+            when(owner.ownerKey()).thenReturn("synthetic-owner");
+            var controller = new ChatApiController(fixture.history, chat, null, settings, null, null, null, null, null,
+                    null, null, null, null, null, null, null, mapper, null, runs, owner);
+            var provider = mock(org.springframework.beans.factory.ObjectProvider.class);
+            when(provider.getIfAvailable()).thenReturn(commits);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "understandingCommits", provider);
+            org.springframework.test.util.ReflectionTestUtils.setField(controller, "generalGraphSourceAuthority", sources);
+            new org.springframework.transaction.support.TransactionTemplate(tm).executeWithoutResult(t ->
+                    shared.find(ChatSession.class, sid).setSessionMeta("{\"syntheticSetting\":\"preserve\"}"));
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            when(chat.continueChat(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any())).thenAnswer(c -> {
+                com.example.lms.dto.ChatRequestDto req = c.getArgument(0);
+                if (calls.incrementAndGet() == 2) {
+                    var rows = fixture.history.getSessionWithMessages(sid).getMessages();
+                    assertTrue(rows.stream().anyMatch(m -> "Synthetic original answer.".equals(m.getContent())));
+                    assertTrue(fixture.history.getRollingSummary(sid).orElseThrow().contains("Synthetic original answer."));
+                    assertEquals(1, sql.queryForObject("SELECT COUNT(*) FROM awx_jobs WHERE state='PENDING'", Integer.class));
+                }
+                assertTrue(commits.stageDeferred(com.example.lms.service.chat.ChatRunExecutionContext.current(),
+                        req.getGeneralGraphScope(), req.getMessage(), "Synthetic original answer.",
+                        com.example.lms.guard.GuardProfile.NORMAL, com.example.lms.domain.enums.MemoryMode.FULL, true, true));
+                return com.example.lms.service.ChatResult.of("Synthetic original answer.", "synthetic", false);
+            });
+            try {
+                for (String question : java.util.List.of("first synthetic question", "next synthetic question")) {
+                    var req = com.example.lms.dto.ChatRequestDto.builder().sessionId(sid).message(question)
+                            .useRag(false).useWebSearch(false).understandingEnabled(true)
+                            .memoryProfile(com.example.lms.domain.enums.MemoryProfile.LIGHT).build();
+                    if (stream) {
+                        var events = controller.chatStream(req, false, false, null,
+                                new org.springframework.mock.web.MockHttpServletRequest())
+                                .collectList().block(java.time.Duration.ofSeconds(10));
+                        assertEquals(1L, events.stream().filter(e -> e.data() != null && "final".equals(e.data().type())).count());
+                        org.junit.jupiter.api.Assertions.assertFalse(events.stream().anyMatch(e -> e.data() != null && "understanding".equals(e.data().type())));
+                    } else assertEquals(HttpStatus.OK, controller.chatSync(req, null,
+                            new org.springframework.mock.web.MockHttpServletRequest()).getStatusCode());
+                }
+                var rows = fixture.history.getSessionWithMessages(sid).getMessages();
+                assertEquals(java.util.List.of("turn-1", "first synthetic question", "Synthetic original answer.",
+                                "next synthetic question", "Synthetic original answer."),
+                        rows.stream().filter(m -> "user".equals(m.getRole()) || "assistant".equals(m.getRole()))
+                                .map(com.example.lms.domain.ChatMessage::getContent).toList());
+                org.junit.jupiter.api.Assertions.assertFalse(rows.stream().anyMatch(m -> m.getContent().startsWith("⎔USUM⎔")));
+                assertEquals(2, sql.queryForObject("SELECT COUNT(*) FROM awx_jobs WHERE state='PENDING'", Integer.class));
+                assertEquals("preserve", mapper.readTree(fixture.history.getSessionForRequest(sid).getSessionMeta())
+                        .path("syntheticSetting").asText());
+                org.mockito.Mockito.verifyNoInteractions(legacy);
+                org.mockito.Mockito.verify(summaries, org.mockito.Mockito.never()).understandDerived(
+                        org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyString());
+            } finally {
+                jobs.close();
+                org.springframework.test.util.ReflectionTestUtils.invokeMethod(runs, "shutdown");
+            }
         }
     }
 

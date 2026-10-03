@@ -150,7 +150,7 @@ Store large packets by artifact reference. Do not inline raw logs, source dumps,
   and repeated RAG hits are supporting sources, not truth authorities.
 
 ## Validation
-After editing any family skill, run `python -X utf8 .agents/skills/demo1-triangulating-counter-evidence/scripts/validate_counter_evidence_skill_family.py`.
+After editing any family skill, run `python -X utf8 .agents\skills\demo1-triangulating-counter-evidence\scripts\validate_counter_evidence_skill_family.py`.
 ## Red Flags
 Do not pass the leader as fact, run all owners without need, count copies as
 independent, treat partial/stale pages as exhaustive, auto-confirm alternatives,

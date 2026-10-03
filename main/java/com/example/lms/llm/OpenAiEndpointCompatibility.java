@@ -295,6 +295,20 @@ public final class OpenAiEndpointCompatibility {
         return payload;
     }
 
+    /** ChatGPT plan HTTP contract: allowlisted fields only; no inherited API-key sampling/cap options. */
+    public static Map<String, Object> chatGptResponsesPayload(String model, java.util.List<Map<String, Object>> input) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        payload.put("model", model);
+        payload.put("input", input.stream().map(item -> {
+            Map<String, Object> copy = new java.util.LinkedHashMap<>(item);
+            if ("system".equals(copy.get("role"))) copy.put("role", "developer");
+            return copy;
+        }).toList());
+        payload.put("store", false);
+        payload.put("stream", true);
+        return payload;
+    }
+
     private static String safeText(String t) {
         return t == null ? "" : t.trim();
     }

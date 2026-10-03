@@ -9,12 +9,12 @@ Use this skill only from the Desktop canonical-owner perspective. Treat Mac mini
 
 ## Required Context
 
-- Canonical Desktop root: `C:\AbandonWare\demo-1\demo-1\src`.
+- Canonical Desktop root: `<repo>`.
 - Default active backend roots: `main/java` and `main/resources`.
 - Default active `:app` roots: `app/src/main/java_clean` and `app/src/main/resources`.
 - Inactive unless Gradle proves otherwise: `project/src/main/java`, `app/src/main/java`, `demo-1`, `lms-core`, backups, archives, generated output, and old overlay folders.
 - For detailed candidate families and deletion gates, read `references/zombie-purge-candidates.md`.
-- Before any deletion, run the read-only helper: `scripts/zombie_candidate_audit.py`.
+- Before any deletion, run the read-only helper: `.agents\skills\abandonware-desktop-zombie-purge-safe-patch\scripts\zombie_candidate_audit.py`.
 
 ## Hard Stops
 
@@ -33,7 +33,7 @@ Stop and report `evidence_needed` instead of deleting when any of these are true
 1. Confirm Desktop ownership and active roots:
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Push-Location $Root
 Get-Location
 $indexOp = (Test-Path ".git\MERGE_HEAD") -or (Test-Path ".git\CHERRY_PICK_HEAD") -or (Test-Path ".git\rebase-merge") -or (Test-Path ".git\rebase-apply")

@@ -20,6 +20,9 @@ import org.springframework.stereotype.Component;
 public class RouterPolicy {
 
     private final MoeRoutingProps props;
+    private static final com.example.lms.service.rag.QueryComplexityGate FALLBACK_GATE =
+            new com.example.lms.service.rag.QueryComplexityGate();
+    private final com.example.lms.service.rag.QueryComplexityGate complexityGate;
 
     /**
      * Maximum token threshold used for promotion.  When the requested max
@@ -33,10 +36,17 @@ public class RouterPolicy {
      * Complexity threshold for MOE promotion.  Complexity scores in the
      * range [0,1] above this value trigger an upgrade.
      */
-    // Complexity threshold is retained but unused in the simplified promotion
-    // logic.  It can still be configured for future heuristics.
+    // Main OAuth admission consumes this threshold; legacy MOE promotion stays independent.
     @Value("${router.moe.complexity-threshold:0.55}")
-    private double complexityThreshold;
+    private double complexityThreshold = 0.55;
+
+    public boolean complexMainRequest(String query, String intent) {
+        boolean codeAnalysis = "CODE".equalsIgnoreCase(intent) || query != null
+                && query.matches("(?is).*(코드.*(분석|검토|오류)|(?:analy[sz]e|debug|review).*code|code.*(?:analysis|review)|```).*");
+        var level = complexityGate.assess(query);
+        double score = codeAnalysis || level == com.example.lms.service.rag.QueryComplexityGate.Level.COMPLEX ? .70 : .40;
+        return score >= complexityThreshold;
+    }
 
     /**
      * Uncertainty threshold for MOE promotion.  Uncertainty scores in the
@@ -83,7 +93,13 @@ public class RouterPolicy {
     private double margin;
 
     public RouterPolicy(MoeRoutingProps props) {
+        this(props, FALLBACK_GATE);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RouterPolicy(MoeRoutingProps props, com.example.lms.service.rag.QueryComplexityGate complexityGate) {
         this.props = props;
+        this.complexityGate = java.util.Objects.requireNonNull(complexityGate);
     }
 
     /**

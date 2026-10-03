@@ -583,6 +583,141 @@ class GlmAgentMcpStdioAcceptanceTest {
         }
     }
 
+    @Test
+    void toolsListAdvertisesContextStringLimit() throws Exception {
+        RunningServer server = startServer(0L);
+        try (BufferedWriter stdin = server.stdin();
+             BufferedReader stdout = server.stdout()) {
+            initialize(stdin, stdout);
+            writeFrame(stdin, Map.of(
+                    "jsonrpc", "2.0",
+                    "id", 50,
+                    "method", "tools/list",
+                    "params", Map.of()));
+            JsonNode listed = readFrame(stdout);
+            JsonNode tools = listed.path("result").path("tools");
+            for (String name : List.of(
+                    "glm_delegate_task", "glm_review_change", "glm_consensus_check")) {
+                JsonNode contextSchema = findTool(tools, name).path("inputSchema")
+                        .path("properties").path("context");
+                assertThat(contextSchema.path("additionalProperties").path("maxLength").asInt())
+                        .as(name + " context per-value maxLength").isEqualTo(4_000);
+                assertThat(contextSchema.path("description").asText())
+                        .as(name + " context total-limit description")
+                        .contains("4000").contains("12000");
+            }
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void oversizedContextValueReturnsStructuredInvalidInputWithoutProviderCall() {
+        GlmAgentCore core = new GlmAgentCore(new SubagentProviderChain(
+                List.of(simpleProvider(new AtomicReference<>("unused"))),
+                new LlmGatewayFailureClassifier()));
+
+        try (GlmAgentMcpTools tools = new GlmAgentMcpTools(core)) {
+            DirectToolResult result = callDirectTool(tools, "glm_delegate_task", Map.of(
+                    "task", "Bounded analysis task.",
+                    "context", Map.of("blob", "x".repeat(4_500)),
+                    "timeoutMs", 5_000));
+            JsonNode body = JSON.valueToTree(result.structuredContent());
+
+            assertThat(result.error()).isTrue();
+            assertThat(body.path("status").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(body.path("errorClass").asText()).isEqualTo("INPUT_INVALID");
+            assertThat(body.path("retryable").asBoolean()).isTrue();
+            assertThat(body.path("reasonCode").asText()).isEqualTo("invalid_context_value");
+            assertThat(body.path("key").asText()).isEqualTo("blob");
+            assertThat(body.path("limit").asInt()).isEqualTo(4_000);
+            assertThat(body.path("actual").asInt()).isEqualTo(4_500);
+            assertThat(body.path("provider").asText()).isEqualTo("none");
+            assertThat(body.path("attemptedProviders")).isEmpty();
+            assertThat(body.toString()).doesNotContain("x".repeat(64));
+        }
+    }
+
+    @Test
+    void contextValueWithinRaisedLimitReachesProvider() {
+        AtomicReference<String> output = new AtomicReference<>("deterministic ok");
+        GlmAgentCore core = new GlmAgentCore(new SubagentProviderChain(
+                List.of(simpleProvider(output)), new LlmGatewayFailureClassifier()));
+
+        try (GlmAgentMcpTools tools = new GlmAgentMcpTools(core)) {
+            DirectToolResult result = callDirectTool(tools, "glm_delegate_task", Map.of(
+                    "task", "Bounded analysis task.",
+                    "context", Map.of(
+                            "a", "x".repeat(3_500),
+                            "b", "y".repeat(3_500)),
+                    "timeoutMs", 5_000));
+            JsonNode body = JSON.valueToTree(result.structuredContent());
+
+            assertThat(result.error()).isFalse();
+            assertThat(body.path("status").asText()).isEqualTo("SUCCESS");
+            assertThat(body.path("provider").asText()).isEqualTo("deterministic");
+        }
+    }
+
+    @Test
+    void oversizedWholeContextReturnsStructuredInvalidInput() {
+        GlmAgentCore core = new GlmAgentCore(new SubagentProviderChain(
+                List.of(simpleProvider(new AtomicReference<>("unused"))),
+                new LlmGatewayFailureClassifier()));
+
+        try (GlmAgentMcpTools tools = new GlmAgentMcpTools(core)) {
+            DirectToolResult result = callDirectTool(tools, "glm_delegate_task", Map.of(
+                    "task", "Bounded analysis task.",
+                    "context", Map.of(
+                            "a", "x".repeat(3_500),
+                            "b", "y".repeat(3_500),
+                            "c", "z".repeat(3_500),
+                            "d", "w".repeat(3_500)),
+                    "timeoutMs", 5_000));
+            JsonNode body = JSON.valueToTree(result.structuredContent());
+
+            assertThat(result.error()).isTrue();
+            assertThat(body.path("status").asText()).isEqualTo("INVALID_INPUT");
+            assertThat(body.path("errorClass").asText()).isEqualTo("INPUT_INVALID");
+            assertThat(body.path("reasonCode").asText()).isEqualTo("invalid_context_total");
+            assertThat(body.path("limit").asInt()).isEqualTo(12_000);
+            assertThat(body.path("provider").asText()).isEqualTo("none");
+            assertThat(body.path("attemptedProviders")).isEmpty();
+        }
+    }
+
+    @Test
+    void clipOversizedContextClipsValueAndRecordsWarning() {
+        AtomicReference<String> output = new AtomicReference<>("deterministic ok");
+        GlmAgentCore core = new GlmAgentCore(new SubagentProviderChain(
+                List.of(simpleProvider(output)), new LlmGatewayFailureClassifier()));
+
+        try (GlmAgentMcpTools tools = new GlmAgentMcpTools(core)) {
+            DirectToolResult result = callDirectTool(tools, "glm_delegate_task", Map.of(
+                    "task", "Bounded analysis task.",
+                    "context", Map.of("blob", "x".repeat(5_000)),
+                    "clipOversizedContext", true,
+                    "timeoutMs", 5_000));
+            JsonNode body = JSON.valueToTree(result.structuredContent());
+
+            assertThat(result.error()).isFalse();
+            assertThat(body.path("status").asText()).isEqualTo("SUCCESS");
+            List<String> warnings = new ArrayList<>();
+            body.path("warnings").forEach(node -> warnings.add(node.asText()));
+            assertThat(warnings).anyMatch(warning ->
+                    warning.contains("context_clipped")
+                            && warning.contains("blob")
+                            && warning.contains("5000"));
+
+            DirectToolResult rejected = callDirectTool(tools, "glm_delegate_task", Map.of(
+                    "task", "Bounded analysis task.",
+                    "context", Map.of("blob", "x".repeat(5_000)),
+                    "timeoutMs", 5_000));
+            assertThat(JSON.valueToTree(rejected.structuredContent())
+                    .path("status").asText()).isEqualTo("INVALID_INPUT");
+        }
+    }
+
     private static JsonNode initialize(BufferedWriter stdin, BufferedReader stdout) throws Exception {
         writeFrame(stdin, Map.of(
                 "jsonrpc", "2.0",

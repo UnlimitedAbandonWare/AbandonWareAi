@@ -26,7 +26,7 @@ class TasksApiControllerDurableTest {
         new ResourceDatabasePopulator(new FileSystemResource("main/resources/db/migration/V20260912__durable_jobs.sql"),new FileSystemResource("main/resources/db/migration/V20260912_03__job_idempotency.sql")).execute(ds);
         var chat=mock(ChatService.class);when(chat.continueChat(any(ChatRequestDto.class))).thenReturn(ChatResult.of("fixture","fixture",false));
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("operator-a",null,java.util.List.of()));
-        try(var jobs=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){
+        try(var jobs=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "unregistered", "legacy"), java.util.Set.of("task_ask"))){
             var c=new TasksApiController(chat,jobs,mock(N8nNotifier.class));c.registerPersistedWork();
             var costs=mock(ChatGenerationAdmissionFilter.class);var check=mock(Runnable.class);when(costs.costCheckCurrentRequest()).thenReturn(check);
             org.springframework.test.util.ReflectionTestUtils.setField(c,"costs",costs);
@@ -53,14 +53,14 @@ class TasksApiControllerDurableTest {
         when(chat.continueChat(any(ChatRequestDto.class))).thenReturn(ChatResult.of("saved fixture", "fixture", false));
         SecurityContextHolder.getContext().setAuthentication(new UsernamePasswordAuthenticationToken("operator-a", null));
         String id;
-        try(var first=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())) {
+        try(var first=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "unregistered", "legacy"), java.util.Set.of("task_ask"))) {
             var controller=new TasksApiController(chat,first,notifier);controller.registerPersistedWork();
             var accepted=controller.askAsync(new TasksApiController.TaskAskRequest("fixture",null,false,false,null,null,null));
             assertEquals(202,accepted.getStatusCode().value());id=accepted.getBody().get("taskId");
             assertEquals("/v1/tasks/"+id,accepted.getHeaders().getLocation().toString());
             verifyNoInteractions(chat);
         }
-        try(var second=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())) {
+        try(var second=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "unregistered", "legacy"), java.util.Set.of("task_ask"))) {
             var controller=new TasksApiController(chat,second,notifier);controller.registerPersistedWork();second.runPendingOnce();
             assertEquals(200,controller.task(id).getStatusCode().value());
             assertEquals(200,controller.result(id).getStatusCode().value());

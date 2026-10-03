@@ -79,15 +79,15 @@ public class AttachmentContextHandler implements ChainLink {
             }
             CihPipelineTrace pipeline = runIqrPipeline(ctx, attachmentIds, ownerIdentity);
             traceCihRag(activeCount, skippedCount, pipeline);
-            return next.proceed(ctx);
+
         } catch (Exception e) {
             traceCihRag(0, 1, CihPipelineTrace.disabled("attachment_context_error"));
             log.warn("[AWX][rag][chain] attachmentContext failed failureReason={} errorType={} sessionHash={}",
                     "attachment-context-handler-error",
                     SafeRedactor.traceLabelOrFallback(e.getClass().getSimpleName(), "unknown"),
                     SafeRedactor.hash12(ctx == null ? null : ctx.sessionId()));
-            return next.proceed(ctx);
         }
+        return next.proceed(ctx);
     }
 
     private CihPipelineTrace runIqrPipeline(

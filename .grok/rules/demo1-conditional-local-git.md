@@ -1,7 +1,7 @@
 # Conditional local Git (this canonical root only)
 
 User authorization on 2026-09-23 replaces the blanket Git mutation ban for
-`C:\AbandonWare\demo-1\demo-1\src` only. This file is the policy body.
+`<repo>` only. This file is the policy body.
 `scripts/conditional_local_git.py` enforces the same rules. Do not copy this
 body into other instruction files.
 
@@ -45,18 +45,17 @@ the staged set for the default commit, or the `--path` set under
 commit.
 
 Sole main remote is `AbandonWareAi`
-(`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) ONLY. `AbandonWare3`
-is fully discarded — never treat it as a valid remote, temporary origin,
-fallback, migration keep, or backup upstream. Never add a second remote for
-convenience — prefer a single-repo branch/tag. If local git still lists
-`AbandonWare3`, report it and never fetch/push to it or prefer its SHA over
-C-root/`AbandonWareAi`; remote removal itself needs an explicit user ask. Old
-docs/ZIP naming `AbandonWare3` are historical only. `scan`/`commit` JSON
+(`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) ONLY — the only
+valid remote is `origin` at that URL. Never add, change, fetch, or push
+another remote; never add a second remote for convenience — prefer a
+single-repo branch/tag. If local git lists a different remote, report it and
+never fetch/push to it or prefer its SHA over C-root/`AbandonWareAi`; remote
+removal itself needs an explicit user ask. Old docs/ZIP naming a different
+repository are historical only — ignore those names. `scan`/`commit` JSON
 reports `intendedRemote`, `forbiddenRemote`, and `originMismatch`; the gate
-fails closed — `forbidden-remote` when any remote URL (any name, fetch or
-push) names `AbandonWare3`, `origin-mismatch` when `origin` differs from the
-sole remote — exit 2 and the commit is blocked. This tool never mutates
-remotes.
+fails closed — `forbidden-remote` when any remote other than the sole
+`origin` is present, `origin-mismatch` when `origin` differs from the sole
+remote — exit 2 and the commit is blocked. This tool never mutates remotes.
 
 This rule does not authorize application-source edits for GraphRAG, Nova Focus,
 or Meta Display.

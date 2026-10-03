@@ -8,13 +8,13 @@ Observed:
   leases      source-edit lease status incl. expired leases pending owner evidence
   changePlane ChangeIntent board summary (read-only intents.json projection)
   protections which agent adapters are observably installed (presence only;
-              hook presence != enforcement — apply-time checks still bind)
+              hook presence != enforcement - apply-time checks still bind)
   statusDoc    PROJECT_STATUS.md sha256 (the value update-row expects)
   tools        which common-guard entry points are present
   projectRoot  whether --root looks like DEMO1-PROJECT-ROOT (markers + canonical)
   signals      peer-signal packet: bus inbox refs, LEASE_RELEASE_REQUEST.md
                locations, active peer journals, and (with --agent) the
-               goal-switch barrier check summary. Metadata/counts only —
+               goal-switch barrier check summary. Metadata/counts only -
                no document bodies, secrets, or conversation text.
 
 Read-only: probes never mutate leases/journals. Exit 0 always unless the report
@@ -186,7 +186,7 @@ def read_json(path, cap=524288):
 
 def release_requests(root, agent=None, limit=32):
     """LEASE_RELEASE_REQUEST.md locations under task dirs + the change-plane
-    fallback dir. Paths/metadata only — request bodies are never copied."""
+    fallback dir. Paths/metadata only - request bodies are never copied."""
     entries = []
     base = root / JOURNAL_BASE
     if base.is_dir():
@@ -280,7 +280,7 @@ def peer_journals(root, journals_field, agent=None, tail=8):
 
 
 def inbox_field(root, py):
-    """awx_device_bus.py inbox as a compact signal — refs only, last 5."""
+    """awx_device_bus.py inbox as a compact signal - refs only, last 5."""
     res = run_json([py, "-B", "scripts/awx_device_bus.py", "inbox"], root)
     result = res.get("result") if isinstance(res.get("result"), dict) else {}
     refs = result.get("eventRefs") or []
@@ -356,7 +356,13 @@ def collect(root, agent=None):
     report["tools"] = {name: rel("scripts", name)["present"] for name in (
         "codex_work_checkpoint.py", "run_verified_command.py", "status_doc.py",
         "work_journal.py", "codex_home_quarantine.py", "awx_session_evidence.py",
-        "agent_preflight.py", "agent_session_watch.py", "agent_work_guard.py")}
+        "agent_preflight.py", "agent_session_watch.py", "agent_work_guard.py",
+        "agent_machine_context.py")}
+    report["machineContext"] = {
+        "command": "python -B scripts/agent_machine_context.py [--pretty]",
+        "present": rel("scripts", "agent_machine_context.py")["present"],
+        "skill": "demo1-agent-machine-context",
+        "note": "one-shot machine/env/tool/db-lane JSON probe; env names only, secrets never emitted"}
     guard = root / "scripts" / "agent_work_guard.py"
     if guard.is_file():
         report["projectRoot"] = run_json(

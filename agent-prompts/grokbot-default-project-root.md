@@ -20,4 +20,5 @@ Default project root: C:\AbandonWare\demo-1\demo-1\src — all investigation, se
 
 - Grok CLI를 이 루트에서 시작하면 `.grok/rules/`(`demo1-bridge.md` 등)가 프로젝트 룰로 로드된다 (`trusted_folders.toml`에 이미 등록됨). 다른 cwd로 열린 자동 세션은 프로젝트 룰을 못 보니 위 프로필 한 줄이 fallback이다.
 - Grok 워크스페이스 메모리(`~/.grok/memory-v2/workspaces/*/topics/demo1-project-root.md`)에도 같은 루트가 기록돼 있다 — 프로필 문구와 내용을 일치시킬 것.
+- 메모리 쓰기 계약(활성/폐기 사실, profile/log/note)과 "이 세션 뭐였지?"·세션 헬스 체크리스트는 `agent-prompts/grokbot-memory-session.md`(룰 SSOT `.grok/rules/demo1-memory-session.md`)를 보라.
 - Start-RAG.bat은 `%~dp0` 자기고정이라 어느 cwd에서 불러도 루트를 다시 추측하지 않는다.

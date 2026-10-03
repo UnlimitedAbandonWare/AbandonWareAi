@@ -109,6 +109,8 @@ public final class PlanExecutionSpec {
     private final List<String> pipeline;
     private final List<String> diagnostics;
     private final String emptyReason;
+    private final boolean contextPreparationAllowed;
+    public boolean contextPreparationAllowed(){return contextPreparationAllowed;}
 
     private PlanExecutionSpec(boolean whenPresent,
                               List<Condition> whenAny,
@@ -116,6 +118,11 @@ public final class PlanExecutionSpec {
                               List<String> pipeline,
                               List<String> diagnostics,
                               String emptyReason) {
+        this(whenPresent,whenAny,unsupportedWhenKeys,pipeline,diagnostics,emptyReason,false);
+    }
+    private PlanExecutionSpec(boolean whenPresent,List<Condition> whenAny,int unsupportedWhenKeys,
+            List<String> pipeline,List<String> diagnostics,String emptyReason,boolean contextPreparationAllowed) {
+        this.contextPreparationAllowed=contextPreparationAllowed;
         this.whenPresent = whenPresent;
         this.whenAny = List.copyOf(whenAny);
         this.unsupportedWhenKeys = unsupportedWhenKeys;
@@ -130,7 +137,7 @@ public final class PlanExecutionSpec {
     }
 
     public boolean isEmpty() {
-        return !whenPresent && pipeline.isEmpty();
+        return !whenPresent && pipeline.isEmpty() && !contextPreparationAllowed;
     }
 
     public boolean whenPresent() {
@@ -209,8 +216,16 @@ public final class PlanExecutionSpec {
             diagnostics.add("unsupported_pipeline_shape");
         }
 
+        boolean preparation=false;
+        Object contextNode=planNode.get("context_prepare");
+        if(contextNode instanceof Map<?,?> p && p.keySet().equals(Set.of("enabled","purpose","max_inference_attempts"))) {
+            preparation=Boolean.TRUE.equals(p.get("enabled"))
+                &&Set.of("attachment_comparison","deep_analysis").contains(p.get("purpose"))
+                &&p.get("max_inference_attempts") instanceof Number n && n.doubleValue()==2.0;
+            if(!preparation)diagnostics.add("context_prepare_not_approved");
+        }else if(contextNode!=null)diagnostics.add("context_prepare_invalid");
         return new PlanExecutionSpec(whenPresent, conditions, unsupportedWhenKeys,
-                stages, diagnostics, null);
+                stages, diagnostics, null, preparation);
     }
 
     private static void parseConditionList(Object value,
@@ -381,11 +396,31 @@ public final class PlanExecutionSpec {
                         "", flags.selfAskOn() ? "no_marker" : "selfask_off");
             }
             case RETRIEVAL -> {
+                StageEntry failed = null;
+                StageEntry missing = null;
                 for (String k : List.of("stage.web", "stage.vector", "stage.kg", "stage.bm25")) {
                     Object v = dbg.get(k);
-                    if (v != null && !"disabled".equals(v)) {
+                    if (v == null || "disabled".equals(v)) {
+                        continue;
+                    }
+                    String marker = String.valueOf(v);
+                    if (marker.startsWith("missing_")) {
+                        if (missing == null) {
+                            missing = new StageEntry(stage, StageStatus.SKIPPED_DEPENDENCY, k, marker);
+                        }
+                    } else if (marker.startsWith("failed")) {
+                        if (failed == null) {
+                            failed = new StageEntry(stage, StageStatus.FAILED, k, marker);
+                        }
+                    } else {
                         yield new StageEntry(stage, StageStatus.EXECUTED, k, "");
                     }
+                }
+                if (failed != null) {
+                    yield failed;
+                }
+                if (missing != null) {
+                    yield missing;
                 }
                 yield new StageEntry(stage, StageStatus.DECLARED, "", "no_retrieval_marker");
             }

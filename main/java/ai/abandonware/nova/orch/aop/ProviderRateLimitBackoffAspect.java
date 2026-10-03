@@ -154,8 +154,9 @@ public class ProviderRateLimitBackoffAspect {
 
     @Around("execution(* com.example.lms.service.web.BraveSearchService.searchWithMeta(..))")
     public Object aroundBraveSearchWithMeta(ProceedingJoinPoint pjp) throws Throwable {
+        BraveSearchService service = pjp.getTarget() instanceof BraveSearchService s ? s : null;
         RateLimitBackoffCoordinator.Decision d = backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE);
-        if (d.shouldSkip()) {
+        if (d.shouldSkip() && !(service != null && service.hasUsableIndependentLane())) {
             markSkipped("brave", d);
             String dr = "cooldown:" + safeStr(d.reason());
             markWebPartialDown("brave", dr);
@@ -167,6 +168,10 @@ public class ProviderRateLimitBackoffAspect {
             Object out = pjp.proceed();
             if (out instanceof BraveSearchResult r) {
                 BraveSearchResult.Status st = r.status();
+                if (service != null && service.hasUsableIndependentLane()
+                        && (st == BraveSearchResult.Status.HTTP_429 || st == BraveSearchResult.Status.COOLDOWN)) {
+                    return out;
+                }
                 if (st == BraveSearchResult.Status.HTTP_429
                         || st == BraveSearchResult.Status.HTTP_503
                         || st == BraveSearchResult.Status.RATE_LIMIT_LOCAL

@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "expect": "FORBIDDEN_REGION_OR_IP",
+  "expect_code": "request_forbidden",
+  "http_status": 403,
+  "body": {"error": {"message": "Country, region, or territory not supported", "type": "request_forbidden", "code": "request_forbidden"}},
+  "note": "unmapped code -> status fallback classifies 403 as FORBIDDEN_REGION_OR_IP"
+}

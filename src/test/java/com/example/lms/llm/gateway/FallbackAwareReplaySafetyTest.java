@@ -1,5 +1,7 @@
 package com.example.lms.llm.gateway;
 
+import com.abandonware.ai.addons.budget.TimeBudget;
+import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.search.TraceStore;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.UserMessage;
@@ -119,16 +121,14 @@ class FallbackAwareReplaySafetyTest {
     }
 
     @Test
-    void transportFailureBeforeAnyOutputUsesFallbackExactlyOnce() {
+    void httpFailureWithoutOutputStillHasUncertainExecution() {
         AtomicInteger fallbackCalls = new AtomicInteger();
         FallbackAwareChatModel model = wrapper(
-                ignored -> { throw httpFailure(503, "runner unavailable"); },
-                ignored -> answer("BACKUP", fallbackCalls));
-
-        ChatResponse response = model.chat(messages());
-
-        assertEquals("BACKUP", response.aiMessage().text());
-        assertEquals(1, fallbackCalls.get());
+                ignored -> { throw httpFailure(503,"runner unavailable"); },
+                ignored -> answer("unexpected",fallbackCalls));
+        RuntimeException failure=assertThrows(RuntimeException.class,()->model.chat(messages()));
+        assertEquals(0,fallbackCalls.get());
+        assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
     }
 
     @Test
@@ -148,20 +148,30 @@ class FallbackAwareReplaySafetyTest {
     }
 
     @Test
-    void streamFailureBeforeFirstTokenUsesFallbackExactlyOnce() {
+    void zeroTokensNeverProveRequestWasNotDispatched() {
         AtomicInteger fallbackCalls = new AtomicInteger();
         LlmGatewayException beforeFirstToken = new LlmGatewayException(
-                "stream ended before output",
-                LlmFailureClass.STREAM_ERROR,
-                "stream_error_before_first_token");
+                "stream ended before output",LlmFailureClass.STREAM_ERROR,"stream_error_before_first_token");
         FallbackAwareChatModel model = wrapper(
-                ignored -> { throw beforeFirstToken; },
-                ignored -> answer("BACKUP", fallbackCalls));
+                ignored -> { throw beforeFirstToken; }, ignored -> answer("unexpected",fallbackCalls));
+        RuntimeException failure=assertThrows(RuntimeException.class,()->model.chat(messages()));
+        assertEquals(0,fallbackCalls.get());
+        assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+    }
 
-        ChatResponse response = model.chat(messages());
+    @Test
+    void ambiguousTimeoutWithoutProviderReceiptNeverReplays() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        TraceStore.put("providerReceiptObserved", false);
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw new LlmGatewayException("timeout before receipt",
+                        LlmFailureClass.TIMEOUT_SOFT, "timeout_before_first_token"); },
+                ignored -> answer("unexpected", fallbackCalls));
 
-        assertEquals("BACKUP", response.aiMessage().text());
-        assertEquals(1, fallbackCalls.get());
+        LlmGatewayException failure = assertThrows(LlmGatewayException.class, () -> model.chat(messages()));
+        assertEquals("provider_execution_uncertain", failure.reasonCode());
+        assertEquals(0, fallbackCalls.get());
+        assertEquals(false, TraceStore.get("providerReceiptObserved"));
     }
 
     @Test
@@ -240,7 +250,7 @@ class FallbackAwareReplaySafetyTest {
         RuntimeException cause = new IllegalArgumentException("synthetic rejected request");
         ChatModel primary = model(ignored -> {
             primaryCalls.incrementAndGet();
-            throw httpFailure(503, "unavailable");
+            throw new LlmGatewayException("Local admission blocked",LlmFailureClass.GPU_DEVICE_LOST,"local_endpoint_open");
         });
         ChatModel fallback = model(ignored -> { fallbackCalls.incrementAndGet(); throw cause; });
         var routed = bounded
@@ -260,7 +270,7 @@ class FallbackAwareReplaySafetyTest {
     void selectedFallbackCancellationKeepsExactIdentity(boolean bounded) {
         var calls = new AtomicInteger();
         var cancellation = new CancellationException("synthetic cancellation");
-        ChatModel primary = model(ignored -> { throw httpFailure(503, "unavailable"); });
+        ChatModel primary = model(ignored -> { throw new LlmGatewayException("Local admission blocked",LlmFailureClass.GPU_DEVICE_LOST,"local_endpoint_open"); });
         ChatModel fallback = model(ignored -> { calls.incrementAndGet(); throw cancellation; });
         var routed = bounded
                 ? new FallbackAwareChatModel(primary, (failure, used) ->
@@ -269,6 +279,130 @@ class FallbackAwareReplaySafetyTest {
                 : new FallbackAwareChatModel(primary, () -> fallback, null, null, "primary", "backup");
         assertSame(cancellation, assertThrows(CancellationException.class, () -> routed.chat(messages())));
         assertEquals(1, calls.get());
+    }
+
+    @Test
+    void absentProviderReceiptDoesNotMakeAmbiguousTimeoutReplayable() {
+        TraceStore.put("providerReceiptObserved", false);
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw new LlmGatewayException("No receipt yet", LlmFailureClass.TIMEOUT_SOFT,
+                        "timeout_before_first_token"); },
+                ignored -> answer("unexpected", fallbackCalls));
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> model.chat(messages()));
+        assertEquals(0, fallbackCalls.get());
+        assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"{\"error\":\"GPU is lost\"}",
+            "{\"error\":\"invalid main_gpu selection (available devices: 0)\"}",
+            "{\"error\":{\"code\":\"vram_oom\",\"message\":\"CUDA out of memory\"}}"})
+    void confirmedDeviceRejectionUsesFallbackExactlyOnce(String body) {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw httpFailure(500, body); },
+                ignored -> answer("backup", fallbackCalls));
+        assertEquals("backup", model.chat(messages()).aiMessage().text());
+        assertEquals(1, fallbackCalls.get());
+    }
+
+    @Test
+    void structuredQueueOverloadUsesFallbackExactlyOnce() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw httpFailure(503, "{\"error\":\"overloaded\"}"); },
+                ignored -> answer("backup", fallbackCalls));
+        assertEquals("backup", model.chat(messages()).aiMessage().text());
+        assertEquals(1, fallbackCalls.get());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"overloaded", "{\"error\":\"overloaded\",\"message\":\"partial\"}",
+            "{\"error\":\"overloaded\",\"error\":\"overloaded\"}", "{\"error\":\"overloaded\"} trailing"})
+    void ambiguousOverloadPayloadStillDoesNotReplay(String body) {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw httpFailure(503, body); },
+                ignored -> answer("unexpected", fallbackCalls));
+        RuntimeException failure = assertThrows(RuntimeException.class, () -> model.chat(messages()));
+        assertEquals(0, fallbackCalls.get());
+        assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+    }
+
+    @Test
+    void sliceExhaustedPrimaryTimeoutLeavesBudgetForFallback() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = new FallbackAwareChatModel(
+                model(ignored -> {
+                    TimeBudget slice = TimeBudgetContext.get();
+                    assertTrue(slice != null, "primary는 슬라이스된 예산을 관측해야 한다");
+                    while (!slice.expired()) {
+                        Thread.yield();
+                    }
+                    throw new LlmGatewayException("slice deadline reached",
+                            LlmFailureClass.TIMEOUT_SOFT, "timeout_before_first_token");
+                }),
+                () -> model(ignored -> answer("backup", fallbackCalls)),
+                new LlmGatewayFailureClassifier(), null, "primary", "backup");
+        TimeBudgetContext.set(new TimeBudget(1000));
+        try {
+            assertEquals("backup", model.chat(messages()).aiMessage().text());
+        } finally {
+            TimeBudgetContext.clear();
+        }
+        assertEquals(1, fallbackCalls.get());
+        Object sliceMs = TraceStore.get("llm.gateway.fallback.timeSliceAllocatedMs");
+        assertTrue(sliceMs instanceof Number && ((Number) sliceMs).longValue() > 0L);
+        assertEquals(Boolean.TRUE, TraceStore.get("llm.gateway.fallbackAware.primarySliceExhausted"));
+    }
+
+    @Test
+    void primaryTimeSliceIsScopedAndRestoredForCaller() {
+        AtomicInteger primaryCalls = new AtomicInteger();
+        TimeBudget parent = new TimeBudget(5000);
+        FallbackAwareChatModel model = wrapper(
+                ignored -> {
+                    primaryCalls.incrementAndGet();
+                    TimeBudget slice = TimeBudgetContext.get();
+                    assertTrue(slice != null && slice != parent,
+                            "primary 호출 구간에는 슬라이스 예산이 보여야 한다");
+                    long sliceRemaining = slice.remainingMillis();
+                    assertTrue(sliceRemaining > 0L && sliceRemaining <= parent.remainingMillis(),
+                            "슬라이스는 부모 잔여 예산 이내여야 한다");
+                    return ChatResponse.builder().aiMessage(AiMessage.from("primary")).build();
+                },
+                ignored -> answer("unexpected", new AtomicInteger()));
+        TimeBudgetContext.set(parent);
+        try {
+            assertEquals("primary", model.chat(messages()).aiMessage().text());
+            assertSame(parent, TimeBudgetContext.get(), "호출 후 부모 예산 객체가 복원되어야 한다");
+        } finally {
+            TimeBudgetContext.clear();
+        }
+        assertEquals(1, primaryCalls.get());
+        Object sliceMs = TraceStore.get("llm.gateway.fallback.timeSliceAllocatedMs");
+        assertTrue(sliceMs instanceof Number && ((Number) sliceMs).longValue() > 0L
+                && ((Number) sliceMs).longValue() < 5000L);
+    }
+
+    @Test
+    void earlyPrimaryTimeoutInsideUnusedSliceStillNeverReplays() {
+        TraceStore.put("providerReceiptObserved", false);
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        FallbackAwareChatModel model = wrapper(
+                ignored -> { throw new LlmGatewayException("provider timeout before slice",
+                        LlmFailureClass.TIMEOUT_SOFT, "timeout_before_first_token"); },
+                ignored -> answer("unexpected", fallbackCalls));
+        TimeBudgetContext.set(new TimeBudget(30000));
+        try {
+            LlmGatewayException failure = assertThrows(LlmGatewayException.class,
+                    () -> model.chat(messages()));
+            assertEquals("provider_execution_uncertain", failure.reasonCode());
+        } finally {
+            TimeBudgetContext.clear();
+        }
+        assertEquals(0, fallbackCalls.get());
     }
 
     private static FallbackAwareChatModel wrapper(

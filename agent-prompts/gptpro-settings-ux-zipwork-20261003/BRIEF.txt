@@ -1,0 +1,119 @@
+[ANTI-STOP] 첨부 ZIP을 직접 풀고, 설정 화면을 실제로 고친 뒤, 결과물 3개(patch, 바뀐 파일 zip, REPORT.md)를 모두 내려받을 수 있게 만들 때까지 멈추지 마세요. 분석만 하고 끝내거나, 파일을 읽고 멈추면 미완성입니다.
+
+# GPT Pro ZIP 작업 지시서 — demo-1 설정 화면 UX 개선 (2026-10-03)
+
+## 첫 명령 (작업 환경)
+```
+mkdir -p /mnt/data/work && cd /mnt/data/work
+unzip -q /mnt/data/demo1_core_20261003-0737_4150b28-dirty.zip -d base
+cp -r base edit
+```
+- base = 원본(절대 수정 금지), edit = 작업본. 마지막에 base와 edit의 차이로 patch를 만듭니다.
+- ZIP 루트 = 실제 프로젝트 루트(C:\AbandonWare\demo-1\demo-1\src)입니다. 경로는 모두 이 루트 기준 상대 경로로 쓰세요.
+- 환경: 당신 샌드박스(Linux). 실제 PC는 Windows, PowerShell 5.1이지만 여기서는 실행할 필요 없습니다.
+
+## 0. 한 줄 목표
+개발자 모드는 그대로 두고, 기술 지식이 없는 사람도 이해하고 조작할 수 있게 설정 화면을 고친 결과물을 patch로 만들어 주세요. 기존 기능은 하나도 지우지 않습니다.
+
+## 1. 확인된 사실 (Grok Bot이 실제 PC 트리와 대조, 2026-10-03 08:20 KST, HEAD 4150b282)
+아래 6개 파일은 ZIP과 실제 PC가 똑같습니다(sha256 앞 12자리). 작업 시작 전에 base에서 같은지 다시 계산하고, 다르면 REPORT 맨 위에 적으세요.
+| 파일 | sha12 |
+|---|---|
+| main/resources/templates/settings.html | cac94b1e0f45 |
+| main/resources/static/js/settings-page.js | f0681390d4b2 |
+| main/resources/static/js/settings-routing.js | 9e77f589fe9f |
+| main/resources/static/js/chat-settings-bridge.js | 87c01272b15b |
+| main/resources/static/css/settings-page.css | ec60068767aa |
+| main/resources/templates/model-settings.html | 1532df20250c |
+
+1. settings.html은 카드 3개입니다.
+   - #browser-settings "이 브라우저 기본값": 모델, 모델 사용 방식(preferred/strict/auto), 검색(OFF/AUTO/FORCE_LIGHT/FORCE_DEEP), RAG. 저장은 settings-page.js가 localStorage에 합니다.
+   - #role-routing "역할별 모델": 서버 프로필, 기본 OFF, 미리보기 → 저장(settings-routing.js, expectedRevision·expectedProfileHash 충돌 검사).
+   - #execution-settings "실행 설정": 읽기 전용(settings-page.js publicKeys, GET /api/settings).
+2. 브라우저 기본값 저장 키는 `awx.settings.v1.preferences`(chat-settings-bridge.js STORAGE_KEY)이고, DEFAULTS = { modelSelectionMode:'preferred', searchMode:'OFF', useRag:false } 입니다.
+3. 핵심 문제(확인됨): chat-settings-bridge.js는 채팅 화면(chat-ui.html)에도 로드되고, 채팅의 모델·검색·RAG 컨트롤 change 이벤트마다 그 값을 같은 기본값 키에 다시 씁니다(controls change → writeSettings). 그래서 "이번 대화에서만 바꾼 값"이 "다음 대화 기본값"이 됩니다.
+4. chat.js는 따로 탭 단위 sessionStorage 키 `chat.controlSettings`에 현재 값을 저장·복원합니다. 저장 층이 두 개라 저장값과 지금 적용값이 다를 수 있습니다.
+5. 채팅 상단에 접히는 관리자 메뉴(Brain, Pipeline Status, RAG Ops, Vector, Models)와 Diagnostics가 있고, model-settings.html은 영어 라벨입니다.
+6. 모델 선택 대화상자는 이미 main/resources/static/js/chat-model-picker.js에 있습니다(검색·즐겨찾기). 새로 만들지 말고 재사용하세요.
+7. ZIP(core 프로필)에는 테스트 폴더(src/test)와 Gradle wrapper jar가 없습니다. 그래서 Java 테스트와 Gradle 빌드는 여기서 돌릴 수 없고 NOT_RUN입니다. PC에는 SettingsPageControllerTest, SettingsRoutingPageTest, ChatRequestSettingsMergerTest, SessionSettingsPrecedenceTest, scripts/test_settings_page_probe.py, scripts/settings_page_probe.py, scripts/settings_routing_guard.py가 있고, 이것들은 나중에 Codex가 PC에서 돌립니다. 이 테스트가 기대할 만한 id·문구·data-* 속성은 함부로 바꾸지 마세요.
+8. 화면 한글이 깨져 보이면 파일 인코딩 문제일 수 있습니다. UTF-8로 읽고 UTF-8로 저장하세요.
+
+## 2. 공통 규칙
+- 먼저 읽기: base/_README_FOR_GPTPRO.md, base/AGENTS.md(설정·UI 관련 부분), 위 6개 파일, chat-ui.html의 설정 관련 부분, chat-model-picker.js.
+- 수정 허용(edit 안에서만):
+  main/resources/templates/settings.html
+  main/resources/static/js/settings-page.js
+  main/resources/static/js/settings-routing.js
+  main/resources/static/js/chat-settings-bridge.js
+  main/resources/static/css/settings-page.css
+  main/resources/templates/model-settings.html (문구·설명·접근성만)
+  main/resources/templates/chat-ui.html (설정 링크·범위 표시 같은 작은 마크업만, 꼭 필요할 때)
+  새 파일이 필요하면 main/resources/static/js/ 또는 css/ 아래 settings-* 이름으로만.
+- 변경 금지: main/resources/static/js/chat.js, 모든 Java 파일, application*.yml/properties, configs/, frontend/, 서버 API 경로와 응답 모양, DB.
+- 기존 기능은 지우지 말고 옮기거나 접기만 하세요. 지워야 할 것 같으면 HOLD에 적으세요.
+- 모든 주장과 문제점에 꼬리표: [확인됨 파일:심볼] / [가정] / [확인 필요]. 사용자 조사 수치는 지어내지 마세요.
+
+## 3. 작업 단계 (WP 5개, 순서대로)
+WP1 저장 범위 분리 (chat-settings-bridge.js, 필요하면 chat-ui.html 작은 마크업)
+- 채팅에서 컨트롤을 바꿔도 기본값 키(awx.settings.v1.preferences)를 자동으로 덮어쓰지 않게 하세요. 이번 대화 값은 chat.js의 기존 sessionStorage 흐름에 맡깁니다.
+- 대신 사용자가 명시적으로 "앞으로도 이 설정 사용"을 고를 때만 기본값에 저장하는 길을 브리지 안에 만드세요(chat.js 수정 없이, DOM 이벤트·속성으로).
+- 기존 export/import/validate/merge 함수의 이름과 동작은 유지하세요(다른 코드나 테스트가 쓸 수 있음).
+WP2 화면 구조 재배치 (settings.html, settings-page.css)
+- 3층: 기본(항상 보임) → 고급(details 접힘) → 개발자·진단(details 접힘). 역할별 모델과 실행 설정은 개발자 층으로, 관리자 페이지 링크(Brain, Pipeline Status, RAG Ops, Vector, Models)도 개발자 층에서 그대로 찾을 수 있게.
+- 각 컨트롤 옆에 저장 범위 표시: "이번 대화만" / "이 브라우저 기본값" / "서버 설정(관리자)".
+WP3 이름·설명·입력 방식 (settings.html, settings-page.js)
+- 쉬운 한국어 이름 + 한 줄 설명 + 기본값에 "권장" 표시. FORCE_LIGHT 같은 값 이름은 고급 층에서만 괄호로.
+- 선택지 4개 이하는 라디오/세그먼트, 켜기·끄기(RAG)는 스위치. 저장되는 값(value)은 지금과 똑같이 유지.
+- 모델은 chat-model-picker.js를 재사용할 수 있으면 재사용하고, 안 되면 지금 select를 유지한 채 이유를 REPORT에 적으세요.
+WP4 오류 예방 (settings-page.js, settings-routing.js)
+- 저장값과 이 탭의 적용값이 다르면 배지로 표시(가능한 범위에서, 불가능하면 [가정]으로 이유).
+- 초기화는 확인 한 번 거치기. 역할별 모델 revision 충돌 시 덮어쓰기 대신 "다시 불러오기" 안내 문구.
+WP5 접근성 (전체 허용 파일)
+- label 연결, 설명은 aria-describedby, 상태 메시지는 aria-live="polite", 키보드만으로 전부 조작, 색만으로 상태 구분 금지, 포커스 표시 유지, model-settings.html 라벨 한국어화(영문 병기 가능).
+
+## 4. 자가 점검 (샌드박스에서 실제로 돌릴 것)
+1. 바뀐 JS마다 `node --check <파일>`.
+2. 바뀐 HTML마다 Python html.parser로 파싱 오류 없는지, 기존 id·data-preference·data-menu-action 속성이 사라지지 않았는지 base와 비교하는 스크립트.
+3. chat-settings-bridge.js의 순수 함수(validateValues, mergeDefaults, readSettings, writeSettings 등)를 가짜 localStorage로 node에서 불러 시험할 수 있으면 해 보고, 특히 "채팅 change만으로는 기본값 키가 안 바뀜"을 확인하세요. 불러오기 구조상 안 되면 NOT_RUN과 이유.
+4. `diff -ruN base edit`로 바뀐 파일이 수정 허용 목록 안에만 있는지 확인. chat.js, Java가 하나라도 있으면 되돌리세요.
+5. Gradle, Java 테스트, 브라우저 실제 확인은 NOT_RUN으로 적으세요(여기서 불가).
+
+## 5. 결과물 (모두 /mnt/data 아래, 내려받기 링크로)
+1. `settings-ux-20261003.patch` — PC에서 `git apply -p1`로 바로 들어가는 a/ b/ 접두어 형식. 예: `cd /mnt/data/work && git diff --no-index base edit > raw.patch` 뒤 경로의 `a/base/`·`b/edit/`를 `a/`·`b/`로 바꾸기(또는 동등한 방법). 줄바꿈은 원본 파일과 같게 유지.
+2. `settings-ux-20261003-changed.zip` — 바뀐 파일만, 루트 기준 같은 경로로.
+3. `REPORT.md` — 아래 보고 형식대로.
+
+## HOLD (하지 말고 REPORT에만)
+- 서버 API·Java·DB를 바꿔야만 되는 개선
+- chat.js를 바꿔야만 되는 개선
+- 기능 제거가 필요해 보이는 것
+- 로그인·권한 강화(PROTO_OPEN = 로그인 없이 열린 개발 모드는 유지)
+
+## ASK_ONCE
+없습니다. 애매하면 되돌리기 쉬운 쪽(기존 동작 유지 + 표시만 추가)을 고르고 [가정]으로 적은 뒤 계속 진행하세요.
+
+## 절대 금지
+ZIP 밖 실제 서버·공개 주소(abandonwareai.kro.kr) 호출, 비밀값 추측·기재, 테스트 결과 지어내기(돌리지 않은 건 NOT_RUN), chat.js·Java·설정 YAML 수정, 기존 기능 삭제, 새 프레임워크·라이브러리·CDN 추가, frontend(Next) 재작성, Pack-GPTPro 도구 실행·수정, git commit/push, remote 추가·변경.
+
+## Acceptance (전부 PASS여야 완료)
+- [ ] base 6개 파일 sha12가 표와 같음(다르면 맨 위 경고)
+- [ ] WP1~WP5 각각 DONE / PARTIAL(이유) / HOLD
+- [ ] 채팅 change만으로 기본값 키가 바뀌지 않음(자가 점검 3 결과 또는 NOT_RUN 이유)
+- [ ] 바뀐 파일이 전부 수정 허용 목록 안, chat.js·Java 변경 0
+- [ ] 기존 id·data-* 속성 손실 0(자가 점검 2)
+- [ ] node --check 전부 통과
+- [ ] patch, changed.zip, REPORT.md 3개 모두 내려받기 가능
+- [ ] Gradle·Java 테스트·브라우저 확인은 NOT_RUN으로 표시
+
+## 보고 형식 (REPORT.md)
+첫 줄: `외부 API: 0회 (ZIP 내부 작업만)`
+1. 기준 확인: base sha12 표, 일치 여부
+2. Part A UX 분석 (사용자가 요청한 6가지)
+   ① 주요 사용자 유형과 요구사항 ② 현재 설정 경험의 문제점(꼬리표) ③ 개선된 구조와 핵심 상호작용 ④ 일반용·개발자용 구분 방식 ⑤ 구체적 UI·UX 개선안과 이유 ⑥ 화면 문구와 텍스트 와이어프레임
+3. 바뀐 파일 표: 파일 | 바뀐 줄 범위(edit 기준) | WP | 이유
+4. 자가 점검 결과: 항목 | RUN/NOT_RUN | 결과
+5. PC에서 Codex가 돌려야 할 것: SettingsPageControllerTest, SettingsRoutingPageTest, ChatRequestSettingsMergerTest, SessionSettingsPrecedenceTest, scripts/test_settings_page_probe.py, 127.0.0.1:18180 /settings·/chat 브라우저 확인. 테스트가 깨질 만한 곳 예상 목록.
+6. 넣은 것 / 뺀 것(이유) / HOLD
+7. Codex에게 그대로 칠 한 문장: 「…」
+
+[ANTI-STOP] 결과물 3개를 실제로 만들어 링크를 걸고, Acceptance를 전부 채운 뒤에만 답을 마치세요.

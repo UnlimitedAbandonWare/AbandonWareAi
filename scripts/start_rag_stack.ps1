@@ -420,8 +420,8 @@ function Get-RagDisplayRegistrationUrl {
 }
 
 function Test-RagHttpsOptIn {
-    $value = [Environment]::GetEnvironmentVariable('AWX_OPTIONAL_HTTPS_ENABLED', 'User')
-    if ($null -eq $value) { $value = $env:AWX_OPTIONAL_HTTPS_ENABLED }
+    $value = $env:AWX_OPTIONAL_HTTPS_ENABLED
+    if ($null -eq $value) { $value = [Environment]::GetEnvironmentVariable('AWX_OPTIONAL_HTTPS_ENABLED', 'User') }
     return $null -ne $value -and $value.Trim().ToLowerInvariant() -in @('true','1','yes','y','on')
 }
 
@@ -761,7 +761,9 @@ function Invoke-RagLauncher {
         if ($chosenOllamaPort -lt 1 -or $chosenOllamaPort -gt 65535 -or $chosenPort -lt 0 -or $chosenPort -gt 65535) { throw 'invalid-service-port' }
         # Inherit model, GPU, secret, DB and provider settings. Set process-local startup defaults only.
         $defaults = @{LOCAL_LLM_ENABLED='true';LOCAL_LLM_AUTOSTART='true';OLLAMA_HOST="127.0.0.1:$chosenOllamaPort";
-            LOCAL_LLM_HEALTH_CHECK_URL="http://127.0.0.1:$chosenOllamaPort/api/version";LOCAL_LLM_FAIL_FAST='true'}
+            LOCAL_LLM_HEALTH_CHECK_URL="http://127.0.0.1:$chosenOllamaPort/api/version";LOCAL_LLM_FAIL_FAST='true';
+            APP_AI_UI_DEFAULT_MODEL='chatgpt-oauth:gpt-5.5';APP_AI_DEFAULT_MODEL='chatgpt-oauth:gpt-5.5';
+            OPENAI_API_MODEL_DEFAULT='chatgpt-oauth:gpt-5.5'}
         if ($MetaDisplay) {
             $asrDefaults = Read-RagMetaAsrDefaults
             foreach ($key in $asrDefaults.Keys) { $defaults[$key] = $asrDefaults[$key] }

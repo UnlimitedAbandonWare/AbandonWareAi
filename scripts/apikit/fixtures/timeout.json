@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "expect": "NETWORK",
+  "http_status": null,
+  "error_kind": "timeout",
+  "error": "TimeoutError",
+  "body": null
+}

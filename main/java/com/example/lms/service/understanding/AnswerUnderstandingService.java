@@ -53,6 +53,29 @@ public class AnswerUnderstandingService {
     @Value("${abandonware.understanding.timeout-ms:12000}")
     private long timeoutMs;
 
+    public enum OutcomeKind { PROVIDER, HEURISTIC_FALLBACK, SKIPPED, FAILURE }
+    public record Outcome(OutcomeKind kind, AnswerUnderstanding value, String reason) {
+        public Outcome {
+            java.util.Objects.requireNonNull(kind);
+            if ((kind == OutcomeKind.PROVIDER || kind == OutcomeKind.HEURISTIC_FALLBACK) != (value != null))
+                throw new IllegalArgumentException("invalid_understanding_outcome");
+        }
+        @Override public String toString() { return "UnderstandingOutcome[" + kind + "]"; }
+    }
+    public boolean isEnabled() { return understandingEnabled; }
+    public String configuredModelId() { return model; }
+    public long configuredBudgetMillis() { return timeoutMs; }
+
+    /** Durable work carries its own approved budget/config; no origin request context is restored. */
+    public Outcome understandDerived(String answer, String question, long approvedBudget, String approvedModel) {
+        if (!understandingEnabled) return new Outcome(OutcomeKind.SKIPPED, null, "understanding_disabled");
+        if (!java.util.Objects.equals(model, approvedModel))
+            return new Outcome(OutcomeKind.SKIPPED, null, "understanding_config_changed");
+        try { return understandOutcome(answer, question, approvedBudget); }
+        catch (java.util.concurrent.CancellationException cancelled) { throw cancelled; }
+        catch (RuntimeException failure) { return new Outcome(OutcomeKind.FAILURE, null, "understanding_failed"); }
+    }
+
     /**
      * Generate a structured understanding of the final answer.  When the
      * understanding feature is disabled or the input answer is blank, this
@@ -66,17 +89,40 @@ public class AnswerUnderstandingService {
      * @return a populated {@link AnswerUnderstanding}
      */
     public AnswerUnderstanding understand(String finalAnswer, String question) {
+        return understand(finalAnswer, question, timeoutMs);
+    }
+
+    /** The caller allowance and the original request deadline can only shorten the configured wait. */
+    public AnswerUnderstanding understand(String finalAnswer, String question, long remainingMillis) {
+        return understandOutcome(finalAnswer, question, remainingMillis).value();
+    }
+
+    public Outcome understandOutcome(String finalAnswer, String question, long remainingMillis) {
         if (finalAnswer == null || finalAnswer.isBlank()) {
-            return fallback(finalAnswer);
+            return new Outcome(OutcomeKind.HEURISTIC_FALLBACK, fallback(finalAnswer), "empty_input");
         }
         if (!understandingEnabled) {
-            return fallback(finalAnswer);
+            return new Outcome(OutcomeKind.HEURISTIC_FALLBACK, fallback(finalAnswer), "understanding_disabled");
+        }
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        long waitMillis = Math.min(timeoutMs, remainingMillis);
+        var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        if (budget != null) waitMillis = budget.capWaitMillis(waitMillis);
+        if (waitMillis <= 0) {
+            TraceStore.put("understanding.status", "skipped");
+            TraceStore.put("understanding.reason", "request_budget_exhausted");
+            return new Outcome(OutcomeKind.SKIPPED, null, "request_budget_exhausted");
         }
         try {
             String answerUnderstandingPrompt = promptBuilder.build(question, finalAnswer);
+            // Recompute after prompt preparation, immediately before admitting the network call.
+            waitMillis = com.example.lms.service.chat.ChatRunExecutionContext.capRequestWait(waitMillis);
             // call Gemini; generate() returns JSON wrapper { ok: true, data: "/* ... */" }
-            String response = geminiClient.generate(answerUnderstandingPrompt)
-                    .block(Duration.ofMillis(timeoutMs));
+            String response;
+            try (var call = com.example.lms.service.chat.ChatRunExecutionContext.interruptibleCall("http")) {
+                response = geminiClient.generate(answerUnderstandingPrompt)
+                        .block(Duration.ofMillis(waitMillis));
+            }
             if (response == null || response.isBlank()) {
                 throw new IllegalStateException("Empty response from Gemini");
             }
@@ -122,14 +168,23 @@ public class AnswerUnderstandingService {
                         Math.max(0.0, Math.min(1.0, conf))
                 );
             }
-            return u;
+            TraceStore.put("understanding.status", "prepared");
+            return new Outcome(OutcomeKind.PROVIDER, u, "provider_result");
         } catch (Exception e) {
+            com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+            if (e instanceof com.example.lms.llm.gateway.LlmGatewayException gateway
+                    && "request_budget_exhausted".equals(gateway.reasonCode())) {
+                TraceStore.put("understanding.status", "skipped");
+                TraceStore.put("understanding.reason", "request_budget_exhausted");
+                return new Outcome(OutcomeKind.SKIPPED, null, "request_budget_exhausted");
+            }
             // Log as warning and fall back.  Do not propagate exception as this
             // should never break the chat flow.
+            TraceStore.put("understanding.status", "failed");
             TraceStore.put("answerUnderstanding.suppressed.generateOrParse", true);
             log.warn("[Understanding] Gemini call or parsing failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return fallback(finalAnswer);
+            return new Outcome(OutcomeKind.HEURISTIC_FALLBACK, fallback(finalAnswer), "provider_or_parse_failure");
         }
     }
 

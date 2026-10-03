@@ -34,6 +34,9 @@ python -B scripts/demo1_goal_switch_barrier.py reject-complete --text "<claim>"
   Run it on any sentence before calling it "done" (see
   `$demo1-goal-complete-stop`).
 
+## create_goal preflight
+Check goal state before `create_goal` — unfinished → `update_goal`/complete first; a `cannot create a new goal ... unfinished goal` rejection is never retried as-is.
+
 ## Ownership and safety
 
 - Owned = `journal.agent == <name>`, or a lease/claim `ownerId` equal to the

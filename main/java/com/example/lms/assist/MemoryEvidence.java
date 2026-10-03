@@ -16,7 +16,7 @@ public record MemoryEvidence(String evidenceId,String sourceId,long sourceRevisi
     public MemoryEvidence {
         entities=java.util.List.copyOf(entities==null?java.util.List.of():entities);
         if(entities.size()>8||!"CO_MENTIONED_WITH".equals(relationshipType))throw new IllegalArgumentException("invalid_memory_relationship");
-        if(!java.util.Set.of("USER_REPORTED","VERIFIED","HYPOTHESIS","ASSISTANT_GENERATED").contains(assertionType)
+        if(!java.util.Set.of("USER_REPORTED","DOCUMENT_REPORTED","VERIFIED","HYPOTHESIS","ASSISTANT_GENERATED").contains(assertionType)
             ||("VERIFIED".equals(assertionType)&&(verificationReference==null||verificationReference.isBlank())))
             throw new IllegalArgumentException("invalid_memory_provenance");
     }

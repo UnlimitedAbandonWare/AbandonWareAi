@@ -1,0 +1,94 @@
+[
+ {
+  "token": ".agents/skills/INDEX",
+  "live": "renamed:INDEX.md",
+  "p1Refs": 827,
+  "samples": [
+   "AGENTS.md",
+   "UAW.txt",
+   ".agents\\skills\\archive-search\\SKILL.md",
+   ".agents\\skills\\archive-search\\agents\\openai.yaml"
+  ]
+ },
+ {
+  "token": "scripts/invoke_consolidated_program.ps1",
+  "live": "missing",
+  "p1Refs": 7,
+  "samples": [
+   ".agents\\skills\\demo1-consolidating-notebook-directives\\tests\\invoke_consolidated_program.tests.ps1",
+   ".agents\\skills\\demo1-consolidating-notebook-directives\\tests\\invoke_consolidated_program_public_composition.tests.ps1",
+   ".agents\\skills\\demo1-consolidating-notebook-directives\\tests\\invoke_consolidated_program_public_contract.tests.ps1",
+   ".agents\\skills\\demo1-consolidating-notebook-directives\\tests\\invoke_consolidated_program_public_events.tests.ps1"
+  ]
+ },
+ {
+  "token": "scripts/new_docker_autograder_job.ps1",
+  "live": "missing",
+  "p1Refs": 5,
+  "samples": [
+   ".agents\\skills\\demo1-docker-autograder\\SKILL.md",
+   ".agents\\skills\\demo1-docker-autograder\\references\\docker-autograder-contract.md",
+   "__patch_drop__\\producer-kit\\multi-device-20260913-r3-producer-kit\\producer-kit.manifest.json",
+   "__patch_drop__\\producer-kit\\multi-device-20260913-r3-producer-kit\\.agents\\skills\\demo1-docker-autograder\\SKILL.md"
+  ]
+ },
+ {
+  "token": "scripts/invoke_docker_autograder.ps1",
+  "live": "missing",
+  "p1Refs": 9,
+  "samples": [
+   ".agents\\skills\\demo1-docker-autograder\\SKILL.md",
+   ".agents\\skills\\demo1-docker-autograder\\scripts\\test_autograder_cleanup_hook.ps1",
+   ".agents\\skills\\demo1-macsrc-defect-intake\\scripts\\advance_autograder_probe.ps1",
+   "docs\\superpowers\\plans\\2026-07-29-docker-autograder-implementation.md"
+  ]
+ },
+ {
+  "token": "scripts/devin_client.py",
+  "live": "missing",
+  "p1Refs": 2,
+  "samples": [
+   "agent-prompts\\clean-agent-loadout-harmony-20260926\\CLEAN_KICKOFF.md",
+   "docs\\PROJECT_STATUS.md"
+  ]
+ },
+ {
+  "token": "scripts/next_step.py",
+  "live": "missing",
+  "p1Refs": 15,
+  "samples": [
+   "AGENTS.md",
+   ".agents\\skills\\demo1-meta-display-resume\\SKILL.md",
+   ".agents\\skills\\demo1-meta-display-sync-client\\SKILL.md",
+   ".agents\\skills\\demo1-meta-display-verification\\SKILL.md"
+  ]
+ },
+ {
+  "token": "scripts/Invoke-Devin.ps1",
+  "live": "missing",
+  "p1Refs": 1,
+  "samples": [
+   "agent-prompts\\clean-agent-loadout-harmony-20260926\\CLEAN_KICKOFF.md"
+  ]
+ },
+ {
+  "token": "scripts/docker_autograder.py",
+  "live": "renamed:test_demo1_docker_autograder.py",
+  "p1Refs": 8,
+  "samples": [
+   ".agents\\skills\\demo1-docker-autograder\\scripts\\invoke_docker_autograder.ps1",
+   ".agents\\skills\\demo1-docker-autograder\\scripts\\test_autograder_cleanup_hook.ps1",
+   "docs\\superpowers\\plans\\2026-07-29-docker-autograder-implementation.md",
+   "docs\\superpowers\\plans\\2026-07-31-stochastic-tool-lab.md"
+  ]
+ },
+ {
+  "token": ".agents/skills/demo1-chat-design-acceptance",
+  "live": "missing",
+  "p1Refs": 2,
+  "samples": [
+   "docs\\superpowers\\plans\\2026-09-04-decision-first-evidence-console.md",
+   "docs\\superpowers\\specs\\2026-09-04-decision-first-evidence-console-design.md"
+  ]
+ }
+]

@@ -3,18 +3,23 @@ package ai.abandonware.nova.orch.aop;
 import ai.abandonware.nova.config.NovaModelGuardProperties;
 import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
 import ai.abandonware.nova.orch.llm.ModelGuardSupport;
+import ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel;
 import com.example.lms.guard.KeyResolver;
+import com.example.lms.llm.ModelRuntimeHealthTracker;
 import com.example.lms.search.TraceStore;
 import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.UserMessage;
 import org.aspectj.lang.ProceedingJoinPoint;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mock.env.MockEnvironment;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -132,6 +137,71 @@ class ModelGuardExpectedFailureContractTest {
         assertInstanceOf(ExpectedFailureChatModel.class, result);
         assertEquals(Boolean.TRUE, TraceStore.get("modelGuard.timeoutFallback"));
         verify(pjp, never()).proceed();
+    }
+
+    @Test
+    void guardNoKeyResponsesExpectedFailureWritesOneUnobservedDisabledRow() throws Throwable {
+        NovaModelGuardProperties props = new NovaModelGuardProperties();
+        props.setMode(NovaModelGuardProperties.Mode.ROUTE_RESPONSES);
+        ModelRuntimeHealthTracker tracker = new ModelRuntimeHealthTracker();
+        String timelineId = tracker.beginRequestTimeline("guard-disabled-request", "guard-disabled-session");
+        tracker.recordRequestPhase(timelineId, "dispatch", "gpt-5-pro", null, "none");
+        tracker.recordRequestPhase(timelineId, "pending", null, null, "none");
+        TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, timelineId);
+        OpenAiChatModelGuardAspect aspect = new OpenAiChatModelGuardAspect(
+                props,
+                new MockEnvironment().withProperty("llm.base-url", "https://api.openai.com/v1"),
+                unavailableKeyResolver());
+        ReflectionTestUtils.setField(aspect, "modelRuntimeHealthTracker", tracker);
+
+        ExpectedFailureChatModel model = assertInstanceOf(
+                ExpectedFailureChatModel.class,
+                aspect.guardLcWithTimeout(pjpForModel("gpt-5-pro")));
+        model.chat(List.of(UserMessage.from("guard disabled probe")));
+
+        List<Map<String, Object>> rows = tracker.redactedRequestAttemptLedger(timelineId);
+        assertEquals(1, rows.size());
+        Map<String, Object> row = rows.get(0);
+        assertEquals("disabled", row.get("failureClass"));
+        assertEquals("configuration_error", row.get("terminalClass"));
+        assertEquals("hash:unknown", row.get("responseHash"));
+        assertEquals(0, row.get("responseCharCount"));
+        assertEquals(false, row.get("responseObserved"));
+        assertEquals(false, row.get("modelAdapterAttemptObserved"));
+        assertEquals(false, row.get("clientHttpExchangeObserved"));
+        assertEquals(false, row.get("providerAttemptObserved"));
+        assertEquals(false, row.get("wireAttemptObserved"));
+        assertEquals(13, row.get("optionItemCount"));
+    }
+
+    @Test
+    void routeResponsesUsesFiveArgumentTimeoutSecondsAtIndexFour() throws Throwable {
+        OpenAiResponsesChatModel model = routedResponsesModel(
+                "gpt-5-pro", 0.2d, 0.8d, 64, 7);
+        assertEquals(7_000L, ReflectionTestUtils.getField(model, "timeoutMs"));
+    }
+
+    @Test
+    void routeResponsesUsesEightArgumentTimeoutSecondsAtIndexSix() throws Throwable {
+        OpenAiResponsesChatModel model = routedResponsesModel(
+                "gpt-5-pro", 0.2d, 0.8d, 0.1d, 0.2d, 64, 9, 0);
+        assertEquals(9_000L, ReflectionTestUtils.getField(model, "timeoutMs"));
+    }
+
+    private static OpenAiResponsesChatModel routedResponsesModel(Object... args) throws Throwable {
+        NovaModelGuardProperties props = new NovaModelGuardProperties();
+        props.setMode(NovaModelGuardProperties.Mode.ROUTE_RESPONSES);
+        props.setOpenAiBaseOnly(false);
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("llm.base-url", "https://api.openai.com/v1")
+                .withProperty("llm.api-key-openai", "test-key-value");
+        @SuppressWarnings("unchecked")
+        ObjectProvider<KeyResolver> provider = mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(new KeyResolver(environment));
+        OpenAiChatModelGuardAspect aspect = new OpenAiChatModelGuardAspect(props, environment, provider);
+        return assertInstanceOf(
+                OpenAiResponsesChatModel.class,
+                aspect.guardLcWithTimeout(pjpForArgs(args)));
     }
 
     @Test

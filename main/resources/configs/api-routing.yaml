@@ -10,6 +10,8 @@ policy:
   chat_wait:
     request_cap_property: public.request-budget.max-time-budget-ms
     request_cap_source: main/resources/application-llm.yaml
+    request_cap_default_ms: 300000
+    request_cap_contract: wall-clock ceiling; latency/progress display stays; exhaustion = stop or fail-soft + explicit timeout reason
     endpoint_capacity_scope: service_endpoint
     caller_timeout_releases_capacity: false
     primary_timeout_division_for_fallback: false
@@ -152,6 +154,22 @@ routes:
     - id: zai
       tier: low_cost
       env: [ZAI_API_KEY]
+
+  # Web install → route registration (design+skeleton, 2026-09-27;
+  # docs: agent-prompts/devin-api-routing-web-install-skeleton-20260927/)
+  model_install:
+    - id: local_pull
+      tier: free_local
+      env: []
+      endpoint_class: "managed Ollama /api/pull"
+      seams: ["com.example.lms.config.LocalLlmProcessManager", "com.example.lms.service.ModelInstallService"]
+      notes: "managed endpoint만; unmanaged는 scripts/ollama-light-preload.ps1 운영자 경로"
+    - id: cloud_route_register
+      tier: low_cost
+      env: [CHAT_REMOTE_MODEL_SELECTION_ROUTES]
+      endpoint_class: "runtime allowlist (app.ai.remote-model-selection-routes 확장)"
+      seams: ["com.example.lms.service.ChatModelCatalogService", "com.example.lms.llm.gateway.CloudModelRouteClassifier", "com.example.lms.llm.gateway.HybridLlmGatewayProbeService"]
+      notes: "승인 routeKey 단위 add만; 전역 allow-remote flip 금지; llmrouter.models+manifest enabled는 바인드/운영자 단계"
 
 debug:
   logger: "com.example.lms.routing.ApiRoutingDebug"

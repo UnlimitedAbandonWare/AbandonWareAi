@@ -171,6 +171,60 @@ public class BraveSearchService implements WebSearchProvider {
     private final AtomicInteger monthlyRemaining;
     private volatile LocalDate lastResetDate = LocalDate.now();
     private volatile boolean quotaExhausted = false;
+    private volatile ai.abandonware.nova.orch.web.brave.BraveRateLimitState laneRateLimits =
+            new ai.abandonware.nova.orch.web.brave.BraveRateLimitState();
+
+    public void bindLaneRateLimitState(ai.abandonware.nova.orch.web.brave.BraveRateLimitState state) {
+        laneRateLimits = java.util.Objects.requireNonNull(state);
+    }
+
+    public boolean hasIndependentKeyLanes() {
+        return freeLaneConfigured && !ConfigValueGuards.isMissing(apiKey)
+                && !java.util.Objects.equals(apiKeyFree, apiKey);
+    }
+
+    /** Identity is resolved from the token pinned before dispatch, never from current quota. */
+    public String requestKeyLane(String token) {
+        if (!hasIndependentKeyLanes()) return "legacy";
+        if (java.util.Objects.equals(token, apiKeyFree)) return "free";
+        if (java.util.Objects.equals(token, apiKey)) return "base";
+        return "unknown";
+    }
+
+    private boolean baseLaneAvailable() {
+        return hasIndependentKeyLanes()
+                && !laneRateLimits.forLane("base").isBlocked(System.currentTimeMillis());
+    }
+
+    public boolean hasUsableIndependentLane() {
+        return configEnabled && hasIndependentKeyLanes() && (freeLaneActive() || baseLaneAvailable());
+    }
+
+    public String selectedKeyLane() {
+        return !hasIndependentKeyLanes() ? "legacy" : freeLaneActive() ? "free" : "base";
+    }
+
+    public void recordLaneQuotaExhausted(String lane, long resetAtEpochMs) {
+        laneRateLimits.forLane(lane).latchQuotaUntil(resetAtEpochMs);
+        if ("free".equals(lane) || "legacy".equals(lane)) markQuotaExhausted();
+        if (!hasUsableIndependentLane()) setOperationallyDisabled("quota_exhausted");
+        TraceStore.put("web.brave.providerDisabled", !isEnabled());
+    }
+
+    public void recordLaneCooldown(String lane, long untilEpochMs) {
+        if (hasIndependentKeyLanes() && ("free".equals(lane) || "base".equals(lane))) {
+            laneRateLimits.forLane(lane).cooldownUntilEpochMs().accumulateAndGet(untilEpochMs, Math::max);
+        } else {
+            cooldownUntilEpochMs.accumulateAndGet(untilEpochMs, Math::max);
+        }
+    }
+
+    private long startCooldown(LaneReservation lane, long waitMs) {
+        if (!hasIndependentKeyLanes()) return startCooldown(waitMs);
+        long duration = Math.min(MAX_429_COOLDOWN_MS, Math.max(0L, waitMs));
+        recordLaneCooldown(requestKeyLane(lane.token()), System.currentTimeMillis() + duration);
+        return duration;
+    }
     // Provider-evidence exhaustion (X-RateLimit-Remaining: 0 on a response, or
     // the external interceptor latch) is distinct from local reservation
     // accounting: a late slot release must not unlatch it.
@@ -373,6 +427,7 @@ public class BraveSearchService implements WebSearchProvider {
         quotaExhausted = false;
         providerReportedExhausted = false;
         lastResetDate = effectiveToday;
+        laneRateLimits.clearLaneLimits();
         clearOperationalDisableIfQuota();
     }
 
@@ -597,12 +652,24 @@ public class BraveSearchService implements WebSearchProvider {
      * skip scheduling Brave calls entirely to reduce thread & connection churn.
      */
     public boolean isCoolingDown() {
+        if (hasIndependentKeyLanes()) return cooldownRemainingMs() > 0L;
         long now = System.currentTimeMillis();
         return now < cooldownUntilEpochMs.get();
     }
 
     /** Remaining cooldown time (ms). Returns 0 if not cooling down. */
     public long cooldownRemainingMs() {
+        if (hasIndependentKeyLanes()) {
+            long now = System.currentTimeMillis();
+            if (hasUsableIndependentLane()) return 0L;
+            long free = quotaExhausted ? Long.MAX_VALUE
+                    : Math.max(0L, laneRateLimits.forLane("free").cooldownUntilEpochMs().get() - now);
+            long base = laneRateLimits.forLane("base").quotaExhaustedUntilEpochMs() > now
+                    ? Long.MAX_VALUE
+                    : Math.max(0L, laneRateLimits.forLane("base").cooldownUntilEpochMs().get() - now);
+            long remaining = Math.min(free, base);
+            return remaining == Long.MAX_VALUE ? 0L : remaining;
+        }
         long now = System.currentTimeMillis();
         long until = cooldownUntilEpochMs.get();
         long remaining = Math.max(0L, until - now);
@@ -1056,7 +1123,7 @@ public class BraveSearchService implements WebSearchProvider {
 
         // Gate 2: 로컬 월 쿼터
         if (props.monthlyQuota() > 0 && monthlyRemaining.get() <= 0) {
-            if (freeLaneConfigured && !ConfigValueGuards.isMissing(apiKey)) {
+            if (baseLaneAvailable()) {
                 quotaExhausted = true;
                 TraceStore.put("web.brave.keyLane", "base");
                 TraceStore.put("web.brave.failoverReason", "quota_exhausted");
@@ -1258,7 +1325,7 @@ public class BraveSearchService implements WebSearchProvider {
             TraceStore.put("web.brave.suppressed.http429", true);
             long retryAfterMs = rateLimitRetryAfterToMs(e.getResponseHeaders());
             long requestedCooldownMs = Math.max(Math.max(0L, props.cooldownMs()), retryAfterMs);
-            long cooldownMs = startCooldown(requestedCooldownMs);
+            long cooldownMs = startCooldown(laneReservation, requestedCooldownMs);
             traceRemoteCooldown("rate-limit", retryAfterMs, cooldownMs);
             completeFreeTierQuota(quotaReservation, e.getResponseHeaders(), false);
             if (permit != null) {
@@ -1287,7 +1354,7 @@ public class BraveSearchService implements WebSearchProvider {
                 long defaultCd = Math.min(base, 5000L);
                 long requestedCooldownMs = Math.max(retryAfterMs, defaultCd);
 
-                long cooldownMs = requestedCooldownMs > 0 ? startCooldown(requestedCooldownMs) : 0L;
+                long cooldownMs = requestedCooldownMs > 0 ? startCooldown(laneReservation, requestedCooldownMs) : 0L;
                 traceRemoteCooldown("http-503", retryAfterMs, cooldownMs);
                 completeFreeTierQuota(quotaReservation, e.getResponseHeaders(), false);
                 if (permit != null) {
@@ -1978,7 +2045,8 @@ public class BraveSearchService implements WebSearchProvider {
     // ---------------------------------------------------------------------
     boolean freeLaneActive() {
         return freeLaneConfigured && !quotaExhausted
-                && monthlyRemaining.get() > 0
+                && (props.monthlyQuota() <= 0 || monthlyRemaining.get() > 0)
+                && !laneRateLimits.forLane("free").isBlocked(System.currentTimeMillis())
                 && !ConfigValueGuards.isMissing(apiKeyFree);
     }
 
@@ -2006,18 +2074,19 @@ public class BraveSearchService implements WebSearchProvider {
     private void markQuotaExhaustedAndDisable(String reason) {
         quotaExhausted = true;
         monthlyRemaining.updateAndGet(v -> Math.max(0, v));
-        if (!(freeLaneConfigured && !ConfigValueGuards.isMissing(apiKey))) {
+        boolean providerDisabled = !baseLaneAvailable();
+        if (providerDisabled) {
             setOperationallyDisabled(reason == null || reason.isBlank() ? "quota_exhausted" : reason);
         }
-        long cdMs = Math.min(MAX_429_COOLDOWN_MS, Math.max(5000L, props.cooldownMs()));
-        startCooldown(cdMs);
+        long cdMs = providerDisabled ? Math.min(MAX_429_COOLDOWN_MS, Math.max(5000L, props.cooldownMs())) : 0L;
+        if (providerDisabled) startCooldown(cdMs);
         traceFreeTierQuota(monthlyRemaining.get(), true, disabledReason);
         try {
             String safeDisabledReason = safeDisabledReason(disabledReason, "quota_exhausted");
             TraceStore.put("web.brave.quota.exhausted", true);
             TraceStore.put("web.brave.quota.cooldownMs", cdMs);
             TraceStore.put("web.brave.cooldown.reason", "quota_exhausted");
-            TraceStore.put("web.brave.providerDisabled", true);
+            TraceStore.put("web.brave.providerDisabled", providerDisabled);
             TraceStore.put("web.brave.disabledReason", safeDisabledReason);
             TraceStore.put("web.brave.disabledReasonCanonical", safeDisabledReason);
         } catch (Exception ignore) {
@@ -2047,6 +2116,11 @@ public class BraveSearchService implements WebSearchProvider {
     private Integer parseMonthlyRemainingHeader(HttpHeaders headers, String context) {
         if (headers == null) {
             return null;
+        }
+        String limit = headers.getFirst("X-RateLimit-Limit");
+        if (limit != null) {
+            String[] windows = limit.split(",");
+            if (windows.length > 1 && "0".equals(windows[windows.length - 1].trim())) return null;
         }
         String remainingHeader = headers.getFirst("X-RateLimit-Remaining");
         if (remainingHeader == null || remainingHeader.isBlank()) {

@@ -1,6 +1,6 @@
 ---
 name: demo1-grok-subscription-review
-description: Use when the user explicitly requests Grok
+description: Use when the user explicitly requests a Grok review or subscription check — grok_review_change status→review inside the acceptance window, never a CLI/API/BYOK fallback bypass.
 ---
 
 # Grok subscription review

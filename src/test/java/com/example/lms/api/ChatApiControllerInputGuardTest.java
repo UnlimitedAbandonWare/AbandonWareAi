@@ -507,6 +507,7 @@ class ChatApiControllerInputGuardTest {
             when(historyService.startNewSession(any(), any(), any(), any(), any()))
                     .thenReturn(Optional.of(session));
             when(historyService.getSessionWithMessages(16L)).thenReturn(session);
+            when(historyService.getSessionForRequest(16L)).thenReturn(session);
             when(historyService.getLastAssistantMessage(16L))
                     .thenReturn(Optional.of("An older unrelated answer."));
             when(historyService.appendMessageReturningId(16L, "assistant", "Current answer."))
@@ -567,6 +568,7 @@ class ChatApiControllerInputGuardTest {
         when(historyService.startNewSession(any(), any(), any(), any(), any()))
                 .thenReturn(Optional.of(session));
         when(historyService.getSessionWithMessages(15L)).thenReturn(session);
+        when(historyService.getSessionForRequest(15L)).thenReturn(session);
         when(historyService.getLastAssistantMessage(15L)).thenReturn(Optional.of("Persisted answer."));
         when(historyService.appendMessageReturningId(15L, "assistant", "Persisted answer."))
                 .thenReturn(57L);
@@ -858,6 +860,7 @@ class ChatApiControllerInputGuardTest {
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(27L)).thenReturn(session);
+        when(historyService.getSessionForRequest(27L)).thenReturn(session);
         when(historyService.appendMessageReturningId(27L, "assistant", "R1 late answer"))
                 .thenReturn(71L);
         when(historyService.appendMessageReturningId(27L, "assistant", "R2 answer"))
@@ -988,6 +991,7 @@ class ChatApiControllerInputGuardTest {
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(28L)).thenReturn(session);
+        when(historyService.getSessionForRequest(28L)).thenReturn(session);
         when(historyService.appendMessageReturningId(28L, "assistant", "R2 answer"))
                 .thenReturn(82L);
 
@@ -1127,6 +1131,7 @@ class ChatApiControllerInputGuardTest {
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(29L)).thenReturn(session);
+        when(historyService.getSessionForRequest(29L)).thenReturn(session);
         when(historyService.appendMessageReturningId(29L, "assistant", "R1 answer"))
                 .thenReturn(91L);
         CountDownLatch entered = new CountDownLatch(1);
@@ -1183,6 +1188,7 @@ class ChatApiControllerInputGuardTest {
 
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(30L)).thenReturn(session);
+        when(historyService.getSessionForRequest(30L)).thenReturn(session);
         when(settingsService.getAllSettings())
                 .thenReturn(java.util.Map.of())
                 .thenReturn(java.util.Map.of())
@@ -1215,6 +1221,7 @@ class ChatApiControllerInputGuardTest {
         foreign.setId(90L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-b");
         when(historyService.getSessionWithMessages(90L)).thenReturn(foreign);
+        when(historyService.getSessionForRequest(90L)).thenReturn(foreign);
 
         MockHttpServletRequest foreignRequest = new MockHttpServletRequest();
         foreignRequest.addHeader("X-Chat-Run-Token", "opaque-invalid-token");
@@ -1269,6 +1276,7 @@ class ChatApiControllerInputGuardTest {
         session.setId(92L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(92L)).thenReturn(session);
+        when(historyService.getSessionForRequest(92L)).thenReturn(session);
         ChatApiController controller = controller(
                 historyService, chatService, settingsService, ownerKeyResolver, runRegistry);
         ChatRunRegistry.BeginResult run = runRegistry.beginOrJoin(92L);
@@ -1299,6 +1307,7 @@ class ChatApiControllerInputGuardTest {
         session.setId(94L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(94L)).thenReturn(session);
+        when(historyService.getSessionForRequest(94L)).thenReturn(session);
         ChatApiController controller = controller(
                 historyService, chatService, settingsService, ownerKeyResolver, runRegistry);
         ChatRunExecutionContext run = runRegistry.beginOrJoin(94L).context();
@@ -1329,21 +1338,12 @@ class ChatApiControllerInputGuardTest {
     }
 
     @Test
-    void acknowledgementWinningAfterWaitTimeoutStillAllowsGeneration() {
+    void acknowledgementTimeoutStillAllowsSameRunGenerationAndReplay() {
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ChatService chatService = mock(ChatService.class);
         SettingsService settingsService = mock(SettingsService.class);
         ClientOwnerKeyResolver ownerKeyResolver = mock(ClientOwnerKeyResolver.class);
-        ChatRunRegistry runRegistry = new ChatRunRegistry() {
-            @Override
-            public boolean cancelIfUnacknowledged(
-                    ChatRunExecutionContext context,
-                    List<org.springframework.http.codec.ServerSentEvent<ChatStreamEvent>> terminalEvidence) {
-                assertTrue(acknowledgeExact(93L, context.clientToken()),
-                        "the fixture ACK must win immediately after the bounded wait");
-                return super.cancelIfUnacknowledged(context, terminalEvidence);
-            }
-        };
+        ChatRunRegistry runRegistry = new ChatRunRegistry();
         org.springframework.test.util.ReflectionTestUtils.setField(runRegistry, "replayCapacity", 16);
         org.springframework.test.util.ReflectionTestUtils.setField(runRegistry, "ttlSeconds", 60);
         ChatApiController controller = controller(
@@ -1353,6 +1353,7 @@ class ChatApiControllerInputGuardTest {
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(historyService.getSessionWithMessages(93L)).thenReturn(session);
+        when(historyService.getSessionForRequest(93L)).thenReturn(session);
         when(historyService.appendMessageReturningId(93L, "assistant", "late ACK answer"))
                 .thenReturn(93L);
         when(chatService.continueChat(any(ChatRequestDto.class), any()))
@@ -1375,8 +1376,12 @@ class ChatApiControllerInputGuardTest {
         assertTrue(events.stream().anyMatch(event -> event.data() != null
                         && "final".equals(event.data().type())
                         && "late ACK answer".equals(event.data().data())),
-                "a late ACK that wins cancellation must continue the same run");
+                "ACK delay must not cancel an accepted run");
         verify(chatService, times(1)).continueChat(any(ChatRequestDto.class), any());
+        String token = runRegistry.currentRunToken(93L).orElseThrow();
+        assertEquals(ChatRunRegistry.Status.DONE, runRegistry.describeExact(93L, token).orElseThrow().status());
+        assertTrue(runRegistry.attachExact(93L, token).orElseThrow().collectList().block().stream()
+                .anyMatch(event -> "final".equals(event.event())));
     }
 
     @Test
@@ -2106,6 +2111,7 @@ class ChatApiControllerInputGuardTest {
         session.setId(140L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(140L)).thenReturn(session);
+        when(historyService.getSessionForRequest(140L)).thenReturn(session);
         ChatApiController controller = controller(
                 historyService, chatService, settingsService, ownerKeyResolver, runRegistry);
         ChatRunRegistry.BeginResult active = runRegistry.beginOrJoin(140L);
@@ -2136,6 +2142,7 @@ class ChatApiControllerInputGuardTest {
         session.setId(141L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(141L)).thenReturn(session);
+        when(historyService.getSessionForRequest(141L)).thenReturn(session);
         ChatApiController controller = controller(
                 historyService, chatService, settingsService, ownerKeyResolver, runRegistry);
 
@@ -2173,6 +2180,7 @@ class ChatApiControllerInputGuardTest {
         session.setId(142L);
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(142L)).thenReturn(session);
+        when(historyService.getSessionForRequest(142L)).thenReturn(session);
         ChatApiController controller = spy(controller(
                 historyService, chatService, settingsService, ownerKeyResolver, runRegistry));
         doThrow(new IllegalStateException("trace attach fixture"))
@@ -2193,7 +2201,7 @@ class ChatApiControllerInputGuardTest {
     }
 
     @Test
-    void ackRequiredDisconnectBeforeSessionReadyCancelsBeforeModelGeneration() throws Exception {
+    void ackRequiredDisconnectBeforeSessionReadyPreservesAcceptedRun() throws Exception {
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ChatService chatService = mock(ChatService.class);
         SettingsService settingsService = mock(SettingsService.class);
@@ -2214,6 +2222,10 @@ class ChatApiControllerInputGuardTest {
             assertTrue(releaseSessionCreation.await(3, TimeUnit.SECONDS));
             return Optional.of(created);
         });
+        when(chatService.continueChat(any(ChatRequestDto.class), any()))
+                .thenReturn(ChatResult.of("detached fixture answer", "mock-model", false));
+        when(historyService.appendMessageReturningId(145L, "assistant", "detached fixture answer"))
+                .thenReturn(1451L);
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.addHeader("X-Chat-Run-Ack-Required", "1");
 
@@ -2226,7 +2238,7 @@ class ChatApiControllerInputGuardTest {
         releaseSessionCreation.countDown();
 
         ChatRunRegistry.RunView terminal = null;
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(6);
         while (System.nanoTime() < deadline && terminal == null) {
             Optional<String> token = runRegistry.currentRunToken(145L);
             if (token.isPresent()) {
@@ -2236,10 +2248,12 @@ class ChatApiControllerInputGuardTest {
             if (terminal == null) Thread.sleep(10L);
         }
 
-        assertNotNull(terminal, "the unacknowledged run should become terminal");
-        assertEquals(ChatRunRegistry.Status.CANCELLED, terminal.status());
+        assertNotNull(terminal, "the detached run should complete and retain replay");
+        assertEquals(ChatRunRegistry.Status.DONE, terminal.status());
         assertFalse(runRegistry.isRunning(145L));
-        verifyNoInteractions(chatService);
+        verify(chatService, times(1)).continueChat(any(ChatRequestDto.class), any());
+        assertTrue(runRegistry.attachExact(145L, runRegistry.currentRunToken(145L).orElseThrow()).orElseThrow().collectList().block()
+                .stream().anyMatch(event -> "final".equals(event.event())));
     }
 
     @Test
@@ -2256,6 +2270,7 @@ class ChatApiControllerInputGuardTest {
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(historyService.getSessionWithMessages(143L)).thenReturn(null);
+        when(historyService.getSessionForRequest(143L)).thenReturn(null);
         when(historyService.startNewSession(any(), any(), any(), any(), any()))
                 .thenReturn(Optional.of(recovered));
         when(historyService.appendMessageReturningId(144L, "assistant", "recovered answer"))
@@ -2282,6 +2297,9 @@ class ChatApiControllerInputGuardTest {
                 .findFirst()
                 .orElseThrow();
         assertEquals(144L, sessionEvent.sessionId());
+        assertNotNull(sessionEvent.traceSignal());
+        assertTrue(sessionEvent.traceSignal().requestIdHash().matches("hash:[0-9a-f]{12}"));
+        assertTrue(sessionEvent.traceSignal().traceIdHash().matches("hash:[0-9a-f]{12}"));
         assertTrue(runRegistry.attachExact(144L, sessionEvent.data()).isPresent());
         assertFalse(runRegistry.attachExact(143L, sessionEvent.data()).isPresent());
         assertFalse(runRegistry.isRunning(143L));
@@ -2321,6 +2339,7 @@ class ChatApiControllerInputGuardTest {
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.getSessionWithMessages(requestedId)).thenReturn(existing ? session : null);
+        when(historyService.getSessionForRequest(requestedId)).thenReturn(existing ? session : null);
         when(historyService.startNewSession(any(), any(), any(), any(), any()))
                 .thenReturn(Optional.of(session));
         when(historyService.appendMessageReturningId(resolvedId, "assistant", "recovery answer"))
@@ -2349,6 +2368,36 @@ class ChatApiControllerInputGuardTest {
         verify(historyService).appendMessageReturningId(resolvedId, "assistant", "recovery answer");
     }
 
+    @Test
+    void strictOauthTerminalIsVisibleThroughExistingErrorEventWithoutFallback() {
+        var history = mock(ChatHistoryService.class);
+        var chat = mock(ChatService.class);
+        var settings = mock(SettingsService.class);
+        var resolver = mock(ClientOwnerKeyResolver.class);
+        var controller = controller(history, chat, settings, resolver);
+        var session = new ChatSession("synthetic OAuth failure", "owner-a", "ANON");
+        session.setId(904L);
+        when(settings.getAllSettings()).thenReturn(Map.of());
+        when(resolver.ownerKey()).thenReturn("owner-a");
+        when(history.startNewSession(any(), any(), any(), any(), any())).thenReturn(Optional.of(session));
+        var terminal = new com.example.lms.llm.gateway.LlmResponseTerminalException(
+                "chatgpt_oauth_stream_required", com.example.lms.llm.gateway.LlmFailureClass.PROVIDER_ERROR,
+                null, null, "failed", null, null);
+        when(chat.continueChat(any(ChatRequestDto.class), any())).thenThrow(terminal);
+        var events = controller.chatStream(ChatRequestDto.builder().message("synthetic bounded request")
+                        .model("chatgpt-oauth:gpt-5.6-luna").strictModelSelection(true)
+                        .useRag(false).useWebSearch(false).build(), false, false, null, new MockHttpServletRequest())
+                .collectList().block(Duration.ofSeconds(5));
+        assertNotNull(events);
+        assertEquals(1, events.stream().map(org.springframework.http.codec.ServerSentEvent::data)
+                .filter(event -> event != null && "error".equals(event.type())
+                        && "chatgpt_oauth_stream_required".equals(event.data())).count());
+        assertTrue(events.stream().map(org.springframework.http.codec.ServerSentEvent::data)
+                .anyMatch(event -> event != null && event.generationTermination() != null));
+        verify(chat, times(1)).continueChat(any(ChatRequestDto.class), any());
+        verify(history, never()).appendMessageReturningId(904L, "assistant", "synthetic answer");
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
             "sync,false", "sync,true", "chat,false", "chat,true", "stream,false", "stream,true"
@@ -2366,7 +2415,24 @@ class ChatApiControllerInputGuardTest {
         assertNewSessionAttachmentDiscovery(route, true, boundary);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"owned", "foreign", "linked"})
+    void existingStreamSessionAssociatesOnlyItsOwnersUnboundAttachments(String boundary) {
+        assertSessionAttachmentDiscovery("stream", false, boundary, true);
+    }
+
     private static void assertNewSessionAttachmentDiscovery(String route, boolean recovered, String boundary) {
+        assertSessionAttachmentDiscovery(route, recovered, boundary, false);
+    }
+
+    private static void assertSessionAttachmentDiscovery(
+            String route, boolean recovered, String boundary, boolean existing) {
+        var bindingEvents = new com.example.lms.debug.DebugEventStore();
+        ReflectionTestUtils.setField(bindingEvents, "enabled", true);
+        ReflectionTestUtils.setField(bindingEvents, "maxSize", 20);
+        ReflectionTestUtils.setField(bindingEvents, "windowMs", 60000L);
+        ReflectionTestUtils.setField(bindingEvents, "maxPerWindow", 20L);
+        ReflectionTestUtils.setField(bindingEvents, "flushIntervalMs", 15000L);
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ChatService chatService = mock(ChatService.class);
         SettingsService settingsService = mock(SettingsService.class);
@@ -2381,6 +2447,7 @@ class ChatApiControllerInputGuardTest {
         when(storage.save(any(), eq("chat"))).thenReturn("/uploads/chat/session-association.txt");
         AttachmentService attachments = new AttachmentService(storage, new com.example.lms.file.FileIngestionService());
         ReflectionTestUtils.setField(controller, "attachmentService", attachments);
+        ReflectionTestUtils.setField(controller, "traceBundleEvents", bindingEvents);
         AttachmentOwnerIdentity owner = AttachmentOwnerIdentity.forAnonymous("owner-a");
         AttachmentOwnerIdentity fileOwner = "foreign".equals(boundary)
                 ? AttachmentOwnerIdentity.forAnonymous("owner-b") : owner;
@@ -2394,19 +2461,23 @@ class ChatApiControllerInputGuardTest {
         session.setId(902L);
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
+        when(historyService.getSessionWithMessages(902L)).thenReturn(session);
+        when(historyService.getSessionForRequest(902L)).thenReturn(session);
         when(historyService.getSessionWithMessages(901L)).thenReturn(null);
+        when(historyService.getSessionForRequest(901L)).thenReturn(null);
         when(historyService.startNewSession(any(), any(), any(), any(), any()))
                 .thenReturn(Optional.of(session));
         when(historyService.appendMessageReturningId(902L, "assistant", "attachment answer"))
                 .thenReturn(9021L);
         AtomicInteger visibleAtGeneration = new AtomicInteger(-1);
         when(chatService.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+            com.example.lms.search.TraceStore.clear(); // actual workflow clears controller trace fields
             visibleAtGeneration.set(attachments.findBySession("902", owner).size());
             return ChatResult.of("attachment answer", "mock-model", false);
         });
         ChatRequestDto request = ChatRequestDto.builder()
                 .message("use the uploaded document")
-                .sessionId(recovered ? 901L : null)
+                .sessionId(existing ? Long.valueOf(902L) : recovered ? Long.valueOf(901L) : null)
                 .attachmentIds(List.of(saved.id()))
                 .useRag(false)
                 .useWebSearch(false)
@@ -2427,6 +2498,16 @@ class ChatApiControllerInputGuardTest {
             assertEquals(902L, response.getBody().getSessionId());
         }
         int expected = "owned".equals(boundary) ? 1 : 0;
+        if (existing) {
+            var binding = bindingEvents.list(20).stream()
+                    .filter(event -> "ChatApiController.stream.attachments".equals(event.where()))
+                    .findFirst().orElseThrow(() -> new AssertionError("bind outcome must survive workflow trace clearing"));
+            assertEquals(expected == 1, binding.data().get("attachment.bind.applied"));
+            assertEquals("owned".equals(boundary) ? "bound" : "foreign".equals(boundary)
+                    ? "owner_mismatch" : "different_session", binding.data().get("attachment.bind.reason"));
+            assertEquals(1, binding.data().get("attachmentIdCount"));
+            assertFalse(binding.toString().contains(saved.id()));
+        }
         assertEquals(expected, visibleAtGeneration.get(), "session discovery must be ready before generation");
         assertEquals(expected, attachments.findBySession("902", owner).size(),
                 "later turns must discover the same owner-scoped attachments without explicit IDs");

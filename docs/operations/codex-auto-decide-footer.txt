@@ -1,0 +1,4 @@
+[AUTO-DECIDE]
+되돌릴 수 있는 판단(범위·기준 해석·문서-라이브 불일치·이름/위치·보조 도구 실패·부분 게이트 실패·무관 테스트 실패·검증용 재기동·구현 방식·기본값 OFF·지시 충돌)은 묻지 말고 `$demo1-codex-auto-decide` 표로 AUTO 결정하고, 보고서에 `AUTO_DECISION:` 줄로 기록한다.
+판정 도구: python -B scripts/codex_question_classifier.py --text "질문 문장"  (AUTO=0 / ASK_ONCE=3 / HOLD=4)
+묻는 건 ASK_ONCE 목록뿐: 데이터·데이터셋 삭제, DB 스키마 변경, push/commit/원격 변경, 보안·인증 정책, 유료 호출 상한 초과, 공개 배포·cloudflared, 기능 플래그 기본값 ON, 사용자 소유 계정/OAuth 전역 배정. 질문은 한 번에 하나.

@@ -90,7 +90,7 @@ final class ChatSessionDetailResponseBuilder {
                                     tracesByAssistant.put(assistantId, new ChatApiController.TurnTraceDto(
                                             assistantId,
                                             pointer.get().snapshotId(),
-                                            mergeModelMetaField(pointer.get().projection(), lastModelMeta)));
+                                            mergeModelMetaField(pointer.get().projection(), lastModelMeta, session.getId())));
                                 }
                             }
                             lastModelMeta = null;
@@ -173,12 +173,15 @@ final class ChatSessionDetailResponseBuilder {
         return ok.body(detail);
     }
 
-    private static Map<String, String> mergeModelMetaField(Map<String, String> projection, String modelMeta) {
-        if (modelMeta == null || modelMeta.isBlank() || !SAFE_MODEL_META.matcher(modelMeta).matches()) {
-            return projection;
-        }
+    private static Map<String, String> mergeModelMetaField(Map<String, String> projection, String modelMeta, Long sessionId) {
         Map<String, String> merged = new LinkedHashMap<>(projection);
-        merged.put("modelUsed", modelMeta);
+        if (modelMeta != null && !modelMeta.isBlank() && SAFE_MODEL_META.matcher(modelMeta).matches()) {
+            merged.put("modelUsed", modelMeta);
+        }
+        // Only assistant-bound envelopes can use the session-owned detail endpoint.
+        if (sessionId != null && sessionId > 0 && projection.containsKey("assistantMessageId")) {
+            merged.put("sessionId", String.valueOf(sessionId));
+        }
         return Map.copyOf(merged);
     }
 }

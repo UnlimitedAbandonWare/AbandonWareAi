@@ -1,6 +1,6 @@
 ---
 name: demo1-core-request-router
-description: Use at the start of a demo-1 user request that may touch Meta Ray-Ban Display
+description: Use when a demo-1 user request may touch Meta Ray-Ban Display, core RAG/LLM logic, or provider/API wiring — classify once, one primary skill per phase
 ---
 
 # Demo1 Core Request Router

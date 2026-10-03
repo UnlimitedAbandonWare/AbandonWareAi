@@ -359,6 +359,90 @@ class DebugEventsDiagnosticsControllerSseLifecycleTest {
                 null, null, null, null, null, Map.of(), null, null);
     }
 
+    @Test
+    void missingReconnectBoundaryReportsGapWithoutEchoingTheUntrustedId() {
+        DebugEventStore store = mock(DebugEventStore.class);
+        when(store.list(anyInt())).thenAnswer(ignored -> new ArrayList<>(List.of(event("retained", 1))));
+        DebugEventsSseRuntime runtime = runtime(1, new RecordingThreadFactory());
+        RecordingEmitter emitter = new RecordingEmitter(300_000L);
+        new DebugEventsDiagnosticsController(store, runtime, 300_000L, ignored -> emitter)
+                .stream(50, 200L, 60_000L, "synthetic-private-resume-id");
+        await(() -> emitter.events.size() == 1);
+        emitter.fireCompletion();
+        await(() -> runtime.completedTaskCount() == 1);
+        assertEquals(1, emitter.gaps.size());
+        assertEquals("cursor_not_retained", emitter.gaps.get(0).get("reason"));
+        assertEquals(false, emitter.gaps.get(0).get("historyComplete"));
+        assertFalse(emitter.gaps.toString().contains("synthetic-private"));
+        assertEquals(0, runtime.activeCount());
+    }
+
+    @Test
+    void reconnectBoundaryOutsideReplayWindowIsExplicit() {
+        DebugEventStore store = mock(DebugEventStore.class);
+        when(store.get("older")).thenReturn(event("older", 1));
+        when(store.list(anyInt())).thenAnswer(ignored -> new ArrayList<>(List.of(event("newer", 2))));
+        DebugEventsSseRuntime runtime = runtime(1, new RecordingThreadFactory());
+        RecordingEmitter emitter = new RecordingEmitter(300_000L);
+        new DebugEventsDiagnosticsController(store, runtime, 300_000L, ignored -> emitter)
+                .stream(1, 200L, 60_000L, "older");
+        await(() -> emitter.events.size() == 1);
+        emitter.fireCompletion();
+        await(() -> runtime.completedTaskCount() == 1);
+        assertEquals(1, emitter.gaps.size());
+        assertEquals("replay_window_exceeded", emitter.gaps.get(0).get("reason"));
+    }
+
+    @Test
+    void emptyReplayAfterResumeLookupDoesNotRepeatTheSameGapOnEveryPoll() {
+        DebugEventStore store = mock(DebugEventStore.class);
+        when(store.get("evicted-during-lookup")).thenReturn(event("evicted-during-lookup", 1));
+        AtomicInteger reads = new AtomicInteger();
+        when(store.list(anyInt())).thenAnswer(ignored -> {
+            reads.incrementAndGet();
+            return new ArrayList<>();
+        });
+        DebugEventsSseRuntime runtime = runtime(1, new RecordingThreadFactory());
+        RecordingEmitter emitter = new RecordingEmitter(300_000L);
+        new DebugEventsDiagnosticsController(store, runtime, 300_000L, ignored -> emitter)
+                .stream(1, 200L, 60_000L, "evicted-during-lookup");
+        await(() -> reads.get() >= 3);
+        emitter.fireCompletion();
+        await(() -> runtime.completedTaskCount() == 1);
+        assertEquals(1, emitter.gaps.size());
+        assertEquals(0, emitter.gaps.get(0).get("availableWindow"));
+        assertTrue(emitter.events.isEmpty());
+        assertEquals(0, runtime.activeCount());
+    }
+
+    @Test
+    void largeBurstReportsGapAndReplaysOnlyTheBoundedWindowOnce() {
+        AtomicReference<List<DebugEvent>> events = new AtomicReference<>(List.of(event("first", 900)));
+        AtomicInteger reads = new AtomicInteger();
+        DebugEventStore store = mock(DebugEventStore.class);
+        when(store.list(anyInt())).thenAnswer(call -> {
+            reads.incrementAndGet();
+            return new ArrayList<>(events.get().stream().limit(call.<Integer>getArgument(0)).toList());
+        });
+        DebugEventsSseRuntime runtime = runtime(1, new RecordingThreadFactory());
+        RecordingEmitter emitter = new RecordingEmitter(300_000L);
+        new DebugEventsDiagnosticsController(store, runtime, 300_000L, ignored -> emitter)
+                .stream(50, 200L, 60_000L, null);
+        await(() -> emitter.events.size() == 1);
+        List<DebugEvent> burst = new ArrayList<>();
+        for (int i = 0; i < 620; i++) burst.add(event("burst-" + i, 100));
+        events.set(burst);
+        await(() -> emitter.events.size() == 121);
+        int deliveredAt = reads.get();
+        await(() -> reads.get() > deliveredAt);
+        emitter.fireCompletion();
+        await(() -> runtime.completedTaskCount() == 1);
+        assertEquals(1, emitter.gaps.size());
+        assertEquals(120, emitter.gaps.get(0).get("availableWindow"));
+        assertEquals(121, emitter.events.stream().map(DebugEvent::id).distinct().count());
+        assertEquals(0, runtime.activeCount());
+    }
+
     private DebugEventsDiagnosticsController controller(DebugEventsSseRuntime runtime, RecordingEmitter emitter) {
         return new DebugEventsDiagnosticsController(emptyStore(), runtime, 300_000L, ignored -> emitter);
     }
@@ -402,6 +486,7 @@ class DebugEventsDiagnosticsControllerSseLifecycleTest {
         private final AtomicBoolean failSend = new AtomicBoolean();
         private final AtomicBoolean failDataSend = new AtomicBoolean();
         private final List<DebugEvent> events = new CopyOnWriteArrayList<>();
+        private final List<Map<?, ?>> gaps = new CopyOnWriteArrayList<>();
         private final CountDownLatch firstSend = new CountDownLatch(1);
 
         RecordingEmitter(long timeoutMs) {
@@ -431,6 +516,9 @@ class DebugEventsDiagnosticsControllerSseLifecycleTest {
                 throw new IOException("controlled");
             }
             for (DataWithMediaType part : event.build()) {
+                if (part.getData() instanceof Map<?, ?> data && data.containsKey("historyComplete")) {
+                    gaps.add(data);
+                }
                 if (part.getData() instanceof DebugEvent data) {
                     if (failDataSend.get()) {
                         throw new IOException("controlled-data");

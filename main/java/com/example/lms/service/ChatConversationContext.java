@@ -75,7 +75,8 @@ public record ChatConversationContext(List<Turn> recent,String summary,List<Turn
             else throw new IllegalArgumentException("focus_model_context_limit");
             ChatMessage current=result.get(result.size()-1);
             result.subList(contextIndex,result.size()).clear();
-            result.add(SystemMessage.from(builder.build(prompt.toBuilder().memory(reduced.memoryText()).build())));
+            String reference=builder.build(prompt.toBuilder().memory(reduced.memoryText()).build());
+            result.add(prompt.preparedContextPacket()==null?SystemMessage.from(reference):UserMessage.from(reference));
             result.addAll(reduced.roleMessages());result.add(current);
         }
         return List.copyOf(result);

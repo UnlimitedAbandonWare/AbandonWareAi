@@ -1,6 +1,6 @@
 ---
 name: demo1-meta-display-resume
-description: Use when resuming the existing Meta Ray-Ban Display task
+description: Use when resuming the existing Meta Ray-Ban Display task — E0 intake/next-step selector, stale-record judgement, handoff to sync-client/verification roles without re-review.
 ---
 
 # Display 작업 접수와 재개

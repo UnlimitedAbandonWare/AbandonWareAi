@@ -49,6 +49,8 @@ class TraceHtmlAblationAttributionCalloutRendererTest {
 
         assertTrue(html.contains("Trace-Ablation Attribution"));
         assertTrue(html.contains("risk=0.812"));
+        assertTrue(html.contains("관측 근거로 계산한 휴리스틱"));
+        assertTrue(html.contains("실제 재실행으로 측정한 품질 향상률이 아닙니다"));
         assertTrue(html.contains("degraded&lt;script&gt;"));
         assertTrue(html.contains("v&lt;1&gt;"));
         assertTrue(html.contains("web&lt;script&gt;"));

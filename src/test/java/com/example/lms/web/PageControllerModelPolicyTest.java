@@ -11,6 +11,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.ui.ExtendedModelMap;
 import org.springframework.web.servlet.mvc.support.RedirectAttributesModelMap;
 
@@ -34,6 +36,37 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class PageControllerModelPolicyTest {
+
+    @Test
+    void chatTraceDockShellIsVisibleWithoutAdminReadAccess() {
+        var modelRepo = mock(ModelEntityRepository.class);
+        when(modelRepo.findAll()).thenReturn(List.of());
+        var currentRepo = mock(CurrentModelRepository.class);
+        when(currentRepo.findById(1L)).thenReturn(Optional.empty());
+        var controller = new PageController(modelRepo, currentRepo, mock(ModelSettingsService.class));
+        var model = new ExtendedModelMap();
+        assertEquals("chat-ui", controller.chatUi(model, null, "compact"));
+        assertEquals(true, model.getAttribute("chatTraceDockShell"));
+        assertEquals(false, model.getAttribute("chatDiagnosticsReadAllowed"));
+        assertEquals(false, model.getAttribute("chatDiagnosticsEnabled"));
+        assertEquals("compact", model.getAttribute("chatSurface"));
+    }
+
+    @Test
+    void chatTraceDockAdminReadFlagTracksExistingAdminDecision() {
+        var modelRepo = mock(ModelEntityRepository.class);
+        when(modelRepo.findAll()).thenReturn(List.of());
+        var currentRepo = mock(CurrentModelRepository.class);
+        when(currentRepo.findById(1L)).thenReturn(Optional.empty());
+        var controller = new PageController(modelRepo, currentRepo, mock(ModelSettingsService.class));
+        var admin = new UsernamePasswordAuthenticationToken("fixture", "fixture",
+                List.of(new SimpleGrantedAuthority("ROLE_ADMIN")));
+        var model = new ExtendedModelMap();
+        assertEquals("chat-ui", controller.chatUi(model, admin, null));
+        assertEquals(true, model.getAttribute("chatTraceDockShell"));
+        assertEquals(true, model.getAttribute("chatDiagnosticsReadAllowed"));
+        assertEquals(true, model.getAttribute("chatDiagnosticsEnabled"));
+    }
 
     @ParameterizedTest
     @MethodSource("genericFailureModelIds")

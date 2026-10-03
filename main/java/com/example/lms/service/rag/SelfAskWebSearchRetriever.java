@@ -179,7 +179,8 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
         }
     }
 
-    private record SearchAttemptMeta(String lane, String query, double weight, int requestedTopK, long laneTimeboxMs) {
+private record SearchAttemptMeta(String lane, String query, double weight, int requestedTopK,
+                                     long laneTimeboxMs, int ordinal, long submittedAtNanos, long allowanceNanos) {
     }
 
     private record LaneBudget(int initial, int remaining) {
@@ -446,10 +447,17 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                     zero100RolloverState.preferredLane(), zero100RolloverState.cooledLane());
 
 
-            // 해당 depth의 키워드들을 병렬 검색 (상한 적용)
-                List<Future<SearchAttempt>> futures = new ArrayList<>();
+            // One monotonic level allowance starts before admission, including CallerRuns submission time.
+            final long levelStartedNanos = System.nanoTime();
+            final long levelAllowanceNanos = TimeUnit.SECONDS.toNanos(Math.max(0, reqSelfAskTimeoutSec));
+            List<Future<SearchAttempt>> futures = new ArrayList<>();
             List<SearchAttemptMeta> futureMeta = new ArrayList<>();
+            BlockingQueue<Integer> completions = new LinkedBlockingQueue<>();
+            List<SearchAttempt> attempts;
+            try {
             for (String kw : currentKeywords) {
+                if (Thread.currentThread().isInterrupted()
+                        || remainingLevelNanos(levelStartedNanos, levelAllowanceNanos) <= 0) break;
                 String kwCanonForLane = canonicalKeyword(kw);
                 String laneForKw = seedLaneByCanon.getOrDefault(kwCanonForLane, "bfs");
                 double laneWeightForKw = seedWeightByCanon.getOrDefault(kwCanonForLane, 1.0d);
@@ -475,36 +483,32 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 log.debug("[SelfAsk][d{}] queryHash={}", depth, SafeRedactor.hash12(kw));
                 log.debug("[SelfAsk][d{}] lane={}, qHash={}",
                         depth, laneForKw, SafeRedactor.hash12(kw));
-                Future<SearchAttempt> f = submitSearchAttempt(kw, topKForKw);
+                int ordinal = futures.size();
+                long submittedAtNanos = System.nanoTime();
+                long laneTimeboxMs = zero100LaneTimeboxMs(laneForKw, reqPerRequestTimeoutMs);
+                long attemptAllowanceNanos = Math.min(TimeUnit.MILLISECONDS.toNanos(
+                        Math.max(0L, Math.min(reqPerRequestTimeoutMs, laneTimeboxMs))),
+                        remainingLevelNanos(levelStartedNanos, levelAllowanceNanos));
+                Future<SearchAttempt> f = submitSearchAttempt(kw, topKForKw, ordinal, completions);
                 futures.add(f);
                 futureMeta.add(new SearchAttemptMeta(laneForKw, kw, laneWeightForKw, topKForKw,
-                        zero100LaneTimeboxMs(laneForKw, reqPerRequestTimeoutMs)));
+                        laneTimeboxMs, ordinal, submittedAtNanos, attemptAllowanceNanos));
 
             }
 
-            // Level-wide budget for this depth.
-            // Important: we do NOT rely on CompletableFuture.orTimeout(), because it only times out the
-            // future result and may leave the underlying work running ("zombie" tasks).
-            final long levelDeadlineMs = System.currentTimeMillis() + java.util.concurrent.TimeUnit.SECONDS.toMillis(reqSelfAskTimeoutSec);
+            // Harvest first; no quality probe, rewrite, provider call or retry inside the collector.
+            attempts = collectSearchAttempts(futures, futureMeta, completions,
+                    levelStartedNanos, levelAllowanceNanos);
+            } finally {
+                cancelSearchAttempts(futures);
+            }
 
-            // 결과 병합 및 다음 레벨 키워드 생성
-            for (int i = 0; i < futures.size(); i++) {
-                SearchAttemptMeta attemptMeta = i < futureMeta.size()
-                        ? futureMeta.get(i)
-                        : new SearchAttemptMeta("bfs", "", 1.0d, reqWebTopK, reqPerRequestTimeoutMs);
+            // Stable ordinal reduction preserves dedup ownership, lane/query attribution and ranking.
+            for (int i = 0; i < attempts.size(); i++) {
+                SearchAttemptMeta attemptMeta = futureMeta.get(i);
                 String kw = attemptMeta.query();
-                long waitMs = Math.min(reqPerRequestTimeoutMs,
-                        Math.max(0L, levelDeadlineMs - System.currentTimeMillis()));
-                waitMs = Math.min(waitMs, attemptMeta.laneTimeboxMs());
-                SearchAttempt attempt = getWithHardTimeout(
-                        futures.get(i),
-                        waitMs,
-                        kw
-                );
-                if (Thread.currentThread().isInterrupted()) {
-                    cancelSearchAttempts(futures);
-                    return interruptedPartialContents(snippets, snippetLane, snippetQuery, qText);
-                }
+                long waitMs = TimeUnit.NANOSECONDS.toMillis(attemptMeta.allowanceNanos());
+                SearchAttempt attempt = attempts.get(i);
                 List<String> results = attempt.results();
                 String kwCanon = canonicalKeyword(kw);
                 String lane = seedLaneByCanon.getOrDefault(kwCanon, attemptMeta.lane());
@@ -516,6 +520,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         snippetQuery.put(result, branchQuery);
                     }
                 }
+                if (Thread.currentThread().isInterrupted()) continue;
                 int afterFilterCount = Math.max(0, snippets.size() - beforeSize);
                 BranchQualityProbe.BranchQualityMetrics branchMetric = branchQualityAttempt(
                         lane,
@@ -533,9 +538,15 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                     moveOneLaneBudget(laneBudgets, lane, zero100RolloverState.preferredLane(), attempt.failureClass(), budget.remaining());
                 }
                 if (shouldRetryBranch(lane, branchMetric, branchRetryCounts)) {
-                    String retryQuery = regenerateBranchQuery(qText, lane, branchQuery, waitMs, branchMetric);
+                    waitMs = Math.min(Math.min(reqPerRequestTimeoutMs, attemptMeta.laneTimeboxMs()),
+                            remainingLevelMillis(levelStartedNanos, levelAllowanceNanos));
+                    String retryQuery = waitMs > 0
+                            ? regenerateBranchQuery(qText, lane, branchQuery, waitMs, branchMetric) : branchQuery;
                     int retryTopK = Math.max(1, Math.min(attemptMeta.requestedTopK(), branchMetric.adjustedTopK()));
                     String skipReason = retrySkipReason(qText, branchQuery, retryQuery, visitedCanon);
+                    waitMs = Math.min(Math.min(reqPerRequestTimeoutMs, attemptMeta.laneTimeboxMs()),
+                            remainingLevelMillis(levelStartedNanos, levelAllowanceNanos));
+                    if (waitMs <= 0 || Thread.currentThread().isInterrupted()) skipReason = "deadline_exhausted";
                     if (skipReason != null) {
                         traceRequeryAttempt(lane, retryQuery, attemptMeta.weight(), branchMetric.adjustedTemperature(), waitMs,
                                 retryTopK, 0, 0, true, "skipped:" + skipReason, branchMetric, true);
@@ -550,9 +561,19 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                         if (StringUtils.hasText(retryCanon)) {
                             visitedCanon.add(retryCanon);
                         }
+                        // Recheck at admission and after submission; rewrite/submission cannot revive the deadline.
+                        waitMs = Math.min(Math.min(reqPerRequestTimeoutMs, attemptMeta.laneTimeboxMs()),
+                                remainingLevelMillis(levelStartedNanos, levelAllowanceNanos));
+                        if (waitMs <= 0 || Thread.currentThread().isInterrupted()) continue;
                         Future<SearchAttempt> retryFuture = submitSearchAttempt(retryQuery, retryTopK);
-                        long retryWaitMs = zero100LaneTimeboxMs(lane, waitMs);
-                        SearchAttempt retryAttempt = getWithHardTimeout(retryFuture, retryWaitMs, retryQuery);
+                        long retryWaitMs = Math.min(zero100LaneTimeboxMs(lane, waitMs),
+                                remainingLevelMillis(levelStartedNanos, levelAllowanceNanos));
+                        SearchAttempt retryAttempt;
+                        try {
+                            retryAttempt = getWithHardTimeout(retryFuture, retryWaitMs, retryQuery);
+                        } finally {
+                            cancelSearchAttempt(retryFuture);
+                        }
                         if (Thread.currentThread().isInterrupted()) {
                             cancelSearchAttempt(retryFuture);
                             cancelSearchAttempts(futures);
@@ -589,6 +610,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                     int used = 0;
                     // LLM 호출 최소화: 기본은 휴리스틱, 필요 시에만 LLM
                     java.util.List<String> children = useLlmFollowupsHere
+                            && remainingLevelNanos(levelStartedNanos, levelAllowanceNanos) > 0
                             ? followUpKeywords(kw)
                             : heuristicFollowups(kw);
                     for (String child : children) {
@@ -605,8 +627,9 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 }
             }
 
-            // Cancel any straggling tasks once this depth budget is exhausted.
-            cancelSearchAttempts(futures);
+            if (Thread.currentThread().isInterrupted()) {
+                return interruptedPartialContents(snippets, snippetLane, snippetQuery, qText);
+            }
             depth++;
         }
 
@@ -1087,7 +1110,7 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
                 java.util.Optional<SelfAskPlanner.SubQuestion> regenerated = threeWayPlanner.regenerateLane(
                         parentQuery,
                         SelfAskPlanner.SubQuestionType.valueOf(lane),
-                        Math.max(250L, timeoutMs),
+                        Math.max(1L, timeoutMs),
                         metric == null ? 0.2d : metric.adjustedTemperature(),
                         metric == null ? 1.0d : Math.max(0.25d, metric.rrfWeight()));
                 if (regenerated.isPresent() && StringUtils.hasText(regenerated.get().text)) {
@@ -2123,9 +2146,128 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
      * 질의별 API 호출 예산 관리
      */
     private Future<SearchAttempt> submitSearchAttempt(String keyword, int topK) {
-        FutureTask<SearchAttempt> task = new FutureTask<>(() -> safeSearchAttempt(keyword, topK));
-        searchExecutor.execute(task);
-        return task;
+        return submitSearchAttempt(keyword, topK, -1, null);
+    }
+
+    private Future<SearchAttempt> submitSearchAttempt(
+            String keyword, int topK, int ordinal, BlockingQueue<Integer> completions) {
+        Runnable completed = () -> {
+            if (completions != null) completions.offer(ordinal);
+        };
+        ExecutorService ownedExecutor = searchExecutor;
+        while (ownedExecutor instanceof ai.abandonware.nova.boot.exec.ContextPropagatingExecutorService wrapper) {
+            ownedExecutor = wrapper.unwrap();
+        }
+        if (ownedExecutor instanceof com.example.lms.infra.exec.ContextAwareExecutorService contextual) {
+            try {
+                return contextual.submitCancellable(() -> safeSearchAttempt(keyword, topK), completed);
+            } catch (RejectedExecutionException rejected) {
+                // The owned task's done() already delivered the one completion event.
+                return CompletableFuture.completedFuture(
+                        new SearchAttempt(List.of(), "executor-saturated", true));
+            }
+        }
+        FutureTask<SearchAttempt> task = new FutureTask<>(() -> safeSearchAttempt(keyword, topK)) {
+            @Override protected void done() { completed.run(); }
+        };
+        try {
+            searchExecutor.execute(task);
+            return task;
+        } catch (RejectedExecutionException rejected) {
+            cancelSearchAttempt(task);
+            return CompletableFuture.completedFuture(
+                    new SearchAttempt(List.of(), "executor-saturated", true));
+        }
+    }
+
+    private static long remainingLevelNanos(long startedNanos, long allowanceNanos) {
+        long remaining = Math.max(0L, allowanceNanos - Math.max(0L, System.nanoTime() - startedNanos));
+        var parent = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        return parent == null ? remaining
+                : Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(parent.remainingMillis()));
+    }
+
+    private static long remainingLevelMillis(long startedNanos, long allowanceNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(remainingLevelNanos(startedNanos, allowanceNanos));
+    }
+
+    private SearchAttempt expiredSearchAttempt(Future<SearchAttempt> future, SearchAttemptMeta meta) {
+        if (future.isDone()) return getWithHardTimeout(future, 0, meta.query());
+        boolean cancelled = cancelSearchAttempt(future);
+        if (!cancelled && future.isDone()) return getWithHardTimeout(future, 0, meta.query());
+        long admittedMs = TimeUnit.NANOSECONDS.toMillis(meta.allowanceNanos());
+        SelfAskTimeoutTrace.recordCancellationRequested(
+                admittedMs > 0 ? "hard_timeout" : "deadline_exhausted",
+                admittedMs, meta.query(), false, cancelled);
+        return new SearchAttempt(List.of(), "timeout", true);
+    }
+
+    private List<SearchAttempt> collectSearchAttempts(
+            List<Future<SearchAttempt>> futures, List<SearchAttemptMeta> metadata,
+            BlockingQueue<Integer> completions, long levelStartedNanos, long levelAllowanceNanos) {
+        List<SearchAttempt> slots = new ArrayList<>(Collections.nCopies(futures.size(), null));
+        int resolved = 0;
+        int completed = 0;
+        long collectionStarted = System.nanoTime();
+        try {
+            while (resolved < futures.size()) {
+                Integer ordinal;
+                while ((ordinal = completions.poll()) != null) {
+                    if (slots.get(ordinal) == null) {
+                        slots.set(ordinal, getWithHardTimeout(futures.get(ordinal), 0, metadata.get(ordinal).query()));
+                        resolved++;
+                        if (!futures.get(ordinal).isCancelled()) {
+                            TraceStore.put("selfask.collection.completedCount", ++completed);
+                        }
+                    }
+                }
+                long waitNanos = remainingLevelNanos(levelStartedNanos, levelAllowanceNanos);
+                for (SearchAttemptMeta meta : metadata) {
+                    int i = meta.ordinal();
+                    if (slots.get(i) != null) continue;
+                    Future<SearchAttempt> future = futures.get(i);
+                    long laneRemaining = Math.max(0L, meta.allowanceNanos()
+                            - Math.max(0L, System.nanoTime() - meta.submittedAtNanos()));
+                    // A done Future may precede its done() notification; never discard its result.
+                    if (future.isDone() || laneRemaining <= 0) {
+                        boolean done = future.isDone();
+                        slots.set(i, done ? getWithHardTimeout(future, 0, meta.query())
+                                : expiredSearchAttempt(future, meta));
+                        resolved++;
+                        if (done && !future.isCancelled()) {
+                            TraceStore.put("selfask.collection.completedCount", ++completed);
+                        }
+                    } else {
+                        waitNanos = Math.min(waitNanos, laneRemaining);
+                    }
+                }
+                if (resolved == futures.size() || waitNanos <= 0 || Thread.currentThread().isInterrupted()) break;
+                ordinal = completions.poll(waitNanos, TimeUnit.NANOSECONDS);
+                if (ordinal != null) completions.offer(ordinal);
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        } finally {
+            // Drain already-completed work even at expiry/interruption, then cancel every straggler.
+            for (SearchAttemptMeta meta : metadata) {
+                int i = meta.ordinal();
+                if (slots.get(i) != null) continue;
+                Future<SearchAttempt> future = futures.get(i);
+                if (Thread.currentThread().isInterrupted() && !future.isDone()) {
+                    boolean cancelled = cancelSearchAttempt(future);
+                    SelfAskTimeoutTrace.recordCancellationRequested(
+                            "interrupted_wait", 0, meta.query(), true, cancelled);
+                    slots.set(i, new SearchAttempt(List.of(), "interrupted", true));
+                } else {
+                    slots.set(i, future.isDone() ? getWithHardTimeout(future, 0, meta.query())
+                            : expiredSearchAttempt(future, meta));
+                }
+            }
+            cancelSearchAttempts(futures);
+            TraceStore.put("selfask.collection.elapsedMs",
+                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - collectionStarted));
+        }
+        return slots;
     }
 
     private static boolean cancelSearchAttempt(Future<SearchAttempt> future) {
@@ -2211,6 +2353,10 @@ public class SelfAskWebSearchRetriever implements ContentRetriever {
             }
             if (Thread.currentThread().isInterrupted()) {
                 return new SearchAttempt(List.of(), "cancelled", true);
+            }
+            var requestBudget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            if (requestBudget != null && requestBudget.expired()) {
+                return new SearchAttempt(List.of(), "deadline_exhausted", true);
             }
             if (webSearchProvider == null || !webSearchProvider.isEnabled()) {
                 return new SearchAttempt(List.of(), "provider-disabled", true);

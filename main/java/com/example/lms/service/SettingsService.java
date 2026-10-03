@@ -32,6 +32,26 @@ public class SettingsService {
 
     private final ConfigurationSettingRepository settingRepo;
 
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.config.ChatDefaultsProperties chatDefaults;
+
+    /** Only persisted administrator values; configured factory fallbacks are not DB overrides. */
+    @Transactional(readOnly = true)
+    public Map<String, Object> getChatAdminOverrides() {
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        Map<String, String> names = Map.of(KEY_OPENAI_MODEL, "model", KEY_TEMPERATURE, "temperature",
+                KEY_TOP_P, "topP", KEY_FREQUENCY_PENALTY, "frequencyPenalty", KEY_PRESENCE_PENALTY, "presencePenalty");
+        for (var row : settingRepo.findAll()) {
+            String key = names.get(row.getSettingKey());
+            if (key == null || row.getSettingValue() == null) continue;
+            if (!"model".equals(key) && numericValidationError(Map.of(row.getSettingKey(), row.getSettingValue())) != null) continue;
+            Object value = "model".equals(key) ? row.getSettingValue() : Double.valueOf(row.getSettingValue());
+            try { result.putAll(ChatPreferenceService.validate(Map.of(key, value))); }
+            catch (IllegalArgumentException invalid) { log.warn("Stored chat default invalid key={}; inherited", key); }
+        }
+        return Map.copyOf(result);
+    }
+
     /* ?????????? Key ?怨몃땾 (?뚢뫂?껅에?살쑎?癒?퐣 域밸챶?嚥????? ?????????? */
     public static final String KEY_SYSTEM_PROMPT      = "SYSTEM_PROMPT";
     public static final String KEY_TEMPERATURE        = "TEMPERATURE";
@@ -66,6 +86,7 @@ public class SettingsService {
 @CacheEvict(cacheNames = "settings", allEntries = true)
     @Transactional
     public void save(String key, String value) {
+        if (key != null) validateNumericSettings(java.util.Collections.singletonMap(key, value));
         if (key == null || value == null) return;
         ConfigurationSetting entity = settingRepo.findById(key)
                 .orElse(new ConfigurationSetting(key, null));
@@ -87,6 +108,7 @@ public class SettingsService {
     @Transactional
     public void saveAllSettings(Map<String, String> kv) {
         if (kv == null || kv.isEmpty()) return;
+        validateNumericSettings(kv);
 
         List<ConfigurationSetting> entities = kv.entrySet().stream()
                 .filter(e -> e.getValue() != null)
@@ -97,6 +119,35 @@ public class SettingsService {
 
         settingRepo.saveAll(entities);
         log.debug("??⑦겣 ?????袁⑥┷ ??{}", kv.keySet());
+    }
+
+    public record InvalidNumericSetting(String key, String reason) {}
+
+    public static InvalidNumericSetting numericValidationError(Map<String, String> settings) {
+        for (Map.Entry<String, String> entry : settings.entrySet()) {
+            String key = entry.getKey();
+            double min;
+            double max;
+            if (KEY_TEMPERATURE.equals(key)) { min = 0; max = 2; }
+            else if (KEY_TOP_P.equals(key)) { min = 0; max = 1; }
+            else if (KEY_FREQUENCY_PENALTY.equals(key) || KEY_PRESENCE_PENALTY.equals(key)) {
+                min = -2; max = 2;
+            } else continue;
+            double number;
+            try {
+                number = Double.parseDouble(entry.getValue().trim());
+            } catch (RuntimeException invalid) {
+                return new InvalidNumericSetting(key, "malformed_numeric");
+            }
+            if (!Double.isFinite(number)) return new InvalidNumericSetting(key, "non_finite");
+            if (number < min || number > max) return new InvalidNumericSetting(key, "out_of_range");
+        }
+        return null;
+    }
+
+    private static void validateNumericSettings(Map<String, String> settings) {
+        InvalidNumericSetting invalid = numericValidationError(settings);
+        if (invalid != null) throw new IllegalArgumentException(invalid.key() + ":" + invalid.reason());
     }
 
     /** ??μ뵬 鈺곌퀬??(??곸몵筌?null) */
@@ -136,6 +187,13 @@ public class SettingsService {
         defaults.put(KEY_FINE_TUNED_MODEL,  "");
 
         // 3) 癰귣쵑鍮
+        if (chatDefaults != null) {
+            defaults.put(KEY_OPENAI_MODEL, chatDefaults.getModel());
+            defaults.put(KEY_TEMPERATURE, String.valueOf(chatDefaults.getTemperature()));
+            defaults.put(KEY_TOP_P, String.valueOf(chatDefaults.getTopP()));
+            defaults.put(KEY_FREQUENCY_PENALTY, String.valueOf(chatDefaults.getFrequencyPenalty()));
+            defaults.put(KEY_PRESENCE_PENALTY, String.valueOf(chatDefaults.getPresencePenalty()));
+        }
         defaults.putAll(db);
         return defaults;
     }

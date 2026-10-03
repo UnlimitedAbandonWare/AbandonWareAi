@@ -29,9 +29,9 @@ broad catch, static smell, or old report is candidate evidence, not RED.
 ## Autograder Probe Hook
 
 When an autograder emits bounded `awx.autograder.evidence.v1`, run
-`scripts/prepare_autograder_probe.ps1`. It freezes the evidence hash and emits
+`.\.agents\skills\demo1-macsrc-defect-intake\scripts\prepare_autograder_probe.ps1`. It freezes the evidence hash and emits
 one dispatch plan: Positive and Negative in parallel, then Neutral. Use
-`scripts/advance_autograder_probe.ps1` only in the declared order:
+`.\.agents\skills\demo1-macsrc-defect-intake\scripts\advance_autograder_probe.ps1` only in the declared order:
 `Finalize`, `GradeSandbox`, `PromoteIntent`, then `PlanSession`. `GradeSandbox`
 delegates one immutable `RED_PROBE` job to `demo1-docker-autograder`; only a
 COMPLETE failing result with the intended signal can advance. Promotion derives

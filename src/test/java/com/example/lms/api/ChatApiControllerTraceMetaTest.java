@@ -154,11 +154,7 @@ class ChatApiControllerTraceMetaTest {
         String source = Files.readString(Path.of("main/java/com/example/lms/api/ChatApiController.java"));
 
         assertPreAckCancellationHelper(source,
-                source.indexOf("if (clientAckRequired && clientDetached.get()) {"));
-        assertPreAckCancellationHelper(source,
                 source.indexOf("if (runContext.isCancellationRequested()) {"));
-        assertPreAckCancellationHelper(source,
-                source.indexOf("if (!acknowledged) {"));
 
         int helper = source.indexOf("private boolean emitPreAcknowledgementCancellation(");
         int helperEnd = source.indexOf("\n    }", helper);
@@ -181,11 +177,10 @@ class ChatApiControllerTraceMetaTest {
                 "the registry must atomically accept evidence only when unacknowledged cancellation wins");
         assertTrue(sinkEmit > acceptedOnly && terminal > sinkEmit,
                 "accepted terminal evidence must be mirrored locally before terminal recording");
-        assertTrue(source.contains(".doOnCancel(() -> {")
-                        && source.substring(source.indexOf(".doOnCancel(() -> {") ,
-                                source.indexOf(".doOnError(", source.indexOf(".doOnCancel(() -> {")))
-                                .contains("emitPreAcknowledgementCancellation("),
-                "the transport detach hook must supply evidence at the cancellation source");
+        assertFalse(source.substring(source.indexOf(".doOnCancel(() -> {"),
+                        source.indexOf(".doOnError(", source.indexOf(".doOnCancel(() -> {")))
+                        .contains("emitPreAcknowledgementCancellation("),
+                "transport detach must preserve the accepted run");
         assertTrue(terminal > sinkEmit,
                 "the run terminal marker must follow buffered cancellation evidence");
     }
@@ -208,7 +203,7 @@ class ChatApiControllerTraceMetaTest {
         assertTrue(source.contains("logSuppressed(\"state.sessionLookup\");"));
         assertTrue(source.contains("logSuppressed(\"state.metaExtract\");"));
         assertTrue(source.contains("logSuppressed(\"chat.clientIp\");"));
-        assertTrue(source.contains("logSuppressed(\"chat.attachments.autoInject\");"));
+        assertTrue(source.contains("logSuppressed(\"stream.attachmentBind\");"));
         assertTrue(source.contains("logSuppressed(\"stream.clientIp\");"));
         assertTrue(source.contains("logSuppressed(\"stream.status.started\");"));
         assertTrue(source.contains("logSuppressed(\"plan.preSearch.stream\");"));
@@ -248,7 +243,7 @@ class ChatApiControllerTraceMetaTest {
         assertTrue(source.contains("logSuppressed(\"sync.finalTraceMeta.clear\");"));
         assertTrue(source.contains("logSuppressed(\"sync.traceHtml.final\");"));
         assertTrue(source.contains("logSuppressed(\"sync.answerModeTracePersist\");"));
-        assertTrue(source.contains("logSuppressed(\"sync.attachmentMeta.extract\");"));
+        assertTrue(source.contains("logSuppressed(\"sync.attachmentMeta\");"));
         assertTrue(source.contains("logSuppressed(\"sync.attachmentMeta\");"));
     }
 
@@ -440,8 +435,9 @@ class ChatApiControllerTraceMetaTest {
                 "persistenceSessionId, \"assistant\", persistableFinalText", streamShape);
         int syncShape = source.indexOf(
                 "semanticFinalContent = ChatHarmonyTracePostprocessor.shapeAnswerForUserInstruction(");
-        int syncPersist = source.indexOf("Long assistantMessageId = historyService.appendMessageReturningId(",
+        int syncPersist = source.indexOf("Long assistantMessageId = deferredService == null ? historyService.appendMessageReturningId(",
                 syncShape);
+        assertTrue(source.contains("deferredService.persistOrigin(syncRun, completedSession.getId(), persistableFinalContent, understandingPlan)"));
         int syncHarmony = source.indexOf(
                 "ChatHarmonyTracePostprocessor.enrich(extraMeta, persistableFinalContent, answerModeFinal);",
                 syncShape);

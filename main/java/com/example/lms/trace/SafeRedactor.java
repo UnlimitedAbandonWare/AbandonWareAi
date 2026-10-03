@@ -32,19 +32,29 @@ public final class SafeRedactor {
     // Exact producer keys and types only: a name containing "prompt"/"token"
     // never grants access to raw content or credentials.
     private static final Set<String> DIAGNOSTIC_FLAGS = Set.of(
+            "queryTransformer.bypassed",
             "prompt.historyRendered", "prompt.lastAssistantRendered",
             "prompt.contextInjected.history", "prompt.contextInjected.lastAssistant",
             "prompt.contextInjected.memory", "prompt.contextInjected.delivered",
             "prompt.memoryPresent", "prompt.events.memoryPresent",
+            "prompt.agentDebugEvidence.chatHarmony.applied", "prompt.builder.required.enforced",
+            "prompt.context.refiner.activated", "prompt.context.refiner.failSoft",
+            "prompt.learningDegraded",
             "llm.gateway.openai.tokenParamRetry");
     private static final Set<String> DIAGNOSTIC_COUNTS = Set.of(
+            "queryTransformer.bypassed.queryLength",
             "prompt.webCount", "prompt.ragCount", "prompt.localDocsCount",
             "prompt.citableEvidenceCount", "prompt.memoryLen",
             "prompt.contextInjected.historyChars", "prompt.ctx.len", "prompt.instr.len",
             "prompt.events.seq", "prompt.events.webCount", "prompt.events.ragCount",
             "prompt.events.vectorCount", "prompt.events.localDocsCount",
+            "prompt.context.composer.input.ragCount", "prompt.localDocsRenderedCount",
             "llm.call.approxInputTokens", "llm.ollamaNative.maxTokens",
             "memory.session.tokenEstimate");
+    private static final Set<String> DIAGNOSTIC_NUMBERS = Set.of("prompt.context.refiner.phi");
+    private static final Set<String> QUERY_BYPASS_REASONS = Set.of(
+            "retrieval_off_direct", "infer_intent_failed", "empty_result", "cancelled",
+            "timeout", "breaker_open", "rejected", "transform_exception");
     private static final Set<String> STANDARD_EVENT_LABEL_KEYS = Set.of(
             "kind", "phase", "stage", "step", "component", "status",
             "input.mode", "input.planId", "failure.reasonCode",
@@ -54,6 +64,11 @@ public final class SafeRedactor {
     public static boolean isTypedDiagnostic(String key, Object value) {
         if (DIAGNOSTIC_FLAGS.contains(key == null ? "" : key)) {
             return value instanceof Boolean;
+        }
+        if (DIAGNOSTIC_NUMBERS.contains(key == null ? "" : key)) {
+            return (value instanceof Double || value instanceof Float)
+                    && Double.isFinite(((Number) value).doubleValue())
+                    && Math.abs(((Number) value).doubleValue()) <= 1_000_000d;
         }
         return DIAGNOSTIC_COUNTS.contains(key == null ? "" : key)
                 && (value instanceof Byte || value instanceof Short
@@ -106,6 +121,13 @@ public final class SafeRedactor {
     public static String hashValue(String s) {
         String h = hash12(s);
         return h == null ? null : "hash:" + h;
+    }
+
+    /** Keep a normalized correlation hash joinable when a context fallback already stored it. */
+    public static String hashValueOrPreserve(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.matches("hash:[0-9a-f]{12}") ? normalized : hashValue(normalized);
     }
 
     public static String hash12(String s) {
@@ -227,7 +249,18 @@ public final class SafeRedactor {
     @SuppressWarnings("unchecked")
     private static Object diagnosticValue(String key, Object value, int maxStringLen, int depth) {
         if (value == null) return null;
+        if ("observedModel".equals(key) && value instanceof String s
+                && s.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) return s;
+        if (Set.of("observedProvider", "routeId", "fallbackReason", "observedReason",
+                "attachment.bind.reason", "rag.evidence.promotion.disabledReason", "finalAnswer.releaseReason",
+                "finalAnswer.evidenceReleaseState", "finalAnswer.retrievalExecution").contains(key == null ? "" : key)
+                && value instanceof String s && s.matches("[A-Za-z0-9_.:-]{1,80}")) return s;
         if (depth > MAX_DEPTH) return "(depth-limit)";
+        // ChatWorkflow's legacy producer used fixed boolean strings for this one flag.
+        if ("queryTransformer.bypassed".equals(key) && value instanceof String s
+                && ("true".equals(s) || "false".equals(s))) return Boolean.valueOf(s);
+        if ("queryTransformer.reason".equals(key) && value instanceof String s
+                && QUERY_BYPASS_REASONS.contains(s)) return s;
 
         if (value instanceof DiagnosticSummary || isTypedDiagnostic(key, value)) {
             return value;
@@ -529,6 +562,9 @@ public final class SafeRedactor {
 
     private static boolean isSafeScalarKey(String k) {
         return k.contains("provider")
+                || k.contains("fallbackto")
+                || k.contains("purpose")
+                || k.contains("whycode")
                 || k.contains("routekey")
                 || k.equals("model")
                 || k.endsWith(".model")

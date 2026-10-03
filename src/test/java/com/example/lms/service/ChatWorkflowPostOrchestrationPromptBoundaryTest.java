@@ -233,8 +233,8 @@ class ChatWorkflowPostOrchestrationPromptBoundaryTest {
         assertTrue(cancellationCheck < finalOwner);
         assertEquals(1, countOccurrences(source.substring(finalBlock, cancellationCheck),
                 "callWithRetryReportingSuccess("));
-        assertTrue(source.contains("boolean strictSingleAttempt = hasThreeRoleRefinementCandidates(ctx);"),
-                "an attached three-role refinement must select the strict one-attempt primary path");
+        assertTrue(source.contains("boolean strictSingleAttempt = ctx.preparedContextPacket()!=null || hasThreeRoleRefinementCandidates(ctx);"),
+                "either a prepared context packet or an attached three-role refinement must select the strict one-attempt primary path");
         assertTrue(Pattern.compile("primarySuccessRef::set\\s*,\\s*strictSingleAttempt")
                         .matcher(source).find(),
                 "the final primary call must receive the three-role one-attempt decision");

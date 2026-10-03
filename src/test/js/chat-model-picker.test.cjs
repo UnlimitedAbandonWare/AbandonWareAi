@@ -6,7 +6,7 @@ const source = fs.readFileSync("main/resources/static/js/chat-model-picker.js", 
 
 // A small DOM fixture: focus detaches exactly when a focused descendant is removed.
 // Native dialog keyboard containment is verified separately in the real browser.
-function fixture() {
+function fixture(storedSettings = null) {
   let document;
   class Element {
     constructor(tag = "div") {
@@ -17,6 +17,7 @@ function fixture() {
     get tabIndex() { return this.attrs.tabindex === undefined ? 0 : Number(this.attrs.tabindex); }
     getClientRects() { return this.hidden ? [] : [{}]; }
     get value() { return this._value; }
+    get options() { return this.querySelectorAll("option"); }
     set value(value) { this._value = String(value); }
     get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
     set textContent(value) { this.replaceChildren(); this._text = String(value); }
@@ -62,10 +63,28 @@ function fixture() {
   const calls = [], ready = [], storage = new Map();
   document.addEventListener("chat:model-catalog", event => ready.push(event.detail.ready));
   class Event { constructor(type, opts = {}) { this.type = type; Object.assign(this,opts); } preventDefault() { this.defaultPrevented = true; } }
+  const selectionMode = new Element("select");
+  if (storedSettings) {
+    const initial = new Element("option"); initial.value = "local:0"; select.append(initial);
+    const chatSource = fs.readFileSync("main/resources/static/js/chat.js", "utf8");
+    const actualFunction = name => {
+      const start = chatSource.indexOf("function " + name + "(");
+      assert.ok(start >= 0, "product function must exist: " + name);
+      const end = chatSource.indexOf("\nfunction ", start + 1);
+      return chatSource.slice(start, end < 0 ? undefined : end);
+    };
+    const restoreSource = ["restoredSessionSetting", "restoredSessionBoolean", "selectCanUseValue",
+      "applyRestoredSessionSettings", "restoreStoredControlSettings"].map(actualFunction).join("\n");
+    vm.runInNewContext(restoreSource + "\nrestoreStoredControlSettings();", {
+      document, dom:{modelSelect:select,modelSelectionMode:selectionMode},
+      storedControlSettings:()=>storedSettings, localControlOverrideActive:false,
+      syncControlStatus(){}, markControlHydrationReady(){}, setStatusRailValue(){}, modelStatusRailValue:v=>v
+    });
+  }
   vm.runInNewContext(source, {document, Event, CustomEvent:Event, Map, console,
     localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
     fetch:(url,opts)=>new Promise((resolve,reject)=>calls.push({url,opts,resolve,reject}))});
-  return {document,panel,select,trigger,search,filter,list,status,count,more,close,refresh,calls,ready,
+  return {document,panel,select,selectionMode,trigger,search,filter,list,status,count,more,close,refresh,calls,ready,
     async respond(index, rows) { calls[index].resolve({ok:true,redirected:false,headers:{get:()=>"application/json"},json:async()=>rows}); await settle(); },
     change(mode) { filter.value=mode; filter.dispatchEvent(new Event("change")); },
     findFavorite(id) { return list.querySelectorAll("button").find(item=>item.getAttribute("aria-label")===id+" 즐겨찾기"); }
@@ -73,6 +92,29 @@ function fixture() {
 }
 const settle = () => new Promise(resolve=>setImmediate(resolve));
 const models = count => Array.from({length:count},(_,i)=>({id:"local:"+i,modelId:"local:"+i,provider:"Ollama",selectable:true,status:"installed",release:"stable"}));
+
+const storedApi = {model:"llmrouter.api3",modelSelectionMode:"strict",source:"user"};
+const apiModel = {id:"llmrouter.api3",modelId:"openai/gpt-oss-120b",provider:"Groq",selectable:true,status:"configured"};
+for (const outcome of ["available","unavailable","offline"]) {
+  test("stored strict API identity survives asynchronous catalog: " + outcome, async () => {
+    const f=fixture(storedApi);
+    assert.equal(f.select.value,storedApi.model);
+    assert.equal(f.selectionMode.value,"strict");
+    assert.equal(f.select.options.find(o=>o.value===storedApi.model).disabled,true);
+    assert.equal(f.ready.at(-1),false);
+    if (outcome==="offline") { f.calls[0].reject(new Error("offline")); await settle(); }
+    else await f.respond(0,[...models(1),{...apiModel,selectable:outcome==="available"}]);
+    assert.equal(f.select.value,storedApi.model,"catalog must never substitute a local model");
+    assert.equal(f.ready.at(-1),outcome==="available");
+    assert.equal(Boolean(f.select.options.find(o=>o.value===storedApi.model).disabled),outcome!=="available");
+  });
+}
+test("a user model choice during catalog loading wins over restored API selection", async () => {
+  const f=fixture(storedApi);
+  f.select.value="local:0"; f.select.dispatchEvent({type:"change"});
+  await f.respond(0,[...models(1),apiModel]);
+  assert.equal(f.select.value,"local:0"); assert.equal(f.ready.at(-1),true);
+});
 
 test("all matches can be browsed in pages and search covers rows beyond the first page", async () => {
   const f=fixture(); await f.respond(0,models(100));

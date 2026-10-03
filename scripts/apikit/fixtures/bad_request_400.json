@@ -1,0 +1,7 @@
+{
+  "provider": "openai",
+  "expect": "BAD_REQUEST_SHAPE",
+  "expect_code": "invalid_request_error",
+  "http_status": 400,
+  "body": {"error": {"message": "Missing required field: 'input'", "type": "invalid_request_error", "param": "input", "code": "invalid_request_error"}}
+}

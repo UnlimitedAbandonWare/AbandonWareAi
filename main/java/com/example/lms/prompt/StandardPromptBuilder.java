@@ -50,6 +50,15 @@ public class StandardPromptBuilder implements PromptBuilder {
             return "### SEARCH RESULTS\n(검색 결과 없음)\n\n### USER QUESTION\n" + safeQuestion;
         }
 
+        if(contexts.size()==1&&contexts.get(0)!=null&&contexts.get(0).preparedContextPacket()!=null){
+            PromptContext ctx=contexts.get(0);
+            TraceStore.put("contextPrepareStatus","RENDERED");
+            return ctx.preparedContextPacket().render()
+                +"\nQuoted conversation data:\n"+java.util.Objects.toString(ctx.memory(),"")
+                +"\n"+java.util.Objects.toString(ctx.history(),"")
+                +"\n"+java.util.Objects.toString(ctx.lastAssistantAnswer(),"");
+        }
+
         // Generic mode: when a caller provides only a systemInstruction and a
         // plain question/text (no web/rag/memory), build a minimal prompt.
         // This is used by non-chat tasks (e.g. NER) to avoid ad-hoc
@@ -420,6 +429,7 @@ public class StandardPromptBuilder implements PromptBuilder {
                 appendMeta(sb, "title", item.title(), 180);
                 appendMeta(sb, "source", item.source(), 300);
                 appendMeta(sb, "filePath", item.filePath(), 300);
+                if(item.attachment()!=null)appendMeta(sb,"attachment",item.attachment().label(),800);
                 if (item.lineStart() != null) {
                     sb.append("; lines=").append(item.lineStart());
                     if (item.lineEnd() != null && !item.lineEnd().equals(item.lineStart())) {
@@ -488,6 +498,8 @@ public class StandardPromptBuilder implements PromptBuilder {
                     break;
                 }
                 String bounded = truncate(snippet, Math.min(4_000, remaining));
+                var provenance=RagEvidenceMetadata.AttachmentProvenance.from(doc.metadata().toMap());
+                if(provenance!=null)sb.append(String.format("[D%d] %s%n",idx,provenance.label()));
                 sb.append(String.format("[D%d] %s%n", idx, bounded));
                 renderedChars += bounded.length();
                 idx++;
@@ -750,6 +762,9 @@ public class StandardPromptBuilder implements PromptBuilder {
 """);
         }
 
+        if (ctx != null) {
+            sb.append(com.example.lms.prompt.pose.ModelLoadoutResolver.renderInstructions(ctx.resolvedLoadout()));
+        }
         return sb.toString();
     }
 

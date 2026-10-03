@@ -38,10 +38,11 @@ python -B scripts/git_doctor.py --root . --probe-remote origin
 - `prunable`/`offline` worktrees are observations, never auto-pruned —
   SMB/external drives can be temporarily disconnected.
 - Absent remote metadata does not block source edits; report it separately.
-- An `origin` still pointing at `AbandonWare3` is a stale-remote finding, not
-  a defect to repair — report it under the sole-remote policy (sole valid:
-  `AbandonWareAi`, `https://github.com/UnlimitedAbandonWare/AbandonWareAi`;
-  AGENTS.md `DEMO1-GIT-REMOTE-SOLE`); the doctor never mutates remotes.
+- An `origin` pointing anywhere other than the sole remote is a stale-remote
+  finding, not a defect to repair — report it under the sole-remote policy
+  (sole valid: `AbandonWareAi`,
+  `https://github.com/UnlimitedAbandonWare/AbandonWareAi`; AGENTS.md
+  `DEMO1-GIT-REMOTE-SOLE`); the doctor never mutates remotes.
 
 ## Do not
 

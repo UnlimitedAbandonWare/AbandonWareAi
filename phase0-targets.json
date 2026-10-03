@@ -1,0 +1,36 @@
+﻿{
+    "targets":  [
+                    {
+                        "path":  "main/java/com/example/lms/api/ChatApiController.java",
+                        "sha256":  "7716309bc7fc021697e7e0324b8a69588189ebe90aee89206e780234890c45be"
+                    },
+                    {
+                        "path":  "main/java/com/example/lms/api/ChatSessionMetaMerger.java",
+                        "sha256":  "54f5fce3d47fcfc8c5800641187b3ad56d2fa65c32fb5399000e5281703c4665"
+                    },
+                    {
+                        "path":  "main/java/com/example/lms/api/SettingsController.java",
+                        "sha256":  "52a915402106e3ca9f4c510392979d6a5eac71b7a768f2352159ba181bbaba5a"
+                    },
+                    {
+                        "path":  "main/java/com/example/lms/dto/ChatRequestDto.java",
+                        "sha256":  "9351c3610445e5e197ea551f98d7a73172c18c979a8bf551347b8d0425bfb865"
+                    },
+                    {
+                        "path":  "main/resources/static/js/chat.js",
+                        "sha256":  "40ac07c406f2d9ce94afc4376cfc0b94487fffb007b3089d9bcb5e7b9e68adc3"
+                    },
+                    {
+                        "path":  "src/test/java/com/example/lms/api/SettingsControllerNullPayloadTest.java",
+                        "sha256":  "b4f7711340086ac42c5cf0680cce9fd1af2e36d7270f0ac77c42bfe810370524"
+                    },
+                    {
+                        "path":  "src/test/java/com/example/lms/api/SettingsControllerPublicProjectionTest.java",
+                        "sha256":  "900a358af64cdfb395f1372de12a46f59675bc8ca16fa536f261ecdbc5aaed83"
+                    },
+                    {
+                        "path":  "src/test/java/com/example/lms/api/SessionSettingsPrecedenceTest.java",
+                        "sha256":  null
+                    }
+                ]
+}

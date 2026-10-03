@@ -1,0 +1,8 @@
+{
+  "provider": "jev",
+  "expect": "KEY_INVALID_OR_EXPIRED",
+  "expect_code": "authentication_error",
+  "http_status": 401,
+  "body": {"error": {"type": "authentication_error", "message": "Authentication failed"}},
+  "note": "Vercel AI Gateway 401 — the 12-day 'auth_blocked' case: key expired 2026-09-17"
+}

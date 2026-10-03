@@ -17,13 +17,15 @@ public final class ApiSpendAttribution {
     }
 
     public static boolean agentModeActive() {
-        return truthy(System.getenv("AWX_AGENT_SPEND_GUARD"))
-                || notBlank(System.getenv("AWX_AGENT_HOST"))
-                || truthy(System.getProperty("awx.agent.spend-guard"));
+        return agentModeActive(new org.springframework.core.env.StandardEnvironment());
+    }
+
+    public static boolean agentModeActive(org.springframework.core.env.Environment environment) {
+        return new ApiRoutingPolicySnapshot(environment).agentModeActive();
     }
 
     public static boolean shouldSkipSuccessfulReplay(String fingerprint) {
-        if (!agentModeActive() || fingerprint == null || fingerprint.isBlank()) {
+        if (fingerprint == null || fingerprint.isBlank()) {
             return false;
         }
         return SUCCESS_CACHE.containsKey(fingerprint);
@@ -33,28 +35,12 @@ public final class ApiSpendAttribution {
         if (fingerprint == null || fingerprint.isBlank()) {
             return;
         }
-        if (agentModeActive()) {
-            SUCCESS_CACHE.put(fingerprint, "ok");
-        }
+        SUCCESS_CACHE.put(fingerprint, "ok");
     }
 
     public static boolean isStalePaidAutoModel(String model) {
-        if (model == null || model.isBlank()) {
-            return false;
-        }
-        if (!agentModeActive()) {
-            return false;
-        }
-        if (truthy(System.getenv("AWX_AGENT_ALLOW_PAID_MODELS"))) {
-            return false;
-        }
-        String m = model.trim().toLowerCase(Locale.ROOT);
-        return m.equals("gpt-4")
-                || m.equals("gpt-4o")
-                || m.startsWith("gpt-4-")
-                || m.equals("gpt-5")
-                || m.startsWith("gpt-5-")
-                || m.equals("gpt-5-chat-latest");
+        var policy = new ApiRoutingPolicySnapshot(new org.springframework.core.env.StandardEnvironment());
+        return policy.agentModeActive() && !policy.explicitPaidOverride() && policy.staleAutoModel(model);
     }
 
     public static void record(

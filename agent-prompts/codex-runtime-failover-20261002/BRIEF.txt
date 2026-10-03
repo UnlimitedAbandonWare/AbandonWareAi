@@ -1,0 +1,128 @@
+$demo1-codex-auto-decide $demo1-codex-plugin-roles $demo1-work-ledger $demo1-main-chat-surface
+
+[ANTI-STOP] 이 파일을 읽은 것만으로는 완료가 아닙니다. 아래 Acceptance(AC1–AC9)를 모두 PASS로 만들거나, 실행하지 못한 항목을 NOT_RUN과 그 이유로 남길 때까지 멈추지 마세요. 되돌릴 수 있는 로컬 단계는 묻지 말고 Self-Ask(찬성/반대/반례 → 중립 판정)로 정한 뒤 AUTO_DECISION 줄로 기록하고 진행합니다. 질문(ASK_ONCE)은 아래 ASK_ONCE 목록에 있는 항목만 허용합니다.
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src (git root, 규칙 파일은 소문자 agents.md, 상태 문서는 docs\PROJECT_STATUS.md)
+셸: Windows PowerShell 5.1 (&& 사용 금지, 긴 스크립트는 나눠 실행)
+
+==================================================
+0. 한 줄 목표
+==================================================
+settings-routing-v3 목표(완료, 137/137)에서 미해결로 남은 LlmRouterRuntimeDeviceFailoverTest 9/15 실패의 단일 근본 원인을 찾아 최소 수정으로 15/15 GREEN을 만들고, 함께 NOT_RUN으로 남은 main /chat 로컬 실사용 스모크(인사·일반 질문)를 무료 로컬 경로로 확인합니다.
+
+==================================================
+1. 확인한 사실 (2026-10-02 10:2x KST, Grok Bot이 실측)
+==================================================
+F1. 직전 목표 codex-settings-routing-v3-4651c556은 complete 상태입니다. A1–A8 PASS, 137건 통과, chat.js의 SHA-256은 4225d94475241421ee69d522864e09eef39f6b15995ef88c98fca010b669c2d3, 그리고 application.properties:976에 chat.settings.routing.enabled=false가 있습니다. /settings와 /chat은 둘 다 HTTP 200입니다.
+F2. 실패 테스트: src\test\java\ai\abandonware\nova\orch\aop\LlmRouterRuntimeDeviceFailoverTest.java. 테스트 파일은 커밋 ee0d99f3(09-27) 이후 바뀌지 않았고, 워킹트리 수정도 없습니다. 즉 테스트 기대치가 바뀐 게 아니라 제품 코드 쪽이 달라졌습니다.
+F3. 9건 모두 "fallback 경로로 넘어가야 하는데 원래 예외가 그대로 올라오는" 형태입니다(증거: data\agent-handoff\codex-autonomy\codex-settings-routing-v3-4651c556\preimage-baseline\comparison.json).
+   - InternalServerException "vram_oom": runtimeVramExhaustion…
+   - InternalServerException "invalid main_gpu selection (available devices: 0)": runtimeGpuLoss…, runtimeDeviceFallbackEligibility…
+   - InternalServerException "GPU is lost": stalledFirstCloud…, fallbackKeepsTheOriginalContextCapacityFloor, firstCloudFailureContinues…
+   - LlmGatewayException "Provider execution is unconfirmed": nonGpuRuntimeFailure…, allAutoLocalEndpointsOpen…
+   - LlmGatewayException "Ollama native response reported a classified failure": http200GpuErrorEnvelope…
+F4. 관련 제품 파일은 모두 커밋되지 않은 다른 세션의 변경(M)을 안고 있습니다.
+   - main\java\ai\abandonware\nova\orch\aop\LlmRouterAspect.java: +173 / 변경 큼
+   - main\java\com\example\lms\llm\gateway\FallbackAwareChatModel.java: +38/-38 일부 (10-01 12:01). "Provider execution is unconfirmed"(193행 부근)는 HEAD에 없고 이 미커밋 diff에서 새로 들어왔습니다.
+   - main\java\com\example\lms\llm\OllamaNativeChatModel.java: +38 (10-02 09:01 수정)
+   관련 가능성이 있는 이전 보고서: oauth-adaptive-r5-1001-9f522366, oauth-benefit-r51-1001-dec9c862, ma21in-contract-repair-2f364071 (각 final report). "실행 여부가 불확실하면 중복 유료 호출을 막으려고 fallback을 하지 않는다"는 의도로 추정되는 가드가, 실행 전에 확정된 기기 실패(GPU 손실·VRAM OOM·main_gpu 오류)까지 막고 있을 가능성이 1순위 가설입니다. 가설일 뿐이니 반드시 증거로 확정하세요.
+F5. 같은 9건이 settings 목표 시작 전 체크포인트에서도 그대로 재현됐습니다. settings 작업이 만든 회귀는 아닙니다.
+
+==================================================
+공통 규칙
+==================================================
+- Superpowers systematic-debugging 순서를 따릅니다. 이미 있는 RED 9건을 재현하고, 원인 1개를 증거로 확정하고, 최소 수정을 한 뒤 GREEN을 확인합니다. 원인을 확정하기 전에 고치면 안 됩니다.
+- 수정 대상 파일은 수정 직전 SHA-256과 git diff --stat를 기록합니다(demo1-work-ledger). 다른 세션의 hunk는 한 줄도 되돌리거나 재배치하지 않습니다. 내 변경은 별도 hunk로 최소화합니다.
+- 소스 편집 lease를 먼저 확인합니다. 다른 세션이 대상 파일에 활성 lease를 갖고 있으면 그 파일은 HOLD로 두고, 공유 lease 흐름(demo1-lease-conflict-autoflow)에 따라 기다리거나 범위를 줄입니다.
+- 외부 API는 기본으로 쓰지 않습니다. 쓴다면 1–3회까지만 쓰고, 401/403/429에는 재시도하지 않으며, 원인을 보고서 맨 위 `외부 API:` 줄에 적습니다. mock 통과는 live 검증으로 치지 않습니다.
+- 보고서에는 AUTO_DECISION 줄(자동으로 정한 것)과 PLUGIN_USAGE 블록(USED / NOT_USED와 이유)을 넣습니다.
+- GLM은 이전 세션에서 HTTP 400 "ChatGPT 계정 zai/glm-5.2 미지원"이었으므로 이번에는 호출하지 않습니다(NOT_USED: provider 설정 문제).
+
+==================================================
+WP (순서대로)
+==================================================
+WP0. 사전 점검 (읽기 전용)
+ - 위 F1–F5를 현재 트리에서 다시 확인합니다(chat.js SHA, 라우팅 플래그, 세 파일의 diff stat, 테스트 파일 상태).
+ - 대상 세 파일의 lease를 확인합니다.
+ - git diff HEAD로 세 파일의 미커밋 hunk 중 fallback 판정에 영향을 주는 부분만 골라 hunks-of-interest.md에 정리합니다. 각 hunk에 대해 어느 이전 목표가 만들었는지(보고서 근거)와 그 hunk가 지키려던 의도를 적습니다.
+
+WP1. RED 재현과 근본 원인 확정
+ - 해당 테스트 클래스만 실행합니다: gradlew test --tests "ai.abandonware.nova.orch.aop.LlmRouterRuntimeDeviceFailoverTest". 15건 중 9건 실패를 같은 이름과 예외로 재현해야 합니다.
+ - 실패 5종(F3)을 각각 "어느 분기에서 fallback이 막히는지" 호출 경로로 추적합니다(Aspect → Factory/FallbackAware → OllamaNative 분류).
+ - 근본 원인을 1개로 확정하고, 근거(파일:행, 해당 hunk, 테스트 기대치)를 root-cause.md에 적습니다. 원인이 2개 이상이면 각각 독립 증거를 붙이고 WP2를 원인별로 나눕니다.
+ - 판단 기준: 실행 전에 확정된 기기 실패(GPU lost, vram_oom, invalid main_gpu, HTTP 200이지만 GPU 오류 envelope)는 공급자가 실행하지 않은 것이 확실하므로 fallback 대상입니다. "실행되었을 수도 있는" 경우(응답 일부 수신, 타임아웃 후 상태 불명 등)만 unconfirmed로 막습니다. 이 기준과 기존 의도가 충돌하면 Self-Ask로 판단하고 AUTO_DECISION으로 남깁니다.
+
+WP2. 최소 수정
+ - root-cause.md에 적은 분기만 고칩니다. 목표는 중복 유료 호출 방지 의도는 그대로 두고, 확정된 기기 실패 분류만 fallback 가능으로 되돌리는 것입니다.
+ - 테스트 기대치는 바꾸지 않습니다. 테스트가 틀렸다고 판단되면 고치지 말고 HOLD로 근거를 남깁니다.
+ - unconfirmed 가드가 계속 작동하는지 보여 주는 반례 테스트를 최소 1건 추가하거나, 이미 있으면 그 테스트를 함께 실행합니다(실행 여부 불명이면 fallback 0회).
+ - chat.js, chat-ui.html, settings 관련 신규 파일은 건드리지 않습니다.
+
+WP3. 회귀 검증 (선택 실행만)
+ - LlmRouterRuntimeDeviceFailoverTest 15/15.
+ - settings-routing-v3의 137건을 같은 명령 묶음으로 다시 실행합니다(common-verifier 기준).
+ - FallbackAwareChatModel, OllamaNativeChatModel, LlmRouterAspect를 직접 참조하는 기존 테스트 클래스만 rg로 찾아 실행합니다. 전체 suite는 실행하지 않습니다.
+ - 새 dev JVM으로 Verify-RAG.bat을 실행해 exit 0을 확인합니다. H2 already-exists 경고는 기존 것이니 개수만 기록합니다.
+
+WP4. main /chat 로컬 실사용 스모크 (무료 경로만)
+ - 대상은 로컬 http://127.0.0.1:18180/chat입니다. profiles는 local,meta-display, interview는 OFF, 라우팅 플래그는 false인 상태여야 합니다.
+ - Browser로 메시지 2건만 보냅니다: "[codex-test] 안녕" 1건, "[codex-test] 대한민국 수도는?" 같은 일반 질문 1건. 로컬 Ollama 경로만 쓰고 유료 공급자는 쓰지 않습니다.
+ - 응답 본문이 정상인지(빈 응답, 오류 envelope, 무한 로딩이 없는지), 그리고 해당 Run의 실행 관측이 /settings 읽기 전용 화면에 미관측 또는 실제값으로 맞게 보이는지 확인합니다. 스크린샷 2장을 남깁니다.
+ - 로컬 모델이 응답하지 않으면 원인(Ollama 상태, 포트, 모델명)을 적고 NOT_RUN으로 남깁니다. 유료 경로로 우회하지 않습니다.
+
+WP5. 정리
+ - docs\PROJECT_STATUS.md에 5줄 이내로 추가합니다(원인, 수정 파일, 15/15, 스모크 결과).
+ - 작업 저널을 닫고 내 lease를 해제합니다. 18180은 기본 상태(local,meta-display / interview OFF / 라우팅 false)로 되돌립니다.
+
+==================================================
+HOLD (이번에 하지 않음, 기록만)
+==================================================
+- 라우팅 플래그 ON 시험(기본값을 뒤집는 일이므로 사용자 결정 대기).
+- H2 DDL already-exists 경고 정리(스키마와 관련된 별도 과제).
+- 체크포인트 스캐너의 Java 람다 오탐(Devin 브리프 checkpoint-lambda-fp에서 처리 중).
+- GLM provider 설정 수정(사용자 계정 설정 문제).
+- 원인이 테스트 쪽이라고 판단될 때의 테스트 기대치 변경.
+
+==================================================
+ASK_ONCE (이것만 질문 허용)
+==================================================
+- 원인 hunk가 다른 세션의 의도된 정책(예: OAuth 경로의 중복 과금 방지)과 정면으로 충돌해서, 9건 GREEN과 그 정책 중 하나를 포기해야 할 때. 두 선택지와 영향을 한 번에 묻습니다.
+- 그 밖의 기준 충돌은 "내 변경 0, 남의 변경 보존" 원칙으로 Self-Ask해서 결정하고 묻지 않습니다.
+
+==================================================
+절대 금지
+==================================================
+- git push/pull/commit/add -A/reset --hard/checkout/restore/stash/force-push, 그리고 AbandonWare3 remote 재추가.
+- 전체 테스트 suite, global clean, 데이터셋 삭제(백업만 허용).
+- .secrets/.env 읽기, secret 출력.
+- chat.js 수정(시작과 종료 SHA가 같아야 함), chat-ui.html 수정.
+- chat.settings.routing.enabled 값 변경, PROTO_OPEN/admin 강화, DB 스키마 변경.
+- 다른 세션의 lease, hunk, staging 건드리기. kro.kr 배포 설정과 cloudflared 건드리기.
+- 유료 API 4회 이상 호출, 401/403/429 재시도.
+
+==================================================
+Acceptance (모두 PASS여야 완료)
+==================================================
+AC1. LlmRouterRuntimeDeviceFailoverTest 15/15 PASS(수정 전 9 FAIL 로그와 수정 후 로그 첨부).
+AC2. root-cause.md에 근본 원인 1개(또는 원인별 독립 증거)가 파일:행과 hunk 근거로 있습니다.
+AC3. unconfirmed 가드 반례 테스트가 PASS입니다(실행 여부 불명이면 fallback 0회).
+AC4. settings-routing-v3 137건 재실행 결과 실패 0, skip 0입니다.
+AC5. 수정 파일을 직접 참조하는 기존 테스트 클래스가 모두 PASS이고, 전체 suite 실행은 0회입니다.
+AC6. 새 JVM에서 Verify-RAG exit 0, /chat과 /settings 모두 HTTP 200입니다.
+AC7. 로컬 /chat 스모크 2건의 응답이 정상이고 스크린샷 2장이 있습니다. 못 하면 원인과 함께 NOT_RUN으로 남깁니다(이 경우 전체는 PARTIAL).
+AC8. chat.js SHA-256이 4225d944…c2d3 그대로이고, 라우팅 플래그는 false입니다. 다른 세션의 hunk는 보존됐습니다(수정 전후 diff 비교).
+AC9. PROJECT_STATUS.md 갱신, 저널 종료, lease 해제, 18180이 기본 상태입니다.
+
+==================================================
+보고 형식
+==================================================
+맨 위: `외부 API: <없음 | 공급자/횟수/결과/원인>`
+1) 결론 한 줄(DONE / PARTIAL / HOLD)
+2) 근본 원인(3줄 이내) + 수정 파일과 변경량
+3) AC1–AC9 표(PASS / FAIL / NOT_RUN과 증거 경로)
+4) AUTO_DECISION 줄 목록
+5) PLUGIN_USAGE 블록
+6) HOLD와 다음 라운드 제안(3개 이내)
+산출물: data\agent-handoff\codex-autonomy\<run-id>\final\ 아래에 report.md, root-cause.md, hunks-of-interest.md, applied.patch, test logs, 스크린샷.
+
+[ANTI-STOP] 원인 확정 → 최소 수정 → AC1–AC9 확인까지 한 번에 진행하세요. 읽기와 계획만 하고 멈추면 미완료입니다.

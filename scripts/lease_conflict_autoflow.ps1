@@ -1,6 +1,7 @@
 # Thin PowerShell proxy for scripts/lease_conflict_autoflow.py so PowerShell-native
 # callers get the same lease-conflict autoflow without typing the interpreter.
 # All semantics, state and exit codes live in the Python tool.
+# SSOT: scripts/lease_conflict_autoflow.py
 [CmdletBinding()]
 param(
     [Parameter(ValueFromRemainingArguments = $true)]

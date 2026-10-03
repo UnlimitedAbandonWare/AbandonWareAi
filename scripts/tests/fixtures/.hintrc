@@ -1,0 +1,19 @@
+{
+  "extends": ["development"],
+  "hints": {
+    "axe/language": "off",
+    "axe/name-role-value": "off",
+    "axe/text-alternatives": "off",
+    "button-type": "off",
+    "compat-api/css": "off",
+    "compat-api/html": "off",
+    "content-type": "off",
+    "disown-opener": "off",
+    "html-checker": "off",
+    "meta-charset-utf-8": "off",
+    "meta-viewport": "off",
+    "no-inline-styles": "off",
+    "ssllabs": "off",
+    "strict-transport-security": "off"
+  }
+}

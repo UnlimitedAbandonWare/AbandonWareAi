@@ -1,0 +1,66 @@
+[DEVIN 지시서] RTX 3090 전력피크·케이블 순시 장애 대응 자동 폴백 로직 강화 — 2026-10-02 20:30 KST
+@demo1-gpu-power-fallback
+파일 ID: PASTE_DEVIN_RTX3090_POWER_FALLBACK_20261002
+[ANTI-STOP] 본 지시서는 읽기 전용 접수로 끝나지 않으며, DV1~DV3 구현 및 검증 통과 후 종료한다.
+
+## 0. 한 줄 목표
+RTX 3090의 전력 케이블·피크로 인한 간헐적 순시 장애 발생 시, 로컬 재시도 루프(0회 고정) 없이 저비용 API(Groq 등)로 자동 폴백하는 안전 경로를 보장하고 검증한다.
+
+## 1. 사실과 환경 (2026-10-02 20:28 KST 확인)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 하드웨어 관측: scripts/rtx3090_health_watch.ps1 실행 결과 ALERT 발생 (anomalies: hw_slowdown_active, hw_power_brake_slowdown_active, sw_power_cap_active, new_error_events).
+- 원인: RTX 3090 전력 케이블/순시 전력 피크(transient power excursion)로 인해 GPU 하드웨어 전력 브레이크(hw_power_brake_slowdown) 및 간헐적 타임아웃/응답 중단 발생.
+- 기존 자산: scripts/gpu_power_fallback.py (sha12: C34F290E94D4)에서 power_limit_suspect 분류 시 localRetryBudget=0 및 auto=true 반환 로직 존재.
+- Java 런타임: com.example.lms.llm.gateway.FallbackAwareChatModel (sha12: 264469181724) 및 LlmGatewayFailureClassifier (sha12: C2F21BA564A5)에 GPU_DEVICE_LOST 및 폴백 체인 존재.
+- 라우팅 규격: configs/api-routing.yaml (sha12: 4546F0F5F615) 기준 free_local 실패 시 low_cost (groq, gemini, opencode 등) 우선.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- Project Root: C:\AbandonWare\demo-1\demo-1\src 고정.
+- 첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+- git add -A, git push, 원격 브랜치 변경 금지. 비밀값/토큰 평문 출력 금지.
+- 미실행된 항목은 NOT_RUN 표기하며 사유를 명시하고 절대 PASS로 둔갑시키지 않는다.
+
+## 3. 작업 항목 (DV1~DV3)
+- DV1 [Devin] gpu_power_fallback.py 에 케이블·전력피크 감지 패턴 및 watch 신호 동기화 보강
+  - 증거: scripts/gpu_power_fallback.py:29-35, scripts/rtx3090_health_watch.ps1:LATEST.md
+  - 작업: hw_power_brake_slowdown_active, hw_slowdown_active, cable_power_trip, transient_spike 키워드가 power_limit_suspect로 정확히 분류되고 localRetryBudget=0 으로 설정되는지 검증 및 보강.
+  - RED 검사: python -B scripts/test_gpu_power_fallback.py ; "exit=$LASTEXITCODE"
+  - GREEN: python -B scripts/test_gpu_power_fallback.py ; "exit=$LASTEXITCODE" (Ran 11+ tests OK, exit=0)
+
+- DV2 [Devin] Java FallbackAwareChatModel 및 LlmGatewayFailureClassifier 전력 장애 매핑 점검
+  - 증거: main/java/com/example/lms/llm/gateway/LlmGatewayFailureClassifier.java:270-280, src/test/java/com/example/lms/llm/gateway/FallbackAwareChatModelTest.java:51-81
+  - 작업: 3090 하드웨어 전력 차단/TDR/GPU_DEVICE_LOST 발생 시 FallbackAwareChatModel이 무한 대기하지 않고 즉시 low_cost fallback으로 1회 자동 전환되는지 확인.
+  - RED/GREEN 검사: .\gradlew.bat :test --tests com.example.lms.llm.gateway.FallbackAwareChatModelTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+
+- DV3 [Devin] 3090 전력 장애 모의 판정 및 API 스펜드 가드 준수 검증
+  - 증거: scripts/gpu_power_fallback.py:decide, configs/agent-api-spend-guard.yaml
+  - 작업: python -B scripts/gpu_power_fallback.py decide --purpose llm --text "hw_power_brake_slowdown_active cable trip" 실행 시 action=fallback_to_api, nextRoute.id=groq, localRetryBudget=0, auto=true 반환 확인.
+  - 검증 명령: python -B scripts/gpu_power_fallback.py decide --purpose llm --text "hw_power_brake_slowdown_active" ; "exit=$LASTEXITCODE"
+
+## 4. HOLD 조건
+- H-1: 유료 모델(paid_quality: openai, anthropic) 폴백이 필요하나 AWX_AGENT_ALLOW_PAID_MODELS 환경변수가 없을 때 (자동으로 저비용 low_cost에서 멈추거나 HOLD).
+- H-2: 3090 하드웨어 이상으로 시스템 블루스크린(BSOD) 또는 완전 전원 차단(Kernel-Power 41) 발생 시 즉시 관측 중단 후 보고.
+
+## 5. ASK_ONCE
+- Q-1: 3090 전력 불안정 시 대체 모델 선택: (a) 권장: 저비용 클라우드 API (Groq Llama-3 / Gemini Flash)로 자동 즉시 전환, (b) 보조 GPU (RTX 3060 12GB) 포트 11435의 소형 모델로 전환, (c) 실패 즉시 대기 후 사용자 확인 요청.
+
+## 6. 절대 금지
+- 3090 전력 피크/브레이크 발생 시 로컬 모델 반복 재시도 금지 (루프 해머링 금지).
+- GPU 클럭/전력 제한(PL)을 임의의 비인가 스크립트로 강제 조작 금지.
+- API 키 평문 로깅 및 git push / git add -A 금지, 비밀값 출력 금지, AbandonWare3 임의 경로 접근 금지, PROTO_OPEN 금지.
+
+## 7. Acceptance Criteria (완료 기준)
+- DV1 완료: scripts/test_gpu_power_fallback.py 실행 시 11개 이상 단위 테스트 통과 (exit=0).
+- DV2 완료: FallbackAwareChatModelTest 가 GPU_DEVICE_LOST 및 폴백 시나리오를 정상 통과 (exit=0).
+- DV3 완료: gpu_power_fallback.py decide 호출 결과 localRetryBudget=0 및 low_cost API 폴백이 JSON으로 확인됨.
+- 미실행 항목이 있을 경우 NOT_RUN 및 구체적 원인(환경 미충족 등)을 명시.
+
+## 8. 보고 형식
+외부 API: 사용 안 함 (로컬 검증) 또는 [AWX][api-spend] why=local_failover
+| 항목 | 결과 (PASS/NOT_RUN/HOLD) | 실행 명령 / 증거 |
+| DV1 | PASS/NOT_RUN | python -B scripts/test_gpu_power_fallback.py |
+| DV2 | PASS/NOT_RUN | gradlew :test --tests FallbackAwareChatModelTest |
+| DV3 | PASS/NOT_RUN | python -B scripts/gpu_power_fallback.py decide |
+
+[ANTI-STOP] 모든 검증 명령의 exit 코드를 확인하고 단일 최종 요약 보고를 제출할 때까지 작업을 지속한다.

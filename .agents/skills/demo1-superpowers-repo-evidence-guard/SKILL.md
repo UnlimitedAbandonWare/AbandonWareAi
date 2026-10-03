@@ -1,6 +1,6 @@
 ---
 name: demo1-superpowers-repo-evidence-guard
-description: Use when demo-1 Safe Patch work explicitly mentions Superpowers, brainstorming, TDD
+description: Use when demo-1 Safe Patch work explicitly mentions Superpowers, brainstorming, or TDD — keeps live repo evidence authoritative over process templates.
 ---
 
 # Demo1 Superpowers Repo Evidence Guard

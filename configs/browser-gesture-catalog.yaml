@@ -1,0 +1,102 @@
+﻿# Browser gesture catalog for /chat post-fix verification (awx.browser-gesture-catalog.v1).
+# SSOT for "which gesture reproduces which video-observed symptom".
+# Parser note: keep this file to the strict YAML subset that
+# scripts/chat_auth_model_matrix_browser.js reads ??maps, "- item" lists,
+# [inline] lists, plain scalars; no '#' inside quoted values.
+#
+# needsModelCall=false gestures run against scripts/chat_ui_browser_fault_fixture.js
+# (synthetic SSE failures, 0 model generations). needsModelCall=true gestures run
+# on a live send inside a matrix cell.
+version: "2026-10-03"
+
+# assert keys -> max allowed count observed on the collected snapshot after the
+# gesture finishes. 0 means "must not occur".
+assertKeys:
+  pendingAssistant: "assistant bubbles still in data-state=pending at end"
+  preparingText: "'Assistant is preparing'/'?듬???以鍮? text visible in bubbles"
+  internalLeak: "internal markers in a message bubble: backend_timeout|stream_failed|message_failed|Traceback|stack line|[Agent-* (status bar/debug panel exempt)"
+  orderViolation: "DOM order: assistant/notice box before its user bubble"
+  overlapPairs: "bounding-box overlaps between message/notice elements"
+  lateTokensAfterStop: "tokens appended after stop/cancel completes"
+  duplicateAnswer: "two assistant bubbles serving one user send (mixed/duplicated)"
+  layoutBreak: "input bar or message column overflow/overlap after action"
+
+gestures:
+  G01:
+    name: "send_wait_timeout"
+    symptom: "video: 'Assistant is preparing...' stays after a failed/timed-out send"
+    needsModelCall: false
+    fixtureScenario: "error-late"
+    steps: ["goto /chat-ui via fixture proxy", "fill messageInput", "click sendBtn", "wait for stream error event to settle", "wait 1.5s for late events", "collectChatSnapshot"]
+    asserts:
+      pendingAssistant: 0
+      preparingText: 0
+    evidence: ["screenshot", "httpStatus", "reasonCode", "domSnapshot"]
+  G02:
+    name: "raw_debug_leak"
+    symptom: "video: raw internal error text (backend codes/stack) inside the conversation bubble"
+    needsModelCall: false
+    fixtureScenario: "error-late"
+    steps: ["goto /chat-ui via fixture proxy", "fill messageInput", "click sendBtn", "wait for stream error event to settle", "collectChatSnapshot"]
+    asserts:
+      internalLeak: 0
+    evidence: ["screenshot", "httpStatus", "reasonCode", "domSnapshot"]
+  G03:
+    name: "layout_order"
+    symptom: "video: failed answer box rendered above/overlapping the user question"
+    needsModelCall: false
+    fixtureScenario: "error-late"
+    steps: ["goto /chat-ui via fixture proxy", "fill messageInput", "click sendBtn", "wait for stream error event to settle", "collectChatSnapshot"]
+    asserts:
+      orderViolation: 0
+      overlapPairs: 0
+    evidence: ["screenshot", "domSnapshot"]
+  G04:
+    name: "stop_mid_stream"
+    symptom: "video: pressing stop mid-stream leaves stuck text or keeps streaming"
+    needsModelCall: false
+    fixtureScenario: "cancel-late"
+    steps: ["goto /chat-ui via fixture proxy", "fill messageInput", "click sendBtn", "wait for first token", "click stopBtn", "wait for cancel settle", "wait 1.5s for late events", "collectChatSnapshot"]
+    asserts:
+      lateTokensAfterStop: 0
+      pendingAssistant: 0
+    evidence: ["screenshot", "domSnapshot"]
+  G05:
+    name: "model_switch_mid"
+    symptom: "video: switching model while streaming corrupts the answer or violates new-conversation rule"
+    needsModelCall: true
+    steps: ["send prompt", "while streaming: selectModel(next candidate)", "observe: new conversation opened OR change deferred/blocked", "wait for settle", "collectChatSnapshot"]
+    asserts:
+      orderViolation: 0
+      duplicateAnswer: 0
+      pendingAssistant: 0
+    evidence: ["screenshot", "httpStatus", "domSnapshot"]
+  G06:
+    name: "reload_mid_stream"
+    symptom: "video: refresh mid-stream restores a bubble stuck in pending"
+    needsModelCall: true
+    steps: ["send prompt", "while streaming: page.reload", "wait for restore", "collectChatSnapshot"]
+    asserts:
+      pendingAssistant: 0
+      preparingText: 0
+    evidence: ["screenshot", "domSnapshot"]
+  G07:
+    name: "double_send"
+    symptom: "video: two quick sends interleave answers into one corrupted bubble"
+    needsModelCall: true
+    steps: ["send prompt A", "send prompt B within 400ms", "wait for both settles", "collectChatSnapshot"]
+    asserts:
+      duplicateAnswer: 0
+      orderViolation: 0
+      pendingAssistant: 0
+    evidence: ["screenshot", "httpStatus", "domSnapshot"]
+  G08:
+    name: "long_paste"
+    symptom: "video: pasting a long document breaks the input bar or message layout"
+    needsModelCall: true
+    steps: ["fill messageInput with generated long text (4000-8000 chars)", "send", "wait for settle", "collectChatSnapshot"]
+    asserts:
+      layoutBreak: 0
+      overlapPairs: 0
+    evidence: ["screenshot", "httpStatus", "domSnapshot"]
+

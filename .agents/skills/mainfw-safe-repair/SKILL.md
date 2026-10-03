@@ -11,7 +11,7 @@ Treat `mainfw` as a source overlay until a real build root is proven. Repair **r
 
 ## Bundled resources
 
-- Run `scripts/probe_mainfw.py` from this skill directory when the repository does not already provide an equivalent structural probe.
+- Run `.agents\skills\mainfw-safe-repair\scripts\probe_mainfw.py` from this skill directory when the repository does not already provide an equivalent structural probe.
 - Use `tests/pressure-scenarios.md` to forward-test evidence precedence, dirty-worktree safety, and RuleBreak authorization choices.
 
 ## Hard Rules
@@ -34,7 +34,7 @@ Treat `mainfw` as a source overlay until a real build root is proven. Repair **r
 Select the probe root that directly contains both `java/` and `resources/`: use `main` for demo-1's custom active layout, `src/main` for a standard repository, or `.` for an extracted overlay. Then run:
 
 ```bash
-python .agents/skills/mainfw-safe-repair/scripts/probe_mainfw.py --root <overlay-root> --output build/mainfw-probe-before.json
+python .agents\skills\mainfw-safe-repair\scripts\probe_mainfw.py --root <overlay-root> --output build/mainfw-probe-before.json
 ```
 
 Then identify:
@@ -93,7 +93,7 @@ Use the actual repository tool:
 Re-run the probe and compare JSON:
 
 ```bash
-python .agents/skills/mainfw-safe-repair/scripts/probe_mainfw.py --root <overlay-root> --output build/mainfw-probe-after.json
+python .agents\skills\mainfw-safe-repair\scripts\probe_mainfw.py --root <overlay-root> --output build/mainfw-probe-after.json
 ```
 
 Required final checks:

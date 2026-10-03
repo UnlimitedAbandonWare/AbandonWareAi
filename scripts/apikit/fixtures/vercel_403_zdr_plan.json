@@ -1,0 +1,8 @@
+{
+  "provider": "jev",
+  "expect": "PLAN_GATE",
+  "expect_code": "permission_denied",
+  "http_status": 403,
+  "body": {"error": {"message": "Zero Data Retention (ZDR) is only available for Pro and Enterprise plans. Current plan: hobby. Please upgrade your plan at https://vercel.com/d?to=%2F%5Bteam%5D%2F%7E%2Fsettings%2Fbilling to access this feature.", "type": "permission_denied", "param": {"error": "Zero Data Retention (ZDR) is only available for Pro and Enterprise plans."}}},
+  "note": "real 403 observed 2026-09-29 (jev-smoke-20260929-102827.json): Hobby-plan ZDR request — plan restriction, not region/IP. Permission_denied code alone must NOT upgrade; the plan wording does."
+}

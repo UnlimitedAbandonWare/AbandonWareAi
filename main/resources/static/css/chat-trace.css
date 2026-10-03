@@ -63,3 +63,40 @@
 .chat-app .awx-trace-panel .trace-pipeline-controls select { max-width: 100%; }
 .chat-app .awx-trace-panel [class*="trace-risk-"] { font-weight: 700; }
 .chat-app .chat-trace-toggle { display: flex; align-items: center; gap: 7px; margin: 8px 0; font-size: 13px; }
+
+.chat-app .trace-dock {
+  flex: 0 0 auto;
+  margin: 4px 24px 8px;
+  border: 1px solid #d5dedb;
+  border-radius: 10px;
+  background: #f8faf9;
+  color: #263b40;
+  font-size: 12px;
+}
+.chat-app .trace-dock-toggle {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+.chat-app .trace-dock-body {
+  display: grid;
+  gap: 8px;
+  max-height: 34vh;
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+.chat-app .trace-dock-body[hidden] { display: none; }
+.chat-app .trace-dock-current,
+.chat-app .trace-dock-history { min-width: 0; overflow-wrap: anywhere; }
+.chat-app .trace-dock-status { margin: 0; color: #53676d; }
+.chat-app .trace-dock-event { padding: 4px 0; border-top: 1px solid #e2e9e6; }
+@media (max-width: 760px) {
+  .chat-app .trace-dock { margin: 4px 12px 8px; }
+}

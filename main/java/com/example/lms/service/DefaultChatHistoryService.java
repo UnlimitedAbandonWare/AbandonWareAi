@@ -73,6 +73,11 @@ public class DefaultChatHistoryService implements ChatHistoryService {
     }
 
     @Override
+    public ChatSession getSessionForRequest(Long id) {
+        return null;
+    }
+
+    @Override
     public ChatSession getSessionWithMessages(Long id) {
         log.debug("[ChatHistory] getSessionWithMessages sessionHash={} (shim)", hashSession(id));
         return null;

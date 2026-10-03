@@ -10,14 +10,14 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.stereotype.Component;
-import org.springframework.web.servlet.HandlerInterceptor;
+import org.springframework.web.servlet.AsyncHandlerInterceptor;
 
 @Component
 @ConditionalOnClass(name = {
         "com.example.lms.guard.rulebreak.RuleBreakContext",
         "com.example.lms.guard.rulebreak.RuleBreakContextHolder"
 })
-public class RuleBreakInterceptor implements HandlerInterceptor {
+public class RuleBreakInterceptor implements AsyncHandlerInterceptor {
 
     private final RuleBreakEvaluator evaluator;
     private final ObjectProvider<DebugEventStore> debugEvents;
@@ -89,6 +89,11 @@ public class RuleBreakInterceptor implements HandlerInterceptor {
             }
         }
         return true;
+    }
+
+    @Override
+    public void afterConcurrentHandlingStarted(HttpServletRequest req, HttpServletResponse res, Object handler) {
+        RuleBreakContextHolder.clear();
     }
 
     @Override

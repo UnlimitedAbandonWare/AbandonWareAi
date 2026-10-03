@@ -1,5 +1,8 @@
 package com.example.lms.service.web;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.example.lms.gptsearch.web.AbstractWebSearchProvider;
 import com.example.lms.gptsearch.web.ProviderId;
 import com.example.lms.gptsearch.web.dto.WebSearchQuery;
@@ -7,12 +10,15 @@ import com.example.lms.gptsearch.web.dto.WebSearchResult;
 import com.example.lms.gptsearch.web.impl.SerpApiProvider;
 import com.example.lms.search.RateLimitPolicy;
 import com.example.lms.search.TraceStore;
+import com.example.lms.search.provider.HybridWebSearchProvider;
+import com.example.lms.search.policy.AdaptiveSearchQueryVariants;
 import com.example.lms.service.NaverSearchService;
 import com.example.lms.service.NaverTraceSignals;
 import com.example.lms.service.rag.TavilyWebSearchRetriever;
 import dev.langchain4j.rag.query.Query;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -22,6 +28,7 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.web.reactive.function.client.ClientResponse;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.client.RestTemplate;
 import reactor.core.publisher.Mono;
 
@@ -32,6 +39,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeoutException;
 import java.util.regex.Pattern;
@@ -40,6 +48,7 @@ import static org.hamcrest.Matchers.containsString;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
@@ -82,6 +91,30 @@ class SearchProviderTraceStandardizationTest {
                 "BraveSearchService fail-soft paths need trace breadcrumbs instead of exact empty catch bodies");
     }
 
+
+    @Test
+    void braveExceptionBreadcrumbsFollowTheThrownFailureType() {
+        for (boolean resourceAccess : List.of(true, false)) {
+            TraceStore.clear();
+            BraveSearchService service = enabledBraveService("fixture-brave-breadcrumb-key", 2000, 0.0d);
+            RestTemplate template = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+            var attempts = new java.util.concurrent.atomic.AtomicInteger();
+            template.setRequestFactory((uri, method) -> {
+                attempts.incrementAndGet();
+                if (resourceAccess) throw new org.springframework.web.client.ResourceAccessException("synthetic transport failure");
+                throw new IllegalStateException("synthetic generic failure");
+            });
+            BraveSearchResult result = service.searchWithMeta("synthetic breadcrumb query", 3);
+            assertEquals(BraveSearchResult.Status.EXCEPTION, result.status());
+            assertTrue(result.snippets().isEmpty());
+            assertEquals(1, attempts.get());
+            assertEquals(true, TraceStore.get(resourceAccess ? "web.brave.suppressed.resourceAccess" : "web.brave.suppressed.exception"));
+            assertNull(TraceStore.get(resourceAccess ? "web.brave.suppressed.exception" : "web.brave.suppressed.resourceAccess"));
+            assertEquals(resourceAccess ? "transport-error" : "exception", TraceStore.get("web.brave.failureReason"));
+            assertProviderTraceDoesNotContain("synthetic breadcrumb query", "fixture-brave-breadcrumb-key");
+        }
+    }
+
     @Test
     void braveUtilityFallbacksExposeDirectTraceBreadcrumbs() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/web/BraveSearchService.java"));
@@ -102,11 +135,8 @@ class SearchProviderTraceStandardizationTest {
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.quotaExhaustedTrace\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.rateLimitLocalTrace\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.localStreakReset\", true)"));
-        assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.correlationHeaders\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.http429\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.httpStatus\", true)"));
-        assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.resourceAccess\", true)"));
-        assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.exception\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.adaptiveInterrupt\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.adaptiveTrace\", true)"));
         assertTrue(source.contains("TraceStore.put(\"web.brave.suppressed.adaptiveSkippedTrace\", true)"));
@@ -272,8 +302,6 @@ class SearchProviderTraceStandardizationTest {
         assertProviderLogDoesNotUseRawThrowableMessages(
                 "main/java/com/example/lms/integration/handlers/AdaptiveWebSearchHandler.java");
         assertProviderLogDoesNotUseRawThrowableMessages(
-                "main/java/com/example/lms/client/GTranslateClient.java");
-        assertProviderLogDoesNotUseRawThrowableMessages(
                 "main/java/com/example/lms/service/rag/TavilyWebSearchRetriever.java");
         assertProviderLogDoesNotUseRawThrowableMessages(
                 "main/java/com/example/lms/service/rag/WebSearchRetriever.java");
@@ -316,8 +344,9 @@ class SearchProviderTraceStandardizationTest {
         assertFalse(novaAnalyze.contains("SafeRedactor.safeMessage(String.valueOf(e)"));
         assertFalse(novaAnalyze.contains("SafeRedactor.safeMessage(e.getMessage()"));
         assertFalse(novaAnalyze.contains("catch (Exception ignore) {\n                    // ignore\n                }"));
-        assertTrue(novaAnalyze.contains("traceCancelFailure(originalQuery, e)"));
-        assertTrue(novaAnalyze.contains("traceInterruptedPoll(originalQuery, ie)"));
+        assertTrue(novaAnalyze.contains("traceCancelFailure(\"\", cancelFailure)"),
+                "cancel failure tracing must not retain the raw query");
+        assertTrue(novaAnalyze.contains("traceInterruptedPoll(originalQuery, interrupted)"));
         assertTrue(novaAnalyze.contains("web.await.analyze.cancelFailure.reason"));
         assertTrue(novaAnalyze.contains("web.await.analyze.interrupted.reason"));
         String analyze = Files.readString(Path.of("main/java/com/example/lms/service/rag/AnalyzeWebSearchRetriever.java"));
@@ -361,15 +390,6 @@ class SearchProviderTraceStandardizationTest {
                         && window.contains("\"metaInt.parse\"")
                         && window.contains("\"invalid_number\""),
                 "Analyze metadata parser fallback should use stable invalid_number error label");
-    }
-
-    @Test
-    void gTranslateClientFailureLogUsesHashAndLengthOnly() throws Exception {
-        String source = Files.readString(Path.of("main/java/com/example/lms/client/GTranslateClient.java"));
-
-        assertFalse(source.contains("SafeRedactor.safeMessage(String.valueOf(e), 180)"));
-        assertTrue(source.contains("[GTranslate] API call failed. errorHash={} errorLength={}"));
-        assertTrue(source.contains("SafeRedactor.hashValue(messageOf(e)), messageLength(e)"));
     }
 
     @Test
@@ -646,6 +666,68 @@ class SearchProviderTraceStandardizationTest {
     }
 
     @Test
+    void braveAndNaverProviderCountsEmitCommonRedactedWebTraceKeys() {
+        String rawQuery = "private common trace query ownerToken=raw-secret";
+        String rawReason = "missing_brave_api_key";
+
+        TraceStore.clear();
+        BraveSearchService brave = enabledBraveService("sk-bravecommon0001");
+        ReflectionTestUtils.invokeMethod(brave, "traceBraveCounts",
+                rawQuery, 4, 0, 0, true, rawReason);
+
+        assertEquals("brave", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.FALSE, TraceStore.get("web.provider.enabled"));
+        assertEquals("missing-key", TraceStore.get("web.provider.disabledReason"));
+        assertEquals(0, TraceStore.get("web.provider.resultCount"));
+        assertEquals(0, TraceStore.get("web.query.variantCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("provider-disabled", TraceStore.get("web.failsoft.reason"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(rawQuery));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("raw-secret"));
+
+        TraceStore.clear();
+        NaverSearchService naver = naverService("naver-id:naver-secret", "", "");
+        ReflectionTestUtils.invokeMethod(naver, "traceNaverCounts",
+                rawQuery, 5, 3, 0, false, null);
+
+        assertEquals("naver", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.TRUE, TraceStore.get("web.provider.enabled"));
+        assertNull(TraceStore.get("web.provider.disabledReason"));
+        assertEquals(3, TraceStore.get("web.provider.resultCount"));
+        assertEquals(0, TraceStore.get("web.query.variantCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.failsoft.reason"));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(rawQuery));
+        assertFalse(String.valueOf(TraceStore.getAll()).contains("raw-secret"));
+    }
+
+    @Test
+    void hybridMergeBoundaryEmitsCommonFusionAndStarvationTraceKeys() {
+        TraceStore.clear();
+        HybridWebSearchProvider provider = new HybridWebSearchProvider(
+                mock(NaverSearchService.class),
+                mock(BraveSearchService.class));
+
+        ReflectionTestUtils.invokeMethod(provider,
+                "emitMergeBoundaryEvent",
+                "unit",
+                "private merge query api_key=raw-secret",
+                3,
+                List.of("brave-one"),
+                List.of(),
+                List.of(),
+                Map.of(),
+                null);
+
+        assertEquals(0, TraceStore.get("web.fusion.selectedCount"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.filter.starvationReason"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.failsoft.reason"));
+        String trace = String.valueOf(TraceStore.getAll());
+        assertFalse(trace.contains("private merge query"), trace);
+        assertFalse(trace.contains("raw-secret"), trace);
+    }
+
+    @Test
     void braveBlankQueryEmitsSkippedReasonWithoutExternalCall() {
         TraceStore.clear();
         BraveSearchService service = enabledBraveService("sk-braveblank000000");
@@ -733,6 +815,12 @@ class SearchProviderTraceStandardizationTest {
         assertEquals("missing_serpapi_api_key", TraceStore.get("web.serpapi.disabledReasonCanonical"));
         assertEquals("missing_serpapi_api_key", TraceStore.get("web.serpapi.skipped.reason"));
         assertTrue(String.valueOf(TraceStore.get("web.serpapi.queryHash")).startsWith("hash:"));
+        assertEquals("serpapi", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.FALSE, TraceStore.get("web.provider.enabled"));
+        assertEquals("missing-key", TraceStore.get("web.provider.disabledReason"));
+        assertEquals(0, TraceStore.get("web.provider.resultCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("provider-disabled", TraceStore.get("web.failsoft.reason"));
     }
 
     @Test
@@ -766,6 +854,12 @@ class SearchProviderTraceStandardizationTest {
 
         assertEquals(Boolean.TRUE, TraceStore.get("web.serpapi.providerEmpty"));
         assertEquals("provider-empty", TraceStore.get("web.serpapi.failureReason"));
+        assertEquals("serpapi", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.TRUE, TraceStore.get("web.provider.enabled"));
+        assertNull(TraceStore.get("web.provider.disabledReason"));
+        assertEquals(0, TraceStore.get("web.provider.resultCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("empty-provider-output", TraceStore.get("web.failsoft.reason"));
 
         ReflectionTestUtils.invokeMethod(provider, "traceSerpApiCounts",
                 "private serp filtered query", 4, 3, 0, false, null);
@@ -773,6 +867,9 @@ class SearchProviderTraceStandardizationTest {
         assertEquals(Boolean.FALSE, TraceStore.get("web.serpapi.providerEmpty"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.serpapi.afterFilterStarved"));
         assertEquals("after-filter-starvation", TraceStore.get("web.serpapi.failureReason"));
+        assertEquals(3, TraceStore.get("web.provider.resultCount"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.filter.starvationReason"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.failsoft.reason"));
     }
 
     @Test
@@ -841,7 +938,39 @@ class SearchProviderTraceStandardizationTest {
         assertEquals(rawQuery.length(), TraceStore.get("web.tavily.queryLength"));
         assertEquals("1-4", TraceStore.get("web.tavily.queryTokenBucket"));
         assertEquals(2200, TraceStore.get("web.tavily.timeoutMs"));
+        assertEquals("tavily", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.FALSE, TraceStore.get("web.provider.enabled"));
+        assertEquals("missing-key", TraceStore.get("web.provider.disabledReason"));
+        assertEquals(0, TraceStore.get("web.provider.resultCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("provider-disabled", TraceStore.get("web.failsoft.reason"));
         assertProviderTraceDoesNotContain(rawQuery, "tavily-secret");
+    }
+
+    @Test
+    void tavilyCountPathEmitsCommonProviderAliases() {
+        TraceStore.clear();
+        TavilyWebSearchRetriever retriever = new TavilyWebSearchRetriever(WebClient.builder());
+        ReflectionTestUtils.setField(retriever, "timeoutMs", 2000);
+
+        ReflectionTestUtils.invokeMethod(retriever, "traceCounts",
+                "private tavily empty query", 4, 0, 0, "provider-empty", true);
+
+        assertEquals("provider-empty", TraceStore.get("web.tavily.failureReason"));
+        assertEquals("tavily", TraceStore.get("web.provider.name"));
+        assertEquals(Boolean.TRUE, TraceStore.get("web.provider.enabled"));
+        assertNull(TraceStore.get("web.provider.disabledReason"));
+        assertEquals(0, TraceStore.get("web.provider.resultCount"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.hash")).startsWith("hash:"));
+        assertEquals("empty-provider-output", TraceStore.get("web.failsoft.reason"));
+
+        ReflectionTestUtils.invokeMethod(retriever, "traceCounts",
+                "private tavily filtered query", 4, 3, 0, null, false);
+
+        assertEquals("after-filter-starvation", TraceStore.get("web.tavily.failureReason"));
+        assertEquals(3, TraceStore.get("web.provider.resultCount"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.filter.starvationReason"));
+        assertEquals("after-filter-starvation", TraceStore.get("web.failsoft.reason"));
     }
 
     @Test
@@ -1153,7 +1282,237 @@ class SearchProviderTraceStandardizationTest {
         assertFalse(result.snippets().isEmpty());
         assertEquals("provider-empty", TraceStore.get("web.brave.adaptive.triggerReason"));
         assertTrue(((Number) TraceStore.get("web.brave.adaptive.variantCount")).intValue() > 0);
+        assertEquals("exploratory", TraceStore.get("web.brave.adaptive.temperatureProfile"));
+        assertTrue(((Number) TraceStore.get("web.brave.adaptive.validationTemperature")).doubleValue() <= 0.25d);
+        assertTrue(((Number) TraceStore.get("web.brave.adaptive.explorationTemperature")).doubleValue()
+                > ((Number) TraceStore.get("web.brave.adaptive.validationTemperature")).doubleValue());
+        assertEquals("exploratory", TraceStore.get("web.query.rewrite.temperatureProfile"));
         assertProviderTraceDoesNotContain(rawQuery, apiKey);
+    }
+
+    @Test
+    void brave429ClampsReportedCooldownAndRedactsRemoteBodyAcrossLogsAndTrace() {
+        TraceStore.clear();
+        String apiKey = "brave-private-cooldown-token";
+        String rawQuery = "private brave cooldown contract query";
+        String remoteBodySentinel = "REMOTE_PRIVATE_STATUS_43";
+        BraveSearchService service = enabledBraveService(apiKey, 2000, 1.0d, 120_000L);
+        RestTemplate restTemplate = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        server.expect(requestTo(containsString("api.search.brave.com")))
+                .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS)
+                        .header("Retry-After", "999999")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"error\":\"" + remoteBodySentinel + " " + rawQuery + " token=" + apiKey + "\"}"));
+        Logger logger = (Logger) LoggerFactory.getLogger(BraveSearchService.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+
+        BraveSearchResult result;
+        try {
+            result = service.searchWithMeta(rawQuery, 3);
+        } finally {
+            logger.detachAppender(appender);
+            appender.stop();
+        }
+
+        server.verify();
+        assertEquals(BraveSearchResult.Status.HTTP_429, result.status());
+        assertEquals(30_000L, result.cooldownMs());
+        assertEquals(result.cooldownMs(), TraceStore.get("web.brave.cooldownMs"));
+        assertEquals(result.cooldownMs(), TraceStore.get("web.brave.cooldown.hintMs"));
+        long remainingMs = service.cooldownRemainingMs();
+        assertTrue(result.cooldownMs() >= remainingMs);
+        assertTrue(result.cooldownMs() - remainingMs <= 250L);
+        assertEquals(30_000L, TraceStore.get("web.brave.retryAfterMs"));
+        assertTrue(String.valueOf(TraceStore.get("web.brave.errorBodyHash")).startsWith("hash:"));
+        assertTrue(((Number) TraceStore.get("web.brave.errorBodyLength")).intValue() > remoteBodySentinel.length());
+        String logs = appender.list.stream()
+                .map(ILoggingEvent::getFormattedMessage)
+                .reduce("", (left, right) -> left + "\n" + right);
+        assertFalse(logs.contains(remoteBodySentinel), logs);
+        assertFalse(logs.contains(rawQuery), logs);
+        assertFalse(logs.contains(apiKey), logs);
+        assertProviderTraceDoesNotContain(remoteBodySentinel, apiKey);
+        assertProviderTraceDoesNotContain(rawQuery, apiKey);
+    }
+
+    @Test
+    void braveGenericHttpStatusTextCannotEscapeThroughResultOrTrace() {
+        TraceStore.clear();
+        String statusTextSentinel = "REMOTE_PRIVATE_STATUS_43";
+        String rawQuery = "private brave generic status query";
+        BraveSearchService service = enabledBraveService("brave-generic-status-token");
+        RestTemplate restTemplate = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        restTemplate.setRequestFactory((uri, method) -> {
+            throw HttpServerErrorException.create(
+                    HttpStatus.BAD_GATEWAY,
+                    statusTextSentinel,
+                    HttpHeaders.EMPTY,
+                    new byte[0],
+                    StandardCharsets.UTF_8);
+        });
+
+        BraveSearchResult result = service.searchWithMeta(rawQuery, 1);
+
+        assertEquals(BraveSearchResult.Status.HTTP_ERROR, result.status());
+        assertEquals("http-error", result.message());
+        assertFalse(String.valueOf(TraceStore.getAll()).contains(statusTextSentinel));
+        assertProviderTraceDoesNotContain(rawQuery, "brave-generic-status-token");
+    }
+
+    @Test
+    void boundedHybridRouteSuppressesBraveAdaptiveWireFanout() {
+        TraceStore.clear();
+        TraceStore.put("web.boundedRoute", true);
+        BraveSearchService service = enabledBraveService("brave-bounded-test-value", 2000, 100.0d);
+        RestTemplate restTemplate = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        server.expect(requestTo(containsString("api.search.brave.com")))
+                .andRespond(withStatus(HttpStatus.OK)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"web\":{\"results\":[]}}"));
+
+        BraveSearchResult result = service.searchWithMeta("bounded brave empty query", 1);
+
+        server.verify();
+        assertTrue(result.snippets().isEmpty());
+        assertEquals("bounded-route", TraceStore.get("web.brave.adaptive.triggerReason"));
+        assertEquals(0, TraceStore.get("web.brave.adaptive.variantCount"));
+    }
+
+    @Test
+    void providerAdaptivePlansHonorDeepSearchModeTraceHint() {
+        TraceStore.clear();
+        TraceStore.put("chatApi.web.recallModeRequested", true);
+
+        BraveSearchService brave = enabledBraveService("sk-braverecall000001", 2000, 100.0d);
+        AdaptiveSearchQueryVariants.Plan bravePlan = ReflectionTestUtils.invokeMethod(brave,
+                "planBraveVariants",
+                "spring boot virtual threads",
+                List.of("spring boot virtual threads"),
+                false,
+                false);
+
+        assertEquals("exploratory", bravePlan.temperatureProfile());
+        assertTrue(bravePlan.queries().contains("spring boot virtual threads official source"));
+        assertEquals(1, bravePlan.diagnostics().verificationLaneCount());
+        assertEquals(1, bravePlan.diagnostics().explorationLaneCount());
+
+        NaverSearchService naver = naverServiceWithoutKeys();
+        AdaptiveSearchQueryVariants.Plan naverPlan = ReflectionTestUtils.invokeMethod(naver,
+                "planNaverVariants",
+                "spring boot virtual threads",
+                List.of("spring boot virtual threads"),
+                false,
+                false);
+
+        assertEquals("exploratory", naverPlan.temperatureProfile());
+        assertTrue(naverPlan.queries().contains("spring boot virtual threads implementation examples"));
+    }
+
+    @Test
+    void providerAdaptivePlansHonorWorkflowSearchPolicyRecallHint() {
+        TraceStore.clear();
+        TraceStore.put("search.policy.mode", "RECALL");
+
+        BraveSearchService brave = enabledBraveService("brave-workflow-recall-key", 2000, 100.0d);
+        AdaptiveSearchQueryVariants.Plan bravePlan = ReflectionTestUtils.invokeMethod(brave,
+                "planBraveVariants",
+                "spring boot virtual threads",
+                List.of("spring boot virtual threads"),
+                false,
+                false);
+
+        assertEquals("exploratory", bravePlan.temperatureProfile());
+        assertTrue(bravePlan.queries().contains("spring boot virtual threads official source"));
+        assertEquals(1, bravePlan.diagnostics().verificationLaneCount());
+        assertEquals(1, bravePlan.diagnostics().explorationLaneCount());
+
+        NaverSearchService naver = naverServiceWithoutKeys();
+        AdaptiveSearchQueryVariants.Plan naverPlan = ReflectionTestUtils.invokeMethod(naver,
+                "planNaverVariants",
+                "spring boot virtual threads",
+                List.of("spring boot virtual threads"),
+                false,
+                false);
+
+        assertEquals("exploratory", naverPlan.temperatureProfile());
+        assertTrue(naverPlan.queries().contains("spring boot virtual threads implementation examples"));
+    }
+
+    @Test
+    void providerAdaptiveTraceIncludesRedactedLaneDiagnostics() {
+        TraceStore.clear();
+        String rawQuery = "private spring boot virtual threads ownerToken=secret";
+        AdaptiveSearchQueryVariants.Plan plan = AdaptiveSearchQueryVariants.plan(
+                rawQuery,
+                List.of(rawQuery),
+                new AdaptiveSearchQueryVariants.Options(
+                        AdaptiveSearchQueryVariants.Provider.NAVER,
+                        true,
+                        7,
+                        4500,
+                        4500,
+                        600,
+                        true,
+                        false,
+                        false));
+
+        NaverSearchService naver = naverServiceWithoutKeys();
+        ReflectionTestUtils.invokeMethod(naver, "traceNaverAdaptive", plan, 0, 0);
+
+        assertTrue(String.valueOf(TraceStore.get("web.naver.adaptive.querySeedHash12")).matches("[0-9a-f]{12}"));
+        assertTrue(String.valueOf(TraceStore.get("web.naver.adaptive.variantSetHash12")).matches("[0-9a-f]{12}"));
+        assertEquals(2, TraceStore.get("web.naver.adaptive.verificationLaneCount"));
+        assertTrue(((Number) TraceStore.get("web.naver.adaptive.explorationLaneCount")).intValue() >= 3);
+        assertTrue(String.valueOf(TraceStore.get("web.naver.adaptive.laneLabels"))
+                .contains("verification:official_source"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.rewrite.laneSummary"))
+                .contains("verification:official_source"));
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.seedHash12")).matches("[0-9a-f]{12}"));
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.variantHash12")).matches("[0-9a-f]{12}"));
+        assertEquals(2, TraceStore.get("web.rewritePlan.verificationCount"));
+        assertTrue(((Number) TraceStore.get("web.rewritePlan.explorationCount")).intValue() >= 3);
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.laneSummary"))
+                .contains("verification:official_source"));
+        assertProviderTraceDoesNotContain(rawQuery, "ownerToken=secret");
+
+        TraceStore.clear();
+        BraveSearchService brave = enabledBraveService("sk-bravediag000005");
+        ReflectionTestUtils.invokeMethod(brave, "traceBraveAdaptive", plan, 0, 0);
+
+        assertTrue(String.valueOf(TraceStore.get("web.brave.adaptive.querySeedHash12")).matches("[0-9a-f]{12}"));
+        assertTrue(String.valueOf(TraceStore.get("web.brave.adaptive.variantSetHash12")).matches("[0-9a-f]{12}"));
+        assertEquals(2, TraceStore.get("web.brave.adaptive.verificationLaneCount"));
+        assertTrue(((Number) TraceStore.get("web.brave.adaptive.explorationLaneCount")).intValue() >= 3);
+        assertTrue(String.valueOf(TraceStore.get("web.brave.adaptive.laneLabels"))
+                .contains("verification:official_source"));
+        assertTrue(String.valueOf(TraceStore.get("web.query.rewrite.laneSummary"))
+                .contains("verification:official_source"));
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.seedHash12")).matches("[0-9a-f]{12}"));
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.variantHash12")).matches("[0-9a-f]{12}"));
+        assertEquals(2, TraceStore.get("web.rewritePlan.verificationCount"));
+        assertTrue(((Number) TraceStore.get("web.rewritePlan.explorationCount")).intValue() >= 3);
+        assertTrue(String.valueOf(TraceStore.get("web.rewritePlan.laneSummary"))
+                .contains("verification:official_source"));
+        assertProviderTraceDoesNotContain(rawQuery, "ownerToken=secret");
+    }
+
+    @Test
+    void adaptiveProviderTracePersistsVariantLaneTemperatureHintsWithoutRawQueries() throws Exception {
+        String naver = Files.readString(Path.of("main/java/com/example/lms/service/NaverSearchService.java"));
+        String brave = Files.readString(Path.of("main/java/com/example/lms/service/web/BraveSearchService.java"));
+
+        for (String source : List.of(naver, brave)) {
+            assertTrue(source.contains("plan.variantLaneTemperatureHints()"));
+            assertTrue(source.contains("variantLaneTemperatureHints"));
+            assertTrue(source.contains("web.query.rewrite.variantLaneTemperatureHints"));
+            assertTrue(source.contains("web.rewritePlan.variantLaneTemperatureHints"));
+            assertFalse(source.contains("web.query.rewrite.rawQuery"));
+            assertFalse(source.contains("web.rewritePlan.rawQuery"));
+        }
     }
 
     @Test
@@ -1380,6 +1739,7 @@ class SearchProviderTraceStandardizationTest {
         assertEquals("missing_naver_client_credentials", TraceStore.get("web.naver.disabledReasonCanonical"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.naver.skipped"));
         assertEquals("missing_naver_client_credentials", TraceStore.get("web.naver.skipped.reason"));
+        assertEquals("missing-key", TraceStore.get("web.provider.disabledReason"));
         assertTrue(String.valueOf(TraceStore.get("web.naver.queryHash")).startsWith("hash:"));
     }
 
@@ -1432,7 +1792,8 @@ class SearchProviderTraceStandardizationTest {
 
         String naver = Files.readString(Path.of("main/java/com/example/lms/service/NaverSearchService.java"));
         long callCount = Pattern.compile("NaverTraceSignals\\.traceBreakerOpen\\(").matcher(naver).results().count();
-        assertEquals(3, callCount, "all Naver breaker-open skip paths should use the canonical trace helper");
+        assertEquals(2, callCount,
+                "the reactive wire owner and synchronous compatibility owner should use the canonical trace helper");
     }
 
     @Test
@@ -1475,10 +1836,11 @@ class SearchProviderTraceStandardizationTest {
                 .build();
         NaverSearchService service = naverService("", clientId, clientSecret, webClient);
 
-        List<String> result = invokeNaverApiMono(service, rawQuery)
-                .block(Duration.ofSeconds(1));
+        RuntimeException failure = assertThrows(RuntimeException.class,
+                () -> invokeNaverApiMono(service, rawQuery).block(Duration.ofSeconds(1)));
 
-        assertTrue(result == null || result.isEmpty());
+        assertEquals("RATE_LIMIT", failure.getMessage());
+        assertEquals("RATE_LIMIT", TraceStore.get("web.naver.failureClass"));
         assertEquals(429, TraceStore.get("web.naver.httpStatus"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.naver.429"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.naver.rateLimited"));
@@ -1504,10 +1866,11 @@ class SearchProviderTraceStandardizationTest {
                 .build();
         NaverSearchService service = naverService("", clientId, clientSecret, webClient);
 
-        List<String> result = invokeNaverApiMono(service, rawQuery)
-                .block(Duration.ofSeconds(1));
+        RuntimeException failure = assertThrows(RuntimeException.class,
+                () -> invokeNaverApiMono(service, rawQuery).block(Duration.ofSeconds(1)));
 
-        assertTrue(result == null || result.isEmpty());
+        assertEquals("TIMEOUT_OR_BUDGET", failure.getMessage());
+        assertEquals("TIMEOUT_OR_BUDGET", TraceStore.get("web.naver.failureClass"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.naver.timeout"));
         assertEquals(Boolean.FALSE, TraceStore.get("web.naver.providerEmpty"));
         assertEquals("timeout", TraceStore.get("web.naver.failureReason"));
@@ -1528,10 +1891,11 @@ class SearchProviderTraceStandardizationTest {
                 .build();
         NaverSearchService service = naverService("", clientId, clientSecret, webClient);
 
-        List<String> result = invokeNaverApiMono(service, rawQuery)
-                .block(Duration.ofSeconds(1));
+        RuntimeException failure = assertThrows(RuntimeException.class,
+                () -> invokeNaverApiMono(service, rawQuery).block(Duration.ofSeconds(1)));
 
-        assertTrue(result == null || result.isEmpty());
+        assertEquals("TIMEOUT_OR_BUDGET", failure.getMessage());
+        assertEquals("TIMEOUT_OR_BUDGET", TraceStore.get("web.naver.failureClass"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.naver.timeout"));
         assertEquals(Boolean.FALSE, TraceStore.get("web.naver.rateLimited"));
         assertEquals(Boolean.FALSE, TraceStore.get("web.naver.429"));
@@ -1613,6 +1977,14 @@ class SearchProviderTraceStandardizationTest {
     }
 
     private static BraveSearchService enabledBraveService(String apiKey, int monthlyQuota, double qpsLimit) {
+        return enabledBraveService(apiKey, monthlyQuota, qpsLimit, 2000L);
+    }
+
+    private static BraveSearchService enabledBraveService(
+            String apiKey,
+            int monthlyQuota,
+            double qpsLimit,
+            long cooldownMs) {
         BraveSearchService service = new BraveSearchService(new BraveSearchProperties(
                 true,
                 "https://api.search.brave.com/res/v1/web/search",
@@ -1621,7 +1993,7 @@ class SearchProviderTraceStandardizationTest {
                 monthlyQuota,
                 500L,
                 200L,
-                2000L));
+                cooldownMs));
         ReflectionTestUtils.setField(service, "configEnabled", true);
         ReflectionTestUtils.setField(service, "apiKey", apiKey);
         ReflectionTestUtils.setField(service, "baseUrl", "https://api.search.brave.com/res/v1/web/search");

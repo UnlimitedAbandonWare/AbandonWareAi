@@ -1,4 +1,4 @@
 interface:
   display_name: "Demo1 Codex Plugin Roles"
   short_description: "Per-work-type Codex plugin allowlist"
-  default_prompt: "Use $demo1-codex-plugin-roles to enable only the plugin lanes the current work type needs."
+  default_prompt: "Apply $demo1-codex-plugin-roles v2 automatically on every task (no paste needed): enable only the plugin lanes the current work type needs, and always end the report with the `외부 API:` line plus a `PLUGIN_USAGE:` block (checked by scripts/codex_plugin_usage_lint.py)."

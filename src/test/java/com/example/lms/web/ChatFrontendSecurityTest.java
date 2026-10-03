@@ -1188,7 +1188,7 @@ class ChatFrontendSecurityTest {
     void streamingSignalBarShowsClientElapsedWhileWaitingForModel() throws Exception {
         String chat = Files.readString(Path.of("main/resources/static/js/chat.js"), StandardCharsets.UTF_8);
 
-        assertTrue(chat.contains("const streamStartedAt = nowMs();"));
+        assertTrue(chat.contains("? previousStartedAt : nowMs();"));
         assertTrue(chat.contains("const streamHeartbeatContext = () =>"));
         assertTrue(chat.contains("client-wait:${elapsedMs}ms"));
         assertTrue(chat.contains("let streamHeartbeatTimer = null;"));
@@ -1209,22 +1209,23 @@ class ChatFrontendSecurityTest {
         assertTrue(chat.contains("streamContext: streamHeartbeatDetail"));
         assertTrue(chat.contains("stopStreamHeartbeat();"));
         assertTrue(chat.contains("const streamUrl = chatTraceRequestUrl(payload?.attach === true"));
-        assertTrue(chat.contains("const response = await fetch(streamUrl, {"));
+        assertTrue(chat.contains("const responsePromise = fetch(streamUrl, {"));
         assertTrue(chat.contains("if (streamOwnedActiveAssistant && activeStreamAssistant === assistant) activeStreamAssistant = null;"));
         assertTrue(chat.contains("syncSessionSelectionCapability();"));
     }
 
     @Test
-    void streamingClientWaitStaysUserControlledInsteadOfAutoStopping() throws Exception {
+    void streamingClientWaitUsesBoundedAdmissionAndFirstAnswerDeadline() throws Exception {
         String chat = Files.readString(Path.of("main/resources/static/js/chat.js"), StandardCharsets.UTF_8);
 
         assertTrue(chat.contains("const STREAM_SERVER_EVIDENCE_BUDGET_MS = 120000;"));
         assertTrue(chat.contains("function hasComposerDraftRailToRefresh()"));
         assertTrue(chat.contains("fallback|new chat"));
         assertTrue(chat.contains("function streamClientDeadlineMs(payload = {})"));
-        assertTrue(chat.contains("return null;"));
+        assertTrue(chat.contains("return Math.min(configured, 30000);"));
         assertTrue(chat.contains("clientDeadlinePromise"));
-        assertTrue(chat.contains("if (clientDeadlineMs != null && elapsedMs >= clientDeadlineMs)"));
+        assertTrue(chat.contains("Math.min(5000, clientDeadlineMs)"));
+        assertTrue(chat.contains("elapsedMs >= effectiveDeadlineMs"));
         assertTrue(chat.contains("const next = clientDeadlinePromise == null"));
         assertTrue(chat.contains("? await reader.read()"));
         assertTrue(chat.contains("next:stop_or_wait"));

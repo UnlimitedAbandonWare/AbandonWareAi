@@ -66,7 +66,7 @@ class ChatRunRegistryEvictionTest {
             deletionThread.start();
 
             assertTrue(awaitBlocked(deletionThread, 2, TimeUnit.SECONDS),
-                    "deletion must wait at the admitted terminal side-effect gate");
+                    "deletion must wait for the admitted terminal write to drain");
             assertFalse(effectCompleted.get());
             releaseSideEffect.countDown();
 
@@ -286,7 +286,7 @@ class ChatRunRegistryEvictionTest {
         long deadline = System.nanoTime() + unit.toNanos(timeout);
         while (System.nanoTime() < deadline) {
             Thread.State state = thread.getState();
-            if (state == Thread.State.BLOCKED) {
+            if (state == Thread.State.TIMED_WAITING) {
                 return true;
             }
             if (state == Thread.State.TERMINATED) {

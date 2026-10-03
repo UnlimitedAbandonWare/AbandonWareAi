@@ -1,0 +1,7 @@
+{
+  "provider": "gemini",
+  "expect": "KEY_INVALID_OR_EXPIRED",
+  "expect_code": "API_KEY_EXPIRED",
+  "http_status": 400,
+  "body": {"error": {"code": 400, "message": "API key expired. Please renew the API key.", "status": "INVALID_ARGUMENT", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_EXPIRED", "domain": "googleapis.com"}]}}
+}

@@ -149,6 +149,7 @@ public class AdaptiveWebSearchHandler extends AbstractRetrievalHandler {
             traceSuppressed("searchModeParse", ignore);
         }
         SearchDecision decision = decisionService.decide(queryText, mode, null, null);
+        decision = com.example.lms.service.rag.handler.JevRetrievalGateHandler.applySearchDecision(q, decision, mode);
         if (!decision.shouldSearch()) {
             return true;
         }

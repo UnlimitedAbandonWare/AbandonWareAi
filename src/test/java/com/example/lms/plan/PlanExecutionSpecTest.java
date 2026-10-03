@@ -145,6 +145,51 @@ class PlanExecutionSpecTest {
         assertTrue(ledger.stream().allMatch(e -> e.status() == PlanExecutionSpec.StageStatus.SKIPPED_FLAG_OFF));
     }
 
+    private static PlanExecutionSpec.StageEntry retrievalEntry(Map<String, Object> evidence) {
+        PlanExecutionSpec spec = PlanExecutionSpec.parse(Map.<String, Object>of(
+                "pipeline", List.of("retrieve.dynamicChain")));
+        return spec.stageLedger(evidence, flags(true)).get(0);
+    }
+
+    @Test
+    void missingBm25ReportsSkippedDependency() {
+        var entry = retrievalEntry(Map.of("stage.bm25", "missing_bm25Index"));
+        assertEquals(PlanExecutionSpec.StageStatus.SKIPPED_DEPENDENCY, entry.status());
+        assertEquals("stage.bm25", entry.evidence());
+        assertEquals("missing_bm25Index", entry.detail());
+    }
+
+    @Test
+    void emptyBm25StillReportsExecuted() {
+        assertEquals(PlanExecutionSpec.StageStatus.EXECUTED,
+                retrievalEntry(Map.of("stage.bm25", "empty")).status());
+    }
+
+    @Test
+    void executedRetrievalTakesPriorityOverMissingDependency() {
+        assertEquals(PlanExecutionSpec.StageStatus.EXECUTED,
+                retrievalEntry(Map.of("stage.web", "ok:2", "stage.bm25", "missing_bm25Index")).status());
+        assertEquals(PlanExecutionSpec.StageStatus.EXECUTED,
+                retrievalEntry(Map.of("stage.web", "missing_web", "stage.bm25", "ok:2")).status());
+    }
+
+    @Test
+    void failedBm25ReportsFailureAndTakesPriorityOverMissingDependency() {
+        var entry = retrievalEntry(Map.of("stage.web", "missing_web", "stage.bm25", "failed:IllegalStateException"));
+        assertEquals(PlanExecutionSpec.StageStatus.FAILED, entry.status());
+        assertEquals("stage.bm25", entry.evidence());
+        assertEquals("failed:IllegalStateException", entry.detail());
+        assertEquals(PlanExecutionSpec.StageStatus.FAILED,
+                retrievalEntry(Map.of("stage.bm25", "failed")).status());
+    }
+
+    @Test
+    void noRetrievalMarkersRemainDeclared() {
+        assertEquals(PlanExecutionSpec.StageStatus.DECLARED, retrievalEntry(Map.of()).status());
+        assertEquals(PlanExecutionSpec.StageStatus.DECLARED,
+                retrievalEntry(Map.of("stage.bm25", "disabled")).status());
+    }
+
     @Test
     void emptySpecIsHonest() {
         PlanExecutionSpec spec = PlanExecutionSpec.empty("missing_resource");

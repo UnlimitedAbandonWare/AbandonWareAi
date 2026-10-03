@@ -68,6 +68,26 @@ public class AgentToolInvoker {
                                       Map<String, Object> input,
                                       ToolContext context,
                                       boolean adminAuthorized) {
+        return invokeInternal(toolId, input, context, adminAuthorized, null);
+    }
+
+    /** Internal synchronous evidence delivery; the public envelope remains diagnostic-only. */
+    public Map<String, Object> invokeForPrompt(String toolId, Map<String, Object> input,
+            ToolContext context, boolean adminAuthorized,
+            java.util.function.Consumer<List<dev.langchain4j.rag.content.Content>> evidenceSink) {
+        if (!"web.search".equals(toolId)) throw ToolInvocationException.badRequest("prompt_tool_not_supported");
+        return invokeInternal(toolId, input, context, adminAuthorized, java.util.Objects.requireNonNull(evidenceSink));
+    }
+
+    public boolean webSearchEnabled() {
+        ToolManifestEntry entry = catalog.load().entry("web.search");
+        return entry != null && entry.enabled();
+    }
+
+    private Map<String, Object> invokeInternal(String toolId, Map<String, Object> input,
+            ToolContext context, boolean adminAuthorized,
+            java.util.function.Consumer<List<dev.langchain4j.rag.content.Content>> evidenceSink) {
+        final TraceContext requestTrace = TraceContext.current();
         long started = System.nanoTime();
         long startedMillis = System.currentTimeMillis();
         String id = toolId == null ? "" : toolId.trim();
@@ -99,6 +119,10 @@ public class AgentToolInvoker {
             userConsentGranted = authorization.userConsentGranted();
             authorizationSource = authorization.source();
             recordAuthorization(adminAuthorized, userConsentGranted, authorizationSource);
+            if ("trace.snapshot".equals(id) && !adminAuthorized && input != null
+                    && "stored_snapshot".equals(java.util.Objects.toString(input.get("mode"), "").trim())) {
+                throw ToolInvocationException.forbidden("stored_snapshot_admin_required");
+            }
             policy.beforeCall(id, entry, adminAuthorized, scopesSatisfied);
         } catch (ToolInvocationException ex) {
             String status = "missing_consent_service".equals(ex.code()) ? "CONSENT_DENIED" : "POLICY_REJECTED";
@@ -113,6 +137,20 @@ public class AgentToolInvoker {
         Map<String, Object> safeInput = input == null ? Map.of() : input;
         try {
             ToolContext safeContext = context == null ? new ToolContext("internal-agent", new ConsentToken("internal-agent")) : context;
+            boolean webSearch = "web.search".equals(id);
+            if (webSearch) {
+                TraceStore.put("agent.acmeGateway.result.reason", null);
+                TraceStore.put("web.search.tool.status", null);
+                if (Boolean.FALSE.equals(safeContext.extras().get("allowWeb"))
+                        || Boolean.FALSE.equals(requestTrace.getFlag("allowWeb"))) {
+                    Map<String, Object> skipped = baseResult(id, true, started);
+                    skipped.put("executionStatus", "SKIPPED");
+                    skipped.put("reasonCode", "web_search_request_disallowed");
+                    traceInvocation(id, adminAuthorized, scopesSatisfied, "SKIPPED", startedMillis,
+                            elapsedMs(started), "web_search_request_disallowed", null);
+                    return skipped;
+                }
+            }
             ToolResponse response = tool.execute(new ToolRequest(safeInput, safeContext));
             if (response == null) {
                 throw ToolInvocationException.failed("tool_result_invalid");
@@ -120,14 +158,19 @@ public class AgentToolInvoker {
             long remainingMillis = TraceContext.current().remainingMillis();
             boolean budgetBounded = remainingMillis != Long.MAX_VALUE;
             boolean budgetExceeded = remainingMillis == 0L;
-            if (budgetExceeded && entry.readOnly()) {
+            if ((budgetExceeded && entry.readOnly()) || (webSearch
+                    && (com.abandonware.ai.agent.integrations.AcmeAICoreGateway.remainingMillis() <= 0
+                        || TraceContext.current() != requestTrace))) {
                 throw new ToolInvocationException(408, "tool_budget_exhausted");
             }
+            String executionStatus = webSearch ? webExecutionStatus() : "OK";
+            if (webSearch) TraceStore.put("web.search.tool.status", executionStatus);
             Map<String, Object> sanitizedData = sanitizeMap(response.data(), entry.maxOutputBytes());
             int maxInline = Math.max(1024, Math.min(entry.maxOutputBytes(), configuredMaxInlineBytes <= 0 ? 65536 : configuredMaxInlineBytes));
             byte[] bytes = artifactWriter.toJsonBytes(sanitizedData);
 
             Map<String, Object> result = baseResult(id, true, started);
+            result.put("executionStatus", executionStatus);
             result.put("readOnly", entry.readOnly());
             result.put("risk", entry.risk());
             result.put("policyDecision", "ALLOW");
@@ -149,11 +192,20 @@ public class AgentToolInvoker {
                 TraceStore.put("tool.invoke.budgetExceeded", true);
             }
             policy.afterCall(id);
-            traceInvocation(id, adminAuthorized, scopesSatisfied, "OK", startedMillis,
+            traceInvocation(id, adminAuthorized, scopesSatisfied, executionStatus, startedMillis,
                     elapsedMs(started), null, null);
-            AgentBreadcrumbMemory.toolInvocation(id, adminAuthorized, scopesSatisfied, "OK", startedMillis,
+            AgentBreadcrumbMemory.toolInvocation(id, adminAuthorized, scopesSatisfied, executionStatus, startedMillis,
                     elapsedMs(started), null, null, safeInput, sanitizedData, failurePatternMemory());
-            emit(id, "tool.invoke.ok", "ok", adminAuthorized, elapsedMs(started), null);
+            emit(id, "tool.invoke." + executionStatus.toLowerCase(java.util.Locale.ROOT),
+                    executionStatus.toLowerCase(java.util.Locale.ROOT), adminAuthorized, elapsedMs(started), null);
+            if (evidenceSink != null && "OK".equals(executionStatus) && TraceContext.isAttached()
+                    && context != null && context.sessionId() != null
+                    && (org.slf4j.MDC.get("sessionId") == null
+                        || context.sessionId().equals(org.slf4j.MDC.get("sessionId")))
+                    && TraceContext.current() == requestTrace
+                    && com.abandonware.ai.agent.integrations.AcmeAICoreGateway.remainingMillis() > 0) {
+                evidenceSink.accept(boundedWebEvidence(response.data()));
+            }
             return result;
         } catch (ToolInvocationException ex) {
             traceInvocation(id, adminAuthorized, scopesSatisfied, "FAIL", startedMillis,
@@ -170,6 +222,36 @@ public class AgentToolInvoker {
             emit(id, "tool.invoke.error", "tool_execution_failed", adminAuthorized, elapsedMs(started), ex);
             throw ToolInvocationException.failed("tool_execution_failed");
         }
+    }
+
+    private static String webExecutionStatus() {
+        String reason = java.util.Objects.toString(TraceStore.getString("agent.acmeGateway.result.reason"), "");
+        if (java.util.Set.of("request-disallowed", "budget-exhausted", "no-eligible-provider").contains(reason))
+            return "SKIPPED";
+        if (java.util.Set.of("all-providers-failed", "ranking-failure", "ranking-nonresponse").contains(reason))
+            return "FAIL_SOFT";
+        String status = TraceStore.getString("web.search.tool.status");
+        return "FAIL_SOFT".equals(status) || "SKIPPED".equals(status) ? status : "OK";
+    }
+
+    private static List<dev.langchain4j.rag.content.Content> boundedWebEvidence(Map<String, Object> data) {
+        if (data == null || !(data.get("results") instanceof List<?> rows)) return List.of();
+        var evidence = new java.util.ArrayList<dev.langchain4j.rag.content.Content>();
+        var seen = new java.util.HashSet<String>();
+        for (Object value : rows) {
+            if (!(value instanceof Map<?, ?> row) || !(row.get("url") instanceof String rawUrl)
+                    || rawUrl.length() > 2048 || !(row.get("snippet") instanceof String snippet)
+                    || snippet.isBlank()) continue;
+            String url = com.example.lms.service.ChatWorkflow.canonicalEnsembleCitationSource(rawUrl);
+            if (url == null || !seen.add(url)) continue;
+            String text = snippet.substring(0, Math.min(600, snippet.length()));
+            evidence.add(dev.langchain4j.rag.content.Content.from(
+                    dev.langchain4j.data.segment.TextSegment.from(text,
+                            dev.langchain4j.data.document.Metadata.from(Map.of(
+                                    "url", url, "source", url, "retrieval_lane", "web.search")))));
+            if (evidence.size() == 3) break;
+        }
+        return List.copyOf(evidence);
     }
 
     public Map<String, Object> describeTools() {

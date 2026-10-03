@@ -1,0 +1,161 @@
+# Devin 붙여넣기 — demo-1 Git why/what tracking UX (기존 시임 연장 · W-pack 후속)
+
+작성: 2026-09-27 Asia/Seoul (KST) · Grok Bot (READ-ONLY probe → 지시서만 기록)
+세션 폴더: agent-prompts/devin-git-why-tracking-20260927/
+Downloads 사본: C:\Users\nninn\Downloads\PASTE_DEVIN_git_why_tracking.txt
+선행 브리프(연장 대상, 교체 금지): agent-prompts/devin-git-application-improvements-20260927/ (W1/W2/W3)
+
+## 1. Mission (한 줄)
+
+**이미 있는** `conditional_local_git` / `agent_git_vibe_commit` / `git_doctor` / `git_publish_review` / handoff journal 시임을 연장해, 에이전트가 **왜 막혔는지(why)** 와 **무엇을 커밋했는지(what)** 를 추적할 수 있게 한다. 병렬 git 스택 발명 금지. 자동 push 금지. 선행 W1/W2/W3를 대체하지 않고 **why/what tracking UX**만 덧붙인다.
+
+## 2. Project Root (고정)
+
+`C:\AbandonWare\demo-1\demo-1\src`
+
+- Git 바이너리 선호: `F:\git\cmd\git.exe`
+- Sole remote: `AbandonWareAi` (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) ONLY. `AbandonWare3` 폐기 — 건드리지 말 것.
+- 이번 쓰기 범위(최소 시임): `scripts/agent_git_vibe_commit.py`, `scripts/conditional_local_git.py`(`commit_selected` 실패 페이로드·message 규약), `scripts/git_doctor.py` 훅 호출부(오케스트레이터에서 subprocess 호출만), 필요 시 message-file 헬퍼/컨벤션, 대응 `scripts/test_agent_git_vibe_commit.py` / `scripts/test_conditional_local_git.py`, 관련 skill 문구 정합(`.agents/skills/demo1-git-vibe-workflow`, `demo1-vibe-git-auto-continue`, `demo1-git-doctor`). 제품 Java/프론트 ❌(스크립트-only 예외만). commit/push는 사용자 명시 요청 전 ❌.
+
+## 3. Self-Ask (5문 — 시작 전 답하고 진행)
+
+1. **에이전트 커밋 단일 진입점은?** → `python -B scripts/agent_git_vibe_commit.py --repo . --path <owned>... --message-file <file> [--task-id <id>]` (JSON `committed=`/`deferred=`). 저수준은 `conditional_local_git.py` (`policy|check|scan|commit|lock`).
+2. **선행 pack(W1/W2/W3)과 이 pack의 관계는?** → 선행은 lock reclaim(W1)·불투명 실패 진단(W2)·잡경로/TTL(W3). **이 pack은 W2를 구현·강화(T1)하고**, journal↔git log 링크(T2)·doctor/publish-review 자동 부착(T3)을 **추가**. W1/W3을 다시 발명하지 말 것; 미착수면 W2/T1을 먼저 좁게 닫고 T2→T3.
+3. **alike-closet에서 실제로 무엇이 불투명했나?** → handoff `devin-safe-git-commit-update-0927-b6f0e3c8`: `progress.json` `committed=5 failed=6`; `final.json` `failedBatches` 전부 `selected-staged-scan-failed` 또는 `selected-commit-failed`만 — 가드 reason/예외 본문 없음. journal `taskId`/`purpose`/`plannedScope`는 있으나 **git log 한 줄로 역추적 불가**.
+4. **doctor / publish-review는 어디 있나?** → `scripts/git_doctor.py`(read-only, `nextOwner`/`blocker`)·`scripts/git_publish_review.py`(CLEAN/BLOCKED/UNKNOWN, 무 push) + skills. **vibe deferred/failure 경로에 자동 호출 없음**(under-used). soft-auto는 reason 보고 후 stop만.
+5. **무엇을 새로 만들지 않는가?** → 두 번째 VCS·별도 commit CLI·자동 push 스위치·`add -A`·외래 staging 건드림·AbandonWare3·시크릿을 메시지/로그에 넣는 필드. 기존 함수/플래그/`--task-id`/`message_ok` LABELS를 **연장**만.
+
+## 4. Extends pointer (선행 브리프 — 교체 금지)
+
+| 선행 ID | 요지 | 이 pack과의 관계 |
+|---|---|---|
+| **W1** | self-orphaned marker `index.lock` soft-reclaim (`clear_stale_lock`/`assess_lock`) | 전제. 이 pack에서 재구현 ❌. lock deferred 시 T3 doctor 부착만 연계 가능. |
+| **W2** | opaque `selected-*-failed` → 진단 페이로드 | **T1이 W2의 실행·강화**. scanReason/findings/safe detail를 vibe JSON까지 관통. |
+| **W3** | `path_forbidden` 잡경로 + blast early-signal + TTL SSOT | 전제/병행 가능. T1 페이로드가 W3 early reason을 가리지 않게 유지. |
+
+선행 전문: `agent-prompts/devin-git-application-improvements-20260927/PASTE_DEVIN.txt`
+
+## 5. Current inventory (이미 동작하는 것)
+
+| 층 | 경로 | 이번 관련 역할 |
+|---|---|---|
+| Gate | `scripts/conditional_local_git.py` | `commit_selected` L~595/598: scan 실패 시 `fail("selected-staged-scan-failed")`만 — stdout JSON 버림. L~652: 예외 시 `selected-commit-failed` + `errorType`만. `message_ok` = LABELS(`이유:`/`Reason:` + `검증:`/`Verify:` + `제약:`/`Constraint:`). |
+| Orchestrator | `scripts/agent_git_vibe_commit.py` | deferred JSON; `--task-id` → `work_journal note`에 `AUTO:committed=`/`AUTO:deferred=`만. **commit message/trailer에 task-id 미주입**. doctor/publish **미호출**. |
+| Doctor | `scripts/git_doctor.py` + `demo1-git-doctor` | read-only blocker/`nextOwner`/foreign split. vibe 경로 미연결. |
+| Publish review | `scripts/git_publish_review.py` + recipes E | 공개 준비 리뷰만(무 push). vibe failure 경로 미연결. |
+| Journal | `scripts/work_journal.py` → `data/agent-handoff/codex-autonomy/<taskId>/journal.json` | 필드: `taskId`,`agent`,`purpose`,`plannedScope`,`events[]`. git log 교차키 없음. |
+| Soft-auto | `demo1-vibe-git-auto-continue` | deferred reason 보고 후 stop. doctor 자동 부착 문구 없음. |
+| Tests | `test_conditional_local_git.py`, `test_agent_git_vibe_commit.py`, `test_git_doctor.py`, `test_git_publish_review.py` | 회귀 받침. |
+
+## 6. Gaps / 아쉬운점 T1–T3 (순위 + 증거)
+
+### T1 — 커밋 실패 시 WHY가 불투명 (`selected-*-failed`) — W2 정렬
+- `commit_selected`: `git_staged_guard` returncode≠0 또는 `ok:false`여도 가드 JSON의 `reason`/`findings`를 버리고 `selected-staged-scan-failed`만 반환.
+- 예외 경로: `selected-commit-failed` + `errorType`만 — safe message/stderr redacted snippet 없음.
+- vibe는 `deferred(result["reason"], …, detail=payload)`로 상위 reason만 에이전트 UX에 노출.
+- **증거:** `data/agent-handoff/codex-autonomy/devin-safe-git-commit-update-0927-b6f0e3c8/final.json` `failedBatches` 6건 reason ∈ {`selected-staged-scan-failed`,`selected-commit-failed`}만; `progress.json` `failed:6`. scripts 배치에 `__pycache__/*.pyc` 포함돼도 실패 WHY 비가시.
+- **선행:** W2 Acceptance(`scanReason`/`errorType`+safe detail, exit 2/3/4 유지, 시크릿 미인쇄).
+
+### T2 — handoff journal ↔ git log 한 줄 링크 부재 (what/why 추적)
+- journal은 `taskId`/`purpose`/`plannedScope`/`agent`를 가짐. vibe `--task-id`는 journal `AUTO:*` 노트만 기록.
+- `message_ok` LABELS는 Reason/Verify/Constraint만 — **Task-Id / Topic / Session trailer·본문 키 없음**.
+- 결과: `git log --oneline --grep=<taskId>` 또는 trailer로 “이 커밋이 어느 handoff/topic인지” 역추적 불가.
+- **증거:** 동 handoff `journal.json` (`taskId=devin-safe-git-commit-update-0927-b6f0e3c8`, purpose에 brief 경로) vs 커밋 메시지 규약에 task-id 필드 없음; `agent_git_vibe_commit.py` `journal_note`는 AUTO 한 줄만.
+
+### T3 — `git_doctor` / `git_publish_review`가 vibe deferred/failure에 미부착 (under-used)
+- doctor·publish-review는 skill/recipes/tests에만 존재. `agent_git_vibe_commit.orchestrate` deferred 반환 전후 subprocess 호출 없음.
+- soft-auto·vibe-workflow: deferred reason 보고 후 stop — `nextOwner`/foreign split/publish verdict를 자동으로 붙이지 않음.
+- **증거:** repo 전역 참조가 skill/test/recipes에 편중; vibe 소스에 `git_doctor`/`git_publish_review` 문자열 없음. alike-closet final은 PUBLISH BLOCKED를 journal 서술로만 남김(오케스트레이터 부착 필드 없음).
+
+## 7. Work items T1–T3 + Acceptance (가장 얇은 시임)
+
+**우선순위: T1(=W2 닫기/강화) → T2 → T3.** 병렬 스택 ❌. W1/W3은 선행 pack 담당(충돌 시 선행 SSOT).
+
+### T1 — Opaque failure → WHY 페이로드 (extend `commit_selected` + vibe deferred detail) ≡ W2
+- **변경 위치:** `conditional_local_git.commit_selected` 실패 반환; `agent_git_vibe_commit.orchestrate` deferred `detail` 관통; `test_conditional_local_git.py` (+ 필요 시 vibe 테스트).
+- **동작:**
+  - scan 실패: 가드 stdout JSON에서 `reason`/`findings` **요약만** → `scanReason`(또는 동등) + 선택 `scanFindingsCount`/`blockedPathCount`(경로 해시·rule id만, **시크릿 값·원문 ❌**).
+  - 예외: 기존 `errorType` + 짧은 safe message(또는 redacted stderr snippet, 길이 상한).
+  - 상위 `reason` 코드 문자열(`selected-staged-scan-failed` / `selected-commit-failed`) **유지**(호환). exit 2/3/4 의미 유지.
+- **Acceptance:**
+  - [ ] 가드 `ok:false` fixture → 응답에 `scanReason`(동등) 존재, 테스트 단언.
+  - [ ] RuntimeError/TimeoutExpired → `errorType` + safe detail; stdout JSON에 시크릿 패턴 문자열 없음.
+  - [ ] vibe deferred JSON의 `detail`(또는 동등)에 위 필드 관통.
+  - [ ] 기존 성공 경로·exit code 회귀.
+
+### T2 — Journal ↔ git log 링크 (message-file / trailer 규약 + `--task-id` 시임)
+- **변경 위치(최소):** `agent_git_vibe_commit` — `--task-id` 있을 때 커밋 메시지에 **trailer 또는 본문 한 줄**로 `Task-Id: <id>`(또는 `AWX-Task-Id:`) 주입; 선택적으로 journal에서 읽은 `topic`/`purpose` 짧은 slug(길이 상한, 시크릿 스크럽). `message_ok`는 기존 LABELS 유지 + trailer는 **추가**이지 대체 아님. skill/workflow에 “grep 가능한 task-id” 한두 문장.
+- **동작 원칙:**
+  - message-file 원본 손상 최소화: temp message file에 trailer append 후 `-F`로 전달, 또는 커밋 직전 규약 검증.
+  - `git log --oneline --grep=Task-Id` / `--grep=<taskId>`로 journal 폴더와 교차 가능.
+  - journal 쪽은 기존 `AUTO:committed=<sha>` 유지(이미 있음) — **양방향**: log→taskId, journal→sha.
+  - 메시지/trailer/로그에 토큰·경로 시크릿·대화원문 ❌.
+- **Acceptance:**
+  - [ ] `--task-id foo --dry-run` 계획에 trailer/주입 의도 표시(또는 동등 필드).
+  - [ ] fixture 커밋(테스트 repo) 메시지에 `Task-Id: …` 존재; `message_ok` LABELS 여전히 통과.
+  - [ ] task-id 없으면 기존 동작 동일(회귀).
+  - [ ] 시크릿-like 문자열이 trailer에 들어가지 않음(스크럽 또는 거부).
+
+### T3 — vibe deferred/failure에 doctor·publish-review 자동 부착 (read-only subprocess)
+- **변경 위치:** `agent_git_vibe_commit.orchestrate` deferred/failure 반환 직전(성공-only 경로에 push 트리거 ❌); soft-auto/vibe-workflow 한 줄(“deferred 시 doctor 요약 포함”).
+- **동작:**
+  - deferred/failure 시 `python -B scripts/git_doctor.py --root <repo> --json` (+ 가능하면 `--owned-path` 반복) 호출 → 요약 필드만 부착: `doctor.issues[]` code/`nextOwner`/짧은 detail(상한). 실패·timeout 시 `doctor: {ok:false,reason:…}`로 soft-fail(커밋 deferred reason을 가리지 않음).
+  - **publish-review**는 “failure 직후 공개 준비 질문이 의미 있을 때”만(예: 로컬 커밋은 됐으나 후속 publish 판단이 필요한 세션, 또는 deferred reason이 scan/secret/remote 계열). 기본은 **deferred/failure에 doctor 우선**; publish-review는 opt-in 플래그 또는 좁은 reason 화이트리스트. **절대 push하지 않음.**
+  - soft-auto 카드/승인 UI 신설 ❌.
+- **Acceptance:**
+  - [ ] fixture deferred(예: forbidden-path / message-missing / index-lock) → stdout JSON에 `doctor` 요약 키 존재.
+  - [ ] doctor subprocess 실패해도 원래 `deferred` reason·exit 유지.
+  - [ ] publish-review 호출 경로가 켜져도 verdict만 기록, push/fetch/remote mutate 없음(테스트 단언 또는 코드 경로 검수).
+  - [ ] dry-run은 doctor를 **호출하지 않거나** read-only preview만(문서화).
+
+## 8. Hard stops (절대)
+
+- Blind / 자동 **push·fetch·pull·remote 변경** ❌ (사용자 명시 ask 전).
+- `add -A` / `add .` / `commit -a` / `--no-verify` / `--amend` / history rewrite / `reset --hard` / `clean -fdx` ❌.
+- Foreign staging **unstage·덮어쓰기** ❌ — `foreignStagingPreserved` 유지.
+- `.git` / 비소유 `index.lock` **강제 삭제** ❌ — archive/move-aside만(W1 조건).
+- **AbandonWare3** remote 추가·fetch·push·선호 ❌.
+- 시크릿/키/대화원문/DB/모델 값을 **커밋 메시지·trailer·journal·doctor detail·stdout**에 넣기 ❌.
+- 제품 GraphRAG/Nova/Meta Display **Java/프론트 무단 편집** ❌ (tiny script-only만).
+- 선행 W1/W2/W3 지시서 **삭제·대체** ❌ — extend only.
+- soft-auto hard list 약화 ❌.
+
+## 9. Verify commands
+
+```powershell
+cd C:\AbandonWare\demo-1\demo-1\src
+F:\git\cmd\git.exe status -sb
+python -B scripts/conditional_local_git.py policy
+python -B scripts/test_conditional_local_git.py
+python -B scripts/test_agent_git_vibe_commit.py
+python -B scripts/test_git_doctor.py
+python -B scripts/test_git_publish_review.py
+# T1/T2 dry-run (tmp message = Reason/Verify/Constraint 라벨 포함):
+python -B scripts/agent_git_vibe_commit.py --repo . --path scripts/agent_git_vibe_commit.py --message-file <tmp-msg> --task-id why-track-probe --dry-run
+python -B scripts/git_doctor.py --root . --json --owned-path scripts/agent_git_vibe_commit.py
+# T2 교차(구현 후, fixture repo에서): F:\git\cmd\git.exe log -1 --pretty=full
+```
+
+메시지 파일 LABELS 필수. dry-run/테스트로 회귀 가능하면 **이 세션에서 제품 dirty 커밋·push 하지 말 것.**
+
+## 10. Start sentence (그대로 시작)
+
+「Project Root `C:\AbandonWare\demo-1\demo-1\src`에서 선행 `devin-git-application-improvements-20260927`(W1/W2/W3)을 **연장**한다. 먼저 T1(=W2)으로 `selected-*-failed`에 WHY 페이로드를 관통시키고, T2로 `--task-id`→커밋 trailer↔journal 링크를 붙인 뒤, T3로 vibe deferred/failure에 read-only `git_doctor`(필요 시 publish-review) 요약을 자동 부착한다. push/add -A/외래 staging 훼손/AbandonWare3/시크릿 메시지·로그/제품 Java 편집은 하지 않는다.」
+
+## 11. Report format
+
+끝나면 아래로만 보고:
+
+```
+DONE | T1=… T2=… T3=…(SKIP/HOLD 명시) | W-ref: W2-aligned=yes
+CHANGED: <paths>
+VERIFY: <명령 + exit>
+WHY: <scanReason/errorType 필드명 한 줄>
+LINK: <trailer 키 이름 + journal AUTO 유지 여부>
+ATTACH: <doctor/publish 키 이름 · dry-run 정책>
+HARD-STOPS-OK: yes
+HOLD: <막힌 이유 코드 | none>
+SKIP: <하지 않은 항목 + 이유>
+```
+
+상태 키워드: **DONE** / **SKIP** / **HOLD** 중 하나 필수.

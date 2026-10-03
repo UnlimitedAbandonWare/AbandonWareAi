@@ -11,7 +11,7 @@ baseline only; recompute from the live active sourceSet.
 
 ## Intake
 
-Run from `C:\AbandonWare\demo-1\demo-1\src`. Prefer active roots:
+Run from `<repo>`. Prefer active roots:
 `main/java`, `main/resources`, `src/test/java`, `app/src/main/java_clean`, and
 `app/src/main/resources`.
 

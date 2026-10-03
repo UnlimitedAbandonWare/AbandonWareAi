@@ -1,0 +1,4 @@
+[테스트 모델 정책] /chat·API RAG/챗봇 테스트·연습(자유 대화 포함)은 화면 기본 모델(qwen3.5:9b)을 그대로 쓰지 말고 `python -B scripts/test_model_policy.py resolve --purpose <quality|regression|smoke|cross_provider|local_fallback|practice_chat|practice_reasoning|practice_compare|auto --prompt-file>` 또는 `scripts/chat_practice_browser.js --prompts <파일>`로 모델을 골라 시작한다. 2026-12-30까지는 chatgpt-oauth API 모델.
+2026-12-30까지 API 후보 전부 불가 시 BLOCKED_API로 멈추고, 로컬은 local_fallback 명시 시에만. 전송 후 관측 모델을 `check --selected <id> --observed <id>`로 확인 — SILENT_FALLBACK/LOCAL_BEFORE_CUTOFF 결과로 PASS 금지.
+모든 생성 호출은 `record --agent <이름> --run <장부>`로 usage.jsonl에 남기고, 상한 25회/실행을 `budget --run <장부>`로 지킨다.
+SSOT: configs/agent-test-model-policy.yaml · 카드: docs/agents/TEST_MODEL_POLICY_KO.md

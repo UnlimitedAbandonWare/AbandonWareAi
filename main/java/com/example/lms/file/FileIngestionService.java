@@ -25,6 +25,19 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import java.util.zip.ZipFile;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.charset.CodingErrorAction;
+import java.io.InputStream;
+import java.util.HashSet;
+import java.util.Set;
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
@@ -56,6 +69,380 @@ public class FileIngestionService {
 
     @Autowired(required = false)
     private Environment environment;
+
+    public static final String PARSER_VERSION = "attachment-text-v1";
+    private static final int UNIT_CHARS = 2_000;
+    private static final int MAX_UNITS = 2_048;
+    private static final ObjectMapper JSON = new ObjectMapper()
+            .enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
+
+    /** Offsets are UTF-16 indexes in BOM-free decoded text; never byte offsets. */
+    public record TextUnit(String memberPath, String locatorType, int lineStart, int lineEnd,
+                           int startOffset, int endOffset, String jsonPointer, int paragraphIndex,
+                           String text) {
+        public String locator() {
+            return (memberPath == null ? "" : memberPath + "#")
+                    + ("PARAGRAPH".equals(locatorType) ? "P" + paragraphIndex
+                    : "L" + lineStart + "-" + lineEnd + ":" + startOffset + "-" + endOffset)
+                    + (jsonPointer == null ? "" : " json:" + jsonPointer);
+        }
+
+        public TextUnit excerpt(int maxChars, boolean fromEnd) {
+            if (maxChars >= text.length()) return this;
+            int start = fromEnd ? text.length() - Math.max(0, maxChars) : 0;
+            int end = fromEnd ? text.length() : Math.max(0, maxChars);
+            if (start < end && Character.isLowSurrogate(text.charAt(start))) start++;
+            if (end > start && Character.isHighSurrogate(text.charAt(end - 1))) end--;
+            String part = text.substring(start, end);
+            int firstLine = lineStart > 0 ? lineStart
+                    + (int) text.substring(0, start).chars().filter(c -> c == '\n').count() : 0;
+            int lastLine = firstLine > 0 ? firstLine
+                    + (int) part.chars().filter(c -> c == '\n').count() - (part.endsWith("\n") ? 1 : 0) : 0;
+            return new TextUnit(memberPath, locatorType, firstLine, Math.max(firstLine, lastLine),
+                    startOffset + start, startOffset + end, jsonPointer, paragraphIndex, part);
+        }
+    }
+
+    public record DocumentExtraction(String state, String reasonCode, String detectedMime,
+                                     String contentSha256, List<String> roles, List<TextUnit> units,
+                                     List<String> archiveMembers, int inspectedEntryCount,
+                                     int bodyReadCount, int omittedEntryCount, int invalidRecordCount) {
+        public DocumentExtraction {
+            roles = List.copyOf(roles);
+            units = List.copyOf(units);
+            archiveMembers = List.copyOf(archiveMembers);
+        }
+    }
+
+    public boolean supportsStructuredDocument(String name, String mime) {
+        String fn = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        String mt = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
+        return fn.endsWith(".docx") || isArchiveDocument(fn, mt) || isStructuredText(fn, mt);
+    }
+
+    private static boolean isStructuredText(String fn, String mt) {
+        if (isOfficeDocument(fn, mt) || isArchiveDocument(fn, mt)) return false;
+        return mt.startsWith("text/") || mt.contains("json") || mt.contains("yaml")
+                || fn.matches(".*\\.(txt|md|markdown|json|jsonl|ndjson|java|py|js|ts|tsx|jsx|xml|csv|yml|yaml|properties|html|css|sql|log)$");
+    }
+
+    /** Deterministic attachment parsing. No provider calls or executable document instructions. */
+    public DocumentExtraction extractDocument(String name, String mime, byte[] bytes, List<String> selectedMembers) {
+        return extractDocument(name, mime, bytes, selectedMembers, null);
+    }
+
+    /** The caller's question selects names only; member text never grants further reads. */
+    public DocumentExtraction extractDocumentForQuestion(String name, String mime, byte[] bytes, String question) {
+        return extractDocument(name, mime, bytes, List.of(), question);
+    }
+
+    private DocumentExtraction extractDocument(String name, String mime, byte[] bytes,
+                                               List<String> selectedMembers, String question) {
+        String fn = name == null ? "" : name.toLowerCase(Locale.ROOT);
+        String mt = mime == null ? "" : mime.toLowerCase(Locale.ROOT);
+        String digest = bytes == null ? "" : org.apache.commons.codec.digest.DigestUtils.sha256Hex(bytes);
+        if (bytes == null || bytes.length == 0) return extraction("EMPTY", "EMPTY_INPUT", mt, digest, fn, List.of());
+        int limit = documentByteLimit();
+        boolean archive = !fn.endsWith(".docx") && isArchiveDocument(fn, mt);
+        int inputLimit = archive ? 25 * 1_048_576 : limit;
+        if (bytes.length > inputLimit) return extraction("LIMIT_EXCEEDED", "DOCUMENT_BYTE_LIMIT", mt, digest, fn, List.of());
+        try {
+            if (archive || fn.endsWith(".docx")) {
+                return structuredZip(fn, bytes, digest, selectedMembers == null ? List.of() : selectedMembers,
+                        fn.endsWith(".docx"), limit, question);
+            }
+            if (!isStructuredText(fn, mt)) return extraction("UNSUPPORTED", "FORMAT_UNSUPPORTED", mt, digest, fn, List.of());
+            String text = decodeDocument(bytes);
+            if (fn.endsWith(".jsonl") || fn.endsWith(".ndjson")) {
+                List<TextUnit> units = new ArrayList<>();
+                int invalid = 0, offset = 0, line = 1;
+                for (String record : text.split("(?<=\\n)", -1)) {
+                    if (!record.isBlank()) {
+                        try {
+                            List<TextUnit> parsed = jsonUnits(record, null, offset, line);
+                            if (units.size() + parsed.size() > MAX_UNITS)
+                                return new DocumentExtraction("LIMIT_EXCEEDED", "TEXT_UNIT_LIMIT", "application/x-ndjson",
+                                        digest, roles(fn), List.of(), List.of(), 0, 0, 0, invalid);
+                            units.addAll(parsed);
+                        } catch (IOException invalidJson) { invalid++; }
+                    }
+                    offset += record.length();
+                    line++;
+                }
+                return new DocumentExtraction(invalid > 0 ? "PARTIAL" : units.isEmpty() ? "EMPTY" : "READY",
+                        invalid > 0 ? "INVALID_JSONL_RECORDS" : "NONE", "application/x-ndjson",
+                        digest, roles(fn), units, List.of(), 0, 0, 0, invalid);
+            }
+            boolean json = fn.endsWith(".json") || mt.contains("json");
+            List<TextUnit> units = json ? jsonUnits(text, null, 0, 1) : textUnits(text, null);
+            return extraction(units.isEmpty() ? "EMPTY" : "READY", "NONE",
+                    json ? "application/json" : "text/plain", digest, fn, units);
+        } catch (DocumentLimitException limitExceeded) {
+            return extraction("LIMIT_EXCEEDED", limitExceeded.getMessage(), mt, digest, fn, List.of());
+        } catch (Exception malformed) {
+            return extraction("CORRUPT", "INVALID_DOCUMENT", mt, digest, fn, List.of());
+        }
+    }
+
+    private int documentByteLimit() {
+        return archiveInt("attachments.documents.maxBytes",
+                archiveInt("attachments.inline.maxDocBytes", 1_048_576, 1, 1_048_576), 1, 1_048_576);
+    }
+
+    private static DocumentExtraction extraction(String state, String reason, String mime, String digest,
+                                                 String name, List<TextUnit> units) {
+        return new DocumentExtraction(state, reason, mime, digest, roles(name), units, List.of(), 0, 0, 0, 0);
+    }
+
+    private static List<String> roles(String name) {
+        if (name.endsWith(".zip")) return List.of("source_snapshot");
+        if (name.contains("directive") || name.startsWith("paste_")) return List.of("directive");
+        if (name.contains("source_report") || name.contains("source_evidence")) return List.of("static_source_evidence");
+        if (name.contains("test") && name.contains("report")) return List.of("test_report");
+        if (name.endsWith(".log") || name.endsWith(".jsonl") || name.endsWith(".ndjson")) return List.of("log");
+        return List.of("unknown");
+    }
+
+    private static String decodeDocument(byte[] bytes) throws IOException {
+        Charset encoding = StandardCharsets.UTF_8;
+        int offset = 0;
+        if (bytes.length >= 2 && bytes[0] == (byte) 0xff && bytes[1] == (byte) 0xfe) {
+            encoding = StandardCharsets.UTF_16LE; offset = 2;
+        } else if (bytes.length >= 2 && bytes[0] == (byte) 0xfe && bytes[1] == (byte) 0xff) {
+            encoding = StandardCharsets.UTF_16BE; offset = 2;
+        } else if (bytes.length >= 3 && bytes[0] == (byte) 0xef && bytes[1] == (byte) 0xbb && bytes[2] == (byte) 0xbf) {
+            offset = 3;
+        }
+        String text = encoding.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes, offset, bytes.length - offset)).toString();
+        if (text.codePoints().anyMatch(c -> c < 32 && c != '\n' && c != '\r' && c != '\t'))
+            throw new IOException("BINARY_TEXT");
+        return text;
+    }
+
+    private static List<TextUnit> textUnits(String text, String member) throws IOException {
+        List<TextUnit> units = new ArrayList<>();
+        int start = 0, line = 1;
+        while (start < text.length()) {
+            if (units.size() >= MAX_UNITS) throw new DocumentLimitException("TEXT_UNIT_LIMIT");
+            int end = Math.min(text.length(), start + UNIT_CHARS);
+            if (end < text.length()) {
+                int newline = text.lastIndexOf('\n', end - 1);
+                if (newline >= start) end = newline + 1;
+                else if (Character.isHighSurrogate(text.charAt(end - 1))) end--;
+            }
+            String part = text.substring(start, end);
+            int newlines = (int) part.chars().filter(c -> c == '\n').count();
+            int lastLine = line + newlines - (part.endsWith("\n") ? 1 : 0);
+            if (!part.isBlank()) units.add(new TextUnit(member, "LINE", line, Math.max(line, lastLine),
+                    start, end, null, 0, part));
+            line += newlines;
+            start = end;
+        }
+        return units;
+    }
+
+    private static List<TextUnit> jsonUnits(String text, String member, int baseOffset, int baseLine) throws IOException {
+        JSON.readTree(text);
+        List<TextUnit> units = new ArrayList<>();
+        try (JsonParser parser = JSON.createParser(text)) {
+            JsonToken token;
+            while ((token = parser.nextToken()) != null) {
+                if (!token.isScalarValue()) continue;
+                parser.getText(); // Consume lazy strings before capturing their source end.
+                int start = (int) parser.currentTokenLocation().getCharOffset();
+                int end = (int) parser.currentLocation().getCharOffset();
+                if (units.size() >= MAX_UNITS || end - start > UNIT_CHARS)
+                    throw new DocumentLimitException("JSON_SPAN_LIMIT");
+                units.add(new TextUnit(member, "JSON_POINTER",
+                        baseLine + parser.currentTokenLocation().getLineNr() - 1,
+                        baseLine + parser.currentLocation().getLineNr() - 1, baseOffset + start, baseOffset + end,
+                        parser.getParsingContext().pathAsPointer().toString(), 0, text.substring(start, end)));
+            }
+        }
+        if (units.isEmpty() && !text.isBlank())
+            units.add(new TextUnit(member, "JSON_POINTER", baseLine, baseLine, baseOffset,
+                    baseOffset + text.length(), "", 0, text));
+        return units;
+    }
+
+    private DocumentExtraction structuredZip(String name, byte[] bytes, String digest,
+                                             List<String> requested, boolean docx, int byteLimit,
+                                             String question) throws Exception {
+        validateCentralDirectory(bytes);
+        Path temporary = Files.createTempFile("attachment-parse-", ".zip");
+        try {
+            Files.write(temporary, bytes);
+            try (ZipFile zip = new ZipFile(temporary.toFile())) {
+                Map<String, ZipEntry> entries = new LinkedHashMap<>();
+                Set<String> foldedNames = new HashSet<>();
+                var enumeration = zip.entries();
+                while (enumeration.hasMoreElements()) {
+                    ZipEntry entry = enumeration.nextElement();
+                    String path = entry.getName();
+                    if (!safeMember(path) || !foldedNames.add(path.toLowerCase(Locale.ROOT)))
+                        throw new IOException("UNSAFE_ARCHIVE_PATH");
+                    if (!entry.isDirectory()) entries.put(path, entry);
+                }
+                if (docx) {
+                    ZipEntry document = entries.get("word/document.xml");
+                    if (document == null) throw new IOException("DOCX_BODY_MISSING");
+                    byte[] xml = zipBody(zip, document, byteLimit);
+                    DocumentBuilderFactory factory = secureXmlFactory();
+                    factory.setNamespaceAware(true);
+                    factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+                    factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+                    Document doc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(xml));
+                    NodeList paragraphs = doc.getElementsByTagNameNS("*", "p");
+                    List<TextUnit> units = new ArrayList<>();
+                    for (int i = 0; i < paragraphs.getLength(); i++) {
+                        List<String> parts = new ArrayList<>();
+                        collectText(paragraphs.item(i), parts);
+                        String text = String.join(" ", parts);
+                        if (text.length() > UNIT_CHARS || units.size() >= MAX_UNITS)
+                            throw new DocumentLimitException("DOCX_SPAN_LIMIT");
+                        if (!text.isBlank()) units.add(new TextUnit("word/document.xml", "PARAGRAPH", 0, 0,
+                                0, text.length(), null, i + 1, text));
+                    }
+                    return extraction(units.isEmpty() ? "EMPTY" : "READY", "TEXT_ONLY",
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", digest, name, units);
+                }
+                List<String> selections = requested.isEmpty() && question != null && !question.isBlank()
+                        ? selectQuestionMembers(entries.keySet(), question)
+                        : requested.stream().distinct().toList();
+                if (selections.size() > 8) throw new DocumentLimitException("ARCHIVE_BODY_COUNT_LIMIT");
+                List<TextUnit> units = new ArrayList<>();
+                int readCount = 0, readBytes = 0;
+                for (String selected : selections) {
+                    if (!safeMember(selected) || excludedMember(selected))
+                        throw new IOException("ARCHIVE_MEMBER_DISALLOWED");
+                    ZipEntry entry = entries.get(selected);
+                    if (entry == null) throw new IOException("ARCHIVE_MEMBER_MISSING");
+                    String lower = selected.toLowerCase(Locale.ROOT);
+                    if (!isStructuredText(lower, "")) throw new IOException("ARCHIVE_MEMBER_UNSUPPORTED");
+                    byte[] body = zipBody(zip, entry, byteLimit);
+                    readBytes += body.length;
+                    if (readBytes > 8 * byteLimit) throw new DocumentLimitException("ARCHIVE_TOTAL_BYTE_LIMIT");
+                    DocumentExtraction parsed = extractDocument(selected, "", body, List.of());
+                    if (!Set.of("READY", "EMPTY").contains(parsed.state()))
+                        throw new IOException("ARCHIVE_MEMBER_INVALID");
+                    for (TextUnit u : parsed.units()) {
+                        if (units.size() >= MAX_UNITS) throw new DocumentLimitException("TEXT_UNIT_LIMIT");
+                        units.add(new TextUnit(selected, u.locatorType(), u.lineStart(), u.lineEnd(),
+                                u.startOffset(), u.endOffset(), u.jsonPointer(), u.paragraphIndex(), u.text()));
+                    }
+                    readCount++;
+                }
+                int previewLimit = archiveInt("attachments.archive.maxEntries", DEFAULT_MAX_ARCHIVE_ENTRIES, 1, 10_000);
+                int omitted = Math.max(0, entries.size() - readCount);
+                return new DocumentExtraction(omitted > 0 || readCount == 0 ? "PARTIAL" : "READY",
+                        readCount == 0 ? "ARCHIVE_LIST_ONLY" : omitted > 0 ? "ARCHIVE_SELECTION_ONLY" : "NONE",
+                        "application/zip", digest, roles(name), units,
+                        entries.keySet().stream().limit(previewLimit).toList(), entries.size(), readCount, omitted, 0);
+            }
+        } finally { Files.deleteIfExists(temporary); }
+    }
+
+    private static byte[] zipBody(ZipFile zip, ZipEntry entry, int limit) throws IOException {
+        if (entry.getSize() < 0 || entry.getSize() > limit) throw new DocumentLimitException("ARCHIVE_MEMBER_BYTE_LIMIT");
+        try (InputStream input = zip.getInputStream(entry)) {
+            byte[] body = input.readNBytes(limit + 1);
+            if (body.length > limit) throw new DocumentLimitException("ARCHIVE_MEMBER_BYTE_LIMIT");
+            java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+            crc.update(body);
+            if (body.length != entry.getSize() || crc.getValue() != entry.getCrc())
+                throw new IOException("ARCHIVE_INTEGRITY");
+            return body;
+        }
+    }
+
+    private static List<String> selectQuestionMembers(Set<String> members, String question) {
+        // Bound matching work independently of the archive preview/display limit.
+        String bounded = question.substring(0, Math.min(question.length(), 16_000));
+        Map<String, Integer> scores = new java.util.TreeMap<>();
+        for (String member : members) {
+            if (!safeMember(member) || excludedMember(member)
+                    || !isStructuredText(member.toLowerCase(Locale.ROOT), "")) continue;
+            String base = member.substring(member.lastIndexOf('/') + 1);
+            int dot = base.lastIndexOf('.');
+            String stem = dot > 0 ? base.substring(0, dot) : base;
+            int score = mentionsMember(bounded, member) ? 3
+                    : mentionsMember(bounded, base) ? 2
+                    : stem.length() >= 3 && mentionsMember(bounded, stem) ? 1 : 0;
+            if (score > 0) scores.put(member, score);
+        }
+        return scores.entrySet().stream()
+                .sorted(Map.Entry.<String, Integer>comparingByValue().reversed()
+                        .thenComparing(Map.Entry.comparingByKey()))
+                .limit(8).map(Map.Entry::getKey).toList();
+    }
+
+    private static boolean mentionsMember(String question, String member) {
+        // A basename inside another full path or identifier is not an explicit reference.
+        return java.util.regex.Pattern.compile("(?<![\\p{L}\\p{N}_./\\\\-])"
+                + java.util.regex.Pattern.quote(member)
+                + "(?:(?![\\p{L}\\p{N}_./\\\\-])|(?=(?:을|를|의|에|와|과|은|는|이|가)(?:\\s|$)))")
+                .matcher(question).find();
+    }
+
+    private static boolean safeMember(String path) {
+        if (path == null || path.isBlank() || path.length() > 2_000 || path.startsWith("/")
+                || path.contains("\\") || path.contains(":") || path.codePoints().anyMatch(Character::isISOControl)) return false;
+        for (String segment : path.split("/")) {
+            if (segment.isBlank() || segment.equals(".") || segment.equals("..")
+                    || segment.endsWith(".") || segment.endsWith(" ")) return false;
+        }
+        return true;
+    }
+
+    private static boolean excludedMember(String path) {
+        String lower = path.toLowerCase(Locale.ROOT);
+        for (String part : lower.split("/")) {
+            if (Set.of(".git", ".secrets", "node_modules", "build", "target", ".gradle", "__pycache__",
+                    "cookies", "auth", "credentials", "secrets", "dumps").contains(part)
+                    || part.startsWith(".env") || part.equals("apikey.txt")
+                    || part.matches(".*\\.(pem|key|pfx|p12|jks|db|sqlite|zip|jar|exe|dll)$")
+                    || part.matches(".*(cookie|token|credential|storage.?state|session.?state|dump).*")
+                    || part.equals("application-local.yml")) return true;
+        }
+        return false;
+    }
+
+    // JDK ZipFile owns decompression; inspect only bounded central-directory security flags.
+    // ZIP APPNOTE 4.3.12/4.3.16: encrypted, split, ZIP64 and symbolic-link containers fail closed.
+    private static void validateCentralDirectory(byte[] bytes) throws IOException {
+        ByteBuffer b = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        int end = -1;
+        for (int p = bytes.length - 22; p >= Math.max(0, bytes.length - 65_557); p--) {
+            if (b.getInt(p) == 0x06054b50 && p + 22 + Short.toUnsignedInt(b.getShort(p + 20)) == bytes.length) {
+                end = p; break;
+            }
+        }
+        if (end < 0) throw new IOException("ZIP_END_MISSING");
+        int count = Short.toUnsignedInt(b.getShort(end + 10));
+        long size = Integer.toUnsignedLong(b.getInt(end + 12));
+        long start = Integer.toUnsignedLong(b.getInt(end + 16));
+        if (count > 10_000) throw new DocumentLimitException("ARCHIVE_ENTRY_LIMIT");
+        if (b.getShort(end + 4) != 0 || b.getShort(end + 6) != 0
+                || Short.toUnsignedInt(b.getShort(end + 8)) != count || start + size != end)
+            throw new IOException("ZIP_DIRECTORY_INVALID");
+        int p = (int) start;
+        for (int i = 0; i < count; i++) {
+            if (p < 0 || p > end - 46 || b.getInt(p) != 0x02014b50) throw new IOException("ZIP_DIRECTORY_INVALID");
+            int flags = Short.toUnsignedInt(b.getShort(p + 8));
+            int unixType = (b.getInt(p + 38) >>> 16) & 0xf000;
+            if ((flags & 1) != 0 || unixType == 0xa000 || b.getShort(p + 34) != 0)
+                throw new IOException("ZIP_ENTRY_UNSUPPORTED");
+            p += 46 + Short.toUnsignedInt(b.getShort(p + 28))
+                    + Short.toUnsignedInt(b.getShort(p + 30)) + Short.toUnsignedInt(b.getShort(p + 32));
+        }
+        if (p != end) throw new IOException("ZIP_DIRECTORY_INVALID");
+    }
+
+    private static final class DocumentLimitException extends IOException {
+        private DocumentLimitException(String reason) { super(reason); }
+    }
 
     /**
      * Extract plain text from an uploaded file.  The strategy is chosen based on

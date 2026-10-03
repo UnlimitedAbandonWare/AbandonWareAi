@@ -5,6 +5,7 @@
 2. `.windsurf/rules/` — Windsurf/Devin Desktop workspace Rules:
    - `demo1-hard-constraints.md` — `always_on`
    - `meta-rayban-display-runtime.md` — `glob` on display/Conversate/meta-display paths
+   - `demo1-default-target-main-chat.md` — `always_on`: default verify target = `abandonwareai.kro.kr/chat`
 3. `.agents/skills/` — multi-step procedures (auto or `/skill-name` / `@skill-name`). Judgment: `positive-negative-neutral-judge`.
 4. `.windsurf/workflows/` — Cascade-only manual `/slash` runbooks (Devin Local: use Skills instead).
 

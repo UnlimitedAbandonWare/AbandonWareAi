@@ -111,7 +111,8 @@ function harness(options = {}) {
     querySelectorAll: selector => root.querySelectorAll(selector),
     addEventListener(name, listener) { documentListeners[name] = listener; }
   };
-  const window = { DOMPurify: options.noSanitizer ? null : { sanitize(html, config) {
+  const window = { location: { href: 'http://localhost/chat', origin: 'http://localhost' },
+    DOMPurify: options.noSanitizer ? null : { sanitize(html, config) {
     sanitizerCalls.push({ html, config });
     const fragment = new Fragment();
     if (options.pipelineRows) {
@@ -183,13 +184,15 @@ function harness(options = {}) {
     fragment.appendChild(details);
     return fragment;
   } } };
-  const context = vm.createContext({ document, window, AbortController,
+  const context = vm.createContext({ document, window, AbortController, URL,
     setTimeout: options.setTimeout || setTimeout,
     clearTimeout: options.clearTimeout || clearTimeout,
     fetch: async (url, init) => {
       fetchCalls.push({ url, init });
       if (options.fetchImpl) return options.fetchImpl(url, init);
-      return options.fetchResponse || { ok: false, status: 404 };
+      return { url: new URL(url, window.location.href).href, redirected: false,
+        headers: { get: name => name.toLowerCase() === 'content-type' ? 'text/html' : null },
+        ...(options.fetchResponse || { ok: false, status: 404 }) };
     } });
   vm.runInContext(source, context);
   const assistant = () => {
@@ -370,6 +373,82 @@ test('restore requests only the exact snapshot id on open and keeps summary on 4
   assert.equal(h.fetchCalls[0].init.credentials, 'same-origin');
   assert.equal(panel.children[1].children[0].children[1].textContent, '812');
   assert.match(panel.children[2].children[0].textContent, /찾을 수 없음/);
+});
+
+test('owned detail uses its session endpoint and never falls back globally on 404', async () => {
+  const h = harness();
+  const panel = h.ui.restore(h.assistant(), {
+    turnId: 7, snapshotId: 'owned-snapshot', fields: { sessionId: '42' }
+  });
+  panel.open = true;
+  panel.listeners.toggle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fetchCalls.length, 1);
+  assert.equal(h.fetchCalls[0].url, '/api/chat/sessions/42/traces/owned-snapshot/html');
+  const download = panel.children[1].children.find(child => child.className === 'awx-trace-download');
+  assert.equal(download.href, '/api/chat/sessions/42/traces/owned-snapshot/html?format=bundle');
+  assert.equal(download.download, 'answer-trace-bundle.zip');
+  assert.equal(h.fetchCalls[0].init.cache, 'no-store');
+  assert.match(panel.children[2].children[0].textContent, /찾을 수 없음/);
+});
+
+test('a redirected 200 login page is an unexpected response, not loaded trace', async () => {
+  const h = harness({ fetchResponse: { ok: true, status: 200, redirected: true,
+    url: 'http://localhost/login', text: async () => '<html><body>login</body></html>' } });
+  const panel = h.ui.restore(h.assistant(), { snapshotId: 'owned', fields: { sessionId: '42' } });
+  panel.open = true;
+  panel.listeners.toggle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(panel.dataset.traceError, 'unexpected_response');
+  assert.equal(h.sanitizerCalls.length, 0);
+});
+
+test('a 200 response with the wrong content type is not treated as trace HTML', async () => {
+  const h = harness({ fetchResponse: { ok: true, status: 200,
+    headers: { get: () => 'application/json' },
+    text: async () => '<details data-trace-redacted="1" class="search-trace">safe</details>' } });
+  const panel = h.ui.restore(h.assistant(), { snapshotId: 'owned', fields: { sessionId: '42' } });
+  panel.open = true;
+  panel.listeners.toggle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(panel.dataset.traceError, 'unexpected_response');
+  assert.equal(h.sanitizerCalls.length, 0);
+});
+
+for (const storage of ['ring', 'durable_projection']) {
+  test('owned trace identifies ' + storage + ' storage provenance', async () => {
+    const h = harness({ fetchResponse: { ok: true, status: 200,
+      headers: { get: name => name.toLowerCase() === 'content-type' ? 'text/html' : storage },
+      text: async () => '<details data-trace-redacted="1" class="search-trace">safe</details>' } });
+    const panel = h.ui.restore(h.assistant(), { snapshotId: 'owned', fields: { sessionId: '42' } });
+    panel.open = true;
+    panel.listeners.toggle();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(panel.dataset.traceStorage, storage);
+    assert.match(panel.children[2].children[1].textContent,
+      storage === 'ring' ? /메모리/ : /저장된 진단 요약/);
+  });
+}
+
+test('invalid owned session bindings do not create a global snapshot request', () => {
+  for (const sessionId of ['0', '-1', '../other', '01', '9007199254740992', 42, null]) {
+    const h = harness();
+    assert.equal(h.ui.restore(h.assistant(), { snapshotId: 'owned', fields: { sessionId } }), null);
+    assert.equal(h.fetchCalls.length, 0);
+  }
+});
+
+test('changing session ownership invalidates an in-flight request for the same snapshot', async () => {
+  const h = harness();
+  const assistant = h.assistant();
+  const panel = h.ui.restore(assistant, { snapshotId: 'owned', fields: { sessionId: '42' } });
+  panel.open = true;
+  panel.listeners.toggle();
+  await new Promise(resolve => setImmediate(resolve));
+  h.ui.restore(assistant, { snapshotId: 'owned', fields: { sessionId: '43' } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(h.fetchCalls.length, 2);
+  assert.equal(h.fetchCalls[1].url, '/api/chat/sessions/43/traces/owned/html');
 });
 
 test('missing DOMPurify fails closed without inserting the supplied HTML', () => {

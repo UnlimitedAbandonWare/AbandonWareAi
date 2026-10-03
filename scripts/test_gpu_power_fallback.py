@@ -24,6 +24,14 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual("driver_reset",
                          gpf.classify_local_inference_failure("nvlddmkm TDR new_error_events"))
 
+    def test_cable_and_transient_power_signals(self):
+        for text in ("cable_power_trip", "transient_spike",
+                     "transient power excursion", "cable trip", "power_trip"):
+            self.assertEqual("power_limit_suspect",
+                             gpf.classify_local_inference_failure(text))
+        self.assertEqual("unknown",
+                         gpf.classify_local_inference_failure("field trip report"))
+
     def test_oom_no_response_unknown(self):
         self.assertEqual("oom_suspect",
                          gpf.classify_local_inference_failure("CUDA out of memory"))
@@ -92,6 +100,15 @@ class DecideTest(unittest.TestCase):
         self.assertEqual("power_limit_suspect", d["reason"])
         self.assertEqual(0, d["localRetryBudget"])
         self.assertEqual("fallback_to_api", d["action"])
+
+    def test_cable_trip_decide_never_retries_local(self):
+        d = gpf.decide("llm", "hw_power_brake_slowdown_active cable trip",
+                       attempts=0, root=ROOT)
+        self.assertEqual("power_limit_suspect", d["reason"])
+        self.assertEqual(0, d["localRetryBudget"])
+        self.assertEqual("fallback_to_api", d["action"])
+        self.assertEqual("groq", d["nextRoute"]["id"])
+        self.assertTrue(d["auto"])
 
     def test_report_line_is_one_line_and_secret_free(self):
         d = gpf.decide("llm", "connection refused", root=ROOT)

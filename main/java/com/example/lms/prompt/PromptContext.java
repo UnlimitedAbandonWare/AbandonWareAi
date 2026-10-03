@@ -81,7 +81,9 @@ public class PromptContext {
     private final String learningContextSummary;
     private final List<SampledCandidate> ensembleCandidates;
     private final boolean ensembleJudgeMode;
+    private final com.example.lms.ensemble.PreparedContextPacket preparedContextPacket;
     private final String contextRefinementSummary;
+    private final com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout resolvedLoadout;
     private final Map<String, Double> contextRefinementSignals;
     private final List<String> sourceUrls;
     private final List<String> officialSources;
@@ -141,7 +143,9 @@ public class PromptContext {
         this.learningContextSummary = b.learningContextSummary;
         this.ensembleCandidates = b.ensembleCandidates != null ? b.ensembleCandidates : java.util.Collections.emptyList();
         this.ensembleJudgeMode = b.ensembleJudgeMode;
+        this.preparedContextPacket = b.preparedContextPacket;
         this.contextRefinementSummary = b.contextRefinementSummary;
+        this.resolvedLoadout = b.resolvedLoadout;
         this.contextRefinementSignals = b.contextRefinementSignals != null
                 ? java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(b.contextRefinementSignals))
                 : java.util.Collections.emptyMap();
@@ -197,7 +201,9 @@ public class PromptContext {
     public List<SampledCandidate> getEnsembleCandidates() { return ensembleCandidates; }
     public boolean ensembleJudgeMode() { return ensembleJudgeMode; }
     public boolean isEnsembleJudgeMode() { return ensembleJudgeMode; }
+    public com.example.lms.ensemble.PreparedContextPacket preparedContextPacket(){return preparedContextPacket;}
     public String contextRefinementSummary() { return contextRefinementSummary; }
+    public com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout resolvedLoadout() { return resolvedLoadout; }
     public Map<String, Double> contextRefinementSignals() { return contextRefinementSignals; }
     public List<String> sourceUrls() { return sourceUrls; }
     public List<String> getSourceUrls() { return sourceUrls; }
@@ -253,7 +259,9 @@ public class PromptContext {
                 .learningContextSummary(learningContextSummary)
                 .ensembleCandidates(ensembleCandidates)
                 .ensembleJudgeMode(ensembleJudgeMode)
+                .preparedContextPacket(preparedContextPacket)
                 .contextRefinementSummary(contextRefinementSummary)
+                .resolvedLoadout(resolvedLoadout)
                 .contextRefinementSignals(contextRefinementSignals)
                 .sourceUrls(sourceUrls)
                 .officialSources(officialSources);
@@ -276,7 +284,9 @@ public class PromptContext {
         private String learningContextSummary;
         private List<SampledCandidate> ensembleCandidates;
         private boolean ensembleJudgeMode;
+        private com.example.lms.ensemble.PreparedContextPacket preparedContextPacket;
         private String contextRefinementSummary;
+        private com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout resolvedLoadout;
         private Map<String, Double> contextRefinementSignals;
         private List<String> sourceUrls;
         private List<String> officialSources;
@@ -381,7 +391,9 @@ public class PromptContext {
         public Builder learningContextSummary(String summary) { this.learningContextSummary = summary; return this; }
         public Builder ensembleCandidates(List<SampledCandidate> candidates) { this.ensembleCandidates = candidates; return this; }
         public Builder ensembleJudgeMode(boolean enabled) { this.ensembleJudgeMode = enabled; return this; }
+        public Builder preparedContextPacket(com.example.lms.ensemble.PreparedContextPacket packet){this.preparedContextPacket=packet;return this;}
         public Builder contextRefinementSummary(String summary) { this.contextRefinementSummary = summary; return this; }
+        public Builder resolvedLoadout(com.example.lms.prompt.pose.ModelLoadoutResolver.ResolvedLoadout loadout) { this.resolvedLoadout = loadout; return this; }
         public Builder contextRefinementSignals(Map<String, Double> signals) { this.contextRefinementSignals = signals; return this; }
         public Builder sourceUrls(List<String> urls) { this.sourceUrls = urls; return this; }
         public Builder officialSources(List<String> urls) { this.officialSources = urls; return this; }

@@ -30,12 +30,28 @@ public class LlmGatewayFailureClassifier {
             "credit_balance_exhausted",
             "spend_limit_exceeded",
             "blocked_api_access");
+    /** ChatGPT plan errors must never select another billing route in the same request. */
+    private static final Set<String> CHATGPT_OAUTH_ERROR_CODES = Set.of(
+            "subscription_sharing_user_not_eligible",
+            "subscription_sharing_usage_limit_exceeded",
+            "subscription_sharing_usage_unavailable",
+            "subscription_sharing_unsupported_capability",
+            "subscription_sharing_route_not_supported",
+            "subscription_sharing_invalid_user",
+            "subscription_sharing_user_unavailable",
+            "chatpass_v2_scope_not_authorized",
+            "invalid_authorization_context");
     private static final ObjectReader ERROR_READER = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     /** A same-request retry must preserve these gateway decisions across outer layers. */
     public static boolean hasNonReplayableReason(Throwable failure) {
+        return hasNonReplayableReason(failure, false);
+    }
+
+    /** API-first may move off a quota-rejected route; terminal/output fences still win. */
+    public static boolean hasNonReplayableReason(Throwable failure, boolean allowQuotaTransition) {
         Throwable current = failure;
         int depth = 0;
         while (current != null && depth++ < MAX_CAUSE_DEPTH) {
@@ -43,12 +59,14 @@ public class LlmGatewayFailureClassifier {
             if (current instanceof LlmGatewayException gatewayFailure) {
                 String reason = gatewayFailure.reasonCode();
                 if ("failover_exhausted".equals(reason)
+                        || "provider_execution_uncertain".equals(reason)
                         || "tool_side_effect_started".equals(reason)
                         || "stream_error_after_partial".equals(reason)
                         || "timeout_after_partial".equals(reason)
                         || "context_limit_exceeded".equals(reason)
                         || "capability_mismatch".equals(reason)
-                        || QUOTA_ERROR_CODES.contains(reason)
+                        || (!allowQuotaTransition && QUOTA_ERROR_CODES.contains(reason))
+                        || CHATGPT_OAUTH_ERROR_CODES.contains(reason)
                         || "route_disabled".equals(reason)
                         || "responses_tools_unsupported".equals(reason)
                         || "responses_content_unsupported".equals(reason)
@@ -57,11 +75,13 @@ public class LlmGatewayFailureClassifier {
                 }
             }
             if (current instanceof HttpException http
-                    && hasQuotaErrorCode(http.statusCode(), http.getMessage())) {
+                    && (!allowQuotaTransition && hasNonReplayableErrorCode(http.getMessage())
+                        || hasErrorCode(http.getMessage(), CHATGPT_OAUTH_ERROR_CODES))) {
                 return true;
             }
             if (current instanceof WebClientResponseException web
-                    && hasQuotaErrorCode(web.getRawStatusCode(), web.getResponseBodyAsString())) {
+                    && (!allowQuotaTransition && hasNonReplayableErrorCode(web.getResponseBodyAsString())
+                        || hasErrorCode(web.getResponseBodyAsString(), CHATGPT_OAUTH_ERROR_CODES))) {
                 return true;
             }
             Throwable next = current.getCause();
@@ -88,13 +108,21 @@ public class LlmGatewayFailureClassifier {
     }
 
     private static boolean hasQuotaErrorCode(int status, String body) {
+        return hasErrorCode(body, QUOTA_ERROR_CODES);
+    }
+
+    private static boolean hasNonReplayableErrorCode(String body) {
+        return hasErrorCode(body, QUOTA_ERROR_CODES) || hasErrorCode(body, CHATGPT_OAUTH_ERROR_CODES);
+    }
+
+    private static boolean hasErrorCode(String body, Set<String> codes) {
         if (body == null || body.isBlank() || body.length() > MAX_ERROR_BODY_CHARS) {
             return false;
         }
         try {
             JsonNode error = ERROR_READER.readTree(body);
             JsonNode code = error.path("error").path("code");
-            return code.isTextual() && QUOTA_ERROR_CODES.contains(code.textValue());
+            return code.isTextual() && codes.contains(code.textValue());
         } catch (JsonProcessingException malformed) {
             // Unconfirmed/malformed provider output keeps the existing generic HTTP policy.
             // Neither the body nor the parser exception is retained or logged.
@@ -119,7 +147,18 @@ public class LlmGatewayFailureClassifier {
             }
             t = next;
         }
-        return classifyMessage(failure.toString());
+        // Typed causes outrank prose in outer wrappers (request IDs and telemetry
+        // can contain status-like digits without describing the actual failure).
+        t = failure;
+        depth = 0;
+        while (t != null && depth++ < MAX_CAUSE_DEPTH) {
+            LlmFailureClass messageClass = classifyMessage(t.getMessage());
+            if (messageClass != LlmFailureClass.UNKNOWN) return messageClass;
+            Throwable next = t.getCause();
+            if (next == t) break;
+            t = next;
+        }
+        return LlmFailureClass.UNKNOWN;
     }
 
     public static boolean isCancellation(Throwable failure) {
@@ -169,7 +208,7 @@ public class LlmGatewayFailureClassifier {
         if (t instanceof WebClientResponseException wcre) {
             return classifyHttpStatus(wcre.getRawStatusCode(), wcre.getResponseBodyAsString());
         }
-        return classifyMessage(t.getMessage());
+        return LlmFailureClass.UNKNOWN;
     }
 
     private static LlmFailureClass classifyHttpStatus(int status, String responseText) {
@@ -220,7 +259,8 @@ public class LlmGatewayFailureClassifier {
         if (m.contains("cancel")) {
             return LlmFailureClass.CANCELLED_NEUTRAL;
         }
-        if (m.contains("rate limit") || m.contains("too many requests") || m.contains("http_429") || m.contains("429")) {
+        if (m.contains("rate limit") || m.contains("too many requests")
+                || m.matches("(?s).*(?<![a-z0-9])(?:http(?:[/ ][12](?:\\.\\d)?)?|status(?: code)?)\\s*[:=_ -]?\\s*429(?![a-z0-9]).*")) {
             return LlmFailureClass.RATE_LIMIT_COOLDOWN;
         }
         if (m.contains("timed out") || m.contains("timeout")) {
@@ -242,7 +282,7 @@ public class LlmGatewayFailureClassifier {
                 || m.contains("nvml_error_gpu_is_lost")) {
             return LlmFailureClass.GPU_DEVICE_LOST;
         }
-        if (m.contains("oom") || m.contains("out of memory") || m.contains("vram")) {
+        if (m.matches("(?s).*\\boom\\b.*") || m.contains("out of memory")) {
             return LlmFailureClass.VRAM_OOM;
         }
         if (m.contains("connection refused") || m.contains("unknownhost") || m.contains("health_down")) {

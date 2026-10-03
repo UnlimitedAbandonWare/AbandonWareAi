@@ -19,7 +19,7 @@ Any task that calls or configures Brave/Tavily/SerpAPI/Naver, Soniox/Deepgram, O
 
 ## Workflow
 
-1. Confirm CWD `C:\AbandonWare\demo-1\demo-1\src`.
+1. Confirm CWD `<repo>`.
 2. Refresh inventory without dumping secrets:
    - `ollama ls`
    - env name presence/length only (see spec)

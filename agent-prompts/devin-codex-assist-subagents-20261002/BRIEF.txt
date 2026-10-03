@@ -1,0 +1,190 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-codex-parallel-lanes @demo1-codex-tool-router @demo1-codex-selfask-triad @demo1-main-chat-surface @demo1-settings-routing-assist @demo1-api-routing-inventory
+
+# Devin — Codex 조수 서브에이전트 세트 만들기 (역할 정의 + 위임 스크립트 + 지침/룰, 제품 소스 수정 0)
+[Contract: DEMO1-DEVIN-CODEX-ASSIST-SUBAGENTS-20261002]
+
+[ANTI-STOP] 이 파일을 읽은 건 intake일 뿐이다. 완료 = 아래 Acceptance가 PASS인 상태. 계획만 쓰고 멈추지 말고 DV0부터 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다. 이번 작업은 새 파일 위주라 기본값은 AUTO다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용). git은 `F:\git\cmd\git.exe`. 파일은 `[IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))`로 쓴다. Python은 표준 라이브러리만.
+
+## 0) 한 줄 목표
+Codex가 소스를 고치는 동안 옆에서 **브라우저 검증, 원인 추적, 라우팅 현황 정리, 패치 검토**를 맡아 줄 Codex 서브에이전트 4종과, 그걸 안전하게 부르고 결과를 받는 스크립트·스킬·룰을 만든다. 소스 수정은 계속 Codex 본체만 한다. 서브에이전트는 읽고, 돌려 보고, 증거를 돌려준다.
+
+## 1) 확인된 사실 (Grok Bot이 16:4x에 PC에서 확인)
+- Codex 전역 `%USERPROFILE%\.codex\config.toml`: `[features] multi_agent = true`, `[agents] max_threads = 3`, `max_depth = 1`. 즉 서브에이전트는 이미 켜져 있고, 동시에 최대 3개, 서브에이전트가 또 서브에이전트를 부르는 건 막혀 있다.
+- 전역 `%USERPROFILE%\.codex\agents\glm_worker.toml`이 있다: read-only, 4섹션 반환(finding / evidence / uncertainty / recommended next check), `deliveryMarker` 확인 규칙. **좋은 기존 패턴이니 형식을 그대로 따른다. 파일 자체는 건드리지 않는다.**
+- 레포 `.codex\agents-staged\`에 `selfask_aliaser.toml`, `selfask_challenger.toml`, `selfask_definer.toml`(각 2 KB, read-only)이 "staged" 상태로 있다. 이것도 건드리지 않는다.
+- 레포 `.codex\config.toml`(391 B), `.codex\hooks.json`(3,167 B, 신뢰 해시 등록된 hook 5개).
+- 지금 돌고 있는 Codex 작업:
+  - `codex-chat-rag-browser-selfcheck`(장부 `data\agent-handoff\codex-chat-rag-browser-selfcheck-63b0c67a\`, 16:44에 `browser\` 폴더 생성). Codex가 브라우저로 `/chat`의 C1~C9 시나리오를 돌리고, 실패 원인을 하나씩 고치는 중이다. 새 스크립트 `scripts\chat_rag_golden_browser.js`와 fixture를 Codex가 만들고 있을 수 있다.
+  - Devin `codex-dot-brief-save`(장부 `devin-codex-dot-brief-save-d98c2c8c`).
+- 다음 Codex 작업 후보(GPT Pro 분석, 2026-10-02): 운영 정책과 사용자 선호 분리, 모델명 추론 제거, API 1순위·Ollama 마지막 대체(WP1~WP5). 현재 소스는 로컬 우선이다:
+  - `main\resources\configs\api-routing.yaml` (7,051 B): `free_local → low_cost → paid_quality`
+  - `main\resources\application-llm.yaml` (37,315 B): `llm.provider: local`
+  - `DynamicChatModelFactory.java`(55,429 B) `isLocalModel()`: 모델 이름 문자열로 로컬 여부를 추측하고, 모르는 이름은 로컬로 본다.
+  - 재사용할 기반: `RoutingProfile.java`, `RoutingSettingsService.java`, `FallbackAwareChatModel.java`, `LocalModelAdmission.java`
+- 재사용할 기존 도구(새로 만들기 전에 먼저 쓴다):
+  - `scripts\phase2_full_app_browser_tests.js`(Playwright, msedge), `trace_dock_browser_probe.js`, `main_chat_target_probe.py --local`, `settings_page_probe.py`
+  - `check_settings_routing_invariants.py`, `settings_routing_guard.py`
+  - `awx_codex_review_adapter.py`, `codex_lane_plan.py`, `codex_parallel_preflight.py`, `codex_work_checkpoint.py`
+- 스킬 폴더 `.agents\skills\`에는 이미 140개 넘게 있다. 비슷한 스킬(`demo1-codex-parallel-lanes`, `demo1-codex-tool-router`, `demo1-codex-selfask-triad`)과 겹치지 않게, 새 스킬은 **"조수 서브에이전트를 언제 어떻게 부르나" 하나만** 다룬다.
+
+## 2) 만들 것
+
+### A. 서브에이전트 정의 4종 (레포 범위)
+위치는 **공식 문서로 확인한 프로젝트 범위 위치**에 둔다(developers.openai.com/codex의 subagents/custom agents 문서, openaiDeveloperDocs MCP). 프로젝트 범위 위치가 공식적으로 없으면 `.codex\agents-assist-staged\`에 두고, 설치 명령은 사용자 카드에만 적는다(ASK_ONCE 참조). **전역 `~/.codex/agents/`, 전역 `config.toml`, 전역 `AGENTS.md`에는 쓰지 않는다.**
+
+공통 규칙(4종 모두 `developer_instructions`에 넣는다):
+- `glm_worker.toml`처럼 `deliveryMarker` 확인, 4섹션 반환, 질문 원문·키·토큰·민감 응답 저장 금지.
+- 서브에이전트를 또 부르지 않음, 최종 판단은 부모(Codex 본체)가 함.
+- `model`은 지정하지 않는다(부모 상속). 유료 외부 모델 경로를 새로 지정하지 않는다.
+- 반환 끝에 `files_written=<목록 또는 none>` 한 줄.
+
+1) `assist_browser_verifier`
+   - 할 일: `127.0.0.1:18180/chat`(로컬)에서 지정된 시나리오만 돌리고, PASS/FAIL 표, 스크린샷 경로, 콘솔·네트워크 오류 요약, trace-dock 값(요청 모델/실제 모델/근거 수)을 돌려준다.
+   - 실행 순서: `scripts\chat_rag_golden_browser.js`가 있으면 그걸 **수정 없이** 실행한다. 없으면 `phase2_full_app_browser_tests.js`나 `main_chat_target_probe.py --local`을 쓴다.
+   - 상한: 한 번 위임에 브라우저 전송 최대 10회, 유료 0회, 서버 재기동 0회. 공개 URL은 쓰지 않는다.
+   - 쓰기: 위임 패킷이 지정한 `data\agent-handoff\<장부>\browser\` 아래 산출물만. sandbox 설정은 공식 문서 기준으로 고른다. 산출물 쓰기에 `workspace-write`가 필요하면 쓰되, 소스 쓰기 0은 D. 가드 스크립트로 사후 확인한다.
+2) `assist_rag_trace_analyst` (read-only)
+   - 할 일: 실패한 시나리오 1개를 받아 첨부 수집 → 청킹/임베딩 → 검색 → 프롬프트 조립 → 모델 호출 → 응답 표시까지 코드 경로를 따라간다.
+   - 반환: **원인 가설 1개**, `파일:줄`, 그 가설을 깨뜨릴 가장 작은 시험 1개(테스트명이나 명령). 여러 원인을 한 번에 내지 않는다.
+3) `assist_routing_mapper` (read-only, WP1~WP5 준비용)
+   - 할 일: `api-routing.yaml`, `application-llm.yaml`, `RoutingProfile`, `DynamicChatModelFactory.isLocalModel/selectLocalBaseUrl`, `FallbackAwareChatModel`, `LocalModelAdmission`을 읽고 **현재 결정 vs "API 우선이었다면" 결정** 표를 만든다.
+   - 역할마다 MAIN_DEFAULT / MAIN_FAST / MAIN_HIGH / Self-Ask 3종을 적는다.
+   - live 호출 0. 기존 `check_settings_routing_invariants.py`를 먼저 돌린다.
+4) `assist_patch_reviewer` (read-only)
+   - 할 일: Codex 본체의 diff를 brief의 금지 목록과 대조한다. 패치 하나에 원인 하나인지, RED→GREEN 증거가 있는지, 비밀값 패턴이 있는지, lease 밖 파일을 건드렸는지, `chat.js` 수정이 있는지 본다.
+   - 반환: `ACCEPT | REVISE(이유 목록)`. 기존 `awx_codex_review_adapter.py`가 맞으면 그걸 호출한다.
+
+### B. 위임 스크립트 `scripts\codex_assist.py` (새 파일)
+- `packet --role <4종> --objective "<한 줄>" --ledger <장부폴더> [--scenario C2] [--budget-sends 10]`
+  - 위임 패킷 JSON을 만든다: objective, deliveryMarker(랜덤 8hex), allowed_write_paths, 상한, 금지 목록 요약.
+  - 장부의 `assist\packets\`에 저장하고, Codex가 서브에이전트에게 그대로 붙일 짧은 텍스트를 stdout으로 낸다.
+- `collect --packet <파일> --result <서브에이전트 반환 텍스트 파일>`
+  - 4섹션이 있는지, `task_received=<marker>`가 맞는지, `files_written`이 allowed 안인지, 비밀값 패턴(`sk-`, `AIza`, `ghp_`, `xox`, `-----BEGIN`, `password=`)이 없는지 검사한다.
+  - 판정 `ACCEPT | REJECT(이유)`를 장부 `assist\results.jsonl`에 한 줄 추가한다. 본문은 저장하지 않고 요약과 해시만 남긴다.
+- `status --ledger <장부>`: 위임 수, 역할별 PASS/REJECT, 남은 브라우저 전송 예산.
+- 네트워크 0, 표준 라이브러리만.
+
+### C. 가드 `scripts\codex_assist_guard.py` (새 파일)
+- `snapshot --ledger <장부>`: 위임 직전 `git status --porcelain`과 대상 파일 sha를 저장한다.
+- `verify --ledger <장부> --packet <파일>`: 위임 후 다시 떠서, **새로 바뀐 경로가 패킷의 allowed_write_paths 밖에 하나라도 있으면 FAIL**을 낸다.
+  - 이미 더러운 파일 1,136개는 snapshot 기준 비교로 구분한다. 다른 세션이 동시에 바꾼 파일은 lease 정보로 `FOREIGN`으로 표시하고, 서브에이전트 탓으로 판정하지 않는다.
+- git은 읽기 명령만 쓴다(`status`, `diff --stat`, `rev-parse`).
+
+### D. 스킬 `.agents\skills\demo1-codex-assist-subagents\SKILL.md` (새 파일)
+- description: "Codex 본체가 소스 수정 중 브라우저 검증·원인 추적·라우팅 정리·패치 검토를 서브에이전트에 맡길 때 사용".
+- 언제 누구를 부르나 표:
+  - 브라우저 시나리오 확인 → `assist_browser_verifier`
+  - 실패 원인 추적 → `assist_rag_trace_analyst`
+  - WP1~WP5 착수 전 → `assist_routing_mapper`
+  - 패치 직후 → `assist_patch_reviewer`
+- 동시 실행은 최대 2개(`max_threads=3` 중 1개는 여유로 둔다). 같은 파일을 두 서브에이전트에 동시에 맡기지 않는다.
+- 순서: `codex_assist.py packet` → `codex_assist_guard.py snapshot` → 서브에이전트 위임 → `collect` → `guard verify` → 부모가 판단.
+- 서브에이전트 결과는 증거일 뿐이다. 최종 PASS 선언과 소스 수정은 부모가 직접 재확인한 뒤에만 한다.
+
+### E. 지침·룰
+- `docs\codex\CODEX_ASSIST_SUBAGENTS_KO.md` (사용자 카드, 한 화면): 4종 설명, Codex에게 할 말 예시, 상한, 되돌리는 법.
+- `docs\codex\ASSIST_BRIEF_CLAUSE.txt`: 앞으로 Codex 지시서에 붙일 5줄 이하 `[ASSIST]` 블록. 예:
+  ```
+  [ASSIST] 브라우저 확인·원인 추적·라우팅 정리·패치 검토는 .agents/skills/demo1-codex-assist-subagents 순서로 서브에이전트에 맡겨도 된다.
+  동시 2개까지, 서브에이전트는 소스 수정 금지, 결과는 codex_assist.py collect + guard verify를 통과한 것만 증거로 쓴다.
+  최종 판단과 소스 수정은 본체가 직접 재확인 후에만 한다.
+  ```
+- 레포 `agents.md`, 전역 `AGENTS.md`에는 넣지 않는다(다른 대화와 꼬임 방지). 필요하면 ASSIST 블록을 지시서마다 붙이는 방식으로만 쓴다.
+
+## 공통 규칙
+- 장부: `data\agent-handoff\devin-codex-assist-subagents-<8hex>\`. 순서는 journal → checkpoint(preimage) → verify. 새 파일도 만들기 전에 `agent_scope_lease.py claim`으로 잡는다.
+- **지금 돌고 있는 Codex 작업과 겹치지 않기:** `codex-chat-rag-browser-selfcheck`가 잡은 lease 경로(`scripts\chat_rag_golden_browser.js`, fixture 폴더, 제품 소스, 그 장부)는 읽기만 한다. 충돌이 나면 `@demo1-lease-conflict-autoflow`를 따른다.
+- 수정 허용 목록(전부 새 파일, 이 밖은 손대지 않는다):
+  - 서브에이전트 정의 4개 (공식 프로젝트 위치 또는 `.codex\agents-assist-staged\`)
+  - `scripts\codex_assist.py`, `scripts\codex_assist_guard.py`, `scripts\test_codex_assist.py`, `scripts\test_codex_assist_guard.py`
+  - `.agents\skills\demo1-codex-assist-subagents\SKILL.md`
+  - `docs\codex\CODEX_ASSIST_SUBAGENTS_KO.md`, `docs\codex\ASSIST_BRIEF_CLAUSE.txt`
+  - 이번 장부 폴더
+- **변경 금지(sha 불변을 Acceptance로 확인):** 전역 `config.toml`, 전역 `AGENTS.md`, 전역 `agents\glm_worker.toml`, 레포 `.codex\config.toml`, `.codex\hooks.json`, `.codex\agents-staged\*` 3개, 레포 `agents.md`, `main\**`, `chat.js`, 기존 `scripts\*` 전부.
+
+## DV0 — 현재 상태 (변경 없음)
+- HEAD, `agent_scope_lease.py who`, "변경 금지" 파일들의 크기·sha12를 `BASELINE.md`에 적는다.
+- 지금 돌고 있는 Codex 장부 2개의 lease 경로를 읽어서 "읽기만" 목록으로 적는다.
+
+## DV1 — 공식 근거 (`OFFICIAL.md`)
+출처 URL과 날짜를 붙여 확인한다:
+1. Codex 커스텀 서브에이전트 정의 파일의 공식 위치(전역/프로젝트)와 필드(`name`, `description`, `developer_instructions`, `sandbox_mode`, `model` 등)
+2. `max_threads`, `max_depth`의 의미
+3. 서브에이전트의 sandbox가 부모와 어떻게 관계되는지
+4. 부모가 서브에이전트를 이름으로 부르는 방법(문장 예시)
+5. 근거 없는 부분은 `UNVERIFIED`로 쓰고 적용하지 않는다.
+
+## DV2 — 스크립트 + 테스트 (먼저 RED)
+`test_codex_assist.py` / `test_codex_assist_guard.py` (임시 폴더와 임시 git repo fixture만 사용, 실제 장부 쓰기 0):
+1. `packet`: 4종 역할마다 JSON 생성, marker는 8hex, 모르는 역할은 거부.
+2. `collect` 정상: 4섹션 + 맞는 marker → ACCEPT.
+3. marker 불일치·누락 → REJECT.
+4. 섹션 누락 → REJECT.
+5. `files_written`이 allowed 밖 → REJECT.
+6. 비밀값 패턴 포함 → REJECT, results.jsonl에 본문 없음.
+7. `status`: 예산 차감이 맞음.
+8. guard: 위임 전후 변화 없음 → PASS.
+9. guard: allowed 안의 산출물만 새로 생김 → PASS.
+10. guard: 소스 파일이 새로 바뀜 → FAIL(경로 표시).
+11. guard: 이미 더러웠던 파일은 판정에서 제외.
+12. guard: lease상 다른 세션 파일 변화 → FOREIGN(서브에이전트 탓 아님).
+
+## DV3 — 서브에이전트 정의 + 스킬 + 문서
+- 정의 4개를 작성하고, TOML 문법을 `python -c "import tomllib; ..."`로 검사한다.
+- 정적 점검: `model` 필드 없음, read-only 3종은 `sandbox_mode = "read-only"`, 4종 모두 "소스 수정 금지·중첩 위임 금지·4섹션" 문구 포함.
+- SKILL.md, 사용자 카드, ASSIST 블록 작성.
+
+## DV4 — 실제 확인 (아주 작게)
+- `codex exec` 사용 가능하면 **1회만**: 부모에게 "assist_routing_mapper로 MAIN_DEFAULT 현재 결정만 정리해" 수준의 읽기 전용 위임을 시켜 본다. 확인할 것: 서브에이전트가 인식되는지, 4섹션 반환, `collect` ACCEPT, `guard verify` PASS.
+- `assist_browser_verifier`는 지금 Codex가 브라우저를 쓰는 중이라 실제 실행하지 않는다 → `NOT_RUN(Codex 브라우저 작업과 충돌 회피)`. 대신 패킷 생성·collect를 fixture로만 확인한다.
+- 실행할 수 없으면 `NOT_RUN_USER_STEP`과 사용자 시험 문장 1줄.
+
+## HOLD
+- 전역 Codex 설정·전역 agents 폴더·전역 AGENTS.md 변경
+- `.codex\agents-staged\` selfask 3종 활성화나 이동
+- 제품 소스(`main\**`, `chat.js`, settings JS) 수정, WP1~WP5 구현 자체(Codex 몫)
+- 서브에이전트에 유료 모델 지정, `max_threads`/`max_depth` 변경
+
+## ASK_ONCE
+- 공식 프로젝트 범위 위치가 없어서 정의 파일을 전역 `~/.codex/agents/`로 옮겨야만 쓸 수 있는 경우: Devin은 옮기지 말고, 설치 명령 1줄과 영향(이름이 겹치지 않는 새 파일 4개 추가뿐)을 사용자 카드에 적고 멈춘다. 옮기는 건 사용자가 결정한다.
+
+## 절대 금지
+- Codex 자동 승인 검토·guardian·리뷰어를 끄거나 우회, 내부 상태 파일(`.codex-global-state.json`, `*.sqlite`, `hooks.state`, `thread-writer-locks`) 편집
+- 서브에이전트에 소스 쓰기 권한을 주고 지침으로만 막기(가드 사후 확인 없이)
+- `auth.json` / `.sandbox-secrets` / `cap_sid` / `installation_id` / `.env` / `.secrets` 읽기·출력
+- push / pull / commit, `git add -A`, reset / checkout / restore / stash / clean / force-push
+- 전체 suite, Gradle 전체 빌드, Verify-RAG, 서버 재기동
+- 공개 URL(`abandonwareai.kro.kr`) 전송, 유료 API 호출
+- AbandonWare3 재추가, PROTO_OPEN / admin 강화, 다른 세션 lease·hunk·장부 훼손, DB 스키마 변경, 데이터셋 삭제
+- skip-permissions / full-access 추가 권장
+
+## Acceptance (실행 안 한 항목은 NOT_RUN과 사유)
+- [ ] AC1 `BASELINE.md`: HEAD, 변경 금지 파일 sha12, 돌고 있는 Codex 작업의 읽기 전용 경로 목록.
+- [ ] AC2 `OFFICIAL.md`: 정의 파일 위치·필드·스레드 상한·sandbox 관계, 출처와 UNVERIFIED 구분.
+- [ ] AC3 테스트 1~12 RED→GREEN, 테스트 중 실제 장부·소스 쓰기 0.
+- [ ] AC4 서브에이전트 정의 4개: TOML 파싱 OK, 정적 점검 통과.
+- [ ] AC5 스킬 1개, 사용자 카드, ASSIST 블록(5줄 이하).
+- [ ] AC6 실제 확인 1건(`codex exec`) 또는 NOT_RUN과 사유. browser_verifier는 NOT_RUN(충돌 회피) + fixture 확인.
+- [ ] AC7 꼬임 0: 변경 금지 파일 sha가 DV0과 동일, HEAD 불변, 돌고 있는 Codex·Devin 장부 손상 0.
+
+## 보고 형식
+```
+외부 API: Codex 생성 <n>회 / 웹 조회 <n>회 / 브라우저 전송 <n>회 / 유료 0회 / 실패 원문: <있으면 그대로>
+DEVIN-CODEX-ASSIST-SUBAGENTS: DONE | PARTIAL | HOLD
+정의 위치: <프로젝트 경로 또는 staged + 근거 URL>
+서브에이전트 4종: browser_verifier / rag_trace_analyst / routing_mapper / patch_reviewer — 각각 <OK/문제>
+스크립트: codex_assist.py, codex_assist_guard.py — 테스트 <n>/12
+실제 확인: <PASS / NOT_RUN(사유)>
+꼬임 0: 변경 금지 sha <동일/불일치 목록>
+AUTO_DECISION: …
+FILES_TOUCHED: <새 파일 목록과 크기>
+되돌리는 법: <새 파일 삭제 명령 1줄, 사용자가 직접>
+AC1~AC7: PASS | FAIL | NOT_RUN(사유)
+사용자 할 일: <Codex에게 할 말 1줄 / ASK_ONCE가 났으면 그 결정>
+HOLD / NEXT
+```
+
+[ANTI-STOP] 읽기 = intake. DV0부터 바로 시작한다. 완료 증거는 공식 근거 정리, 스크립트 테스트 GREEN, 서브에이전트 정의 4개 정적 점검 통과, 변경 금지 sha 불변, 실제 확인 결과(또는 NOT_RUN 사유)다.

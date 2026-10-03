@@ -4,6 +4,7 @@ import ai.abandonware.nova.orch.llm.ExpectedFailureChatModel;
 import com.abandonware.ai.addons.budget.TimeBudget;
 import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.llm.TimedChatModelCaller;
+import com.example.lms.llm.JudgeCallObservation;
 import com.example.lms.trace.SafeRedactor;
 import com.example.lms.search.TraceStore;
 import dev.langchain4j.model.chat.ChatModel;
@@ -62,10 +63,14 @@ public class FactStatusClassifier {
      * 휴리스틱과 LLM(사용 가능 시)을 이용해 검증 상태를 분류합니다.
      */
     public FactVerificationStatus classify(String question, String context, String draft, String model) {
+        JudgeCallObservation observation = JudgeCallObservation.start("fact_status_classifier");
+        TraceStore.put("factStatusClassifier.judge.disabledReason", null);
         // 1. 강화된 휴리스틱 분류를 먼저 실행합니다.
         FactVerificationStatus heuristicStatus = heuristicClassify(question, context, draft);
         if (heuristicStatus == FactVerificationStatus.INSUFFICIENT) {
             // 정보 부족은 더 검사할 필요 없이 즉시 반환합니다.
+            observation.skipped("heuristic_insufficient");
+            observation.finish("heuristic", false, "heuristic_insufficient");
             return heuristicStatus;
         }
 
@@ -73,21 +78,25 @@ public class FactStatusClassifier {
         ChatModel llm = chatModelProvider == null ? null : chatModelProvider.getIfAvailable();
         if (llm == null || llm instanceof ExpectedFailureChatModel) {
             traceJudgeFailSoft("judge_model_unavailable");
+            observation.skipped("judge_model_unavailable");
+            observation.finish("heuristic", false, "judge_model_unavailable");
             return heuristicStatus;
         }
         if (llm != null && isNotBlank(context) && context.length() >= 80 && isNotBlank(model)) {
             try {
                 String factStatusClassificationPrompt = String.format(CLASSIFICATION_TEMPLATE, toNn(question), toNn(context), toNn(draft));
-                String rawResponse = callChatModel(llm, factStatusClassificationPrompt);
+                String rawResponse = callChatModel(llm, factStatusClassificationPrompt, observation);
                 if (isBlank(rawResponse)) {
                     return heuristicStatus;
                 }
                 FactVerificationStatus llmStatus = parseLabel(rawResponse);
                 if (llmStatus != FactVerificationStatus.UNKNOWN) {
                     // LLM이 성공적으로 분류했다면 그 결과를 최종적으로 신뢰합니다.
+                    observation.finish("judge", true, null);
                     return llmStatus;
                 }
                 traceJudgeFailSoft("judge_malformed_response");
+                observation.finish("heuristic", false, "judge_malformed_response");
             } catch (Exception e) {
                 traceJudgeFailSoft("judge_call_failed");
                 log.debug("FactStatusClassifier LLM classification failed. errorHash={} errorLength={}",
@@ -96,6 +105,8 @@ public class FactStatusClassifier {
         }
 
         // 3. LLM 분류에 실패했거나 조건이 안 되면, 휴리스틱 결과를 최종 결과로 사용합니다.
+        observation.skipped("judge_conditions_not_met");
+        observation.finish("heuristic", false, "judge_conditions_not_met");
         return heuristicStatus;
     }
 
@@ -163,35 +174,48 @@ public class FactStatusClassifier {
      * text.  It swallows any exceptions and returns an empty string to
      * allow callers to safely fall back to heuristics.
      */
-    private String callChatModel(ChatModel llm, String factStatusClassificationPrompt) {
+    private String callChatModel(ChatModel llm, String factStatusClassificationPrompt, JudgeCallObservation observation) {
         if (llm == null || factStatusClassificationPrompt == null) return "";
         try {
             TimeBudget requestBudget = TimeBudgetContext.get();
             if (requestBudget != null && requestBudget.expired()) {
                 traceJudgeFailSoft("request_budget_exhausted");
+                observation.skipped("request_budget_exhausted");
+                observation.finish("heuristic", false, "request_budget_exhausted");
                 return "";
             }
             var userMessage = UserMessage.from(factStatusClassificationPrompt);
-            dev.langchain4j.data.message.AiMessage ai;
+            dev.langchain4j.model.chat.response.ChatResponse response;
             if (requestBudget == null) {
-                var res = llm.chat(userMessage);
-                ai = res == null ? null : res.aiMessage();
+                try (var judgeBinding = observation.bind()) {
+                    observation.invocationStarted();
+                    response = llm.chat(userMessage);
+                }
+                observation.responseReceived(response);
             } else {
                 long remainingMs = requestBudget.remainingMillis();
                 if (remainingMs <= 0L) {
                     traceJudgeFailSoft("request_budget_exhausted");
+                observation.skipped("request_budget_exhausted");
+                observation.finish("heuristic", false, "request_budget_exhausted");
                     return "";
                 }
-                ai = TimedChatModelCaller.chat(
+                response = TimedChatModelCaller.chatResponse(
                         llm,
                         List.of(userMessage),
                         Duration.ofMillis(remainingMs),
                         "fact_status_classifier_judge",
-                        llm.getClass().getName());
+                        llm.getClass().getName(), observation);
             }
-            if (ai == null) return "";
-            return ai.text() == null ? "" : ai.text();
+            var ai = response == null ? null : response.aiMessage();
+            if (ai == null || ai.text() == null || ai.text().isBlank()) {
+                observation.finish("heuristic", false, "judge_empty_response");
+                return "";
+            }
+            return ai.text();
         } catch (Exception e) {
+            observation.failed(e);
+            observation.finish("heuristic", false, "judge_call_failed");
             traceJudgeFailSoft("judge_call_failed");
             log.debug("[FactStatusClassifier] ChatModel call failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));

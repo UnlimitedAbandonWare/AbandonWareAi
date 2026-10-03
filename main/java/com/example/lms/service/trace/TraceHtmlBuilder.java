@@ -715,6 +715,7 @@ public class TraceHtmlBuilder {
         appendKvGroup(sb, extraMeta, shown, "Mode",
                 java.util.List.of("orch.mode", "orch.strike", "orch.compression", "orch.bypass", "orch.reason",
                         "orch.webRateLimited", "orch.auxLlmDown", "orch.highRisk", "orch.irregularity",
+                        "orch.auxDegraded", "orch.auxHardDown", "orch.webHardDown.stageOff",
                         "orch.noiseEscape.bypassSilentFailure",
                         "orch.noiseEscape.bypassSilentFailure.escapeP",
                         "orch.noiseEscape.bypassSilentFailure.roll",
@@ -785,12 +786,22 @@ public class TraceHtmlBuilder {
                         "nightmare.breaker.openUntilMs",
                         "nightmare.breaker.openUntilMs.last",
                         "nightmare.mode"));
+        appendKvGroup(sb, extraMeta, shown, "Keyword Selection",
+                java.util.List.of("keywordSelection.mode", "keywordSelection.reason",
+                        "keywordSelection.maxMust", "keywordSelection.cacheSeeded",
+                        "keywordSelection.cacheSeeded.reason", "keywordSelection.noiseEscape",
+                        "keywordSelection.fallback.must.count", "keywordSelection.fallback.should.count",
+                        "keywordSelection.fallback.mustLimit", "keywordSelection.fallback.intent",
+                        "keywordSelection.qtxGate.softAllow.used",
+                        "keywordSelection.qtxGate.softAllow.oneShotAttempted"));
         // Already-produced query diagnostics only; rendering never invokes transformation.
         appendKvGroup(sb, extraMeta, shown, "Query Transformation",
                 java.util.List.of("qtx.stagePolicy.enabled", "qtx.stagePolicy.clamped",
                         "qtx.suppressed.minLiveBudget", "qtx.minLiveBudgetMs",
                         "qtx.timeoutMs.cappedByMinLiveBudget", "qtx.timeoutMs.before", "qtx.timeoutMs.after",
-                        "qtx.bypass.reason", "qtx.constraints.rejectedCount", "qtx.constraints.reason"));
+                        "qtx.bypass.reason", "qtx.constraints.rejectedCount", "qtx.constraints.reason",
+                        "queryTransformer.bypassed", "queryTransformer.reason",
+                        "queryTransformer.bypassed.queryLength"));
         appendKvGroup(sb, extraMeta, shown, "Guard",
                 java.util.List.of("guard.final.action", "guard.final.coverageScore", "guard.inconsistentTemplate",
                         "guard.escalated",
@@ -838,12 +849,20 @@ public class TraceHtmlBuilder {
         appendKvPrefixGroup(sb, extraMeta, shown, "MLA Breadcrumb Step", "mla.breadcrumb.step.", 24);
         appendKvPrefixGroup(sb, extraMeta, shown, "ML", "ml.", 24);
         appendKvPrefixGroup(sb, extraMeta, shown, "Embedding", "embed.", 24);
+        appendKvGroup(sb, extraMeta, shown, "Vector",
+                java.util.List.of("vector.fp.bypassed", "vector.fp.dropped", "vector.fp.blockedReason",
+                        "vector.fp.wantHash", "vector.fp.wantLength",
+                        "vector.federated.cancelMode", "vector.federated.timeout"));
 
         // Custom (human-friendly) debug UX for web.* fields
         TraceHtmlWebSelectedTermsRenderer.append(sb, extraMeta, shown);
         appendWebNaverPlanHintBoostOnlyOverlay(sb, extraMeta, shown);
         TraceHtmlWebAwaitEventsRenderer.append(sb, extraMeta, shown);
         TraceHtmlWebFailSoftRunsRenderer.append(sb, extraMeta, shown);
+
+        appendKvGroup(sb, extraMeta, shown, "Agent Web Search",
+                java.util.List.of("agent.webSearch.prompt.status", "agent.webSearch.prompt.reasonCode",
+                        "agent.webSearch.prompt.returnedCount", "agent.acmeGateway.result.reason"));
 
         appendKvPrefixGroup(sb, extraMeta, shown, "Web", "web.", 40);
         sb.append("</table></details></div>");
@@ -1127,6 +1146,12 @@ public class TraceHtmlBuilder {
         return safeValue(safe);
     }
 
+    private static final java.util.Set<String> AGENT_WEB_PROMPT_STATE_KEYS = java.util.Set.of(
+            "agent.webSearch.prompt.status",
+            "agent.webSearch.prompt.reasonCode",
+            "agent.webSearch.prompt.returnedCount",
+            "agent.acmeGateway.result.reason");
+
     private static Map<String, Object> sanitizeMeta(Map<String, Object> meta) {
         if (meta == null || meta.isEmpty()) {
             return java.util.Map.of();
@@ -1138,7 +1163,11 @@ public class TraceHtmlBuilder {
             String key = e.getKey();
             String displayKey = SafeRedactor.isTypedDiagnostic(key, e.getValue())
                     ? key : safeMetaKey(key);
-            if ("rag.evidence.public".equals(key)) {
+            if (AGENT_WEB_PROMPT_STATE_KEYS.contains(key)) {
+                // Machine-generated status/reason/count scalars under the
+                // "prompt" namespace are labels, not user content.
+                out.put(displayKey, SafeRedactor.traceLabelOrFallback(e.getValue(), "unknown"));
+            } else if ("rag.evidence.public".equals(key)) {
                 out.put(displayKey, sanitizePublicEvidence(e.getValue()));
             } else {
                 out.put(displayKey, SafeRedactor.diagnosticValue(key.toLowerCase(java.util.Locale.ROOT).contains("soakkpijson") ? "query" : key, e.getValue(), 800));

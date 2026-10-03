@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "awx.work_journal.v1",
+  "taskId": "incident-goal-alpha-aaaaaaaa",
+  "agent": "agent-alpha",
+  "purpose": "DEMO1-INCIDENT-CONTRACT-EXAMPLE-20261002: anonymized twin of the 2026-10-02 duplicate-goal incident; scope/path names generalized",
+  "plannedScope": [
+    "main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java",
+    "main/java/com/example/lms/config/LocalLlmProcessManager.java",
+    "main/java/com/example/lms/llm/OllamaNativeChatModel.java",
+    "main/java/com/example/lms/llm/TimedChatModelCaller.java",
+    "main/java/com/example/lms/service/ChatWorkflow.java",
+    "src/test/java",
+    "docs/PROJECT_STATUS.md"
+  ],
+  "status": "in_progress",
+  "result": null,
+  "startedAtUtc": "2026-10-02T04:28:23+00:00",
+  "updatedAtUtc": "2026-10-02T04:44:00+00:00",
+  "endedAtUtc": null,
+  "events": [
+    {
+      "at": "2026-10-02T04:29:18+00:00",
+      "kind": "info",
+      "text": "WP0 snapshot recorded; no claim and no coop writer-begin issued (root cause of the collision)",
+      "refs": []
+    }
+  ],
+  "_fixtureNote": "Anonymized structure copy of codex-chat-timeout-failover-v2-26e76ed3 for parallel-lanes tests. Real ledger stays under data/agent-handoff/codex-autonomy/."
+}

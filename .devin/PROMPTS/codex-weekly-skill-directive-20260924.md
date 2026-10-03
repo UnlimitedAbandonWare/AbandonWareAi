@@ -1,10 +1,10 @@
 # Devin 구현 지시서 — Codex 주간 세션 분석 기반 에이전트 스킬·기능·도구 (2026-09-17~24)
 
 - 작성일: 2026-09-24
-- 분석 대상: `C:\Users\nninn\.codex\sessions\2026\09\17` ~ `2026\09\24`, 55개 세션 JSONL, 약 358MB (전수 파싱)
+- 분석 대상: `%USERPROFILE%\.codex\sessions\2026\09\17` ~ `2026\09\24`, 55개 세션 JSONL, 약 358MB (전수 파싱)
 - 분석 산출물: `%TEMP%\codex-week\` (`extract.py`, `stage2.py`, `sessions_summary.json`, `report.txt`, `report2.txt`)
 - 목표: 최근 1주일의 실사용 패턴에서 반복 확인된 수요를 바탕으로 아래 스킬/기능/도구를 구현·보강한다.
-- 작업 루트: `C:\AbandonWare\demo-1\demo-1\src` — 기존 AGENTS.md 규칙, 스킬 SSOT, 소유권·lease·preimage·검증 게이트 전부 준수.
+- 작업 루트: `<repo>` — 기존 AGENTS.md 규칙, 스킬 SSOT, 소유권·lease·preimage·검증 게이트 전부 준수.
 
 ## 1. 근거 데이터 (집계 완료, 검증됨)
 

@@ -168,8 +168,8 @@ Java 제품 경로는 현 프로젝트의 HTTP client/JSON mapper를 재사용�
 
 ```http
 POST https://ai-gateway.vercel.sh/v1/evaluate
-Authorization: Bearer <process-local credential; never log>
-Content-Type: application/json
+Authorization 헤더 = Bearer <process-local credential; never log>
+Content-Type 헤더 = application/json
 ```
 
 ```json
@@ -196,12 +196,13 @@ Content-Type: application/json
   },
   "providerOptions": {
     "gateway": {
-      "only": ["typesafe-ai"],
-      "zeroDataRetention": true
+      "only": ["typesafe-ai"]
     }
   }
 }
 ```
+
+> **Hobby 플랜 규칙 (2026-09-29 실측):** 요청·예시·테스트 고정값에 Pro 전용 옵션을 넣지 않는다. `providerOptions.gateway.zeroDataRetention`는 Hobby에서 HTTP 403 `plan_gate`로 거부된다(실측 본문 fixture: `scripts/apikit/fixtures/vercel_403_zdr_plan.json`). 분류 SSOT: `docs/API_ROUTING_SPEC.md` §External API failure classification.
 
 응답 검증 규칙:
 

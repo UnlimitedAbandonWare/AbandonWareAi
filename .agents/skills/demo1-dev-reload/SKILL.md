@@ -7,7 +7,7 @@ description: Use when demo-1 Java/Spring/Display sources change; compile+ForceRe
 
 ## Project Root
 
-- Default: `C:\AbandonWare\demo-1\demo-1\src`. All relative launcher/script paths are from here.
+- Default: `<repo>`. All relative launcher/script paths are from here.
 
 ## Why this exists
 Spring Boot keeps the old classpath in a running JVM. Codex must not "restart the same process" or serve previous `build/` artifacts and claim the edit is live. Official Boot hot-swapping expects **recompile then restart** (or DevTools restart classloader). This project uses **Start-RAG ForceRestart + DevWatch** instead of adding `spring-boot-devtools`.

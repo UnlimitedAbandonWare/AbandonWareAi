@@ -2,6 +2,7 @@ package com.example.lms.assist;
 
 import org.junit.jupiter.api.Test;
 import java.time.*;
+import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.http.HttpStatus.*;
 import org.springframework.web.server.ResponseStatusException;
@@ -48,6 +49,22 @@ class DisplayRelayTest {
         var a=relay.activate("live","o",A,"s");relay.poll("live",L);
         assertEquals(CONFLICT,assertThrows(ResponseStatusException.class,()->relay.ack("live",L,999)).getStatusCode());
         clock.now+=6001;assertEquals(0,relay.debug("live",a).get("subscribers"));
+    }
+    @Test void focusAndHintStaySeparateChannelsAndFocusDropsOnDisconnect(){
+        var clock=new MutableClock();var relay=new DisplayRelay(clock);
+        var a=relay.activate("live","o",A,"s");
+        var hint=new DisplayContentView.TextCard("CUE","일반 힌트",List.of(),clock.instant().toEpochMilli()+15000,"req-1",List.of());
+        var focus=new NovaFocusState.View("srv","act-1","turn-1",1,1,true,"ANSWER_READY",null,"질문",
+                "포커스 답변","meta",null,20000,"",new NovaFocusSettings.Presentation(true,80,6,true,5000,400),false,false);
+        assertTrue(relay.publish("live",a,caption("t"),hint,focus));
+        var event=relay.poll("live",L);
+        assertSame(hint,event.hint(),"hint stays its own TextCard channel");
+        assertSame(focus,event.focus(),"focus stays its own View channel");
+        assertNotEquals(focus.answerText(),event.hint().text(),"focus text never enters the hint channel");
+        // Producer disconnected: focus drops immediately; hint lives on its own TTL.
+        clock.now+=10001;
+        var stale=relay.poll("live",L);
+        assertNull(stale.focus());assertSame(hint,stale.hint());
     }
     private static DisplayContentView.Transcript caption(String text){
         return DisplayContentView.caption(new ConversateSessionService.Caption("asr-1",1,true,text,null,java.util.List.of(),System.currentTimeMillis(),System.currentTimeMillis()+15000),System.currentTimeMillis());

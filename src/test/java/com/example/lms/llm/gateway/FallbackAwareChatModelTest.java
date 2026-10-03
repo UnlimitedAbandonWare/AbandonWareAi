@@ -52,7 +52,7 @@ class FallbackAwareChatModelTest {
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         ChatModel fallback = new ChatModel() {
@@ -74,7 +74,7 @@ class FallbackAwareChatModelTest {
         ChatResponse response = model.chat(List.<ChatMessage>of(UserMessage.from("probe")));
 
         assertEquals("fallback ok", response.aiMessage().text());
-        assertEquals("MODEL_MISSING", TraceStore.get("llm.gateway.fallbackAware.primaryFailure"));
+        assertEquals("GPU_DEVICE_LOST", TraceStore.get("llm.gateway.fallbackAware.primaryFailure"));
         assertEquals(true, TraceStore.get("llm.gateway.fallbackAware.sameRequestRetry"));
         assertNull(TraceStore.get("llm.gateway.fallbackAware.routeResolutionFailureReason"));
         assertNull(TraceStore.get("llm.gateway.fallbackAware.routeResolutionFailureCount"));
@@ -125,14 +125,14 @@ class FallbackAwareChatModelTest {
     void budgetExpiryDuringFallbackConstructionSkipsProviderInvocation() {
         TimeBudget requestBudget = mock(TimeBudget.class);
         // Initial dispatch and fallback admission both have time; construction consumes it.
-        when(requestBudget.remainingMillis()).thenReturn(60L, 60L, 0L);
+        when(requestBudget.remainingMillis()).thenReturn(60L, 60L, 60L, 0L);
         TimeBudgetContext.set(requestBudget);
         AtomicInteger fallbackBuilds = new AtomicInteger();
         AtomicInteger fallbackCalls = new AtomicInteger();
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         FallbackAwareChatModel model = new FallbackAwareChatModel(
@@ -170,7 +170,7 @@ class FallbackAwareChatModelTest {
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         FallbackAwareChatModel model = new FallbackAwareChatModel(
@@ -225,7 +225,7 @@ class FallbackAwareChatModelTest {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
                 primaryCalls.incrementAndGet();
-                throw new RuntimeException("model not found: raw-upstream-body-private");
+                throw new LlmGatewayException("Local admission blocked: raw-upstream-body-private", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         ChatModel fallback = new ChatModel() {
@@ -298,9 +298,9 @@ class FallbackAwareChatModelTest {
         assertEquals(List.of(1, 2), attempts.stream().map(row -> row.get("sequence")).toList());
         assertEquals(List.of("primary", "fallback"), attempts.stream().map(row -> row.get("role")).toList());
         assertEquals(List.of("failed", "success"), attempts.stream().map(row -> row.get("outcome")).toList());
-        assertEquals(List.of("model_missing", "none"),
+        assertEquals(List.of("gpu_device_lost", "none"),
                 attempts.stream().map(row -> row.get("failureClass")).toList());
-        assertEquals(List.of("model_unavailable", "success"),
+        assertEquals(List.of("error", "success"),
                 attempts.stream().map(row -> row.get("terminalClass")).toList());
         assertEquals(List.of("127.0.0.1:11435", "127.0.0.1:11434"),
                 attempts.stream().map(row -> row.get("endpointLabel")).toList());
@@ -340,7 +340,7 @@ class FallbackAwareChatModelTest {
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         ChatModel fallback = new ChatModel() {
@@ -431,7 +431,7 @@ class FallbackAwareChatModelTest {
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         ChatModel fallback = new ChatModel() {
@@ -535,7 +535,7 @@ class FallbackAwareChatModelTest {
         ChatModel primary = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
-                throw new RuntimeException("model not found");
+                throw new LlmGatewayException("Local admission blocked", LlmFailureClass.GPU_DEVICE_LOST, "local_endpoint_open");
             }
         };
         ModelRuntimeHealthTracker.RequestAttemptRoute primaryRoute = tracker.redactedRequestAttemptRoute(

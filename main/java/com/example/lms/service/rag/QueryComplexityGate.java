@@ -58,7 +58,13 @@ public class QueryComplexityGate {
     public Level assess(String q) {
         /* 1) ML 분류기가 존재하면 우선 사용 */
         if (classifier != null) {
-            return classifier.classify(q);
+            try {
+                Level level = classifier.classify(q);
+                if (level != null) return level;
+                com.example.lms.search.TraceStore.put("rag.queryComplexity.reasonCode", "classifier_missing_fallback");
+            } catch (RuntimeException failure) {
+                com.example.lms.search.TraceStore.put("rag.queryComplexity.reasonCode", "classifier_failure_fallback");
+            }
         }
 
         /* 2) 분류기가 없거나 초기화 실패 시 → 기존 규칙 기반 로직 */
@@ -91,6 +97,11 @@ public class QueryComplexityGate {
 
         // (C) 그 외 → AMBIGUOUS
         return Level.AMBIGUOUS;
+    }
+
+    /** Request-local observation; the original classifier remains the fallback. */
+    public Level assess(String q, com.example.lms.assist.JevChoiceAdvisor.ChoiceObservation observation) {
+        return new JevComplexityClassifier(this::assess).classify(q, observation);
     }
 
     /** COMPLEX 판정 시 Self-Ask 단계 사용 여부 */

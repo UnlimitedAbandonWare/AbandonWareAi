@@ -6,6 +6,7 @@
     const panel = doc.getElementById("modelBrowser");
     const select = doc.getElementById("modelSelect");
     if (!panel || !select) return null;
+    const isDefaults = select.dataset?.preference === "model";
     const search = panel.querySelector("[data-model-search]");
     const filter = panel.querySelector("[data-model-filter]");
     const list = panel.querySelector("[data-model-results]");
@@ -25,6 +26,21 @@
     let catalogCurrent = false;
     let windowSize = PAGE;
     let windowKey = "";
+    let modelTouched = false;
+    let defaultApplied = false;
+    let applyingDefault = false;
+    let automaticDefaultActive = false;
+    function untouchedFreshChat() {
+      if (isDefaults) return false;
+      if (modelTouched || defaultApplied) return false;
+      try {
+        const session = env.sessionStorage || root.sessionStorage;
+        if (session && (session.getItem("chat.currentSessionId") || session.getItem("chat.activeRun")
+            || session.getItem("chat.controlSettings"))) return false;
+        const defaults = root.AwxSettingsCore?.readSettings(storage);
+        return !defaults?.model;
+      } catch { return false; }
+    }
 
     function readIds(key) {
       try {
@@ -52,7 +68,7 @@
     const recheckInFlight = new Set();
     function ready() {
       const selected = choices.find(row => row.id === select.value);
-      doc.dispatchEvent(new CustomEvent("chat:model-catalog", { detail: { ready: catalogCurrent && selected?.selectable === true } }));
+      doc.dispatchEvent(new CustomEvent("chat:model-catalog", { detail: { ready: catalogCurrent && selected?.selectable === true, hydrated: catalogCurrent } }));
     }
     function remember(id) {
       recent = [id, ...recent.filter(value => value !== id)].slice(0, 10);
@@ -257,8 +273,15 @@
           && typeof row.provider === "string" && typeof row.selectable === "boolean").slice(0, 1100);
         publicCatalogLoaded = Boolean(discover);
         catalogCurrent = true;
-        const previous = select.value;
+        const serverDefault = choices.find(row => row.defaultChoice === true && row.selectable);
+        const applyDefault = serverDefault && untouchedFreshChat();
+        const previous = applyDefault ? serverDefault.id : select.value;
         select.replaceChildren();
+        if (isDefaults) {
+          const inherit = doc.createElement("option");
+          inherit.value = ""; inherit.textContent = "기본 설정 따르기 · 채팅에서 선택";
+          select.appendChild(inherit);
+        }
         const groups = new Map();
         for (const row of choices.filter(row => row.selectable)) {
           let group = groups.get(row.provider);
@@ -273,7 +296,7 @@
           option.textContent = row.modelId;
           group.appendChild(option);
         }
-        if (!choices.some(row => row.id === previous && row.selectable)) {
+        if (!choices.some(row => row.id === previous && row.selectable) && !(isDefaults && previous === "")) {
           const unavailable = doc.createElement("option");
           unavailable.value = previous;
           unavailable.textContent = previous ? previous + " · 사용 가능 여부 확인 필요" : "모델을 선택해 주세요";
@@ -284,6 +307,16 @@
           select.value = previous;
         }
         status.textContent = choices.filter(row => row.selectable).length + "개 선택 가능 · 목록 확인은 실제 생성 성공을 뜻하지 않습니다.";
+        if (applyDefault) {
+          defaultApplied = true;
+          automaticDefaultActive = true;
+          applyingDefault = true;
+          try {
+            const mode = doc.getElementById("modelSelectionMode");
+            if (mode) { mode.value = "auto"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          } finally { applyingDefault = false; }
+        }
         render();
         ready();
       } catch {
@@ -325,7 +358,14 @@
       if (!publicCatalogLoaded && ["all", "unavailable"].includes(filter.value)) void refresh(true);
     });
     panel.querySelector("[data-model-refresh]").addEventListener("click", () => refresh(["all", "unavailable"].includes(filter.value)));
-    select.addEventListener("change", () => { remember(select.value); ready(); render(); });
+    select.addEventListener("change", () => {
+      if (!applyingDefault && automaticDefaultActive) {
+        automaticDefaultActive = false;
+        const mode = doc.getElementById("modelSelectionMode");
+        if (mode) { mode.value = "strict"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
+      }
+      modelTouched = true; if (select.value) remember(select.value); ready(); render();
+    });
     doc.addEventListener("keydown", event => {
       if (event.key !== "Escape" || !panel.open) return;
       const inside = typeof panel.contains === "function" && (panel.contains(event.target) || event.target === opener);

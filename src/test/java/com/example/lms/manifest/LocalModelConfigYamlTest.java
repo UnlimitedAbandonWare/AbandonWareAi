@@ -89,9 +89,9 @@ class LocalModelConfigYamlTest {
     @Test
     void modelManifestsKeepRoleAwareLocalBindingsAndAliases() throws IOException {
         assertLocalManifest(Path.of("main/resources/configs/models.manifest.yaml"));
-        assertLocalManifest(Path.of("app/src/main/resources/configs/models.manifest.yaml"));
+        assertLocalManifest(Path.of("app/quarantine/resources_legacy/configs/models.manifest.yaml"));
 
-        Map<?, ?> appManifest = loadMap(Path.of("app/src/main/resources/configs/models.manifest.yaml"));
+        Map<?, ?> appManifest = loadMap(Path.of("app/quarantine/resources_legacy/configs/models.manifest.yaml"));
         Map<?, ?> routing = map(appManifest, "routing");
         List<?> rules = (List<?>) routing.get("rules");
         assertEquals("smtek/Qwen3.8-27B:Q3_K_XL", ((Map<?, ?>) rules.get(0)).get("use"));
@@ -102,7 +102,7 @@ class LocalModelConfigYamlTest {
     @Test
     void localApplicationYamlKeepsQwenAndGemmaOnSeparateRoles() throws IOException {
         assertLocalApplicationRoles(Path.of("main/resources/application-local.yml"));
-        assertLocalApplicationRoles(Path.of("app/src/main/resources/application-local.yml"));
+        assertLocalApplicationRoles(Path.of("app/quarantine/resources_legacy/application-local.yml"));
     }
 
     @Test

@@ -67,8 +67,10 @@ public class NovaFailurePatternAutoConfiguration {
             FailurePatternJsonlWriter jsonlWriter,
             FailurePatternCooldownRegistry cooldownRegistry,
             ObjectMapper om,
-            NovaFailurePatternProperties props) {
-        return new FailurePatternOrchestrator(detector, metrics, jsonlWriter, cooldownRegistry, om, props);
+            NovaFailurePatternProperties props,
+            ObjectProvider<com.example.lms.debug.DebugEventStore> debugEvents) {
+        return new FailurePatternOrchestrator(detector, metrics, jsonlWriter, cooldownRegistry, om, props,
+                debugEvents.getIfAvailable());
     }
 
     @Bean

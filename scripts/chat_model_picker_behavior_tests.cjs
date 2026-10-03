@@ -192,6 +192,29 @@ function choiceButtons(list) {
   return list.querySelectorAll("button.model-choice-select").filter(button => button.getAttribute("data-model-more") !== "1");
 }
 
+test("server cloud default applies once to an untouched fresh chat", async () => {
+  const ui=harness();
+  const mode=ui.doc.createElement("select"); mode.setAttribute("id","modelSelectionMode"); mode.value="strict";
+  ui.doc.append(mode);
+  const picker=createPicker(ui.doc,{fetch:async()=>jsonResponse([row(1,{defaultChoice:true,provider:"gemini"}),row(2)]),storage:ui.storage,autostart:false});
+  await picker.refresh(false);
+  assert.equal(ui.select.value,"id-1");
+  assert.equal(mode.value,"auto");
+  ui.select.value="id-2"; ui.select.dispatchEvent({type:"change"});
+  assert.equal(mode.value,"strict");
+  await picker.refresh(false);
+  assert.equal(ui.select.value,"id-2");
+});
+
+test("server default preserves restored controls and explicit mode", async () => {
+  const ui=harness();
+  const opt=ui.doc.createElement("option"); opt.value="id-2"; opt.selected=true; ui.select.appendChild(opt);
+  const session={getItem:key=>key === "chat.controlSettings" ? "present" : null};
+  const picker=createPicker(ui.doc,{fetch:async()=>jsonResponse([row(1,{defaultChoice:true,provider:"gemini"}),row(2)]),
+    storage:ui.storage,sessionStorage:session,autostart:false});
+  await picker.refresh(false); assert.equal(ui.select.value,"id-2");
+});
+
 test("shows 80 rows and expands the rest without a listbox role", async () => {
   const ui = harness();
   const rows = Array.from({ length: 100 }, (_, index) => row(index));

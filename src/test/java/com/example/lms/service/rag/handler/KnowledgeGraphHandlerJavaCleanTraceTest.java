@@ -14,7 +14,7 @@ class KnowledgeGraphHandlerJavaCleanTraceTest {
     @Test
     void javaCleanInterruptedFallbackRecordsRedactedTraceStoreBreadcrumb() throws Exception {
         String source = Files.readString(Path.of(
-                "app/src/main/java_clean/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java"),
+                "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java"),
                 StandardCharsets.UTF_8);
 
         assertTrue(source.contains("import com.example.lms.search.TraceStore;"));

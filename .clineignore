@@ -22,3 +22,7 @@ data/device-resources/*
 !var/debug/**
 !var/dev-admin-token.txt
 var/meta-display-db/*.db
+
+# --- 2026-10-03 Grok Bot: Spring secret yml (untracked, may hold keys) ---
+**/application-secrets.yml
+**/application-secrets*.yml

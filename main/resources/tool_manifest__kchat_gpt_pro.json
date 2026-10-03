@@ -81,7 +81,7 @@
     {
       "id": "config.inspect",
       "enabled": true,
-      "description": "Inspect selected runtime configuration presence and risk flags without values.",
+      "description": "Inspect configuration presence or explicitly allowlisted typed effective values.",
       "risk": "read_only",
       "scopes": ["internal.read"],
       "readOnly": true,
@@ -179,15 +179,14 @@
     },
     {
       "id": "web.search",
-      "enabled": false,
-      "description": "Legacy web search AgentTool reference; not exposed through the internal ops API in this pass.",
+      "enabled": true,
+      "description": "Conditional web search; effective availability requires the default-OFF feature flag and registered gateway.",
       "risk": "external_call",
       "scopes": ["web.get"],
       "readOnly": false,
       "ownerTokenRequired": true,
       "maxOutputBytes": 65536,
-      "returnsLargePayloadByReference": true,
-      "disabledReason": "legacy_reference_not_exposed"
+      "returnsLargePayloadByReference": true
     },
     {
       "id": "rag.retrieve",

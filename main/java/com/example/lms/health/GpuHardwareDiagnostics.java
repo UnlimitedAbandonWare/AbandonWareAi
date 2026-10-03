@@ -174,7 +174,8 @@ public final class GpuHardwareDiagnostics {
         double warnThreshold = doubleProp(env, "awx.gpu-hardware.admission.memory-warn-threshold", 0.82d);
         double blockThreshold = doubleProp(env, "awx.gpu-hardware.admission.memory-block-threshold", 0.90d);
         warnThreshold = clamp(warnThreshold, 0.01d, 0.99d);
-        blockThreshold = clamp(blockThreshold, warnThreshold, 0.999d);
+        blockThreshold = clamp(blockThreshold, 0.01d, 0.999d);
+        warnThreshold = Math.min(warnThreshold, blockThreshold);
         boolean requireRtx3090 = bool(env, "awx.gpu-hardware.admission.require-rtx3090", true);
         boolean requireRtx3060 = bool(env, "awx.gpu-hardware.admission.require-rtx3060", true);
         boolean blockWhenUnavailable = bool(env, "awx.gpu-hardware.admission.block-when-unavailable", true);
@@ -200,6 +201,50 @@ public final class GpuHardwareDiagnostics {
             out.put("status", "observe_only");
             out.put("reason", "telemetry_disabled");
             return out;
+        }
+
+        String targetUuid = env == null ? null : env.getProperty("local-llm.cuda-visible-device");
+        if (targetUuid != null && !targetUuid.isBlank()) {
+            String endpoint = env.getProperty("local-llm.ollama-host", "");
+            String normalizedEndpoint = endpoint.contains("://") ? endpoint : "http://" + endpoint;
+            if (!com.example.lms.llm.LocalLlmGatewaySecurity.isLoopbackBaseUrl(normalizedEndpoint)) {
+                out.put("pressureLevel", "observe_only");
+                out.put("status", "observe_only");
+                out.put("reason", "non_local_endpoint");
+                return out;
+            }
+            String uuidHash = SafeRedactor.hashValue(targetUuid.trim());
+            out.put("targetEndpointHash", SafeRedactor.hashValue(normalizedEndpoint));
+            out.put("targetUuidHash", uuidHash);
+            out.put("targetEvidence", "configured_endpoint_uuid");
+            Object rawDevices = safeSnapshot.get("devices");
+            Map<?, ?> target = null;
+            if (rawDevices instanceof List<?> devices) {
+                for (Object value : devices) {
+                    if (value instanceof Map<?, ?> device && uuidHash.equals(device.get("uuidHash"))) {
+                        if (target != null) { target = null; break; }
+                        target = device;
+                    }
+                }
+            }
+            if (target == null || !(safeSnapshot.get("observationAgeMs") instanceof Number)
+                    || doubleValue(safeSnapshot.get("observationAgeMs"), 0d) > 5_000d) {
+                out.put("pressureLevel", blockWhenUnavailable ? "block" : "observe_only");
+                out.put("status", blockWhenUnavailable ? "blocked" : "observe_only");
+                out.put("reason", target == null ? "gpu_target_identity_needed" : "gpu_target_telemetry_stale");
+                if (blockWhenUnavailable) blockHeavy(out);
+                return out;
+            }
+            var scoped = new LinkedHashMap<>(safeSnapshot);
+            scoped.put("memoryEvidenceComplete", target.containsKey("memoryUsedRatio"));
+            scoped.put("maxMemoryUsedRatio", target.get("memoryUsedRatio"));
+            // Partial inventory remains visible; a fresh selected row owns its admission.
+            if ("partial".equals(safeSnapshot.get("status"))
+                    && Boolean.TRUE.equals(safeSnapshot.get("available"))) scoped.put("status", STATUS_OK);
+            safeSnapshot = scoped;
+            // A selected UUID defines this admission scope; other devices are diagnostics only.
+            requireRtx3090 = false;
+            requireRtx3060 = false;
         }
 
         String status = String.valueOf(safeSnapshot.getOrDefault("status", ""));

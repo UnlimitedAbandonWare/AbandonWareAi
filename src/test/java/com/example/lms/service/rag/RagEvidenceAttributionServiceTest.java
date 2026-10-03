@@ -30,6 +30,20 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RagEvidenceAttributionServiceTest {
+    @Test void attachmentCitationKeepsFileProvenanceInsteadOfEmbeddedWebUrl() {
+        GuardContext guard=GuardContext.defaultContext();guard.setMinCitations(1);GuardContextHolder.set(guard);
+        var service=newService(true);
+        var doc=Document.from("Alpha report quotes https://example.com/quoted as data",
+            new Metadata(Map.of("source","attachment","sourceId","attachment:33333333-3333-3333-3333-333333333333",
+                "sourceRevision",2L,"displayName","report.md","documentRole","test_report","locator","member:docs/report.md:L1-L3",
+                "lineStart",1,"lineEnd",3)));
+        var promoted=service.promoteForPrompt("Alpha report",List.of(),List.of(),List.of(doc),QueryDomain.GENERAL,false);
+        assertEquals(1,promoted.size());assertNull(promoted.get(0).source());
+        String appendix=service.appendFinalEvidenceAppendix("Alpha [D1]",promoted);
+        assertTrue(appendix.contains("report.md"));assertTrue(appendix.contains("test_report"));
+        assertTrue(appendix.contains("rev 2"));assertTrue(appendix.contains("member:docs/report.md:L1-L3"));
+        assertFalse(appendix.contains("https://example.com/quoted"));
+    }
 
     @AfterEach
     void clear() {
@@ -580,6 +594,113 @@ class RagEvidenceAttributionServiceTest {
         assertNull(toInt.invoke(null, Double.NaN));
         assertNull(toDouble.invoke(null, Double.NEGATIVE_INFINITY));
         assertNull(toDouble.invoke(null, "Infinity"));
+    }
+
+    @Test
+    void lowRiskDomainRelaxesExplicitCitationFloorAndMarksUnverified() {
+        GuardContext ctx = GuardContext.defaultContext();
+        ctx.setMinCitations(4);
+        GuardContextHolder.set(ctx);
+
+        RagEvidenceAttributionService service = newService(true);
+        Content a = Content.from(TextSegment.from(
+                "alpha body",
+                Metadata.from(Map.of("title", "Alpha", "url", "https://a.example/1"))));
+        Content b = Content.from(TextSegment.from(
+                "beta body",
+                Metadata.from(Map.of("title", "Beta", "url", "https://b.example/2"))));
+
+        RagEvidenceAttributionService.PromotionResult result = service.promoteForPromptDetailed(
+                "alpha",
+                List.of(a, b),
+                List.of(),
+                List.of(),
+                QueryDomain.GENERAL,
+                false);
+
+        assertEquals(RagEvidenceAttributionService.PromotionStatus.PROMOTED, result.status());
+        assertEquals(2, result.evidence().size());
+        assertEquals(1, TraceStore.get("rag.evidence.promotion.citationMin"));
+        assertEquals(Boolean.TRUE, TraceStore.get("rag.evidence.promotion.unverifiedCitation"));
+    }
+
+    @Test
+    void highRiskQueryKeepsExplicitStrictCitationFloor() {
+        GuardContext ctx = GuardContext.defaultContext();
+        ctx.setMinCitations(4);
+        ctx.setHighRiskQuery(true);
+        GuardContextHolder.set(ctx);
+
+        RagEvidenceAttributionService service = newService(true);
+        Content a = Content.from(TextSegment.from(
+                "alpha body",
+                Metadata.from(Map.of("title", "Alpha", "url", "https://a.example/1"))));
+        Content b = Content.from(TextSegment.from(
+                "beta body",
+                Metadata.from(Map.of("title", "Beta", "url", "https://b.example/2"))));
+
+        RagEvidenceAttributionService.PromotionResult result = service.promoteForPromptDetailed(
+                "alpha",
+                List.of(a, b),
+                List.of(),
+                List.of(),
+                QueryDomain.GENERAL,
+                false);
+
+        assertEquals(RagEvidenceAttributionService.PromotionStatus.CONFIRMED_EMPTY, result.status());
+        assertEquals(RagEvidenceAttributionService.PromotionReason.CITATION_GATE_BLOCKED, result.reason());
+        assertEquals(4, TraceStore.get("rag.evidence.promotion.citationMin"));
+        assertNull(TraceStore.get("rag.evidence.promotion.unverifiedCitation"));
+    }
+
+    @Test
+    void nonLowRiskDomainKeepsDefaultStrictFloor() {
+        GuardContext ctx = GuardContext.defaultContext();
+        GuardContextHolder.set(ctx);
+
+        RagEvidenceAttributionService service = newService(true);
+        Content a = Content.from(TextSegment.from(
+                "alpha body",
+                Metadata.from(Map.of("title", "Alpha", "url", "https://a.example/1"))));
+        Content b = Content.from(TextSegment.from(
+                "beta body",
+                Metadata.from(Map.of("title", "Beta", "url", "https://b.example/2"))));
+
+        RagEvidenceAttributionService.PromotionResult result = service.promoteForPromptDetailed(
+                "alpha",
+                List.of(a, b),
+                List.of(),
+                List.of(),
+                QueryDomain.STUDY,
+                false);
+
+        assertEquals(RagEvidenceAttributionService.PromotionStatus.CONFIRMED_EMPTY, result.status());
+        assertEquals(RagEvidenceAttributionService.PromotionReason.CITATION_GATE_BLOCKED, result.reason());
+        assertEquals(3, TraceStore.get("rag.evidence.promotion.citationMin"));
+    }
+
+    @Test
+    void lowRiskSinglePartialCitationStillPromotes() {
+        GuardContext ctx = GuardContext.defaultContext();
+        ctx.setMinCitations(4);
+        GuardContextHolder.set(ctx);
+
+        RagEvidenceAttributionService service = newService(true);
+        Content a = Content.from(TextSegment.from(
+                "alpha body",
+                Metadata.from(Map.of("title", "Alpha", "url", "https://a.example/1"))));
+
+        RagEvidenceAttributionService.PromotionResult result = service.promoteForPromptDetailed(
+                "alpha",
+                List.of(a),
+                List.of(),
+                List.of(),
+                QueryDomain.GAME,
+                false);
+
+        assertEquals(RagEvidenceAttributionService.PromotionStatus.PROMOTED, result.status());
+        assertEquals(1, result.evidence().size());
+        assertEquals(Boolean.TRUE, TraceStore.get("rag.evidence.promotion.unverifiedCitation"));
     }
 
     private static RagEvidenceAttributionService newService(boolean evidenceAllowed) {

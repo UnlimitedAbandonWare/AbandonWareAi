@@ -21,8 +21,7 @@ import org.slf4j.Logger;
 /**
  * 첨부 파일을 저장하고 메타데이터를 관리하는 서비스.
  *
- * 현재는 간단한 MVP 구현으로 인메모리 저장소를 사용하여 첨부 메타를 관리합니다.
- * 필요 시 JPA 저장소로 교체할 수 있습니다.
+ * 소유권이 있는 첨부는 관계형 정본을 사용하며 인메모리 맵은 요청용 캐시입니다.
  */
 @Service
 public class AttachmentService {
@@ -40,6 +39,79 @@ public class AttachmentService {
     private final Map<String, String> contentDigestById = new ConcurrentHashMap<>();
     private final Map<String, Long> retainedAtEpochMsById = new ConcurrentHashMap<>();
     private final Map<String, String> ownerHashById = new ConcurrentHashMap<>();
+
+    @Autowired
+    private AttachmentSourceStore durableStore;
+    private final Map<String, AttachmentSourceStore.Snapshot> durableSnapshots = new ConcurrentHashMap<>();
+
+
+    /** Revalidate the exact server snapshot without reparsing, changing selection or granting collection. */
+    public boolean contextSourcesCurrent(com.example.lms.ensemble.PreparedContextPacket packet,
+            AttachmentOwnerIdentity owner,String sessionId){
+        if(packet==null)return false;
+        var checked=new HashSet<String>();
+        for(var span:packet.spans()){
+            String id=com.example.lms.service.rag.graph.GeneralGraphSourceAuthority.sourceAttachmentId(span.sourceId());
+            if(id==null)continue;
+            if(owner==null||sessionId==null||durableStore==null)return false;
+            var row=durableStore.find(id).orElse(null);
+            if(row==null||!owner.hash().equals(row.ownerNamespace())||!sessionId.equals(row.sessionId())
+                    ||row.sourceRevision()!=span.sourceRevision()||row.unitsJson()==null)return false;
+            if(checked.add(id)){
+                if(row.dto().size()<0||row.dto().size()>25*1048576L)return false;
+                var path=storage.resolveStoredPath(row.dto().url());if(path.isEmpty())return false;
+                try(var input=java.nio.file.Files.newInputStream(path.get())){
+                    byte[] bytes=input.readNBytes(Math.toIntExact(row.dto().size())+1);
+                    if(bytes.length!=row.dto().size()||!row.contentSha256().equals(
+                            org.apache.commons.codec.digest.DigestUtils.sha256Hex(bytes)))return false;
+                }catch(java.io.IOException unavailable){return false;}
+            }
+            try{
+                var units=new com.fasterxml.jackson.databind.ObjectMapper().readTree(row.unitsJson());
+                boolean found=false;
+                for(var unit:units){
+                    String text=unit.path("text").asText("");
+                    if(span.locator().equals(unit.path("locator").asText())
+                            &&span.start()>=0&&span.end()<=text.length()
+                            &&span.excerpt().equals(text.substring(span.start(),span.end()))){found=true;break;}
+                }
+                if(!found)return false;
+            }catch(Exception invalid){return false;}
+        }
+        return true;
+    }
+
+    private AttachmentDto currentDto(String id) {
+        if (id == null) return null;
+        synchronized (metadataMutationLock) {
+            if (durableStore == null) return repo.get(id); // constructor-only fixtures
+            var persisted = durableStore.find(id);
+            if (persisted.isPresent()) {
+                cacheSnapshot(persisted.get());
+            } else if (ownerHashById.containsKey(id) || durableSnapshots.containsKey(id)) {
+                repo.remove(id);extractedTextById.remove(id);contentDigestById.remove(id);
+                retainedAtEpochMsById.remove(id);ownerHashById.remove(id);durableSnapshots.remove(id);removeFromSessionIndex(id);
+            }
+            return repo.get(id);
+        }
+    }
+
+    private void cacheSnapshot(AttachmentSourceStore.Snapshot snapshot) {
+        String id=snapshot.dto().id();
+        repo.compute(id,(key,old)->snapshot.dto().equals(old)?old:snapshot.dto());
+        ownerHashById.put(id,snapshot.ownerNamespace());contentDigestById.put(id,snapshot.contentSha256());
+        retainedAtEpochMsById.put(id,snapshot.retainedAt());durableSnapshots.put(id,snapshot);
+        removeFromSessionIndex(id);
+        if(snapshot.sessionId()!=null)sessionIndex.computeIfAbsent(snapshot.sessionId(),key->new java.util.concurrent.CopyOnWriteArrayList<>()).add(id);
+    }
+
+    private void restoreSession(String sessionId) {
+        if(durableStore==null||sessionId==null)return;
+        synchronized(metadataMutationLock){
+            for(String id:List.copyOf(sessionIndex.getOrDefault(sessionId,List.of())))currentDto(id);
+            for(var snapshot:durableStore.forSession(sessionId))cacheSnapshot(snapshot);
+        }
+    }
 
     @Autowired(required = false)
     private Environment environment;
@@ -106,7 +178,7 @@ public class AttachmentService {
             for (MultipartFile f : files) {
                 if (f == null || f.isEmpty()) continue;
                 String id = UUID.randomUUID().toString();
-                String trustedDigest = interactionEvidenceObservationEnabled() ? digestOf(f) : null;
+                String trustedDigest = digestOf(f);
                 // LocalFileStorageService.save 의 시그니처는 (MultipartFile file, String subPath)
                 // 루트 업로드 디렉터리 하위에 "chat" 폴더를 생성하여 파일을 저장합니다.
                 String url = storage.save(f, "chat");
@@ -117,8 +189,12 @@ public class AttachmentService {
                         f.getContentType(),
                         url
                 );
+                out.add(dto);
                 synchronized (metadataMutationLock) {
                     long retainedAtEpochMs = System.currentTimeMillis();
+                    if(durableStore!=null&&ownerIdentity!=null)
+                        durableStore.create(dto,ownerIdentity.hash(),sessionId,trustedDigest,retainedAtEpochMs,
+                            Math.addExact(retainedAtEpochMs,retentionTtlMs()));
                     repo.put(id, dto);
                     if (trustedDigest != null) {
                         contentDigestById.put(id, trustedDigest);
@@ -131,7 +207,6 @@ public class AttachmentService {
                         linkToSessionLocked(sessionId, id);
                     }
                 }
-                out.add(dto);
                 recordAttachmentLifecycle(
                         dto,
                         DurableLifecycleReceiptStore.State.CREATED,
@@ -146,7 +221,7 @@ public class AttachmentService {
 
     /** 특정 ID의 첨부 메타를 조회합니다. */
     public Optional<AttachmentDto> find(String id) {
-        return Optional.ofNullable(repo.get(id));
+        return Optional.ofNullable(currentDto(id));
     }
 
     public Optional<AttachmentDto> find(String id, AttachmentOwnerIdentity ownerIdentity) {
@@ -168,6 +243,7 @@ public class AttachmentService {
         }
         MetadataDeletion deletion;
         synchronized (metadataMutationLock) {
+            currentDto(id);
             deletion = deleteMetadataLocked(id);
         }
         deleteStoredBytes(deletion.dto());
@@ -211,6 +287,7 @@ public class AttachmentService {
         }
         MetadataDeletion deletion;
         synchronized (metadataMutationLock) {
+            currentDto(id);
             if (!repo.containsKey(id)) {
                 com.example.lms.search.TraceStore.put("attachment.delete.denied", true);
                 com.example.lms.search.TraceStore.put("attachment.delete.deniedReason", "missing_attachment");
@@ -276,6 +353,7 @@ public class AttachmentService {
             AttachmentOwnerIdentity ownerIdentity,
             boolean requireOwner) {
         if (sessionId == null || sessionId.isBlank()) return java.util.List.of();
+        restoreSession(sessionId);
         java.util.List<String> ids = sessionIndex.getOrDefault(sessionId, java.util.List.of());
         // ConcurrentHashMap does not provide a snapshot() method.  Make a shallow copy
         // to avoid concurrent modification issues while iterating.  Using a plain
@@ -319,6 +397,7 @@ public class AttachmentService {
         if (sessionId == null || sessionId.isBlank() || lookahead <= 0) {
             return java.util.List.of();
         }
+        restoreSession(sessionId);
         java.util.List<String> ids = sessionIndex.getOrDefault(sessionId, java.util.List.of());
         java.util.List<String> out = new java.util.ArrayList<>(Math.min(ids.size(), lookahead));
         for (String id : ids) {
@@ -348,6 +427,11 @@ public class AttachmentService {
      * @return a list of documents representing the uploaded attachments
      */
     public java.util.List<dev.langchain4j.data.document.Document> asDocuments(java.util.List<String> ids) {
+        return asDocuments(ids, null);
+    }
+
+    private java.util.List<dev.langchain4j.data.document.Document> asDocuments(
+            java.util.List<String> ids, String question) {
         java.util.List<dev.langchain4j.data.document.Document> result = new java.util.ArrayList<>();
         if (ids == null || ids.isEmpty()) {
             com.example.lms.search.TraceStore.put("attachment.localDocs.count", 0);
@@ -355,8 +439,12 @@ public class AttachmentService {
         }
         for (String id : ids) {
             try {
-                com.example.lms.dto.AttachmentDto dto = this.repo.get(id);
+                com.example.lms.dto.AttachmentDto dto = currentDto(id);
                 if (dto == null) continue;
+                if (fileIngestionService.supportsStructuredDocument(dto.name(), dto.contentType())) {
+                    result.addAll(structuredDocuments(dto, 16_000 / ids.size(), question));
+                    continue;
+                }
                 String text = extractedTextById.get(id);
                 // Load file content from storage.  The AttachmentDto.url field stores the
                 // absolute file path returned by LocalFileStorageService.save().  Read
@@ -376,10 +464,12 @@ public class AttachmentService {
                     java.nio.file.Path path = java.nio.file.Path.of(dto.url().replace('\\','/'));
                     String cleaned = dto.url().replace('\\','/').replaceFirst("^/+", "");
                     java.nio.file.Path resolved = java.nio.file.Path.of(cleaned).toAbsolutePath().normalize();
-                    java.nio.file.Path readPath = null;
-                    if (java.nio.file.Files.exists(path)) {
+                    java.nio.file.Path readPath = resolveExistingAttachmentPath(dto);
+                    if (readPath != null) {
+                        // The configured storage root owns locator resolution.
+                    } else if (durableStore == null && java.nio.file.Files.exists(path)) {
                         readPath = path;
-                    } else if (java.nio.file.Files.exists(resolved)) {
+                    } else if (durableStore == null && java.nio.file.Files.exists(resolved)) {
                         readPath = resolved;
                         log.debug("Resolved attachment path: id={} urlHash={}",
                                 id, com.example.lms.trace.SafeRedactor.hash12(dto.url()));
@@ -476,10 +566,150 @@ public class AttachmentService {
         return result;
     }
 
+    private List<dev.langchain4j.data.document.Document> structuredDocuments(
+            AttachmentDto dto, int charBudget, String question)
+            throws java.io.IOException {
+        java.nio.file.Path path = resolveExistingAttachmentPath(dto);
+        if (path == null) return List.of();
+        long maxBytes = maxDocumentBytes();
+        if (java.nio.file.Files.size(path) > maxBytes) {
+            com.example.lms.search.TraceStore.put("attachment.text.emptyReason",
+                    com.example.lms.trace.SafeRedactor.traceLabelOrFallback("attachment_extraction_skipped_too_large", "unknown"));
+            com.example.lms.search.TraceStore.put("attachment.extraction.skippedReason", "too_large");
+            com.example.lms.search.TraceStore.put("attachment.extraction.maxBytes", maxBytes);
+            return List.of();
+        }
+        byte[] bytes;
+        try (java.io.InputStream input = java.nio.file.Files.newInputStream(path)) {
+            bytes = input.readNBytes(Math.toIntExact(Math.min(maxBytes, 25 * 1_048_576L)) + 1);
+        }
+        if (bytes.length > maxBytes) return List.of();
+        String digest = org.apache.commons.codec.digest.DigestUtils.sha256Hex(bytes);
+        var sourceSnapshot=durableSnapshots.get(dto.id());
+        String expected = contentDigestById.get(dto.id());
+        if (expected != null && !expected.equals(digest)) {
+            com.example.lms.search.TraceStore.put("attachment.extraction.skippedReason", "content_digest_mismatch");
+            return List.of();
+        }
+        var parsed = fileIngestionService.extractDocumentForQuestion(dto.name(), dto.contentType(), bytes, question);
+        if (!Set.of("READY", "PARTIAL", "EMPTY").contains(parsed.state())) {
+            com.example.lms.search.TraceStore.put("attachment.extraction.skippedReason", parsed.reasonCode());
+            return List.of();
+        }
+        List<dev.langchain4j.data.document.Document> documents = new ArrayList<>();
+        List<com.example.lms.file.FileIngestionService.TextUnit> selected = new ArrayList<>();
+        int remaining = charBudget;
+        // Retain both ends of long reports; parsing preserves all bounded source units.
+        for (int step = 0; step < parsed.units().size() && remaining > 0; step++) {
+            int index = step % 2 == 0 ? step / 2 : parsed.units().size() - 1 - step / 2;
+            var unit = parsed.units().get(index);
+            if (unit.text().length() > remaining) {
+                int allocation = step == 0 && parsed.units().size() > 1 ? Math.max(1, remaining / 2) : remaining;
+                unit = unit.excerpt(allocation, step % 2 != 0);
+            }
+            if (!unit.text().isBlank()) {
+                selected.add(unit);
+                remaining -= unit.text().length();
+            }
+        }
+        boolean partial = parsed.state().equals("PARTIAL") || selected.stream().mapToInt(u -> u.text().length()).sum()
+                < parsed.units().stream().mapToInt(u -> u.text().length()).sum();
+        selected.sort(Comparator.comparingInt(com.example.lms.file.FileIngestionService.TextUnit::startOffset)
+                .thenComparingInt(com.example.lms.file.FileIngestionService.TextUnit::paragraphIndex));
+        for (var unit : selected) {
+            Map<String, Object> meta = attachmentMetadata(dto, parsed, unit.locator());
+            meta.put("locatorType", unit.locatorType());
+            if (unit.lineStart() > 0) {
+                meta.put("lineStart", unit.lineStart());
+                meta.put("lineEnd", unit.lineEnd());
+            }
+            if (unit.paragraphIndex() > 0) meta.put("paragraphIndex", unit.paragraphIndex());
+            if (unit.memberPath() != null) meta.put("archiveMemberPath", unit.memberPath());
+            if (unit.jsonPointer() != null) meta.put("jsonPointer", unit.jsonPointer());
+            meta.put("startOffset", unit.startOffset());
+            meta.put("endOffset", unit.endOffset());
+            meta.put("offsetEncoding", unit.paragraphIndex() > 0 ? "paragraph-utf16" : "decoded-utf16");
+            meta.put("coveragePartial", Boolean.toString(partial));
+            documents.add(dev.langchain4j.data.document.Document.from(unit.text(),
+                    new dev.langchain4j.data.document.Metadata(meta)));
+        }
+        if (documents.isEmpty() && charBudget > 0 && "ARCHIVE_LIST_ONLY".equals(parsed.reasonCode())) {
+            Map<String, Object> meta = attachmentMetadata(dto, parsed, "archive-list");
+            meta.put("locatorType", "ARCHIVE_LIST");
+            meta.put("coveragePartial", "true");
+            String listing = "ARCHIVE LIST ONLY (bodyReadCount=0)\n" + String.join("\n", parsed.archiveMembers());
+            if (listing.length() > charBudget) listing = listing.substring(0, charBudget);
+            documents.add(dev.langchain4j.data.document.Document.from(listing,
+                    new dev.langchain4j.data.document.Metadata(meta)));
+        }
+        if (documents.isEmpty() && "EMPTY".equals(parsed.state())) {
+            com.example.lms.search.TraceStore.put("attachment.text.emptyReason", "structured_document_empty");
+            com.example.lms.search.TraceStore.put("attachment.extraction.skippedReason", "structured_document_empty");
+        }
+        if(repo.get(dto.id())!=dto)return List.of();
+        if(sourceSnapshot!=null&&!documents.isEmpty()){
+            // Only parser-produced spans are stored, never model-authored source IDs or offsets.
+            var units=new ArrayList<Map<String,Object>>();
+            for(var document:documents){
+                var unit=new LinkedHashMap<String,Object>();
+                for(String key:List.of("displayName","documentRole","locator","locatorType","archiveMemberPath",
+                        "jsonPointer","lineStart","lineEnd","paragraphIndex","startOffset","endOffset","offsetEncoding")){
+                    Object value=document.metadata().toMap().get(key);if(value!=null)unit.put(key,value);
+                }
+                unit.put("text",document.text());units.add(unit);
+            }
+            String json=new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(units);
+            var recorded=durableStore.recordText(dto.id(),sourceSnapshot.sourceRevision(),digest,
+                com.example.lms.file.FileIngestionService.PARSER_VERSION,json,partial?"PARTIAL":"TEXT_READY");
+            if(recorded.isEmpty())return List.of();
+            var snapshot=recorded.get();durableSnapshots.put(dto.id(),snapshot);
+            for(var document:documents){
+                var meta=document.metadata();String locator=meta.getString("locator");
+                meta.put("sourceRevision",snapshot.sourceRevision());
+                meta.put("sourceLocator","attachment:"+dto.id()+"/revisions/"+snapshot.sourceRevision()+"#"+locator);
+                meta.put("chunkId",org.apache.commons.codec.digest.DigestUtils.sha256Hex(
+                    dto.id()+":"+snapshot.sourceRevision()+":"+snapshot.parserVersion()+":"+locator+":"+document.text()));
+                meta.put("graphState",snapshot.graphState());meta.put("vectorState",snapshot.vectorState());
+            }
+        }
+        return currentDto(dto.id())==dto?documents:List.of();
+    }
+
+    private Map<String, Object> attachmentMetadata(AttachmentDto dto,
+            com.example.lms.file.FileIngestionService.DocumentExtraction parsed, String locator) {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("source", "attachment");
+        meta.put("attachmentId", dto.id());
+        meta.put("sourceId", "attachment:" + dto.id());
+        meta.put("sourceRevision", 1L);
+        meta.put("name", dto.name() == null ? "" : dto.name());
+        meta.put("displayName", dto.name() == null ? "" : dto.name().replaceAll("\\p{Cntrl}", " "));
+        meta.put("contentType", dto.contentType() == null ? "" : dto.contentType());
+        meta.put("detectedMime", parsed.detectedMime());
+        meta.put("contentSha256", parsed.contentSha256());
+        meta.put("parserVersion", com.example.lms.file.FileIngestionService.PARSER_VERSION);
+        meta.put("documentRole", String.join(",", parsed.roles()));
+        meta.put("executionAuthority", "DATA_ONLY");
+        meta.put("locator", locator);
+        meta.put("sourceLocator", "attachment:" + dto.id() + "/revisions/1#" + locator);
+        meta.put("chunkId", org.apache.commons.codec.digest.DigestUtils.sha256Hex(
+                dto.id() + ":1:" + com.example.lms.file.FileIngestionService.PARSER_VERSION + ":" + locator));
+        meta.put("textState", parsed.state());
+        meta.put("parseReasonCode", parsed.reasonCode());
+        meta.put("graphState", "NOT_INDEXED");
+        meta.put("vectorState", "NOT_INDEXED");
+        meta.put("semanticExtractionReason", "TOKEN_COUNT_UNVERIFIED");
+        meta.put("semanticAttempts", 0);
+        meta.put("inspectedEntryCount", parsed.inspectedEntryCount());
+        meta.put("bodyReadCount", parsed.bodyReadCount());
+        meta.put("attachmentType", attachmentType(dto.name(), dto.contentType()));
+        return meta;
+    }
+
     public java.util.List<dev.langchain4j.data.document.Document> asDocumentsForSession(
             java.util.List<String> ids,
             String sessionId) {
-        return asDocumentsForSessionInternal(ids, sessionId, null, false);
+        return asDocumentsForSessionInternal(ids, sessionId, null, false, null);
     }
 
     public java.util.List<dev.langchain4j.data.document.Document> asDocumentsForSession(
@@ -490,14 +720,22 @@ public class AttachmentService {
                 ids,
                 sessionId,
                 Objects.requireNonNull(ownerIdentity, "ownerIdentity"),
-                true);
+                true, null);
+    }
+
+    public java.util.List<dev.langchain4j.data.document.Document> asDocumentsForSession(
+            java.util.List<String> ids, String sessionId,
+            AttachmentOwnerIdentity ownerIdentity, String question) {
+        return asDocumentsForSessionInternal(ids, sessionId,
+                Objects.requireNonNull(ownerIdentity, "ownerIdentity"), true, question);
     }
 
     private java.util.List<dev.langchain4j.data.document.Document> asDocumentsForSessionInternal(
             java.util.List<String> ids,
             String sessionId,
             AttachmentOwnerIdentity ownerIdentity,
-            boolean requireOwner) {
+            boolean requireOwner,
+            String question) {
         if (ids == null || ids.isEmpty()) {
             return asDocuments(ids);
         }
@@ -506,6 +744,7 @@ public class AttachmentService {
             com.example.lms.search.TraceStore.put("attachment.sessionFilter.reason", "missing_session");
             return requireOwner ? java.util.List.of() : asDocuments(ids);
         }
+        for(String id:ids)currentDto(id);
         java.util.Set<String> allowed = new java.util.HashSet<>(sessionIndex.getOrDefault(sessionId, java.util.List.of()));
         if (allowed.isEmpty()) {
             com.example.lms.search.TraceStore.put("attachment.sessionFilter.applied", true);
@@ -521,7 +760,7 @@ public class AttachmentService {
         com.example.lms.search.TraceStore.put("attachment.sessionFilter.applied", true);
         com.example.lms.search.TraceStore.put("attachment.sessionFilter.allowedCount", filtered.size());
         com.example.lms.search.TraceStore.put("attachment.sessionFilter.blockedCount", ids.size() - filtered.size());
-        return asDocuments(filtered);
+        return asDocuments(filtered, question);
     }
 
     /**
@@ -629,11 +868,16 @@ public class AttachmentService {
         }
     }
 
-    private static java.nio.file.Path resolveExistingAttachmentPath(AttachmentDto dto) {
+    private java.nio.file.Path resolveExistingAttachmentPath(AttachmentDto dto) {
         if (dto == null || dto.url() == null || dto.url().isBlank()) {
             return null;
         }
         try {
+            if(storage!=null){
+                var stored=storage.resolveStoredPath(dto.url());
+                if(stored!=null&&stored.isPresent())return stored.get();
+            }
+            if(durableStore!=null)return null;
             java.nio.file.Path direct = java.nio.file.Path.of(dto.url().replace('\\', '/'));
             if (java.nio.file.Files.isRegularFile(direct)) {
                 return direct;
@@ -664,6 +908,8 @@ public class AttachmentService {
         int evicted = 0;
         java.util.List<AttachmentDto> deletedDtos = new java.util.ArrayList<>();
         synchronized (metadataMutationLock) {
+            if(durableStore!=null)for(String id:durableStore.expiredIds(nowEpochMs))
+                durableStore.includingExpired(id).ifPresent(this::cacheSnapshot);
             java.util.List<java.util.Map.Entry<String, Long>> retained =
                     new java.util.ArrayList<>(retainedAtEpochMsById.entrySet());
             for (java.util.Map.Entry<String, Long> entry : retained) {
@@ -778,6 +1024,7 @@ public class AttachmentService {
         }
         synchronized (metadataMutationLock) {
             for (String id : ids) {
+                currentDto(id);
                 linkToSessionLocked(sessionId, id);
             }
         }
@@ -787,23 +1034,33 @@ public class AttachmentService {
             String sessionId,
             java.util.List<String> ids,
             AttachmentOwnerIdentity ownerIdentity) {
+        com.example.lms.search.TraceStore.put("attachment.bind.applied", false);
+        com.example.lms.search.TraceStore.put("attachment.bind.reason", "missing_session_or_ids");
         if (sessionId == null || sessionId.isBlank() || ids == null || ids.isEmpty()) {
             return false;
         }
         Objects.requireNonNull(ownerIdentity, "ownerIdentity");
         synchronized (metadataMutationLock) {
             for (String id : ids) {
-                if (id == null
-                        || id.isBlank()
-                        || !repo.containsKey(id)
-                        || !isOwnedBy(id, ownerIdentity)
-                        || isLinkedToDifferentSession(id, sessionId)) {
+                currentDto(id);
+                if (id == null || id.isBlank() || !repo.containsKey(id)) {
+                    com.example.lms.search.TraceStore.put("attachment.bind.reason", "metadata_missing");
+                    return false;
+                }
+                if (!isOwnedBy(id, ownerIdentity)) {
+                    com.example.lms.search.TraceStore.put("attachment.bind.reason", "owner_mismatch");
+                    return false;
+                }
+                if (isLinkedToDifferentSession(id, sessionId)) {
+                    com.example.lms.search.TraceStore.put("attachment.bind.reason", "different_session");
                     return false;
                 }
             }
             for (String id : ids) {
                 linkToSessionLocked(sessionId, id);
             }
+            com.example.lms.search.TraceStore.put("attachment.bind.applied", true);
+            com.example.lms.search.TraceStore.put("attachment.bind.reason", "bound");
             return true;
         }
     }
@@ -816,6 +1073,8 @@ public class AttachmentService {
         }
         java.util.List<String> existing = sessionIndex.computeIfAbsent(sessionId,
                 k -> new java.util.concurrent.CopyOnWriteArrayList<>());
+        if(durableStore!=null&&ownerHashById.containsKey(id)
+                &&!durableStore.bind(id,ownerHashById.get(id),sessionId))throw new IllegalStateException("attachment_session_changed");
         if (!existing.contains(id)) {
             existing.add(id);
         }
@@ -823,6 +1082,7 @@ public class AttachmentService {
 
     private MetadataDeletion deleteMetadataLocked(String id) {
         AttachmentDto existing = repo.get(id);
+        if(durableStore!=null)durableStore.tombstone(id);
         if (existing != null) {
             recordAttachmentLifecycle(
                     existing,
@@ -834,6 +1094,7 @@ public class AttachmentService {
         contentDigestById.remove(id);
         retainedAtEpochMsById.remove(id);
         ownerHashById.remove(id);
+        durableSnapshots.remove(id);
         int removedSessionLinks = removeFromSessionIndex(id);
         return new MetadataDeletion(dto, removedSessionLinks);
     }
@@ -845,6 +1106,10 @@ public class AttachmentService {
         boolean deleted = false;
         try {
             deleted = storage != null && storage.delete(dto.url());
+            if(!deleted&&storage!=null&&durableStore!=null){
+                var persisted=durableStore.deleted(dto.id()).filter(s->s.dto().equals(dto));
+                if(persisted.isPresent())deleted=storage.deletePersisted(dto.url(),dto.size(),persisted.get().contentSha256());
+            }
         } catch (RuntimeException failure) {
             traceSuppressed("attachment.delete.physical", failure);
         }
@@ -891,10 +1156,10 @@ public class AttachmentService {
                 if (dto == null || dto.id() == null) {
                     continue;
                 }
-                MetadataDeletion deletion = deleteMetadataLocked(dto.id());
-                if (deletion.dto() != null) {
-                    physicalDeletes.add(deletion.dto());
-                }
+                try {deleteMetadataLocked(dto.id());}
+                catch(RuntimeException unavailable){traceSuppressed("attachment.rollback.metadata",unavailable);}
+                // This list contains only bytes saved by this upload, including a failed row insert.
+                physicalDeletes.add(dto);
             }
         }
         for (AttachmentDto dto : physicalDeletes) {
@@ -939,6 +1204,7 @@ public class AttachmentService {
         if (id == null || ownerIdentity == null) {
             return false;
         }
+        currentDto(id);
         String expected = ownerHashById.get(id);
         return expected != null && expected.equals(ownerIdentity.hash());
     }

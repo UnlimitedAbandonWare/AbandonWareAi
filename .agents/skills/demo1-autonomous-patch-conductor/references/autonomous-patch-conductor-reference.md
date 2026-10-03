@@ -8,7 +8,7 @@ needed section only after the entrypoint selects this skill.
 Run from the Desktop canonical root.
 
 ```powershell
-$Root = "C:\AbandonWare\demo-1\demo-1\src"
+$Root = "<repo>"
 Push-Location $Root
 
 Get-Location

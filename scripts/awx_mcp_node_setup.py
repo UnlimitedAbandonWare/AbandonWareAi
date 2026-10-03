@@ -18,6 +18,12 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from awx_paths import resolve as _awx_resolve
+except ImportError:  # producer-kit copy without the registry
+    def _awx_resolve(_key, **kw):
+        return Path(__file__).resolve().parents[1]
+
+try:
     from scripts.awx_shared_state import Change, Conflict, apply_changes, merge_config, read_optional, encode_config, parse_config
     from scripts.awx_host_runtime import local_state_root, host_facts
 except ModuleNotFoundError:
@@ -26,7 +32,7 @@ except ModuleNotFoundError:
 
 
 SCHEMA_VERSION = "awx.mcp.node_setup.v1"
-DESKTOP_CANONICAL = Path("C:/AbandonWare/demo-1/demo-1/src")
+DESKTOP_CANONICAL = Path(_awx_resolve("repo.root"))
 ALLOWED_ENV_REFS = (
     "NAVER_KEYS",
     "NAVER_CLIENT_ID",

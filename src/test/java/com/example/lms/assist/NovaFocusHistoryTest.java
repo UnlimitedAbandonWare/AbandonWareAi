@@ -136,4 +136,23 @@ class NovaFocusHistoryTest {
         assertEquals(NovaFocusSettings.RecentContext.defaults(),store.settings(owner,"recent-settings",2,explicit).settings().recentContext());
         assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.RecentContext(true,180,12,2001));
     }
+    @Test void omittedMemoryPreservesStoredPolicyAndExplicitBlockReplacesIt(){
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var custom=new NovaFocusSettings.Memory(NovaFocusSettings.Memory.Mode.FULL,NovaFocusSettings.Memory.GraphMode.AUTO,6,NovaFocusSettings.Memory.EmbeddingPrefer.LOCAL_ONLY,false);
+        var initial=new NovaFocusSettings(true,d.wakeWord(),1200,20000,8000,d.presentation(),false,false,d.snapshot(),d.answerSelection(),d.recentContext(),custom);
+        assertEquals(1,store.settings(owner,"mem",0,initial).settingsVersion());
+        // 예전 클라이언트(11필드, memory 생략)가 덮어도 저장된 메모리 정책은 유지된다.
+        var legacy=new NovaFocusSettings(true,d.wakeWord(),1500,25000,9000,d.presentation(),true,false,d.snapshot(),d.answerSelection());
+        var kept=store.settings(owner,"mem",1,legacy).settings();
+        assertEquals(custom,kept.memory());assertEquals(1500,kept.utteranceQuietMs());assertTrue(kept.recallEnabled());
+        // 명시된 블록은 완전히 새 값으로 교체한다 — 부분 병합이 아니다.
+        var cleared=store.settings(owner,"mem",2,new NovaFocusSettings(true,d.wakeWord(),1500,25000,9000,d.presentation(),true,false,d.snapshot(),d.answerSelection(),null,new NovaFocusSettings.Memory(null,null,null,null,null))).settings().memory();
+        assertEquals(NovaFocusSettings.Memory.GraphMode.OFF,cleared.graphMode());assertEquals(4,cleared.maxEvidence().intValue());
+        assertNull(cleared.mode());assertNull(cleared.webOnUnknown());
+        assertEquals(NovaFocusSettings.Memory.EmbeddingPrefer.LOCAL_THEN_CLOUD,cleared.embeddingPrefer());
+        assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.Memory(null,null,9,null,null));
+        assertThrows(IllegalArgumentException.class,()->new NovaFocusSettings.Memory(null,null,0,null,null));
+        // CAS 동작은 그대로다.
+        assertThrows(IllegalArgumentException.class,()->store.settings(owner,"mem",2,legacy));
+    }
 }

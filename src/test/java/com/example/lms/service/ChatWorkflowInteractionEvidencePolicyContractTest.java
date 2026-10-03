@@ -58,8 +58,11 @@ class ChatWorkflowInteractionEvidencePolicyContractTest {
         assertTrue(source.contains("if (finalized.memorySaveAllowed())"));
         assertTrue(source.contains("learningWriteInterceptor.ingest("));
         assertTrue(source.contains("memoryWriteInterceptor.save("));
-        assertTrue(source.contains("understandAndMemorizeInterceptor.afterVerified("));
+        int prepare = source.indexOf("understandAndMemorizeInterceptor.prepare(");
         int finalizedPersistence = source.indexOf("FinalizedMemoryPersistence.persist(");
+        int commit = source.indexOf("understandAndMemorizeInterceptor.commitPrepared(");
+        assertTrue(prepare > source.indexOf("if (finalized.memorySaveAllowed())")
+                && prepare < finalizedPersistence && commit > finalizedPersistence);
         int reinforcedSideEffect = source.indexOf("\"memory.reinforce\"", finalizedPersistence);
         assertTrue(finalizedPersistence >= 0 && reinforcedSideEffect > finalizedPersistence);
         String reinforcedWindow = source.substring(

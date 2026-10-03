@@ -26,7 +26,7 @@ No prompt bodies, response bodies, tokens, or API keys — by construction the
 record stores key *names* only, never trace values.
 
 ## Do
-1. Project root: `C:\AbandonWare\demo-1\demo-1\src`
+1. Project root: `<repo>`
 2. Find the session/run:
 ```powershell
 python -B scripts/chat_session_debug_export.py status            # JSON: counts/days/latest pointer
@@ -57,6 +57,24 @@ python -B scripts/chat_session_debug_export.py export <id>
   (`application-local.yml`, `application-meta-display.yml`); public/prod stays
   `false`. Kill switch: `agent.db-context.enabled=false`.
 - Writer kill switch: `abandonware.debug.chat-session-traces.enabled=false`.
+
+## Ownership check
+- Anonymous session ownership = the `ownerKey` cookie only (`ClientOwnerKeyResolver`;
+  IP and `X-Owner-Key` headers are never an ownership basis — a tunnel puts all
+  clients on one IP).
+- "남의 세션/run이 보인다" repro: two curl cookie jars (A/B) — `GET /api/chat/sessions`
+  must list only A's rows for A; `state`/`cancel`/`ack`/`stream`/`sessions/{id}` on
+  B's id must be denied for A (neutral/`session_forbidden`/403, not data).
+- proto-open (`demo.auth.proto-open`) stamps every request ROLE_ADMIN name
+  `proto-open` — ambient-admin is owner-scoped like a regular user for
+  ownership checks, in every mode. Real admin = `isAdmin` && principal ≠
+  `proto-open` (presented admin token → name `admin-token`, or a real admin
+  login); only a real admin, and only in main mode, keeps the cross-owner
+  read exception (`getAllSessionsForAdmin` list, foreign `state`/`cancel`/
+  `sessions/{id}`). Interview mode grants no admin exception at all.
+- Rule SSOT: `.windsurf/rules/demo1-session-ownership.md`; regression tests:
+  `ChatApiControllerMainModeOwnershipTest`,
+  `ChatApiControllerInterviewOwnershipTest`.
 
 ## Related
 - Writer: `main/java/com/example/lms/debug/ChatSessionTraceRecorder.java`

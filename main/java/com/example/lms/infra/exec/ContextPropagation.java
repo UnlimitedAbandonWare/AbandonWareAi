@@ -3,6 +3,7 @@ package com.example.lms.infra.exec;
 import com.abandonware.ai.addons.budget.TimeBudget;
 import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.search.TraceStore;
+import com.example.lms.guard.rulebreak.RuleBreakContextSnapshot;
 import com.example.lms.service.guard.GuardContext;
 import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
@@ -50,13 +51,20 @@ public final class ContextPropagation {
 
         final Map<String, Object> capturedTrace = TraceStore.context();
         final TimeBudget capturedBudget = TimeBudgetContext.get();
+        final var capturedRun = com.example.lms.service.chat.ChatRunExecutionContext.current();
+        final boolean acceptedExecution = com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution();
+        final var capturedPurpose = com.example.lms.assist.JevDecisionScope.capture();
+        final var capturedRuleBreak = RuleBreakContextSnapshot.capture();
 
         return () -> {
             final Map<String, String> prevMdc = MDC.getCopyOfContextMap();
             final GuardContext prevGuard = safeGetGuard();
             final Map<String, Object> prevTrace = TraceStore.context();
             final TimeBudget prevBudget = TimeBudgetContext.get();
-            try {
+            try (var runBinding = capturedRun != null ? com.example.lms.service.chat.ChatRunExecutionContext.bind(capturedRun)
+                    : acceptedExecution ? com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask() : null;
+                 var purposeBinding = capturedPurpose == null ? null : com.example.lms.assist.JevDecisionScope.bind(capturedPurpose);
+                 var ruleBreakBinding = capturedRuleBreak.bind()) {
                 applyMdc(capturedMdc);
                 safeApplyGuard(guardRef);
                 applyTrace(capturedTrace);
@@ -96,13 +104,20 @@ public final class ContextPropagation {
 
         final Map<String, Object> capturedTrace = TraceStore.context();
         final TimeBudget capturedBudget = TimeBudgetContext.get();
+        final var capturedRun = com.example.lms.service.chat.ChatRunExecutionContext.current();
+        final boolean acceptedExecution = com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution();
+        final var capturedPurpose = com.example.lms.assist.JevDecisionScope.capture();
+        final var capturedRuleBreak = RuleBreakContextSnapshot.capture();
 
         return () -> {
             final Map<String, String> prevMdc = MDC.getCopyOfContextMap();
             final GuardContext prevGuard = safeGetGuard();
             final Map<String, Object> prevTrace = TraceStore.context();
             final TimeBudget prevBudget = TimeBudgetContext.get();
-            try {
+            try (var runBinding = capturedRun != null ? com.example.lms.service.chat.ChatRunExecutionContext.bind(capturedRun)
+                    : acceptedExecution ? com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask() : null;
+                 var purposeBinding = capturedPurpose == null ? null : com.example.lms.assist.JevDecisionScope.bind(capturedPurpose);
+                 var ruleBreakBinding = capturedRuleBreak.bind()) {
                 applyMdc(capturedMdc);
                 safeApplyGuard(guardRef);
                 applyTrace(capturedTrace);
@@ -131,13 +146,20 @@ public final class ContextPropagation {
 
         final Map<String, Object> capturedTrace = TraceStore.context();
         final TimeBudget capturedBudget = TimeBudgetContext.get();
+        final var capturedRun = com.example.lms.service.chat.ChatRunExecutionContext.current();
+        final boolean acceptedExecution = com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution();
+        final var capturedPurpose = com.example.lms.assist.JevDecisionScope.capture();
+        final var capturedRuleBreak = RuleBreakContextSnapshot.capture();
 
         return () -> {
             final Map<String, String> prevMdc = MDC.getCopyOfContextMap();
             final GuardContext prevGuard = safeGetGuard();
             final Map<String, Object> prevTrace = TraceStore.context();
             final TimeBudget prevBudget = TimeBudgetContext.get();
-            try {
+            try (var runBinding = capturedRun != null ? com.example.lms.service.chat.ChatRunExecutionContext.bind(capturedRun)
+                    : acceptedExecution ? com.example.lms.service.chat.ChatRunExecutionContext.bindAcceptedTask() : null;
+                 var purposeBinding = capturedPurpose == null ? null : com.example.lms.assist.JevDecisionScope.bind(capturedPurpose);
+                 var ruleBreakBinding = capturedRuleBreak.bind()) {
                 applyMdc(capturedMdc);
                 safeApplyGuard(guardRef);
                 applyTrace(capturedTrace);

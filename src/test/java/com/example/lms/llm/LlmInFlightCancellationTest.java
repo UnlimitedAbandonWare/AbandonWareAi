@@ -131,7 +131,13 @@ class LlmInFlightCancellationTest {
             caller.join(15_000);
             assertTrue(workerExited.await(5, TimeUnit.SECONDS));
             assertFalse(caller.isAlive());
-            if ("none".equals(cancelPoint) || "observe".equals(cancelPoint) || "native_retry_control".equals(cancelPoint)) {
+            if ("none".equals(cancelPoint) || "observe".equals(cancelPoint) || "resolver".equals(cancelPoint)) {
+                assertNotNull(failure.get());
+                assertNull(response.get());
+                assertEquals(1,requests.get(),"a received request cannot be replayed from zero output");
+                assertEquals(0,fallbackResolutions.get());
+                assertTrue(com.example.lms.llm.gateway.LlmGatewayFailureClassifier.hasNonReplayableReason(failure.get()));
+            } else if ("native_retry_control".equals(cancelPoint)) {
                 assertNull(failure.get());
                 assertEquals("controlled answer", response.get().aiMessage().text());
                 assertEquals(2, requests.get(), "internal failure must retain fallback");
@@ -145,7 +151,7 @@ class LlmInFlightCancellationTest {
                         () -> assertEquals(1, requests.get(), "no new HTTP fallback after accepted Stop"),
                         () -> assertNull(response.get()),
                         () -> assertNotNull(failure.get()),
-                        () -> assertEquals("resolver".equals(cancelPoint) ? 1 : 0, fallbackResolutions.get()));
+                        () -> assertEquals(0, fallbackResolutions.get()));
             }
             var lifecycle = tracker.redactedRequestLifecycle(timelineId.get());
             assertTrue(lifecycle.stream().filter(row -> "http_client_started".equals(row.get("event")))

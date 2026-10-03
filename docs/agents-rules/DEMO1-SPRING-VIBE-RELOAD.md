@@ -1,0 +1,8 @@
+<!-- moved-from: AGENTS.md L180-L186 sha256=8f05f64e12e782288193ed7910c181d58cf8e7c1396ae5a704145e76618856ea movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- BEGIN DEMO1-SPRING-VIBE-RELOAD -->
+## Spring / Start-RAG vibe reload (Java changes must rebuild)
+- Runner: `Start-RAG.bat` -> `scripts/start_rag_stack.ps1 -MetaDisplay -ForceRestart -DevWatch -OpenBrowser`. Ports `18180`/`18181`/`18182`; profile `local,meta-display`. **Spring fact:** a running JVM keeps the old classpath — editing `.java` does not update what executes. This repo uses **DevWatch**, not `spring-boot-devtools`.
+- Agent headless: `set AWX_RAG_NO_PAUSE=1` before any `*.bat` (shell agents MUST set this, else the bat waits on `pause`).
+- After changes under `main/java` or active `main/resources` (dev Meta Display): 1) prefer live DevWatch — wait for `[DEV-RELOAD] socket ready` in `var/dev-reload/dev-reload.log`, or recycle `Close-RAG.bat` then `Start-RAG.bat`; 2) prove with `Verify-RAG.bat` (`debug_rag_stack.ps1 -Action verify -WithCompile`: compileJava+processResources + runtime/ports/HTTP/freshness/DevWatch; exit 0=verified, 3=not-running, 6=checks-failed); 3) boot-failure first read `Read-RAG-Debug.bat` -> `var/rag-launcher/LATEST.json`; 4) `Status-RAG.bat`/`-CheckOnly` = alive-only, never proof.
+- **Forbidden as proof:** restarting only the old PID; previous `build/` outputs without `:compileJava`/`:processResources`; `-CheckOnly`, `Status-RAG.bat`, or HTTP 200 on the old process; a second Meta Display Spring on the same ports. Skills `$demo1-dev-reload`/`$start-rag-reload` remain as archives — agents do not need them for this loop.
+<!-- END DEMO1-SPRING-VIBE-RELOAD -->

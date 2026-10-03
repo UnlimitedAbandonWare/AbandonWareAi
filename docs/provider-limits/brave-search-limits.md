@@ -3,7 +3,7 @@
 ```yaml
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-01"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -46,6 +46,17 @@ This is a public pricing description, not this account's current balance.
 - `docs/codex/BRAVE_FREE_TO_BASE_ROUTING_DIRECTIVE.md` defines the dual-key behavior:
   `BRAVE_API_KEY_FREE` first up to a local monthly quota, then `BRAVE_API_KEY` base.
   This is an application policy, not Brave's official plan classification.
+
+## Local quota vs official credits (reviewed 2026-10-01)
+
+- `main/java/com/example/lms/service/web/BraveSearchProperties.java:12`의
+  `monthlyQuota` 기본값은 `2000`이다(`gpt-search.brave.monthly-quota`).
+- 공식 무료 크레딧은 **월 $5 = 1,000 쿼리**(`$5 / 1,000 requests`)이므로 기본값과
+  1,000회 불일치가 있다. 1,001~2,000 구간에서 `BRAVE_API_KEY_FREE`가 실제로는
+  소진된 뒤 `BRAVE_API_KEY` base lane(유료)으로 자동 전환될 수 있다.
+- 코드 기본값 조정 전까지 권장 설정: `gpt-search.brave.monthly-quota: 1000`
+  (환경변수 `GPT_SEARCH_BRAVE_MONTHLYQUOTA` 계열 relaxed binding).
+  기본값 1000 조정은 Codex 인계 항목(`data/agent-handoff/zero-cost-audit/FOR_CODEX.md`).
 
 ## Credential env names
 

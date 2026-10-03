@@ -14,7 +14,7 @@ class NaverCredentialResourceContractTest {
     @Test
     void activeApplicationResourcesKeepClientPairBridgeFallback() throws IOException {
         assertNaverBridge("main/resources/application.yml");
-        assertNaverBridge("app/src/main/resources/application.yaml");
+        assertNaverBridge("app/quarantine/resources_legacy/application.yaml");
     }
 
     private static void assertNaverBridge(String path) throws IOException {

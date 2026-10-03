@@ -1,3 +1,12 @@
+---
+name: demo1-agent-change-plane
+description: >-
+  Use before any source write that could overlap a parallel agent session on
+  this checkout: a cross-agent ChangeIntent board layered over the source-edit
+  lease — declare intent, admit non-overlapping work via the real begin, renew
+  via heartbeat, append-only events, one release request per conflict fingerprint.
+---
+
 # demo1 Agent Change Plane
 
 Cross-agent (Devin / Grok / Codex / Cline) ChangeIntent board layered on top of

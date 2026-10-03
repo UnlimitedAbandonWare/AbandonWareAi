@@ -50,6 +50,59 @@ public class ContextAwareExecutorService implements ExecutorService {
         delegate.execute(wrap(command, mdc, guard, traceCtx));
     }
 
+
+    /**
+     * Explicit request-owned work: unlike submit(), cancellation may interrupt
+     * this worker and removes its exact queue entry. Completion is waiter
+     * completion only; it does not prove that an interrupted provider stopped.
+     */
+    public <T> Future<T> submitCancellable(Callable<T> work, Runnable completion) {
+        final Thread submitter = Thread.currentThread();
+        class OwnedTask extends java.util.concurrent.FutureTask<T> {
+            volatile boolean submitting = true;
+            volatile boolean inlineRejected;
+            OwnedTask() { super(ContextPropagation.wrapCallable(work)); }
+            @Override public void run() {
+                if (submitting && Thread.currentThread() == submitter) {
+                    inlineRejected = true;
+                    reject(new java.util.concurrent.RejectedExecutionException("request_owned_inline_rejected"));
+                    return;
+                }
+                super.run();
+            }
+            void reject(java.util.concurrent.RejectedExecutionException failure) { setException(failure); }
+            @Override public boolean cancel(boolean interrupt) {
+                boolean cancelled = super.cancel(interrupt);
+                removeQueued();
+                return cancelled;
+            }
+            void removeQueued() {
+                if (delegate instanceof java.util.concurrent.ThreadPoolExecutor pool) pool.remove(this);
+            }
+            @Override protected void done() {
+                if (completion != null) completion.run();
+            }
+        }
+        OwnedTask task = new OwnedTask();
+        try {
+            if (delegate.isShutdown()) {
+                throw new java.util.concurrent.RejectedExecutionException("executor_shutdown");
+            }
+            delegate.execute(task);
+            if (task.inlineRejected) {
+                throw new java.util.concurrent.RejectedExecutionException("request_owned_inline_rejected");
+            }
+            return task;
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            task.reject(rejected);
+            throw rejected;
+        } finally {
+            task.submitting = false;
+            // A cancellation can win before execute actually enqueues the task.
+            if (task.isCancelled()) task.removeQueued();
+        }
+    }
+
     @Override
     public Future<?> submit(Runnable task) {
         Map<String, String> mdc = MDC.getCopyOfContextMap();

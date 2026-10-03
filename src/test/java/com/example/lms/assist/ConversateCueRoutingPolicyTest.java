@@ -12,6 +12,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ConversateCueRoutingPolicyTest {
+    @Test void registeredOauthNeverCapturesClassifierOrDisplayDemand() {
+        route("light",1,.2,1.2,500);
+        var registration=mock(com.example.lms.llm.ChatGptOAuthRegistration.class);
+        when(registration.models()).thenReturn(java.util.List.of("fixture-mini"));
+        var policy=policy(); policy.setChatGptOAuth(registration);
+        assertEquals("light",policy.reserve(demand(),Set.of()).choice().key());
+        assertEquals("light",policy.reserve(new ConversateCueRoutingPolicy.Demand(false,1,300,100,3000,.02),Set.of()).choice().key());
+    }
     @org.junit.jupiter.api.io.TempDir java.nio.file.Path proofDir;
     void verifyGroqFixture()throws Exception {
         routes.getModels().get("groq").setName("openai/gpt-oss-20b");

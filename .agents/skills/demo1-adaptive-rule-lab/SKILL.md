@@ -10,11 +10,11 @@ Keep the original owner, constraints and recovery capability attached to each it
 
 ## Discovery and organization
 
-1. Read `../semantic-catalog.yaml` and search with `python -B .agents/skills/demo1-adaptive-rule-lab/scripts/catalog.py search --query "반례 검증"` from the repository root. The generated `../SEMANTIC_INDEX.md` is a human view; `../INDEX.md` retains typed route authority.
-2. On entry, run `catalog.py validate` before using reviewed metadata. Changed hashes invalidate annotations and relations. Resolve diagnostics against current source; never silently refresh a hash without reviewing the changed meaning. After current annotations pass, refresh the derived view with `catalog.py build --write`; repeat after actual invocation/completion events at task exit.
+1. Read `../semantic-catalog.yaml` and search with `python -B .agents\skills\demo1-adaptive-rule-lab\scripts\catalog.py search --query "반례 검증"` from the repository root. The generated `../SEMANTIC_INDEX.md` is a human view; `../INDEX.md` retains typed route authority.
+2. On entry, run `.agents\skills\demo1-adaptive-rule-lab\scripts\catalog.py validate` before using reviewed metadata. Changed hashes invalidate annotations and relations. Resolve diagnostics against current source; never silently refresh a hash without reviewing the changed meaning. After current annotations pass, refresh the derived view with `.agents\skills\demo1-adaptive-rule-lab\scripts\catalog.py build --write`; repeat after actual invocation/completion events at task exit.
 3. Use function, purpose, input, output, dependency and observation scope together. Concepts are extensible, allow multiple labels, and do not force one exclusive folder. Lexical scores identify candidates; the agent reads source meaning and records evidence lines before confirming relationships.
-4. Run `catalog.py suggest` to assess overlap. Preserve distinct triggers, inputs, outputs, permissions, mandatory gates and recovery floors. Shared vocabulary is not merge authority. Use `keep_distinct`, a conditional relationship, or a reviewed merge proposal. Physical consolidation requires its existing owner workflow and current preimages.
-5. Record actual route events with `catalog.py record-usage --event <repo-relative-json>`. Unknown frequency stays null. Never infer invocation from timestamps, mentions or retrieval. Compare frequency only within the same observation scope.
+4. Run `.agents\skills\demo1-adaptive-rule-lab\scripts\catalog.py suggest` to assess overlap. Preserve distinct triggers, inputs, outputs, permissions, mandatory gates and recovery floors. Shared vocabulary is not merge authority. Use `keep_distinct`, a conditional relationship, or a reviewed merge proposal. Physical consolidation requires its existing owner workflow and current preimages.
+5. Record actual route events with `.agents\skills\demo1-adaptive-rule-lab\scripts\catalog.py record-usage --event <repo-relative-json>`. Unknown frequency stays null. Never infer invocation from timestamps, mentions or retrieval. Compare frequency only within the same observation scope.
 
 ## Inventive experiment loop
 

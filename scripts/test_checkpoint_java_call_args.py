@@ -33,6 +33,37 @@ class JavaCallWithArgsCheckpointTest(unittest.TestCase):
         with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
             CP.secret_free(java_file(statement(expr, name)).encode(), "main/java/E.java")
 
+    def test_oauth_transport_bearers_are_exact_path_bound_fixtures(self):
+        path = 'src/test/java/ai/abandonware/nova/orch/llm/ChatGptResponsesTransportContractTest.java'
+        for suffix in ('a', 'b'):
+            body = ('"Bea' + 'rer synthetic-oauth-' + suffix + '";').encode()
+            CP.secret_free(body, path)
+            for other in ('main/java/T.java', 'src/test/java/T.java', 'docs/T.md'):
+                with self.subTest(path=other), self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
+                    CP.secret_free(body, other)
+            for changed in (body.replace(b'";', b'-extra";'), body + b'"Bea' + b'rer unrelated-value";'):
+                with self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
+                    CP.secret_free(changed, path)
+
+    def test_admin_guard_public_syntax_is_path_bound_and_adjacent_secrets_stay_blocked(self):
+        path = "main/java/com/example/lms/security/AdminTokenGuardInterceptor.java"
+        source = Path(path).read_bytes()
+        CP.secret_free(source, path)
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(source + ('\napi' + 'Key="synthetic-private-value";').encode(), path)
+        placeholder = ('sb.append("<li><code>X-Admin-To' + 'ken: &lt;token&gt;</code> header</li>");').encode()
+        CP.secret_free(placeholder, path)
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(placeholder.replace(b"&lt;token&gt;", b"synthetic-private-value"), path)
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(placeholder, "main/java/Other.java")
+
+    def test_cookie_runtime_reference_is_code_and_literal_cookie_stays_blocked(self):
+        name = "coo" + "kie"
+        self.assert_exempt("OwnerKeyBootstrapFilter.usableOwnerKey(owner.ownerKey());", name)
+        self.assert_strict('"synthetic-private-value";', name)
+        self.assert_strict('resolver.read("synthetic-private-value");', name)
+
     def test_literal_free_call_args_are_exempt(self):
         for expr in ("Normalizer.normalize(wake.strip(),Normalizer.Form.NFD);",
                      "resolver.read(value);",
@@ -41,6 +72,22 @@ class JavaCallWithArgsCheckpointTest(unittest.TestCase):
                      "config.load();"):
             with self.subTest(expr=expr):
                 self.assert_exempt(expr)
+
+    def test_json_parser_cursor_loop_is_code_not_a_credential(self):
+        loop = "while ((" + KEYWORD + " = parser.nextToken()) != null) { }"
+        CP.secret_free(java_file(loop).encode(), "main/java/E.java")
+
+    def test_json_cursor_exception_keeps_mimics_and_literals_strict(self):
+        loop = "while ((" + KEYWORD + " = parser.nextToken()) != null) { }"
+        variants = ["// " + loop, "/* " + loop + " */", '"' + loop + '"',
+                    loop.replace("nextToken()", 'nextToken("synthetic")'),
+                    loop + "\n" + statement('"synthetic";'),
+                    loop.replace("parser", "gsk" + "_" + "x" * 32)]
+        for text in variants:
+            with self.subTest(length=len(text)), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(text.encode(), "main/java/E.java")
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(loop.encode(), "docs/example.md")
 
     def test_each_secret_word_uses_same_rule(self):
         for name in (KEYWORD, SETTING, "pass" + "word", "client" + "Secret"):
@@ -98,6 +145,79 @@ class JavaCallWithArgsCheckpointTest(unittest.TestCase):
             CP.secret_free(java_file(fixture).encode(), 'main/java/E.java')
         with self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
             CP.secret_free(java_file(fixture.replace('secret-value', 'different-value')).encode(), test_path)
+
+    def test_fixed_ops_config_fixture_is_path_and_value_bound(self):
+        fixture = '.withPropertyValues("probe.admin-' + KEYWORD + '=structural-fixture-value")'
+        path = 'src/test/java/com/example/lms/config/AgentToolOpsConfigContextTest.java'
+        CP.secret_free(fixture.encode(), path)
+        CP.secret_free(fixture.encode(), path.lower())
+        for target, value in (("main/java/E.java", fixture),
+                              (path, fixture.replace('structural-fixture-value', 'different-value'))):
+            with self.subTest(path=target):
+                with self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
+                    CP.secret_free(value.encode(), target)
+
+
+    def test_fixed_gateway_trace_fixture_is_path_and_value_bound(self):
+        fixture = '"private query Author' + 'ization=Bea' + 'rer fake-sensitive-token"'
+        path = 'src/test/java/com/abandonware/ai/agent/integrations/AcmeAICoreGatewayTraceTest.java'
+        CP.secret_free(fixture.encode(), path)
+        CP.secret_free(fixture.encode(), path.lower())
+        for target, value in (("main/java/E.java", fixture),
+                              (path, fixture.replace('fake-sensitive-token', 'different-value'))):
+            with self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
+                CP.secret_free(value.encode(), target)
+
+
+    def test_typed_authorization_decision_is_not_a_literal_header(self):
+        fixture = 'AuthorizationDecision author' + 'ization = ensureScopes(tool, entry, context, adminAuthorized);'
+        CP.secret_free(java_file(fixture).encode(), 'main/java/E.java')
+        for value in ('// ' + fixture, fixture.replace('tool,', '"literal-header",')):
+            with self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
+                CP.secret_free(value.encode(), 'main/java/E.java')
+
+
+class JavaBareCallStringArgsCheckpointTest(unittest.TestCase):
+    """A bare helper call whose args are all environment-variable names or
+    dotted property names (e.g. firstTrimmed("naver.client-secret",
+    "NAVER_CLIENT_SECRET")) carries no credential value; only the label is
+    masked and every arg byte stays under the full prefixed-secret scan."""
+
+    def assert_exempt(self, expr, name=KEYWORD):
+        CP.secret_free(java_file(statement(expr, name)).encode(), "main/java/E.java")
+
+    def assert_strict(self, expr, name=KEYWORD):
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(java_file(statement(expr, name)).encode(), "main/java/E.java")
+
+    def test_bare_call_with_only_name_args_is_exempt(self):
+        for expr in ('firstTrimmed("naver.client-secret", "NAVER_CLIENT_SECRET");',
+                     'getEnv("BRAVE_API_KEY");',
+                     'helper("a.b-c", "C_D");'):
+            with self.subTest(expr=expr):
+                self.assert_exempt(expr)
+
+    def test_bare_call_secret_word_variants(self):
+        for name in (KEYWORD, SETTING, "client" + "Secret"):
+            with self.subTest(name=name):
+                self.assert_exempt('resolve("prop.name", "ENV_NAME");', name)
+
+    def test_bare_call_nonliteral_or_mixed_args_stay_blocked(self):
+        for expr in ("read();", "helper(name);", 'helper("a", count);',
+                     'helper("plain-value");', 'helper("a.b", count);',
+                     "holder.read(value);suffix", '"literal";'):
+            with self.subTest(expr=expr):
+                self.assert_strict(expr)
+
+    def test_bare_call_prefixed_literal_arg_still_blocked(self):
+        self.assert_strict('helper("sk' + "-" + "x" * 24 + '");')
+
+    def test_bare_call_mimic_inside_string_stays_blocked(self):
+        expr = statement('helper("A_B", "c.d");')
+        for text in ('"' + expr + '"', "// " + expr, "/* " + expr + " */"):
+            with self.subTest(kind=text[:3]):
+                with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                    CP.secret_free(text.encode(), "main/java/E.java")
 
 
 class BeginOverlapWarningTest(unittest.TestCase):

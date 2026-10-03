@@ -1,6 +1,6 @@
 ---
 name: demo1-devin-source-orchestrator
-description: Use when Devin or another agent gets a pasted multi-seam demo-1 source brief and must pick skills and tools per phase instead of one skill or thirty @mentions
+description: "승인된 demo-1 멀티 seam 구현 브리프를 실행 단계와 기존 스킬·도구 계획으로 나눠 수행할 때. 분담 지시서 작성만·목표 정리만·보고서 판정에는 쓰지 않음."
 ---
 
 # Demo1 Devin source orchestrator
@@ -21,7 +21,7 @@ python -B scripts/devin_task_orchestrate.py self-test
 
 ## How to run a plan
 
-1. Task entry: `python -B scripts/agent_preflight.py --root .` then `$demo1-work-ledger` open. Foreign `in_progress` journals are liveness-unknown, not done.
+1. Task entry: `python -B scripts/agent_preflight.py --root .`; open `$demo1-work-ledger` only for file-changing work under the root — read-only phases or outside-root artifacts skip journal/preimage per the ledger's own When rule. Foreign `in_progress` journals are liveness-unknown, not done.
 2. `plan` on the **current user brief** (not an old handoff). Follow `phases` in order.
 3. Each phase: load **that** `skill` (+ optional `guard`), run listed `tools`, stay inside `write`. `skip` is binding. `stop` is the evidence that ends the phase.
 4. `next --done …` after a phase. Do not start the next write scope until the current `stop` is met.

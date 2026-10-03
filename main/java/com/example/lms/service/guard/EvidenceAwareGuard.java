@@ -2078,6 +2078,30 @@ public class EvidenceAwareGuard {
             int actual = safeEvidence.size();
             TraceStore.put("guard.minCitations.required", minCitations);
             TraceStore.put("guard.minCitations.actual", actual);
+
+            // [WP3 dynamic guardrail] 저위험 질의에서 부분 근거(1건 이상)가 있고 초안이
+            // 회피/구조적 빈약 템플릿이 아니면 evidence-list degrade 대신 원문을
+            // unverified_citation 경고와 함께 방출한다. 고위험 질의는 기존 detour 유지.
+            boolean highRiskQuery = ctx != null && ctx.isHighRiskQuery();
+            if (!highRiskQuery && actual >= 1 && !noEvidenceTemplate && !structurallyEmpty) {
+                TraceStore.put("guard.unverifiedCitation", true);
+                TraceStore.put("guard.final.action", "ALLOW_PARTIAL_CITATIONS");
+                TraceStore.put("guard.final.action.reason", "unverified_citation");
+                TraceStore.put("guard.degradedToEvidence", false);
+                return new GuardDecision(
+                        draft,
+                        false,
+                        false,
+                        false,
+                        false,
+                        coverage,
+                        strength,
+                        DraftQuality.OK,
+                        GuardAction.ALLOW_NO_MEMORY,
+                        safeEvidence,
+                        false);
+            }
+
             TraceStore.put("guard.detour", "insufficient_citations");
 
             // [PATCH src111_merge15/merge15] For entity/definitional queries under

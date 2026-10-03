@@ -1,0 +1,87 @@
+# Abandon_X — 설정·라우팅 v3 보조 교정 [초안]
+
+기준: 2026-10-01 제공 FIND_X.zip, HEAD=null.
+FIND_X SHA-256: d94c087f8d89eb2a8f14206c273b49ca82dbe3178cae464e483df8ecb39143ea
+UAW SHA-256: a4ab90929e7c7541c3b4a9b28a60ed4234578d708f641d3479380ff15cffbe16
+
+이 파일은 기존 Abandon_X.txt에 참고할 별도 제안이다. 원본 UAW.txt와 Abandon_X.txt는 변경하지 않았다.
+아래 DONE는 명시한 코드가 정적으로 확인됐다는 뜻이며 런타임 성공·테스트 통과를 의미하지 않는다.
+FIND_X와 다른 HEAD에는 줄 번호를 재사용하지 말고 심볼·해시를 다시 확인한다.
+
+## 1. 설계 의도로 보존
+
+PARTIAL — 경량 판단·질의 분해·근거 수집과 고성능 최종 생성을 구분한다.
+UAW.txt:1720–1742의 역할 분담은 v2 여섯 역할 배정에 반영한다. 별도 심판·에이전트 모델을 매번 호출하도록 확대하지 않는다.
+
+DONE(정적) — 근거 수집·정제는 기존 PromptContext/PromptBuilder에 인계한다.
+FIND_X.zip!main/java/com/example/lms/service/ChatWorkflow.java:2979–3024,3073–3101,3327–3330.
+새 설정 페이지가 프롬프트를 직접 만들거나 원시 진단을 모델 입력에 주입하지 않는다.
+
+## 2. 과거 패치 반복 금지
+
+DONE(등록 코드) — canonical RuleBreak 인터셉터 조건부 등록이 이미 존재한다.
+FIND_X.zip!main/java/com/example/lms/config/WebMvcConfig.java:59–71.
+UAW do03 및 Abandon_X.txt §2-C의 미등록 판정을 FIND_X에 그대로 적용하지 않는다.
+bean이 없으면 등록을 건너뛰는 분기도 있으므로 실제 전파는 NOT_RUN. 재등록·보안 완화 없음.
+
+DONE(import 행) — FailurePattern·Zero100 자동설정 import가 이미 존재한다.
+FIND_X.zip!main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports:1–8.
+UAW do02를 반복하거나 과거 여섯 행 목록으로 덮어쓰지 않는다. 실제 조건부 빈 활성은 근거 부족.
+
+PARTIAL — canonical DPP 실행 분기가 존재한다.
+FIND_X.zip!main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java:871–887.
+기존 Abandon_X의 dormant 사본 설명을 모든 DPP에 적용하지 않는다. 요청·의존 조건과 실제 관측을 구분한다.
+ONNX도 같은 파일:939–995의 요청·부재·실행·실패 구분을 재사용한다.
+
+PARTIAL — ArtPlate의 proposeWithSse·AtomicReference는 이미 있다.
+FIND_X.zip!main/java/com/example/lms/artplate/NineArtPlateGate.java:204–247.
+UAW.txt:3206–3209의 예정 패치를 반복하지 않는다. get→계산→set 전체가 원자적 CAS라고 주장하지 않는다.
+설정 미리보기에서 이 상태ful 선택기를 호출하지 않는다. 이번 작업에 별도 동시성 리팩터링을 추가하지 않는다.
+
+## 3. 의미를 세분화할 항목
+
+PARTIAL — Plan은 전부 미사용도, 범용 실행기도 아니다.
+FIND_X.zip!main/java/com/example/lms/plan/PlanHintApplier.java:803–816에는 broad unwired 목록이 있다.
+FIND_X.zip!main/java/com/example/lms/plan/PlanExecutionSpec.java:174–229,339–376에는 제한 조건·stageLedger가 있다.
+FIND_X.zip!main/java/com/example/lms/service/ChatWorkflow.java:1470–1505,2824–2854에서 이를 소비한다.
+legacy not_used 진단을 삭제하지 않고 조건·단계 기록과 병기한다. delegated를 executed로 표시하지 않는다.
+
+DONE(배선)/PARTIAL(운영) — Jev는 메인 검색 체인에 이미 연결돼 있다.
+FIND_X.zip!main/java/com/example/lms/config/RetrieverChainConfig.java:42–97.
+FIND_X.zip!main/java/com/example/lms/service/rag/handler/JevRetrievalGateHandler.java:35–66,112–140.
+FIND_X.zip!main/java/com/example/lms/assist/JevRuntimeConfiguration.java:8–21.
+FIND_X.zip!main/java/com/example/lms/gptsearch/decision/JevSearchNeedAdvisor.java:13–42.
+surface·조건부 빈·AUTO·privacy·시간·비용 경계를 유지한다. 새로운 분류기·중복 평가 요청을 만들지 않는다.
+활성화 값을 변경해도 빈·래퍼가 즉시 재구성된다는 근거가 없으므로 이번 페이지에서는 상태만 읽는다.
+
+PARTIAL — 예산 제안과 적용은 다르다.
+FIND_X.zip!main/java/com/example/lms/service/rag/budget/RetrievalBudgetGovernor.java:79–102.
+FIND_X.zip!main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java:1145–1181.
+확인한 호출부의 queryBurstCount 소비와 web/vector/kg 추천을 구분한다. 새 전역 K 조절 기능으로 포장하지 않는다.
+
+PARTIAL — context_prepare는 고성능 모델 선택만으로 켜지지 않는다.
+FIND_X.zip!main/java/com/example/lms/service/ChatWorkflow.java:3103–3148.
+명시 요청·비strict·이미지 없음·로컬 모델·Plan 승인·when TRUE·현재 소스/취소 검사 유지.
+chat.js와 네 DOM 컨트롤 제약 아래서 새 요청 필드를 몰래 추가하지 않는다. 새 활성 토글은 HOLD.
+
+PARTIAL — 관측값을 추정값과 섞지 않는다.
+FIND_X.zip!main/java/com/example/lms/api/ChatStreamSignalBuilder.java:95–174,192–219.
+기존 finalContextCountSource 및 최대 32단계 allowlist를 재사용한다. web+vector 추정을 실제 최종 문맥 건수로 표시하지 않는다.
+설정 요청의 ThreadLocal trace 또는 전역 마지막 성공으로 과거 Run을 복원하지 않는다.
+
+## 4. 불변과 범위
+
+새 영속 정책·라우터·Plan 실행기·기억 서비스·그래프 서비스·로그 서버를 만들지 않는다.
+v2의 ConfigurationSetting 단일 JSON 행·여섯 역할·read/preview/save·Run 스냅숏을 유지한다.
+role target 저장은 검색·자동 학습·동의·Display를 활성화하지 않는다.
+source scope·동의 철회·원본 수정/삭제·취소는 고정된 모델 정책과 별도로 현재 값을 재검증한다.
+응답 생성, 최종 채택, 기억 저장, 학습 채택을 각각 관측한다. 미관측은 null이다.
+chat.js·스튜디오·DB 스키마·보안·기존 API 계약 변경 0. 새 기능 off·추가 유료 false·새 추가 상한 0.
+실호출·commit·push 금지. 원본 소스나 다른 에이전트의 작업은 이 지시서 작성 과정에서 수정하지 않는다.
+
+## 5. 검증
+
+이 교정은 정적 소스 판독이다. 실제 앱 테스트·빌드·서버·공급자 호출은 NOT_RUN.
+실제 빌드 루트·sourceSet·HEAD·현재 INV/DONE/HOLD·API_ROUTING_SPEC §6·운영 유효값이 다음 증거다.
+적용은 v3 WP1~WP5에 v2 작업을 합쳐 한 원인씩 RED→최소 수정→GREEN으로 진행한다.
+기존 기능을 문서 설명만 보고 다시 추가하지 않는다. 산출물 검사 통과를 앱 동작 보장으로 쓰지 않는다.

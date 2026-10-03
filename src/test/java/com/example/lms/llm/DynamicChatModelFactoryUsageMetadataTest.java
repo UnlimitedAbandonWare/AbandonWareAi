@@ -56,6 +56,26 @@ class DynamicChatModelFactoryUsageMetadataTest {
     }
 
     @Test
+    void constructionIdentityIsBoundToEachReturnedObjectAndActualSurface() {
+        var factory = configuredFactory();
+        var nativeClient = factory.lcWithTimeout("qwen3:8b", null, null, null, null, 64, 5);
+        var sdkClient = factory.lcWithTimeout("gemma4:26b", null, null, null, null, 64, 5);
+        var nativeIdentity = DynamicChatModelFactory.configuredModelIdentity(nativeClient);
+        var sdkIdentity = DynamicChatModelFactory.configuredModelIdentity(sdkClient);
+        assertEquals("qwen3:8b", nativeIdentity.modelId());
+        assertEquals("ollama_native", nativeIdentity.endpointKind());
+        assertEquals(null, nativeIdentity.adapterVersion(), "custom adapter has no SDK version attestation");
+        assertEquals("gemma4:26b", sdkIdentity.modelId());
+        assertEquals("openai_chat_completions", sdkIdentity.endpointKind());
+        assertEquals(dev.langchain4j.model.openai.OpenAiChatModel.class.getPackage().getImplementationVersion(), sdkIdentity.adapterVersion());
+        assertEquals(ModelRuntimeHealthTracker.endpointIdentityHash("http://127.0.0.1:11434/v1"), sdkIdentity.endpointHash());
+        assertEquals(null, DynamicChatModelFactory.configuredModelIdentity(org.mockito.Mockito.mock(ChatModel.class)));
+        assertEquals(null, DynamicChatModelFactory.configuredModelIdentity(null));
+        assertEquals("qwen3:8b", DynamicChatModelFactory.configuredModelIdentity(nativeClient).modelId(),
+                "later construction cannot change the first object's evidence");
+    }
+
+    @Test
     void nonPositiveCapIsNotSentAndRemainsProviderDefaultUnknown() {
         DynamicChatModelFactory factory = configuredFactory();
 

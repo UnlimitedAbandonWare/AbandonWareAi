@@ -8,15 +8,19 @@
     <meta name="_csrf_header" th:if="${_csrf != null}" th:content="${_csrf.headerName}">
     <title>AbandonWare AI</title>
     <link rel="stylesheet" href="/css/chat-style.css?v=chat-attach-stt-20260925">
-    <link rel="stylesheet" href="/css/chat-trace.css?v=mgain-trace-20260926">
+    <link rel="stylesheet" href="/css/chat-trace.css?v=trace-dock-r2-20260929">
+    <link rel="stylesheet" href="/css/chat-display-bridge.css?v=interview-absorb-20261001">
     <script defer src="/js/fetch-wrapper.js"></script>
     <script defer src="/js/brain-state-ui.js"></script>
     <script defer src="/js/vendor/chat/marked-18.0.14.min.js"></script>
     <script defer src="/js/vendor/chat/dompurify-3.4.15.min.js"></script>
     <script defer src="/js/chat-trace-ui.js?v=mgain-trace-20260926"></script>
+    <script defer src="/js/chat-trace-dock.js?v=trace-dock-r2-20260929"></script>
     <script defer src="/js/vendor/chat/katex-0.18.7.min.js"></script>
     <script defer src="/js/chat-answer-renderer.js?v=20260923-document-1"></script>
-  <script defer src="/js/chat.js?v=mgain-trace-20260926"></script>
+  <script defer src="/js/chat.js?v=trace-dock-r2-20260929"></script>
+  <script defer src="/assets/interview/interview-core.js?v=interview-absorb-20261001"></script>
+  <script defer src="/js/chat-display-bridge.js?v=interview-absorb-20261001"></script>
   <script defer src="/js/chat-model-picker.js?v=20260923-dialog-1"></script>
 </head>
 <body class="chat-app" data-auth-mode="form-login" data-vibe-feature-pool="open" data-feature-pool="open" th:attr="data-chat-surface=${chatSurface}">
@@ -24,6 +28,7 @@
 <header class="top-utility-bar">
     <a class="brand-mark" href="/chat" aria-label="AbandonWare AI"><span class="brand-symbol" aria-hidden="true">a<span>•</span></span>AbandonWare <span class="brand-ai">AI</span></a>
     <nav class="app-menu-bar" aria-label="Primary">
+        <a href="/settings" data-menu-action="open-settings">설정</a>
         <!-- vibe/proto-open: admin 콘솔은 선택 표면 — 디버그 1순위는 Read-RAG-Debug.bat / var/rag-launcher/LATEST.json. /admin/** 는 proto-open에서 토큰 없이 열림 -->
         <details class="admin-tools">
             <summary>고급 도구 (선택)</summary>
@@ -261,6 +266,14 @@
                 </div>
             </div>
         </header>
+        <aside class="trace-dock" data-trace-dock data-diagnostics-read="false" data-testid="trace-dock" aria-label="진단 창">
+            <button type="button" class="trace-dock-toggle" data-testid="trace-dock-toggle" aria-expanded="false" aria-controls="traceDockBody">진단</button>
+            <div id="traceDockBody" class="trace-dock-body" hidden>
+                <section class="trace-dock-current" data-testid="trace-dock-current" aria-live="polite" aria-label="현재 요청 진단"></section>
+                <section class="trace-dock-history" data-testid="trace-dock-history" aria-label="최근 진단 기록"></section>
+                <p class="trace-dock-status" role="status" data-testid="trace-dock-status">진단 대기</p>
+            </div>
+        </aside>
         <div class="response-settings" data-testid="chat-response-settings">
             <div class="control-panel" aria-label="Chat controls">
                 <label class="model-control"><span>모델</span>
@@ -334,6 +347,8 @@
                 <input id="attachInput" type="file" multiple hidden data-testid="chat-attach-input" aria-label="첨부할 파일 선택">
                 <div class="composer-input">
                     <ul id="attachList" class="attach-chips" hidden aria-label="첨부된 파일 목록"></ul>
+                    <label id="attachmentGraphConsentLabel" hidden><input id="attachmentGraphConsent" type="checkbox"> 이번 첨부를 이 대화의 검색 기억에 저장</label>
+                    <label id="contextPreparationLabel" hidden><input id="contextPreparationRequested" type="checkbox"> 이번 첨부 비교를 위해 근거 정리 요청</label>
                     <textarea id="messageInput" name="message" rows="2" autocomplete="off" placeholder="질문이나 떠오른 생각을 적어 주세요…" aria-label="Message" data-testid="chat-message-input"></textarea>
                 </div>
                 <button id="attachBtn" class="icon" type="button" title="파일 첨부" data-testid="chat-attach-button" aria-label="파일 첨부">📎</button>
@@ -341,10 +356,13 @@
                 <button id="sendBtn" class="primary" type="button" title="전송" data-testid="chat-send-button" aria-label="질문 전송">↑</button>
                 <button id="stopBtn" class="ghost" type="button" title="중지" data-testid="chat-stop-button" disabled hidden>중지</button>
             </form>
+            <div id="display-bridge-mount"></div>
             <p class="composer-note"><span>Enter로 전송 · Shift+Enter로 줄바꿈</span><span>답변의 중요한 정보는 근거를 확인하세요.</span></p>
         </div>
     </section>
 </main>
 <!-- === Scripts -->
+<div class="help"><button type="button" id="chat-save-defaults" disabled>현재 선택을 개인 기본값으로 저장</button><span id="chat-defaults-status" role="status" aria-live="polite">개인 설정 확인 중</span></div>
+<script defer src="/js/chat-settings-bridge.js"></script>
 </body>
 </html>

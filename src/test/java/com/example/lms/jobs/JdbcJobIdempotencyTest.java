@@ -23,7 +23,7 @@ class JdbcJobIdempotencyTest {
     @Test void fiveRequestsSpacedByOneHundredMillisecondsInvokeHandlerOnce() throws Exception {duplicateRace(true);}
     void duplicateRace(boolean staggered)throws Exception {
         var ds=database();var calls=new AtomicInteger();var pool=Executors.newFixedThreadPool(5);var go=new CountDownLatch(1);
-        try(var a=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC());var b=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){
+        try(var a=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"));var b=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){
             a.registerHandler("task_ask",input->{calls.incrementAndGet();return "{}";});b.registerHandler("task_ask",input->{calls.incrementAndGet();return "{}";});
             var futures=new ArrayList<Future<JobService.Admission>>();
             for(int i=0;i<5;i++){int n=i;futures.add(pool.submit(()->{go.await();if(staggered)Thread.sleep(n*100L);return submit(n%2==0?a:b,"owner","same",FP);}));}go.countDown();
@@ -34,7 +34,7 @@ class JdbcJobIdempotencyTest {
         }finally{pool.shutdownNow();}
     }
     @Test void ownerOperationAndFingerprintAreSeparateAndLegacyNoKeyStillCreatesJobs(){
-        var ds=database();try(var s=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){
+        var ds=database();try(var s=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){
             var first=submit(s,"a","k",FP);assertThrows(JobService.IdempotencyConflict.class,()->submit(s,"a","k",OTHER));
             assertNotEquals(first.taskId(),submit(s,"b","k",FP).taskId());
             assertNotEquals(first.taskId(),s.enqueueOnce("other_operation",Map.of(),Map.of("ownerHash","a"),null,"k",FP).taskId());
@@ -42,19 +42,19 @@ class JdbcJobIdempotencyTest {
         }
     }
     @Test void keyFenceSurvivesServiceRestartAndNoRedisStateIsNeededForReplay(){
-        var ds=database();String id;try(var s=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){id=submit(s,"a","k",FP).taskId();}
-        try(var s=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){assertEquals(id,submit(s,"a","k",FP).taskId());assertEquals("PENDING",s.status(id));}
+        var ds=database();String id;try(var s=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){id=submit(s,"a","k",FP).taskId();}
+        try(var s=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){assertEquals(id,submit(s,"a","k",FP).taskId());assertEquals("PENDING",s.status(id));}
     }
     @Test void retentionDoesNotExpireRunningOrUnknownAndReuseStartsOnlyAfterCompletedRetention(){
         var ds=database();var now=new AtomicLong(1800000000000L);Clock clock=new Clock(){public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return this;}public Instant instant(){return Instant.ofEpochMilli(now.get());}};
-        try(var s=new JdbcJobService(ds,new ObjectMapper(),clock)){
+        try(var s=new JdbcJobService(ds, new ObjectMapper(), clock, new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){
             var id=submit(s,"a","k",FP).taskId();now.addAndGet(Duration.ofDays(2).toMillis());assertEquals(id,submit(s,"a","k",FP).taskId());
             s.registerHandler("task_ask",input->"{}");s.runPendingOnce();now.addAndGet(Duration.ofHours(24).toMillis()-1);assertEquals(id,submit(s,"a","k",FP).taskId());
             now.incrementAndGet();assertNotEquals(id,submit(s,"a","k",FP).taskId());assertTrue(s.result(id,"a").isEmpty());
         }
     }
     @Test void executionExceptionIsUnknownWithoutProviderOutcomeContractAndNeverRetries(){
-        var ds=database();var calls=new AtomicInteger();try(var s=new JdbcJobService(ds,new ObjectMapper(),Clock.systemUTC())){
+        var ds=database();var calls=new AtomicInteger();try(var s=new JdbcJobService(ds, new ObjectMapper(), Clock.systemUTC(), new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds), java.util.Set.of("task_ask", "other_operation"), java.util.Set.of("task_ask"))){
             s.registerHandler("task_ask",input->{calls.incrementAndGet();throw new java.io.IOException("synthetic_after_send");});var id=submit(s,"a","k",FP).taskId();s.runPendingOnce();s.runPendingOnce();
             assertEquals("OUTCOME_UNKNOWN",s.status(id));assertEquals(id,submit(s,"a","k",FP).taskId());assertEquals(1,calls.get());assertNull(s.find(id,"a").orElseThrow().expiresAt());
         }

@@ -6,7 +6,7 @@
 
 - Main/default chat (RTX 3090 / 11434): `gemma4:26b` (alt: `gemma4:31b`, `smtek/Qwen3.8-27B:Q3_K_XL`).
 - Fast/helper / Display+RAG light lane (RTX 3060 / 11435): **`qwen3.5:9b`** (NOT `qwen3:8b` — not installed).
-- Judge/critic/coder (3090): `qwen3.8:27b`.
+- Judge/critic/coder (3090): `smtek/Qwen3.8-27B:Q3_K_XL`.
 - Vision: `qwen3-vl:8b`.
 - Embedding (RAG): `qwen3-embedding:4b` or `qwen3-embedding:latest` (alts: `nomic-embed-text`, `bge-m3`).
 - Prefer 11435 for 3060 fast/embed; probe `/api/version` before assuming 11434.

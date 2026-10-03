@@ -1,0 +1,156 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @demo1-codex-tool-router @demo1-codex-assist-subagents
+
+# DEVIN 지시서 — Codex의 GLM 보조 호출이 HTTP 400 나는 문제: 원인 고정 + MCP 경로로 우회 + 룰·도구 정비 (2026-10-02)
+
+[ANTI-STOP] 읽고 계획만 세운 뒤 멈추지 마라. D0부터 D6까지 끝까지 진행하고 Acceptance 전 항목을 PASS / FAIL / NOT_RUN 으로 채운 뒤에만 보고하라. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정/부정/반례 → 중립 판정)로 정하고 AUTO 진행. 묻는 것은 ASK_ONCE 2건뿐이다.
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용) · git = F:\git\cmd\git.exe · Python 3.11(표준 라이브러리 + tomllib, pip install 금지)
+역할: 제품 소스(main\, src\test\) 수정 금지. 룰·스킬·스크립트·검증만.
+
+====================================================================
+0. 한 줄 목표
+====================================================================
+Codex가 GLM을 "네이티브 서브에이전트(glm_worker)"로 부르면 ChatGPT 로그인 경로에서 무조건 400이 난다. 이 경로를 막고, ChatGPT 로그인과 무관하게 Vercel AI Gateway로 바로 가는 MCP 경로(glm_agent)로 GLM 보조를 쓰게 룰·사전점검 도구를 고친다.
+
+====================================================================
+1. 확인된 사실 (Grok Bot, 2026-10-02 20:58 KST, PC에서 직접 확인)
+====================================================================
+F1 정확한 오류(Codex 세션 rollout-2026-10-02T20-52-33-01a0fc75…jsonl, 11:52:37Z):
+   status 400 invalid_request_error — "The 'zai/glm-5.2' model is not supported when using Codex with a ChatGPT account."
+   같은 세션 메타: "model":"zai/glm-5.2", "multi_agent_version":"v2"
+F2 C:\Users\nninn\.codex\agents\glm_worker.toml: model = "zai/glm-5.2", model_provider = "vercel", sandbox read-only
+   C:\Users\nninn\.codex\config.toml: 최상위 model = "gpt-6.1-sol"(최상위 model_provider 없음 = ChatGPT 계정 경로), [agents] max_threads=3 max_depth=1, [features] multi_agent=true,
+   [model_providers.vercel] base_url https://ai-gateway.vercel.sh/codex/v1, env_key AI_GATEWAY_API_KEY, wire_api responses
+F3 결론(원인): Codex 데스크톱이 띄운 네이티브 서브에이전트는 부모의 ChatGPT 계정 인증으로 요청을 보낸다. 역할 파일의 model_provider="vercel" 이 이 경로에서 적용되지 않고, OpenAI 쪽은 ChatGPT 계정으로 비-OpenAI 모델을 거부한다.
+   → 설정을 고쳐서 해결되는 문제가 아니다(Z.ai 답변과 일치). Codex 전체를 API 키 로그인으로 바꾸면 되지만 ChatGPT 크레딧을 못 쓰게 되므로 하지 않는다.
+F4 우회 가능한 경로가 이미 있다: config.toml [mcp_servers."glm_agent"]
+   command = hermes venv python, args = scripts\awx_host_runtime.py run --runtime glm …, enabled_tools = glm_delegate_task / glm_review_change / glm_consensus_check / glm_agent_status,
+   env_vars = ["AI_GATEWAY_API_KEY", "AGENT_SUBAGENT_GLM_ENABLED", "GLM_EXTERNAL_READY"], default_tools_approval_mode = "prompt", required=false
+   이 경로는 Codex 로그인과 별개로 Vercel AI Gateway 를 직접 부른다.
+F5 환경변수(값은 보지 않고 존재 여부만): AI_GATEWAY_API_KEY = User 에 있음 / AGENT_SUBAGENT_GLM_ENABLED = 없음 / GLM_EXTERNAL_READY = 없음
+   main\java\com\abandonware\ai\agent\orchestrator\subagent\SubagentProviderConfiguration.java:86  enabled(environment, "GLM_EXTERNAL_READY", false)
+   → MCP 경로도 이 두 플래그가 없어서 "꺼짐"으로 보고될 가능성이 높다(D1 에서 확인).
+F6 "GLM은 키만 있으면 glm_worker 로 보내라"는 규칙이 여러 곳에 있다:
+   전역 C:\Users\nninn\.agents\skills\glm-offload (Codex 세션 지침에 "$glm-offload … false means no glm_worker" 로 주입됨)
+   저장소 .agents\skills\demo1-codex-plugin-roles, demo1-codex-selfask-triad, demo1-codex-tool-router (glm_worker 언급)
+F7 java glm-agent-mcp 프로세스 3개 실행 중(낮에는 11개였음). 누가 쓰는지 모름.
+F8 Codex 는 지금 Plan9 API 우선 라우팅 작업 중(ledger data\agent-handoff\codex-plan9-api-first-routing-3da4fc89). GLM 400 뒤 재시도 없이 기본 탐색 에이전트로 계속 진행 중 = 정상 동작. 그 세션을 방해하지 마라.
+
+====================================================================
+공통 규칙
+====================================================================
+- ledger: data\agent-handoff\devin-glm-native-400-<8hex>\ (PLAN.md, LEASE.md, EVIDENCE\, REPORT.md)
+- 수정 전 lease(파일 목록 + 만료 4h). Codex Plan9 ledger·lease 파일은 읽기만.
+- 수정 허용: scripts\ 새 파일, .agents\skills\ 아래 저장소 스킬(위 F6 3개 + 신규 1개), .codex\agents\ 아래 저장소 보조 subagent 의 설명 문구(필요할 때만), .grok\rules·.devin 쪽 포인터 새 파일 1개
+- 변경 금지: main\, src\test\, build.gradle(.kts), chat.js, agents.md 본문(포인터 1줄 추가가 꼭 필요하면 ASK 없이 하지 말고 REPORT 에 제안만),
+  C:\Users\nninn\.codex\config.toml · agents\glm_worker.toml · 전역 스킬(ASK_ONCE 로만), auth.json(열지 마라)
+
+====================================================================
+작업
+====================================================================
+D0 증거 고정 (읽기 전용)
+- 최근 2시간 Codex 세션 jsonl 에서 "is not supported when using Codex with a ChatGPT account" 와 "glm" 이 같이 나오는 줄만 찾아 시각·세션 파일명·오류 문구를 EVIDENCE\native-400.md 에 기록(프롬프트·응답 전문 저장 금지, 오류 문장만).
+- glm_worker 를 네이티브로 부르라고 지시하는 위치를 전부 표로(전역/저장소, 파일:행, 문장 요약).
+
+D1 MCP 경로 실태 확인
+- scripts\awx_host_runtime.py 의 --runtime glm 경로와 SubagentProviderConfiguration 을 읽고:
+  ① AGENT_SUBAGENT_GLM_ENABLED / GLM_EXTERNAL_READY 가 없으면 glm_agent 도구가 어떻게 응답하는지(꺼짐/오류/정상)
+  ② 실제 호출 대상(Vercel gateway 모델 ID, base_url)이 무엇인지
+  ③ java glm-agent-mcp.jar 와 이 python runtime 의 관계(같은 서버를 띄우는지)
+  를 코드 근거(file:line)로 정리.
+- 라이브 확인은 최대 2회: glm_agent_status 1회(생성 호출 아님) + 필요할 때만 아주 짧은 glm_delegate_task 1회.
+  호출 방법은 MCP stdio 를 직접 붙이는 테스트 스크립트(D3)로, 현재 프로세스 환경에서만. 401/403/429/400 은 재시도하지 말고 원인 조사 후 보고 맨 위에.
+  (메모: docs\API_ROUTING_SPEC.md 에 "Vercel Hobby plan 403 plan_gate" 기록이 있다 → 403 이면 플랜 문제로 분류)
+
+D2 플래그 문제 처리
+- D1 결과 두 플래그가 없어서 꺼져 있으면, 해결안은 두 가지 중 하나:
+  (a) config.toml [mcp_servers."glm_agent".env] 에 비밀이 아닌 두 플래그만 "true" 로 넣기
+  (b) 사용자 환경변수(User)에 두 플래그 추가
+  둘 다 전역 변경이다 → ASK_ONCE #1. 답을 받기 전엔 적용하지 말고, 적용용 PowerShell 한 줄과 되돌리기 한 줄을 REPORT 에 준비.
+  (a)를 고르면 config.toml 을 먼저 config.toml.bak-20261002-<hhmm> 로 백업하고, 그 블록 외에는 한 글자도 바꾸지 마라.
+- 플래그와 무관하게 동작하면 D2 는 "불필요"로 기록.
+
+D3 사전점검 도구 → scripts\glm_route_preflight.py (+ scripts\test_glm_route_preflight.py)
+- 출력(JSON + 한 줄): route = MCP_READY | MCP_DISABLED_FLAGS | MCP_NOT_CONFIGURED | NATIVE_UNSUPPORTED_CHATGPT_LOGIN | KEY_MISSING
+- 점검 항목(비밀 값 읽기·출력 금지):
+  · AI_GATEWAY_API_KEY 존재 여부(bool만)
+  · ~/.codex/config.toml 을 tomllib 로 읽어 최상위 model_provider 유무, mcp_servers.glm_agent 존재·enabled·enabled_tools, model_providers.vercel 존재 (값 중 키처럼 보이는 것은 출력 금지)
+  · 최상위 model_provider 가 없으면(= ChatGPT 계정 경로) native glm_worker 는 NATIVE_UNSUPPORTED 로 판정
+  · 두 플래그 존재 여부
+  · 선택 옵션 --live-status: glm_agent MCP stdio 에 붙어 glm_agent_status 1회만 호출(생성 호출 없음)
+- 종료 코드: MCP_READY=0, 그 외는 1~4 로 구분. unittest 는 합성 config/환경만 사용.
+
+D4 룰·스킬 수정 (저장소만, 최소 hunk)
+- 신규 .agents\skills\demo1-glm-route-guard\SKILL.md
+  Use when: "Codex 가 GLM 보조(glm_worker, glm-offload, GLM 검토)를 쓰려 할 때"
+  순서: ① python -B scripts\glm_route_preflight.py ② MCP_READY → glm_agent 의 glm_delegate_task / glm_review_change 사용 ③ NATIVE_UNSUPPORTED 또는 MCP 불가 → GLM=SESSION_UNAVAILABLE 로 기록하고 기본 탐색 에이전트로 계속, 재시도 금지
+  원칙: ChatGPT 로그인 세션에서 spawn 으로 glm_worker 를 띄우지 않는다 / GLM 은 읽기 전용 보조이고 최종 판단·수정은 Codex / 호출 상한(작업당 GLM 5회) / 400·401·403·429 재시도 금지
+- demo1-codex-plugin-roles, demo1-codex-selfask-triad, demo1-codex-tool-router: "glm_worker 로 보내라" 문장을 "demo1-glm-route-guard 를 따른다(네이티브 glm_worker 는 ChatGPT 로그인에서 400)" 로 바꾸는 최소 수정. 다른 문장은 건드리지 마라.
+- .codex\agents\ 의 저장소 보조 subagent(assist_*.toml)가 model = zai/… 같은 비-OpenAI 모델을 쓰면 같은 400 이 난다 → 각 파일의 model / model_provider 를 표로 확인만 하고, 문제 있으면 REPORT 에 수정안(부모 모델 상속 또는 OpenAI 모델)만 적어라(이번엔 수정은 이 표에서 비-OpenAI 모델인 파일만, 부모 상속으로).
+- .grok\rules\demo1-glm-route-guard.md 포인터 1개(SSOT 경로 + 핵심 5줄).
+- 전역 C:\Users\nninn\.agents\skills\glm-offload 는 수정하지 말고 ASK_ONCE #2. 바꿀 문장 diff 를 REPORT 에 준비(백업 후 해당 문단만 교체하는 안).
+
+D5 회귀 확인
+- 저장소 스킬 라우터가 새 스킬을 찾는지: scripts\demo1_vibe_skill_router.py(또는 awx_skill_router.py) 로 "GLM 보조 써서 조사" 같은 질의 1개를 돌려 demo1-glm-route-guard 가 상위에 나오는지 확인(도움말 먼저).
+- python -m unittest scripts\test_glm_route_preflight.py 통과.
+- git status --short 로 main\·src\test\ 변경 0 확인.
+
+D6 Codex 에 줄 한 줄 안내
+- REPORT 끝에 Codex 가 지금 세션에서 바로 쓸 한 줄을 적어라. 예:
+  「GLM 은 spawn(glm_worker) 쓰지 말고 python -B scripts\glm_route_preflight.py 실행 후 MCP_READY 면 glm_agent 의 glm_delegate_task 로, 아니면 SESSION_UNAVAILABLE 로 계속.」
+- Codex ledger·Codex 세션에는 직접 쓰지 마라.
+
+====================================================================
+HOLD
+====================================================================
+- Codex 전체 로그인을 API 키로 바꾸기(크레딧 손실) — 하지 않음
+- glm-agent-mcp java 프로세스 정리 — 누가 쓰는지 확인만 하고 종료하지 마라(REPORT 에 PID·시작 시각·명령줄 요약)
+- Vercel 플랜 변경·키 교체
+
+====================================================================
+ASK_ONCE (2건, 끝에 한 번에)
+====================================================================
+#1 "glm_agent MCP 를 켜려면 AGENT_SUBAGENT_GLM_ENABLED / GLM_EXTERNAL_READY 를 (a) Codex config.toml 의 glm_agent env 에 넣을까요, (b) 사용자 환경변수로 넣을까요?" (D1 에서 필요하다고 확인된 경우만)
+#2 "전역 glm-offload 스킬의 'glm_worker 로 보내라' 문단을 demo1-glm-route-guard 안내로 바꿔도 될까요?(백업 후 그 문단만)"
+답 전엔 적용하지 말고 나머지 작업은 계속 진행.
+
+====================================================================
+절대 금지
+====================================================================
+- 제품 소스(main\, src\test\, chat.js, build 파일) 수정
+- auth.json · .env · .secrets · apikey.txt · application-secrets.yml 열람, 키·토큰 값 출력(존재 여부 bool 만)
+- ~/.codex/config.toml · glm_worker.toml · 전역 스킬을 ASK_ONCE 답 없이 수정
+- git push/pull/commit/add -A/reset/checkout/restore/stash/clean, AbandonWare3 재추가
+- 외부 호출 2회 초과, 400/401/403/429 재시도
+- Codex Plan9 세션의 ledger·lease·작업 파일 건드리기, 서버 재시작, 남의 프로세스 종료
+- 전체 테스트 스위트, Gradle 실행
+- skip-permissions / full-access 모드 권장
+
+====================================================================
+Acceptance (전부 판정해야 완료, 안 돌린 것은 NOT_RUN)
+====================================================================
+A1 EVIDENCE\native-400.md: 오류 문장·시각·세션 파일명 + glm_worker 지시 위치 표
+A2 D1 정리: 플래그 없을 때 glm_agent 동작, 호출 대상, java/python 관계 (file:line 근거)
+A3 라이브 ≤ 2회 결과 기록(했으면 HTTP·분류, 안 했으면 이유)
+A4 glm_route_preflight.py + unittest 통과, 현재 PC 에서 1회 실행 결과(route 값) 기록
+A5 신규 스킬 demo1-glm-route-guard + 저장소 스킬 3개 최소 수정 + .grok 포인터 1개
+A6 .codex\agents\assist_*.toml 모델 표(비-OpenAI 모델 유무)와 처리 결과
+A7 스킬 라우터에서 새 스킬 검색 확인
+A8 ASK_ONCE 2건 + 적용/되돌리기 명령 준비
+A9 git status 기준 main\·src\test\ 변경 0, 전역 파일 변경 0(ASK 답 전), 비밀 미열람 명시
+A10 Codex 용 한 줄 안내 작성
+
+====================================================================
+보고 형식
+====================================================================
+외부 API: n/2회, 결과 HTTP·분류(400/401/403/429 면 근본 원인을 맨 위에)
+원인 한 줄: (F3 확인 또는 반박 근거)
+변경 파일: 경로 + 요약 (git status --short)
+D0~D6 각각 PASS/FAIL/NOT_RUN + 핵심 1줄
+glm_route_preflight 현재 결과: route=…
+ASK_ONCE: 2줄
+Codex 한 줄: 「…」
+
+[ANTI-STOP] 멈추지 말고 D0부터 D6까지 끝까지 진행하라. 막힌 항목은 FAIL/NOT_RUN 으로 적고 다음으로 넘어가라. A1~A10 판정 전에는 끝내지 마라.

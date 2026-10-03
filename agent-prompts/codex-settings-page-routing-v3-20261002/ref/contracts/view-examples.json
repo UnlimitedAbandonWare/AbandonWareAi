@@ -1,0 +1,130 @@
+{
+  "notice": "설계용 합성 데이터. 모델 가용성·실제 실행·성능 측정 결과가 아니다. 기존 v2 저장 스키마를 확장하지 않는다.",
+  "saveProfileUnchanged": {
+    "schemaVersion": 1,
+    "enabled": false,
+    "bindings": {},
+    "additionalPaidAllowed": false,
+    "additionalCostCapUsd": 0
+  },
+  "settingsView": {
+    "viewVersion": 1,
+    "profileRevision": 0,
+    "runtimeEnabled": false,
+    "runtimeSupported": null,
+    "capabilities": [
+      {
+        "id": "jev.main",
+        "kind": "signal",
+        "editable": false,
+        "configuredValue": null,
+        "effectiveValue": null,
+        "observedValue": null,
+        "sourceKind": "existing_config",
+        "sourceKey": "demo.jev.mode",
+        "appliedScope": "surface",
+        "runtimeAvailable": null,
+        "applyTiming": "read_only",
+        "reasonCode": null,
+        "sourceRefs": [
+          "S01",
+          "S02",
+          "S04"
+        ]
+      },
+      {
+        "id": "plan.conditions",
+        "kind": "conditional_hint",
+        "editable": false,
+        "configuredValue": null,
+        "effectiveValue": null,
+        "observedValue": null,
+        "sourceKind": "plan_hint",
+        "sourceKey": null,
+        "appliedScope": "run",
+        "runtimeAvailable": null,
+        "applyTiming": "read_only",
+        "reasonCode": null,
+        "support": "partial",
+        "legacyDslStatus": null,
+        "sourceRefs": [
+          "S13",
+          "S15"
+        ]
+      },
+      {
+        "id": "retrieval.topk",
+        "kind": "observation",
+        "editable": false,
+        "configuredValue": null,
+        "effectiveValue": null,
+        "observedValue": null,
+        "sourceKind": "runtime",
+        "sourceKey": null,
+        "appliedScope": "run",
+        "runtimeAvailable": null,
+        "applyTiming": "read_only",
+        "reasonCode": null,
+        "recommendationValue": null,
+        "sourceRefs": [
+          "S25",
+          "S26"
+        ]
+      }
+    ]
+  },
+  "previewView": {
+    "basis": "SYNTHETIC_SCENARIO",
+    "modelCalls": 0,
+    "externalCalls": 0,
+    "writes": 0,
+    "stateMutations": 0,
+    "runtimeCandidate": null,
+    "guaranteedWinner": false,
+    "profileRevision": 0,
+    "policyFingerprint": null,
+    "catalogFingerprint": null,
+    "planFingerprint": null,
+    "warnings": [
+      "health_not_observed"
+    ],
+    "roleEffects": []
+  },
+  "runView": {
+    "notice": "합성 예시",
+    "scope": "EXISTING_AUTHORIZED_RUN",
+    "profileRevision": 12,
+    "role": "MAIN_HIGH",
+    "requestedChoiceId": null,
+    "selectedRouteKey": null,
+    "responseModelId": null,
+    "answerOriginAttemptId": null,
+    "finalizationStatus": null,
+    "plan": {
+      "legacyDslStatus": "not_used",
+      "when": "unknown",
+      "lateActivation": false,
+      "stages": [
+        {
+          "stage": "prompt.build",
+          "status": "delegated",
+          "reasonCode": "caller_owned"
+        }
+      ]
+    },
+    "contextCounts": {
+      "web": 4,
+      "vector": 3,
+      "finalContext": 7,
+      "source": "web_vector_estimate"
+    },
+    "newGenerationTriggered": false
+  },
+  "namingStatus": "PROPOSAL_CHECK_API_ROUTING_SPEC_SECTION_6",
+  "newApiEndpoints": [],
+  "existingV2DraftEndpoints": [
+    "POST /api/settings/routing/read",
+    "POST /api/settings/routing/preview",
+    "POST /api/settings/routing/save"
+  ]
+}

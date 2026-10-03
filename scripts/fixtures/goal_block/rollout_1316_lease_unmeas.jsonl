@@ -1,0 +1,5 @@
+{"timestamp":"2026-10-03T04:00:00.000Z","type":"session_meta","payload":{"id":"fixture-1316","cwd":"C:\\AbandonWare\\demo-1\\demo-1\\src","source":"vscode"}}
+{"timestamp":"2026-10-03T04:00:30.000Z","type":"event_msg","payload":{"type":"user_message","message":"OAuth 회귀 경로와 SSE 어댑터 수정"}}
+{"timestamp":"2026-10-03T05:40:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"OAuth 회귀 경로의 기존 테스트를 수정했습니다."}}
+{"timestamp":"2026-10-03T05:48:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"같은 차단 조건이 재확인됐습니다."}}
+{"timestamp":"2026-10-03T05:52:00.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"**목표 상태를 `blocked`로 갱신합니다.** 같은 차단 조건이 세 번 연속 확인됐습니다. SSE 어댑터·기본값 YAML은 timeout-policy 소스 예약으로 잠겨 있고, 요청별 실제 호출 수 집계가 불가합니다."}}

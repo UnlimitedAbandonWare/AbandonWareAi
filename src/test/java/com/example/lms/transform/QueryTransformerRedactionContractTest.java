@@ -69,11 +69,11 @@ class QueryTransformerRedactionContractTest {
         assertTrue(source.contains("traceSuppressed(\"normalized.blankTrace\")"));
         assertTrue(source.contains("traceSuppressed(\"normalized.recoveredTrace\")"));
         assertTrue(source.contains("traceSuppressed(\"normalized.orchTrace\")"));
-        assertTrue(source.contains("traceSuppressed(\"correction.fallback\")"));
-        assertTrue(source.contains("traceSuppressed(\"variants.fallback\")"));
+        assertTrue(source.contains("traceSuppressed(\"correction.fallback\", e)"));
+        assertTrue(source.contains("traceSuppressed(\"variants.fallback\", e)"));
         assertTrue(source.contains("traceSuppressed(\"userPrompt.recoverContext\")"));
         assertTrue(source.contains("traceSuppressed(\"userPrompt.recoveredOrchTrace\")"));
-        assertTrue(source.contains("traceSuppressed(\"classifyIntent.fallback\")"));
+        assertTrue(source.contains("traceSuppressed(\"classifyIntent.fallback\", e)"));
     }
 
     @Test

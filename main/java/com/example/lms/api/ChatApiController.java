@@ -951,6 +951,10 @@ public class ChatApiController {
      * abstraction instead of talking to concrete engines directly.
      */
     private final WebSearchProvider webSearchProvider;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.abandonware.ai.agent.tool.AgentToolInvoker agentToolInvoker;
+    @org.springframework.beans.factory.annotation.Value("${agent.tools.web-search.enabled:${AGENT_WEB_SEARCH_ENABLED:false}}")
+    private boolean agentWebSearchEnabled;
 
     private final SensitiveTopicDetector sensitiveTopicDetector;
 
@@ -969,6 +973,8 @@ public class ChatApiController {
     // In-memory snapshot store (optional; fail-soft in minimal builds)
     @Autowired(required = false)
     private TraceSnapshotStore traceSnapshotStore;
+    @Autowired(required = false)
+    private com.example.lms.debug.DebugEventStore traceBundleEvents;
 
     @Autowired(required = false)
     private com.example.lms.debug.ai.DebugAiMetricsService debugAiMetricsService;
@@ -1027,6 +1033,8 @@ public class ChatApiController {
      * without the understanding feature enabled.
      */
     private final ChatStreamEmitter chatStreamEmitter;
+    @org.springframework.beans.factory.annotation.Autowired
+    private org.springframework.beans.factory.ObjectProvider<com.example.lms.service.understanding.UnderstandingCommitService> understandingCommits;
     private final ObjectMapper objectMapper;
 
     /**
@@ -1051,12 +1059,19 @@ public class ChatApiController {
     private ChatCancellationCommandHandler cancellationCommandHandler = new ChatCancellationCommandHandler();
 
     private final com.example.lms.web.ClientOwnerKeyResolver ownerKeyResolver;
+    @org.springframework.beans.factory.annotation.Value("${demo.interview.enabled:false}")
+    private boolean interviewDemo;
     // === Default RAG toggle ===
     // Use server-side default when the client does not explicitly set useRag.
     // This property is defined in application.yml under chat.defaults.useRag and
     // defaults to true.
     @org.springframework.beans.factory.annotation.Value("${chat.defaults.useRag:true}")
     private boolean defaultUseRag;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.ChatPreferenceService chatPreferenceService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.config.ChatDefaultsProperties chatDefaultsProperties;
 
     @org.springframework.beans.factory.annotation.Value("${memory.summary.shadow-vector-enabled:true}")
     private boolean sessionSummaryShadowVectorEnabled;
@@ -1128,11 +1143,23 @@ public class ChatApiController {
                     } catch (Throwable failure) {
                         logSuppressed("cancel.appendStoppedMarker");
                     }
-                });
+                }, () -> cancelDeferredUnderstanding(resolvedSessionId, resolvedRunToken));
         if ("cancel_failed".equals(result.reason())) {
             logSuppressed("cancel.cancelSession");
         }
         return ResponseEntity.ok(result.body());
+    }
+
+    /** Called only after the existing cancellation authorization and nonblank exact token checks. */
+    private boolean cancelDeferredUnderstanding(Long sessionId, String originalRunId) {
+        var service = understandingCommits == null ? null : understandingCommits.getIfAvailable();
+        if (service == null) return false;
+        ChatSession session = historyService.getSessionWithMessages(sessionId);
+        if (session == null) return false;
+        String owner = session.getAdministrator() == null
+                ? AttachmentOwnerIdentity.forAnonymous(session.getOwnerKey()).hash()
+                : AttachmentOwnerIdentity.forAdministrator(session.getAdministrator().getUsername()).hash();
+        return service.cancelRun(owner, sessionId, originalRunId);
     }
 
     private boolean authorizeCancellation(Long sessionId, Authentication authentication) {
@@ -1371,9 +1398,10 @@ public class ChatApiController {
             return ResponseEntity.badRequest().body(new ChatResponseDto("bad_request", null, "bad_request", false));
         }
         publicRequestBudgetGuard.validateChat(dto);
+        String ownerKey = ownerKeyResolver.ownerKey();
+        captureChatSettings(dto, ownerKey);
         validateEffectiveBudgetEarly(dto);
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
-        String ownerKey = ownerKeyResolver.ownerKey();
         ResponseEntity<ChatResponseDto> denied = ChatSessionAccessGuard.authorize(
                 historyService, dto.getSessionId(), username, ownerKey, log);
         if (denied != null) {
@@ -1421,7 +1449,6 @@ public class ChatApiController {
         final SelectionEntropy selectionEntropy = selectionState.entropy();
         final SelectionDecisionLedger selectionDecisionLedger = selectionState.ledger();
         publicRequestBudgetGuard.validateChat(req);
-        validateEffectiveBudgetEarly(req);
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
         // Capture the client IP early to avoid IllegalStateException when running on
         // non-request threads. Prefer the X-Forwarded-For header when present.
@@ -1451,6 +1478,7 @@ public class ChatApiController {
         if (denied != null) {
             return Mono.just(denied);
         }
+        captureChatSettings(req, preResolvedOwnerKey);
         final String jamminiMode = resolveJamminiMode(
                 request.getHeader("X-Jammini-Mode"), request.getHeader("X-Brave-Mode"));
         final String guardLevel = request.getHeader("X-Guard-Level");
@@ -1459,34 +1487,7 @@ public class ChatApiController {
         // ??????덈콦???깅턄??嶺뚮∥???꾨뎨????곕츩??ル벣遊??怨뺣깹????븐슙???貫?꾥뚭였寃?????袁⑥춸 ?????덈펲.
         // MERGE_HOOK:PROJ_AGENT::controller_session_attachment_inject
         // 嶺뚳퐘維? 嶺뚯쉶?꾣룇?筌뤾퍓??attachmentIds ???㈑??筌뤾쑬???嶺뚳퐘維??띠럾? ???깅さ嶺????吏??낅슣???+ Fail-soft 嶺뚳퐣瑗??
-        if ((req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
-                && ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(req.getMessage())) {
-
-            try {
-                String sid = req.getSessionId() == null ? null : String.valueOf(req.getSessionId());
-                if (sid != null && !sid.isBlank()) {
-                    java.util.List<String> ids = attachmentService.findIdsBySession(
-                            sid,
-                            publicRequestBudgetGuard.attachmentLookaheadLimit(),
-                            AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey));
-                    if (ids != null && !ids.isEmpty()) {
-                        req.setAttachmentIds(ids);
-                        log.info("[ChatApi] Auto-injected {} attachments from sessionHash={}", ids.size(), SafeRedactor.hashValue(sid));
-                    }
-                }
-            } catch (Exception ignore) {
-                logSuppressed("chat.attachments.autoInject");
-                // ?筌뤾쑬???브퀗??????덉넮 ??戮?뱺??嶺뚳퐘維? ???⑸츎 ?롪퍒????뿉??띠룄?당쳥???겶? Fail-soft??嶺뚯쉳?듸쭛?
-            }
-
-            // ?????嶺뚳퐘維??띠럾? ??怨몃さ嶺??롪퍔???彛???節뗢뵛????怨쀫틮 嶺뚯쉶?꾣룇??怨쀬Ŧ 嶺뚳퐣瑗??
-            if (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty()) {
-                String __msg = String.valueOf(req.getMessage());
-                log.warn("[ChatApi] Attachment question but no attachments found. messageHash={} messageLength={}",
-                        SafeRedactor.hash12(__msg), __msg.length());
-                // BAD_REQUEST?????嶺뚯솘? ??袁ぢ??熬곣뫁????怨쀫틮 嶺?嶺뚳퐣瑗?怨レ뿉???ｌ뫒??嶺뚯쉳?듸쭛?
-            }
-        }
+        // Restore only the server-approved selection after loading the owned session below.
 
         validateEffectiveBudgetEarly(req);
 
@@ -1593,6 +1594,9 @@ public class ChatApiController {
         }
         // Capture authority on the request thread. Generation and replay may run on
         // other threads, where SecurityContextHolder is not the subscriber's context.
+        final boolean agentWebAuthority = isAdmin(
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication());
+        final boolean agentWebRequest = agentWebRequestAuthorized(agentWebAuthority);
         final boolean mayReadTraceHtml = isAdmin(
                 org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication())
                 && (debug || exposeTrace);
@@ -1601,7 +1605,9 @@ public class ChatApiController {
         final SelectionEntropy selectionEntropy = selectionState.entropy();
         final SelectionDecisionLedger selectionDecisionLedger = selectionState.ledger();
         publicRequestBudgetGuard.validateChatForStream(req, attach);
+        final String preResolvedOwnerKey = ownerKeyResolver.ownerKey();
         if (!attach) {
+            captureChatSettings(req, preResolvedOwnerKey);
             validateEffectiveBudgetEarly(req);
         }
         final String jamminiMode = resolveJamminiMode(
@@ -1627,7 +1633,6 @@ public class ChatApiController {
         }
 
         // [MoE] ???х뙴?꾨Ь?嶺뚯쉳????熬곣뫖??ownerKey / ?筌뤾쑬?????녹맠 ??ル∥??
-        final String preResolvedOwnerKey = ownerKeyResolver.ownerKey();
         final String sessionIdHeader = request.getHeader("X-Session-Id");
         final String conversationIdHeader = request.getHeader("X-Conversation-Id");
         final String requestIdHeader = request.getHeader("X-Request-Id");
@@ -1732,7 +1737,9 @@ public class ChatApiController {
         final String __httpQuery = request.getQueryString();
         final String __httpUa = request.getHeader("User-Agent");
         final com.abandonware.ai.addons.budget.TimeBudget __capturedBudget =
-                com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+                runRegistry == null ? com.abandonware.ai.addons.budget.TimeBudgetContext.get() : null;
+        final com.example.lms.guard.rulebreak.RuleBreakContextSnapshot __capturedRuleBreak =
+                com.example.lms.guard.rulebreak.RuleBreakContextSnapshot.capture();
         final Object __capturedBodyBytesValue = TraceStore.get("public.request.budget.bodyBytes");
         final Long __capturedBodyBytes = __capturedBodyBytesValue instanceof Number number
                 ? Math.max(0L, number.longValue())
@@ -1750,10 +1757,14 @@ public class ChatApiController {
             logSuppressed("stream.status.started");
         }
         Disposable d = Mono.fromRunnable(() -> {
+            try (var __ruleBreakScope = __capturedRuleBreak.bind()) {
             ChatRunExecutionContext.Scope runScope = null;
             try {
                 if (__capturedBudget != null) {
                     com.abandonware.ai.addons.budget.TimeBudgetContext.set(__capturedBudget);
+                } else {
+                    // The fully received request has an independently owned run.
+                    com.abandonware.ai.addons.budget.TimeBudgetContext.clear();
                 }
             // ??SSE ???덈콦?源녿닔? boundedElastic????????덈뺄?????ThreadLocal 嶺뚮ㅏ援????낅슣????熬곣뫗??
             try (TraceContext __tc = attachStreamTraceContext(__capturedSid, __capturedTrace)) {
@@ -1779,6 +1790,8 @@ public class ChatApiController {
                 }
 
                 traceClear("stream.trace.clear");
+                log.info("[plan9-request-phase] phase=controller count=1 requestHash={} atEpochMs={}",
+                        SafeRedactor.hashValueOrPreserve(__capturedRequestId), System.currentTimeMillis());
 
                 if (__capturedBodyBytes != null) {
                     tracePutIfAbsent("public.request.budget.bodyBytes", __capturedBodyBytes);
@@ -1824,7 +1837,8 @@ public class ChatApiController {
                 // the DTO actually used by workflow/prompt assembly.
                 ChatSession priorSession = (req.getSessionId() == null)
                         ? null
-                        : historyService.getSessionWithMessages(req.getSessionId());
+                        : historyService.getSessionForRequest(req.getSessionId());
+                restoreAttachmentSelection(req,priorSession,_username,preResolvedOwnerKey);
                 java.util.Map<String, Object> sessionMeta = (priorSession == null)
                         ? null
                         : mergeSessionMetaIntoRequest(priorSession, req);
@@ -1928,7 +1942,7 @@ public class ChatApiController {
                 }
                 if (sessionMeta == null) {
                     // session created/recovered in this request: collect request fields for persist
-                    sessionMeta = mergeSessionMetaIntoRequest(session, req);
+                    sessionMeta = mergeSessionMetaIntoRequest(session, dto);
                 }
                 try {
                     session.setSessionMeta(objectMapper.writeValueAsString(sessionMeta));
@@ -1938,21 +1952,46 @@ public class ChatApiController {
                             SafeRedactor.hashValue(String.valueOf(session.getId())), errorSummary(e));
                 }
                 // ???? ???揶??筌뤾쑬??嶺뚮씞?뗩뇡?????
-                // If a new session was created and attachments are present, map the
-                // attachments to this session. Without this association the
+                // Associate explicitly selected uploads with new or existing owned sessions.
+                // Without this association the
                 // AttachmentContextHandler (which relies on findBySession) will not
                 // return uploaded documents.
                 try {
-                    if (sessionCreated
-                            && __hasAttachments
+                    TraceStore.put("attachment.bind.sessionCreated", sessionCreated);
+                    TraceStore.put("attachment.bind.attempted", false);
+                    TraceStore.put("attachment.bind.count", __hasAttachments ? req.getAttachmentIds().size() : 0);
+                    if (__hasAttachments
                             && session != null && session.getId() != null) {
-                        attachmentService.attachToSession(
+                        TraceStore.put("attachment.bind.attempted", true);
+                        boolean attached = attachmentService.attachToSession(
                                 String.valueOf(session.getId()),
                                 req.getAttachmentIds(),
                                 AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey));
+                        TraceStore.put("attachment.bind.applied", attached);
                     }
                 } catch (Exception ex) {
-                    log.debug("Failed to attach uploaded files to new session (SSE): {}", String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(ex)), String.valueOf(ex).length()));
+                    TraceStore.put("attachment.bind.applied", false);
+                    TraceStore.put("attachment.bind.reason", "bind_exception");
+                    logSuppressed("stream.attachmentBind");
+                    log.debug("Failed to attach uploaded files to session (SSE): {}", String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(ex)), String.valueOf(ex).length()));
+                } finally {
+                    if (__hasAttachments && traceBundleEvents != null) {
+                        try {
+                            traceBundleEvents.emit(
+                                    com.example.lms.debug.DebugProbeType.GENERIC,
+                                    com.example.lms.debug.DebugEventLevel.INFO,
+                                    "attachment.bind", "Attachment session binding evaluated",
+                                    "ChatApiController.stream.attachments",
+                                    java.util.Map.of("attachmentIdCount", req.getAttachmentIds().size(),
+                                            "attachment.bind.sessionCreated", sessionCreated,
+                                            "attachment.bind.attempted", Boolean.TRUE.equals(TraceStore.get("attachment.bind.attempted")),
+                                            "attachment.bind.applied", Boolean.TRUE.equals(TraceStore.get("attachment.bind.applied")),
+                                            "attachment.bind.reason", java.util.Objects.toString(
+                                                    TraceStore.get("attachment.bind.reason"), "not_attempted")), null);
+                        } catch (Exception ignored) {
+                            // Diagnostic failure does not alter attachment authorization or generation.
+                        }
+                    }
                 }
                 // Propagate real session id so that it can be cancelled later
                 if (session != null && session.getId() != null) {
@@ -1982,16 +2021,6 @@ public class ChatApiController {
                         runContext.registerCancellationHandle(workerHandle);
                     }
                     runScope = ChatRunExecutionContext.bind(runContext);
-                    if (clientAckRequired && clientDetached.get()) {
-                        emitPreAcknowledgementCancellation(
-                                sink,
-                                runContext,
-                                selectionEntropy,
-                                selectionDecisionLedger,
-                                __capturedBudget,
-                                __streamStartedNs);
-                        return;
-                    }
                     interactiveClient.bind(runContext);
                     if (runContext.isCancellationRequested()) {
                         emitPreAcknowledgementCancellation(
@@ -2082,7 +2111,9 @@ public class ChatApiController {
                         ChatRunExecutionContext runContext = runContextRef.get();
                         sink.tryEmitNext(sse(ChatStreamEvent.sessionReady(
                                 session.getId(),
-                                runContext == null ? null : runContext.clientToken())));
+                                runContext == null ? null : runContext.clientToken(),
+                                ChatStreamSignalBuilder.buildTraceSignal(
+                                        java.util.Map.of(), __capturedTrace, __capturedRequestId, null))));
                     }
                 } catch (Exception ignore) {
                     logSuppressed("stream.sessionReady");
@@ -2094,22 +2125,9 @@ public class ChatApiController {
                             && !clientDetached.get()
                             && acknowledgedRun.awaitClientAcknowledgement(CHAT_RUN_CLIENT_ACK_TIMEOUT_MILLIS);
                     if (!acknowledged) {
-                        boolean cancelledUnacknowledged = emitPreAcknowledgementCancellation(
-                                sink,
-                                acknowledgedRun,
-                                selectionEntropy,
-                                selectionDecisionLedger,
-                                __capturedBudget,
-                                __streamStartedNs);
-                        // ACK can win after the bounded wait but before cancellation
-                        // acquires the run gate. Continue that same run instead of
-                        // finishing an empty DONE replay.
-                        boolean lateAcknowledgementWon = !cancelledUnacknowledged
-                                && acknowledgedRun != null
-                                && acknowledgedRun.awaitClientAcknowledgement(0L);
-                        if (!lateAcknowledgementWon) {
-                            return;
-                        }
+                        TraceStore.put("chat.sse.ackWaitExpired", true);
+                        log.info("[AWX] timeoutSource=ChatApiController.clientAckWait phase=transport_delivery runHash={} action=preserve_run",
+                                acknowledgedRun == null ? "not_observed" : acknowledgedRun.redactedRunIdentity());
                     }
                 }
 
@@ -2119,6 +2137,7 @@ public class ChatApiController {
 
                 final Long persistedUserMessageId = sessionCreated ? session.getInitialUserMessageId()
                         : historyService.appendMessageReturningId(session.getId(), "user", dto.getMessage());
+                if (runContextRef.get() != null) runContextRef.get().bindPersistedUserMessage(persistedUserMessageId);
 
                 //
                 // Run lightweight chain (location intercept / attachment context / image
@@ -2182,7 +2201,7 @@ public class ChatApiController {
                 NaverSearchService.SearchTrace rawTrace = null;
                 List<String> rawSnips = java.util.Collections.emptyList();
                 String traceHtml = null;
-                if (allowWeb) {
+                if (allowWeb && !agentWebRequest) {
                     try {
                         Long remainingMs = __capturedBudget == null ? null : __capturedBudget.remainingMillis();
                         long tookMs = Math.max(0L, (System.nanoTime() - __streamStartedNs) / 1_000_000L);
@@ -2249,7 +2268,7 @@ public class ChatApiController {
                         log.info("[ChatApi] All search providers failed. RAG-only fallback.");
                     }
 
-                    if (rawTrace != null) {
+                    if ((debug || exposeTrace) && rawTrace != null) {
                         // (A) Raw web snippets are shown immediately.
                         // (B) Final TopK context is added later after the chat workflow finishes.
                         try {
@@ -2315,7 +2334,11 @@ public class ChatApiController {
                 final java.util.concurrent.atomic.AtomicBoolean __queryRewriteTransformerEmitted =
                         new java.util.concurrent.atomic.AtomicBoolean(false);
 
-                java.util.function.Function<String, java.util.List<String>> __webSupplier = (q) -> {
+                final String agentEvidenceSession = String.valueOf(session.getId());
+                java.util.function.Function<String, java.util.List<String>> __webSupplier = agentWebRequest
+                        ? (com.example.lms.service.ChatWorkflow.WebEvidenceSupplier)
+                            q -> agentPromptSearch(q, topKParam, agentEvidenceSession, allowWeb, agentWebAuthority)
+                        : (q) -> {
                     GuardContext __ctx;
                     try {
                         __ctx = GuardContextHolder.get();
@@ -2431,6 +2454,7 @@ public class ChatApiController {
                 }
                 requestTimelineId = beginModelRequestTimeline(
                         __capturedRequestId, currentSessionKeyHolder[0], dtoForCall.getModel());
+                dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey));
                 bindGeneralGraphScope(dtoForCall, session, _username, preResolvedOwnerKey);
                 ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
                 ChatRunExecutionContext generatedRun = runContextRef.get();
@@ -2576,8 +2600,8 @@ public class ChatApiController {
                     stashStreamTraceSnapshot(streamTraceMetaRef);
                     TraceStore.clear();
 
-                    if (rawTrace != null || finalWebTopK != null || finalVectorTopK != null
-                            || (extraMeta != null && !extraMeta.isEmpty())) {
+                    if ((debug || exposeTrace) && (rawTrace != null || finalWebTopK != null || finalVectorTopK != null
+                            || (extraMeta != null && !extraMeta.isEmpty()))) {
                         String finalTraceHtml = traceHtmlBuilder.buildSplitPanel(rawTrace, rawSnips,
                                 finalWebTopK,
                                 finalVectorTopK,
@@ -2630,6 +2654,7 @@ public class ChatApiController {
                 }
 
                 boolean cancelledBeforePersist = false;
+                boolean firstVisibleToken = true;
                 for (String c : chunk(visibleFinalText, 60)) {
                     if (isStreamRunCancelled(runContextRef.get(), finalSessionId)) {
                         cancelledBeforePersist = true;
@@ -2637,6 +2662,11 @@ public class ChatApiController {
                     }
                     Sinks.EmitResult tokenEmitResult = emitTokenStreamEvent(
                             sink, sse(ChatStreamEvent.token(c)));
+                    if (firstVisibleToken && tokenEmitResult.isSuccess()) {
+                        firstVisibleToken = false;
+                        log.info("[plan9-request-phase] phase=sse_first_token count=1 requestHash={} atEpochMs={}",
+                                SafeRedactor.hashValueOrPreserve(__capturedRequestId), System.currentTimeMillis());
+                    }
                     if (!tokenEmitResult.isSuccess()) {
                         TraceStore.put("chat.stream.outcome.tokenEmitFailureReason",
                                 tokenEmitResult.name().toLowerCase(java.util.Locale.ROOT));
@@ -2648,6 +2678,9 @@ public class ChatApiController {
                     cancelledBeforePersist = true;
                 }
                 ChatRunExecutionContext committingRun = runContextRef.get();
+                var deferredService = understandingCommits == null ? null : understandingCommits.getIfAvailable();
+                var understandingPlan = cancelledBeforePersist || deferredService == null ? null
+                        : deferredService.prepareTranscript(committingRun, persistableFinalText, streamRagControlProjection.held());
                 if (!cancelledBeforePersist
                         && committingRun != null
                         && !committingRun.tryBeginTranscriptCommit()) {
@@ -2680,12 +2713,13 @@ public class ChatApiController {
                 AtomicReference<ChatStreamEvent.PipelineSnapshot> persistedPipelineSnapshotRef =
                         new AtomicReference<>(pipelineSnapshotBeforePersistence);
                 Runnable durablePersistence = () -> {
-                    Long assistantMessageId = historyService.appendMessageReturningId(
-                            persistenceSessionId, "assistant", persistableFinalText);
+                    Long assistantMessageId = deferredService == null ? historyService.appendMessageReturningId(
+                            persistenceSessionId, "assistant", persistableFinalText)
+                            : deferredService.persistOrigin(committingRun, persistenceSessionId, persistableFinalText, understandingPlan);
                     if (assistantMessageId != null && committingRun != null && !committingRun.markPersisted()) {
                         throw new IllegalStateException("exact transcript persistence outcome rejected");
                     }
-                    captureFinalizedGraph(persistenceGraphScope, persistedUserMessageId,
+                    captureFinalizedGraph(dtoForCall, persistenceGraphScope, persistedUserMessageId,
                             assistantMessageId, streamRagControlProjection.held());
                     if (!streamRagControlProjection.held()) {
                         updateRollingSummaryAndMaybePromote(
@@ -2705,7 +2739,7 @@ public class ChatApiController {
                             persistenceTraceHtml,
                             traceSnapshotStore,
                             historyService,
-                            log);
+                            log, debug || exposeTrace);
                     traceTurnIdRef.set(persistedTraceTurnId);
                     persistedPipelineSnapshotRef.set(ChatStreamSignalBuilder.withTraceTurnId(
                             pipelineSnapshotBeforePersistence,
@@ -2778,7 +2812,7 @@ public class ChatApiController {
                                 traceTurnId,
                                 learningContextMeta,
                                 result.evidenceMetadata(),
-                                finalPipelineSnapshot);
+                                finalPipelineSnapshot).withObservation(traceMetaForSnapshot);
                 requestCompletion.accept(completedRequestEvent);
                 Sinks.EmitResult finalEmitResult = emitFinalStreamEvent(
                         committingRun,
@@ -2850,6 +2884,9 @@ public class ChatApiController {
                         recordModelRequestTerminal(responseTerminal.reasonCode(), terminalTimelineId,
                                 responseTerminal.metadata().modelName());
                         streamOutcomeRef.compareAndSet(null, responseTerminal.reasonCode());
+                        if (responseTerminal.reasonCode().startsWith("chatgpt_oauth_")) {
+                            sink.tryEmitNext(sse(ChatStreamEvent.error(responseTerminal.reasonCode())));
+                        }
                         sink.tryEmitNext(sse(ChatStreamEvent.terminal(
                                 ChatResponseDto.terminal(responseTerminal, currentSessionId.get()))));
                     });
@@ -2857,7 +2894,7 @@ public class ChatApiController {
                 }
                 recordRunTerminal(runContextRef.get(), "error");
                 recordModelRequestTerminal("error", requestTimelineId, null);
-                log.error("[AWX][chat] stream-failed type={} error={}", ex.getClass().getSimpleName(), String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(ex)), String.valueOf(ex).length()));
+                logStreamFailureDiagnostics(ex);
                 // Avoid direct string concatenation when building error messages
                 String errMsg = com.example.lms.llm.ModelSelectionException.streamFailureCode(ex);
                 try {
@@ -3008,6 +3045,7 @@ public class ChatApiController {
                 }
                 sink.tryEmitComplete();
             }
+            }
         })
                 .subscribeOn(Schedulers.boundedElastic())
                 .doFinally(ignored -> admissionLease.close())
@@ -3025,16 +3063,6 @@ public class ChatApiController {
                 .doOnCancel(() -> {
                     clientDetached.set(true);
                     ChatRunExecutionContext detachedRun = runContextRef.get();
-                    boolean cancelledUnacknowledged = clientAckRequired
-                            && runRegistry != null
-                            && detachedRun != null
-                            && emitPreAcknowledgementCancellation(
-                                    sink,
-                                    detachedRun,
-                                    selectionEntropy,
-                                    selectionDecisionLedger,
-                                    __capturedBudget,
-                                    __streamStartedNs);
                     interactiveClient.disconnect();
                     Long sid = currentSessionId.get();
                     try {
@@ -3120,12 +3148,14 @@ public class ChatApiController {
         return null;
     }
 
+    /** ipua:/system: resolved keys are shared group identities, not per-browser ownership proof. */
+    private static boolean isSharedFallbackOwnerKey(String key) {
+        return key == null || key.startsWith("ipua:") || key.startsWith("system:");
+    }
+
     private boolean canAccessSession(ChatSession session, Authentication authentication) {
         if (session == null) {
             return false;
-        }
-        if (isAdmin(authentication)) {
-            return true;
         }
         String username = authentication != null && authentication.isAuthenticated() ? authentication.getName() : null;
         var owner = session.getAdministrator();
@@ -3133,7 +3163,52 @@ public class ChatApiController {
             return username != null && owner.getUsername().equals(username);
         }
         String currentKey = ownerKeyResolver.ownerKey();
-        return session.getOwnerKey() != null && session.getOwnerKey().equals(currentKey);
+        return !isSharedFallbackOwnerKey(currentKey)
+                && session.getOwnerKey() != null && session.getOwnerKey().equals(currentKey);
+    }
+
+    /** Called only inside the admitted session's supplier; authority is captured on the request thread. */
+    private boolean agentWebRequestAuthorized(boolean adminAuthorized) {
+        return agentWebSearchEnabled && adminAuthorized && agentToolInvoker != null
+                && agentToolInvoker.webSearchEnabled();
+    }
+
+    private List<dev.langchain4j.rag.content.Content> agentPromptSearch(String query, int topK, String sessionId,
+            boolean allowWeb, boolean adminAuthorized) {
+        var evidence = new java.util.ArrayList<dev.langchain4j.rag.content.Content>();
+        TraceStore.put("agent.webSearch.prompt.status", "SKIPPED");
+        TraceStore.put("agent.webSearch.prompt.reasonCode", null);
+        TraceStore.put("agent.webSearch.prompt.returnedCount", 0);
+        try {
+            if (!allowWeb || agentToolInvoker == null) {
+                TraceStore.put("agent.webSearch.prompt.reasonCode",
+                        !allowWeb ? "web_search_request_disallowed" : "web_search_tool_unavailable");
+                return List.of();
+            }
+            Map<String, Object> result = agentToolInvoker.invokeForPrompt("web.search",
+                    Map.of("query", query == null ? "" : query, "topK", Math.min(3, topK)),
+                    new com.abandonware.ai.agent.tool.request.ToolContext(sessionId, null, Map.of("allowWeb", allowWeb)),
+                    adminAuthorized,
+                    evidence::addAll);
+            String status = java.util.Objects.toString(result.get("executionStatus"), "FAIL_SOFT");
+            if (!Set.of("OK", "SKIPPED", "FAIL_SOFT").contains(status)) status = "FAIL_SOFT";
+            TraceStore.put("agent.webSearch.prompt.status", status);
+            if (!"OK".equals(status)) {
+                TraceStore.put("agent.webSearch.prompt.reasonCode", SafeRedactor.traceLabelOrFallback(
+                        java.util.Objects.toString(result.get("reasonCode"),
+                                "FAIL_SOFT".equals(status) ? "web_search_failed" : "web_search_skipped"),
+                        "web_search_unavailable"));
+                return List.of();
+            }
+            TraceStore.put("agent.webSearch.prompt.returnedCount", evidence.size());
+            return List.copyOf(evidence);
+        } catch (com.abandonware.ai.agent.tool.ToolInvocationException rejected) {
+            boolean failed = rejected.status() >= 500 || rejected.status() == 408 || rejected.status() == 429;
+            TraceStore.put("agent.webSearch.prompt.status", failed ? "FAIL_SOFT" : "SKIPPED");
+            TraceStore.put("agent.webSearch.prompt.reasonCode",
+                    SafeRedactor.traceLabelOrFallback(rejected.code(), "tool_invocation_rejected"));
+            return List.of();
+        }
     }
 
     private static boolean isAdmin(Authentication authentication) {
@@ -3160,7 +3235,7 @@ public class ChatApiController {
                 data.learningContext(), data.evidence(), data.statusSignal(),
                 data.traceSignal(), data.scoreDelta(), data.pipelineSnapshot(),
                 data.debugFxSignal(), data.transformerBlocks(), data.selectionEntropySignal(),
-                data.generationTermination());
+                data.generationTermination(), data.observation());
         return ServerSentEvent.<ChatStreamEvent>builder(projected)
                 .event(event.event()).id(event.id()).retry(event.retry())
                 .comment(event.comment()).build();
@@ -3475,6 +3550,42 @@ public class ChatApiController {
         } catch (RuntimeException ex) {
             logSuppressed("modelRequestTimeline.terminal");
         }
+    }
+
+    static void logStreamFailureDiagnostics(Throwable failure) {
+        String error = String.valueOf(failure);
+        log.error("[AWX][chat] stream-failed type={} error={} causeClasses={} appFrame={}",
+                failure.getClass().getSimpleName(),
+                String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(error), error.length()),
+                streamFailureCauseClasses(failure), streamFailureAppFrame(failure));
+    }
+
+    static String streamFailureCauseClasses(Throwable failure) {
+        java.util.List<String> classes = new java.util.ArrayList<>();
+        for (int depth = 0; failure != null && depth < 5; depth++) {
+            classes.add(failure.getClass().getName());
+            if (failure.getCause() == failure) break;
+            failure = failure.getCause();
+        }
+        return String.join(">", classes);
+    }
+
+    static String streamFailureAppFrame(Throwable failure) {
+        java.util.List<Throwable> causes = new java.util.ArrayList<>();
+        for (int depth = 0; failure != null && depth < 5; depth++) {
+            causes.add(failure);
+            if (failure.getCause() == failure) break;
+            failure = failure.getCause();
+        }
+        for (int i = causes.size() - 1; i >= 0; i--) {
+            for (StackTraceElement frame : causes.get(i).getStackTrace()) {
+                if (frame.getClassName().startsWith("com.example.")
+                        || frame.getClassName().startsWith("com.abandonware.")) {
+                    return frame.getClassName() + "#" + frame.getMethodName() + ":" + frame.getLineNumber();
+                }
+            }
+        }
+        return "not_observed";
     }
 
     Sinks.EmitResult emitStreamEvent(
@@ -4088,7 +4199,8 @@ public class ChatApiController {
         // the DTO actually used by workflow/prompt assembly.
         ChatSession priorSession = (uiReq.getSessionId() == null)
                 ? null
-                : historyService.getSessionWithMessages(uiReq.getSessionId());
+                : historyService.getSessionForRequest(uiReq.getSessionId());
+        restoreAttachmentSelection(uiReq,priorSession,username,preResolvedOwnerKey);
         java.util.Map<String, Object> sessionMeta = (priorSession == null)
                 ? null
                 : mergeSessionMetaIntoRequest(priorSession, uiReq);
@@ -4222,7 +4334,7 @@ public class ChatApiController {
         // [Jammini Memory Hook] session metadata merge/persist
         if (sessionMeta == null) {
             // session created/recovered in this request: collect request fields for persist
-            sessionMeta = mergeSessionMetaIntoRequest(session, uiReq);
+            sessionMeta = mergeSessionMetaIntoRequest(session, dto);
         }
         try {
             session.setSessionMeta(objectMapper.writeValueAsString(sessionMeta));
@@ -4251,6 +4363,7 @@ public class ChatApiController {
         final Long persistedUserMessageId = session == null ? null : sessionCreated
                 ? session.getInitialUserMessageId()
                 : historyService.appendMessageReturningId(session.getId(), "user", dto.getMessage());
+        syncRun.bindPersistedUserMessage(persistedUserMessageId);
 
         // 3) ???롪틵???        // ?롪틵???嶺뚮ㅄ維獄??ChatRequestDto.searchMode????臾먰돵 ??戮?꽑??類ｋ펲. OFF??????롪틵???源녿굵 濾곌쑬????⑤슦??
         // FORCE_LIGHT/DEEP??怨뺤┣ 嶺뚣끉裕뉏펺?useWebSearch?띠럾? false??????롪틵???源녿굵 濾곌쑬??????? AUTO 嶺뚮ㅄ維獄??????        // __finalUseWeb???잙갭梨????????類ｋ펲. topK??webTopK ?熬곣뫀援????臾먰돵 嶺뚯솘??筌먲퐢彛??
@@ -4262,16 +4375,19 @@ public class ChatApiController {
                 effectiveSearchMode(dto.getMessage(), sm);
         boolean performSearch = shouldUseWebForSearchMode(
                 dto.getMessage(), effectiveSearchMode, __finalUseWeb, __finalUseRag, searchDecisionService, topKParam);
+        final boolean agentWebAuthority = isAdmin(
+                org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication());
+        final boolean agentWebRequest = agentWebRequestAuthorized(agentWebAuthority);
         GuardContext __preSearchCtx = GuardContextHolder.get();
         markCheapSearchMode(__preSearchCtx, effectiveSearchMode, "sync.preSearch");
         final String __providerSearchQuery = providerSearchQuery(dto.getMessage());
         if (performSearch) {
             recordSearchModeRewriteHint(effectiveSearchMode);
         }
-        NaverSearchService.SearchResult sr = performSearch
+        NaverSearchService.SearchResult sr = performSearch && !agentWebRequest
                 ? webSearchProvider.searchWithTrace(__providerSearchQuery, topKParam)
                 : new NaverSearchService.SearchResult(List.of(), null);
-        if (performSearch && sr != null) {
+        if (performSearch && !agentWebRequest && sr != null) {
             List<String> rawSnips = prioritizeDomainEvidenceSnippets(dto.getMessage(), sr.snippets());
             rawSnips = completeNamedOfficialCoverageSnippets(
                     dto.getMessage(),
@@ -4351,7 +4467,11 @@ public class ChatApiController {
         final String __prefetchDomainProfile = (__prefetchCtx == null ? null : __prefetchCtx.getDomainProfile());
         final Integer __prefetchMinCitations = (__prefetchCtx == null ? null : __prefetchCtx.getMinCitations());
 
-        java.util.function.Function<String, java.util.List<String>> __webSupplier = (q) -> {
+        final String agentEvidenceSession = String.valueOf(session.getId());
+        java.util.function.Function<String, java.util.List<String>> __webSupplier = agentWebRequest
+                ? (com.example.lms.service.ChatWorkflow.WebEvidenceSupplier)
+                    q -> agentPromptSearch(q, topKParam, agentEvidenceSession, performSearch, agentWebAuthority)
+                : (q) -> {
             GuardContext __ctx;
             try {
                 __ctx = GuardContextHolder.get();
@@ -4439,6 +4559,7 @@ public class ChatApiController {
         if (syncRun.isCancellationRequested()) {
             throw new java.util.concurrent.CancellationException("request_cancelled");
         }
+        dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey));
         bindGeneralGraphScope(dtoForCall, session, username, preResolvedOwnerKey);
         ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
         String semanticFinalContent = result.content();
@@ -4455,6 +4576,9 @@ public class ChatApiController {
         }
         StageBoundaryBreadcrumbs.recordFromCurrentTrace("final");
 
+        var deferredService = understandingCommits == null ? null : understandingCommits.getIfAvailable();
+        var understandingPlan = deferredService == null ? null
+                : deferredService.prepareTranscript(syncRun, persistableFinalContent, syncRagControlProjection.held());
         if (!syncRun.markGenerationSucceeded() || !syncRun.tryBeginTranscriptCommit()) {
             throw new java.util.concurrent.CancellationException("request_cancelled");
         }
@@ -4463,13 +4587,14 @@ public class ChatApiController {
                 new java.util.concurrent.atomic.AtomicReference<>();
         boolean durableAccepted = syncRun.runTerminalSideEffect(() -> {
         // 5) Persist assistant turn.
-        Long assistantMessageId = historyService.appendMessageReturningId(
-                completedSession.getId(), "assistant", persistableFinalContent);
+        Long assistantMessageId = deferredService == null ? historyService.appendMessageReturningId(
+                completedSession.getId(), "assistant", persistableFinalContent)
+                : deferredService.persistOrigin(syncRun, completedSession.getId(), persistableFinalContent, understandingPlan);
         boolean syncPersistenceAccepted = assistantMessageId != null;
         if (syncPersistenceAccepted) {
             syncRun.markPersisted();
         }
-        captureFinalizedGraph(dtoForCall.getGeneralGraphScope(), persistedUserMessageId,
+        captureFinalizedGraph(dtoForCall, dtoForCall.getGeneralGraphScope(), persistedUserMessageId,
                 assistantMessageId, syncRagControlProjection.held());
 
         String modelUsedFinal = ChatModelMetaSupport.resolveModelUsed(result.modelUsed(), dto.getModel(), FALLBACK_MODEL);
@@ -4551,7 +4676,7 @@ public class ChatApiController {
             }}
 
         String traceHtmlForSnapshot = null;
-        if (__srFinal != null) {
+        if (exposeTrace && __srFinal != null) {
             String traceHtml = "";
             try {
                 java.util.List<String> rawSnips = (__srFinal.snippets() == null)
@@ -4578,7 +4703,7 @@ public class ChatApiController {
                 traceHtmlForSnapshot,
                 traceSnapshotStore,
                 historyService,
-                log);
+                log, exposeTrace);
 
         // Persist answer.mode + traceTurnId snapshot for cross-device badges and deterministic trace open.
         try {
@@ -4598,31 +4723,8 @@ public class ChatApiController {
         // is computed by comparing the number of requested attachment IDs and the
         // number of documents successfully extracted by AttachmentService.
         try {
-            java.util.List<String> __idsForMeta = uiReq.getAttachmentIds();
-            if (__idsForMeta != null && !__idsForMeta.isEmpty()) {
-                int __total = __idsForMeta.size();
-                int __loaded = 0;
-                try {
-                    AttachmentOwnerIdentity __attachmentOwner = uiReq.getAttachmentOwnerIdentity();
-                    var __docsForMeta = __attachmentOwner == null
-                            ? java.util.List.<dev.langchain4j.data.document.Document>of()
-                            : attachmentService.asDocumentsForSession(
-                                    __idsForMeta,
-                                    completedSession == null || completedSession.getId() == null
-                                            ? null
-                                            : String.valueOf(completedSession.getId()),
-                                    __attachmentOwner);
-                    if (__docsForMeta != null)
-                        __loaded = __docsForMeta.size();
-                } catch (Exception ignore) {
-                    logSuppressed("sync.attachmentMeta.extract");
-                }
-                int __failed = __total - __loaded;
-                if (__failed > 0) {
-                    String metaMsg = String.format(ATTACHMENT_LOAD_FAILURE_FORMAT, __total, __failed);
-                    historyService.appendMessage(completedSession.getId(), "system", metaMsg);
-                }
-            }
+            // Reuse the actual model-input selection; reparsing here can change ZIP selection/revision.
+            TraceStore.put("attachment.context.usedCount",dtoForCall.getUsedAttachmentSources().size());
         } catch (Exception ignore) {
             logSuppressed("sync.attachmentMeta");
         }
@@ -4730,7 +4832,14 @@ public class ChatApiController {
 
     // ===== settings merge =====
     private ChatRequestDto mergeWithSettings(ChatRequestDto ui) {
-        return ChatRequestSettingsMerger.merge(ui, settingsService.getAllSettings(), defaultUseRag, log);
+        if (chatDefaultsProperties == null) // Direct legacy fixtures do not create a Spring properties bean.
+            return ChatRequestSettingsMerger.merge(ui, settingsService.getAllSettings(), defaultUseRag, log);
+        var snapshot = ui.getChatSettingsSnapshot();
+        var resolved = ChatRequestSettingsMerger.resolve(ui, snapshot == null ? Map.of() : snapshot.user(),
+                snapshot == null ? settingsService.getChatAdminOverrides() : snapshot.admin(), chatDefaultsProperties, log);
+        TraceStore.put("chat.settings.sources", resolved.sources());
+        TraceStore.put("chat.settings.defaultsVersion", chatDefaultsProperties.getDefaultsVersion());
+        return resolved.request();
     }
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
@@ -4739,11 +4848,23 @@ public class ChatApiController {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.example.lms.service.rag.graph.BrainStateChatWorkflowAspect generalGraphCapture;
 
-    private void captureFinalizedGraph(com.example.lms.service.rag.graph.GeneralGraphScope scope,
+    private void restoreAttachmentSelection(ChatRequestDto request,ChatSession session,String username,String ownerKey){
+        if(request==null||session==null||hasAttachments(request)||generalGraphSourceAuthority==null
+                ||!ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(request.getMessage()))return;
+        try{
+            com.example.lms.service.rag.graph.GeneralGraphScope.authorize(session,username,ownerKey)
+                .ifPresent(scope->request.setAttachmentIds(generalGraphSourceAuthority.selectedAttachmentIds(scope)));
+        }catch(RuntimeException unavailable){TraceStore.put("attachment.selection.restore","unavailable");}
+    }
+
+    private void captureFinalizedGraph(ChatRequestDto request, com.example.lms.service.rag.graph.GeneralGraphScope scope,
                                        Long userMessageId, Long assistantMessageId, boolean held) {
-        if (held || generalGraphCapture == null || userMessageId == null) return;
+        if (held || userMessageId == null || assistantMessageId == null) return;
         try {
-            generalGraphCapture.captureFinalized(scope, userMessageId, assistantMessageId);
+            if(generalGraphSourceAuthority!=null&&!request.getUsedAttachmentSources().isEmpty())
+                generalGraphSourceAuthority.rememberAttachmentSelection(scope,request.getUsedAttachmentSources(),true);
+            if(generalGraphCapture!=null)generalGraphCapture.captureFinalized(scope,userMessageId,assistantMessageId,
+                Boolean.TRUE.equals(request.getAttachmentGraphConsent())?request.getUsedAttachmentSources():java.util.List.of());
         } catch (RuntimeException unavailable) {
             TraceStore.put("retrieval.kg.brainState.capture.outcome", "failed");
         }
@@ -4887,18 +5008,18 @@ public class ChatApiController {
             @AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails principal,
             @RequestParam(name = "limit", defaultValue = "50") int limit,
             jakarta.servlet.http.HttpServletRequest request) {
-        boolean isAdmin = principal != null && principal.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN"));
         String user = principal != null ? principal.getUsername() : "anonymousUser";
         String clientIp = resolveClientIp(request);
-
-        java.util.List<ChatSession> list;
-        if (isAdmin) {
-            list = historyService.getAllSessionsForAdmin(limit);
-        } else {
-            list = historyService.getSessionsForUser(user, clientIp, limit);
+        String currentKey = ownerKeyResolver.ownerKey();
+        if (isSharedFallbackOwnerKey(currentKey)) {
+            return java.util.List.of();
         }
+
+        java.util.List<ChatSession> list = historyService.getSessionsForUser(user, clientIp, limit);
         return list.stream()
+                .filter(s -> s.getAdministrator() == null
+                        ? s.getOwnerKey() != null && s.getOwnerKey().equals(currentKey)
+                        : s.getAdministrator().getUsername().equals(user))
                 .map(s -> new SessionInfo(
                         s.getId(),
                         s.getTitle(),
@@ -4992,7 +5113,7 @@ public class ChatApiController {
         String username = authentication != null && authentication.isAuthenticated()
                 ? authentication.getName()
                 : null;
-        boolean isAdmin = isAdmin(authentication);
+        boolean isAdmin = !interviewDemo && isAdmin(authentication);
 
         if (session == null) {
             if (restoreProbe) {
@@ -5009,7 +5130,7 @@ public class ChatApiController {
         boolean traceOwner = owner == null
                 ? session.getOwnerKey() != null && session.getOwnerKey().equals(ownerKeyResolver.ownerKey())
                 : username != null && owner.getUsername().equals(username);
-        if (!isAdmin && !traceOwner) {
+        if (!traceOwner) {
             if (restoreProbe) {
                 return restoreProbeReset("SESSION_UNAVAILABLE");
             }
@@ -5023,6 +5144,162 @@ public class ChatApiController {
                 settingsService.getAllSettings(),
                 isAdmin && traceOwner && (debug || exposeTrace),
                 log);
+    }
+
+    @GetMapping("/sessions/{id}/traces/{snapshotId}/html")
+    public ResponseEntity<?> getSessionTraceHtml(
+            @PathVariable("id") Long id,
+            @PathVariable("snapshotId") String snapshotId,
+            Authentication authentication,
+            @RequestParam(value = "format", defaultValue = "html") String format) {
+        if (!"html".equals(format) && !"bundle".equals(format) && !"json".equals(format)) return ResponseEntity.badRequest().build();
+        if (id == null || id <= 0 || !ChatTraceMetaMessageRestorer.isSafeTraceSnapshotId(snapshotId)) {
+            return ResponseEntity.notFound().build();
+        }
+        ChatSession session = historyService.getSessionWithMessages(id);
+        ResponseEntity<?> access = getSessionResponse(id, false, true, authentication, session);
+        if (!access.getStatusCode().is2xxSuccessful()) return access;
+        if (session == null || !id.equals(session.getId())
+                || !(access.getBody() instanceof SessionDetail detail)) return ResponseEntity.notFound().build();
+        if ("json".equals(format)) {
+            String turnReference = snapshotId.matches("turn_[0-9]{1,18}") ? snapshotId.substring(5) : null;
+            ChatTraceMetaMessageRestorer.SnapshotPointer jsonPointer = null;
+            Long pointerMessageId = null;
+            for (var message : session.getMessages()) {
+                if (!"system".equals(message.getRole())) continue;
+                var parsed = ChatTraceMetaMessageRestorer.parseSnapshotPointer(message.getContent(), message.getId());
+                if (parsed.isEmpty() || (turnReference == null ? !snapshotId.equals(parsed.get().snapshotId())
+                        : !turnReference.equals(String.valueOf(message.getId())))) continue;
+                if (jsonPointer != null) return ResponseEntity.notFound().build();
+                jsonPointer = parsed.get(); pointerMessageId = message.getId();
+            }
+            if (jsonPointer == null || jsonPointer.assistantMessageId() == null) return ResponseEntity.notFound().build();
+            Long assistant = jsonPointer.assistantMessageId();
+            if (session.getMessages().stream().noneMatch(m -> "assistant".equals(m.getRole()) && assistant.equals(m.getId())))
+                return ResponseEntity.notFound().build();
+            return ResponseEntity.ok().header("Cache-Control", "no-store").body(
+                    Map.of("traceTurnId", pointerMessageId, "assistantMessageId", assistant,
+                            "snapshotId", jsonPointer.snapshotId(), "diagnostics", jsonPointer.diagnostics()));
+        }
+        var matches = detail.turnTraces().stream().filter(t -> snapshotId.equals(t.snapshotId())).toList();
+        if (matches.size() != 1) return ResponseEntity.notFound().build();
+        Long assistantId = matches.get(0).turnId();
+        ChatTraceMetaMessageRestorer.SnapshotPointer owned = null;
+        LocalDateTime capturedAt = null;
+        for (var message : session.getMessages()) {
+            if (!"system".equals(message.getRole())) continue;
+            var parsed = ChatTraceMetaMessageRestorer.parseSnapshotPointer(message.getContent(), message.getId());
+            if (parsed.isEmpty() || !snapshotId.equals(parsed.get().snapshotId())) continue;
+            var candidate = parsed.get();
+            if (!assistantId.equals(candidate.assistantMessageId())) return ResponseEntity.notFound().build();
+            if (owned != null && !owned.equals(candidate)) return ResponseEntity.notFound().build();
+            owned = candidate;
+            capturedAt = message.getCreatedAt();
+        }
+        if (owned == null) return ResponseEntity.notFound().build();
+        var snapshot = traceSnapshotStore == null ? Optional.<TraceSnapshotStore.TraceSnapshot>empty()
+                : traceSnapshotStore.get(snapshotId);
+        if ("bundle".equals(format)) return sessionTraceBundle(owned, capturedAt, snapshot.orElse(null));
+        String html = snapshot.map(TraceSnapshotStore.TraceSnapshot::html).orElse(null);
+        String storage = "ring";
+        if (html == null || html.isBlank()) {
+            if (owned.diagnostics().isEmpty() || traceHtmlBuilder == null) return ResponseEntity.notFound().build();
+            var fields = owned.projection();
+            html = traceHtmlBuilder.buildSnapshotHtml(snapshotId, null, null, null, null,
+                    fields.get("reason"), fields.get("method"), fields.get("pathHash"),
+                    null, null, owned.diagnostics(), Map.of());
+            storage = "durable_projection";
+        }
+        return ResponseEntity.ok().contentType(MediaType.TEXT_HTML)
+                .header("Cache-Control", "no-store")
+                .header("X-Trace-Storage", storage).body(html);
+    }
+
+    private ResponseEntity<?> sessionTraceBundle(ChatTraceMetaMessageRestorer.SnapshotPointer pointer,
+            LocalDateTime capturedAt, TraceSnapshotStore.TraceSnapshot snapshot) {
+        try {
+            Map<String, byte[]> files = new java.util.LinkedHashMap<>();
+            Map<String, Object> sources = new java.util.LinkedHashMap<>();
+            files.put("summary.json", objectMapper.writeValueAsBytes(pointer.projection()));
+            if (!pointer.diagnostics().isEmpty()) files.put("trace.json", objectMapper.writeValueAsBytes(pointer.diagnostics()));
+            sources.put("summary", Map.of("status", "available", "source", "chat_system_pointer"));
+            sources.put("trace", Map.of("status", pointer.diagnostics().isEmpty() ? "unavailable" : "available",
+                    "reason", pointer.diagnostics().isEmpty() ? "legacy_summary_only" : "safe_projection_only",
+                    "retainedFieldCount", pointer.diagnostics().size()));
+            // TraceSnapshotStore already hashes these IDs; hashing again breaks the exact join.
+            String requestHash = snapshot != null && snapshot.requestId() != null
+                    && snapshot.requestId().matches("hash:[0-9a-f]{12}") ? snapshot.requestId() : null;
+            String traceHash = snapshot != null && snapshot.traceId() != null
+                    && snapshot.traceId().matches("hash:[0-9a-f]{12}") ? snapshot.traceId() : null;
+            if (traceBundleEvents != null && requestHash != null) {
+                var page = traceBundleEvents.page(requestHash, traceHash, null, 200);
+                StringBuilder events = new StringBuilder();
+                for (var event : page.items()) {
+                    // One event ID per store event; file mirrors are never collected again.
+                    Map<String, Object> row = new java.util.LinkedHashMap<>();
+                    row.put("id", event.id());
+                    row.put("ts", event.ts().toString());
+                    row.put("level", event.level().name());
+                    row.put("probe", event.probe().name());
+                    row.put("fingerprint", event.fingerprint());
+                    row.put("requestIdHash", event.requestId());
+                    row.put("traceIdHash", event.traceId());
+                    row.put("messageHash", SafeRedactor.hashValue(event.message()));
+                    events.append(objectMapper.writeValueAsString(row)).append('\n');
+                }
+                if (!page.items().isEmpty()) files.put("events.ndjson", events.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                sources.put("events", Map.of("status", page.items().isEmpty() ? "unavailable" : "available",
+                        "reason", page.items().isEmpty() ? "not_in_retained_ring" : "bounded_current_ring",
+                        "count", page.items().size(), "truncated", page.hasMore(), "historyComplete", false));
+            } else {
+                sources.put("events", Map.of("status", "unavailable",
+                        "reason", snapshot == null ? "ring_expired_or_restarted" : "correlation_or_store_unavailable"));
+            }
+            sources.put("logs", Map.of("status", "unavailable",
+                    "reason", "raw_application_logs_not_collected",
+                    "structuredFailurePatterns", "included_in_events_when_retained"));
+            files.put("README.txt", ("This answer only. Summary and typed trace fields use the existing chat store.\n"
+                    + "Events, when present, are bounded correlated ring metadata; they are not durable log history.\n"
+                    + "Missing sources are declared in manifest.json. No raw prompt, query, log, path or secret is exported.\n"
+                    + "Opening or exporting does not run models, retrieval or memory writes.\n")
+                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Map<String, Object> checksums = new java.util.LinkedHashMap<>();
+            for (var file : files.entrySet()) checksums.put(file.getKey(),
+                    java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(file.getValue())));
+            Map<String, Object> manifest = new java.util.LinkedHashMap<>();
+            manifest.put("schema", "awx.answer-trace-bundle.v1");
+            manifest.put("redactionVersion", "typed-pointer-v3");
+            manifest.put("build", Optional.ofNullable(getClass().getPackage().getImplementationVersion()).orElse("not_observed"));
+            manifest.put("snapshotId", pointer.snapshotId());
+            manifest.put("assistantMessageId", pointer.assistantMessageId());
+            manifest.put("capturedAt", capturedAt == null ? "not_observed" : capturedAt.toString());
+            manifest.put("exportedAt", java.time.Instant.now().toString());
+            manifest.put("terminalReason", pointer.projection().getOrDefault("reason", "not_observed"));
+            manifest.put("ringScope", "current_process_only");
+            manifest.put("durableScope", "existing_chat_store");
+            manifest.put("sources", sources);
+            manifest.put("checksumsSha256", checksums);
+            if (requestHash != null) manifest.put("requestIdHash", requestHash);
+            if (traceHash != null) manifest.put("traceIdHash", traceHash);
+            files.put("manifest.json", objectMapper.writeValueAsBytes(manifest));
+            if (files.values().stream().mapToInt(bytes -> bytes.length).sum() > 262_144)
+                return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
+            var out = new java.io.ByteArrayOutputStream();
+            try (var zip = new java.util.zip.ZipOutputStream(out)) {
+                for (var file : files.entrySet()) {
+                    zip.putNextEntry(new java.util.zip.ZipEntry(file.getKey()));
+                    zip.write(file.getValue());
+                    zip.closeEntry();
+                }
+            }
+            return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
+                    .header("Cache-Control", "no-store")
+                    .header("Content-Disposition", "attachment; filename=\"answer-trace-bundle.zip\"")
+                    .body(out.toByteArray());
+        } catch (Exception ignored) {
+            logSuppressed("chat.traceBundle");
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        }
     }
 
     private static ResponseEntity<Map<String, Object>> restoreProbeReset(String error) {
@@ -5109,6 +5386,15 @@ public class ChatApiController {
      * - UI?띠럾? 嶺뚮ㅏ援????띠룆??????깅さ嶺?嶺뚮∥????????????(???????濡レ┣ ??⑥ろ맖).
      * - UI?띠럾? null/?リ옇???泥롨첋?뚮턄嶺?嶺뚮∥?? ?띠룆???DTO???낅슣????類ｋ펲.
      */
+    private void captureChatSettings(ChatRequestDto request, String ownerKey) {
+        if (chatPreferenceService == null || chatDefaultsProperties == null || request.getChatSettingsSnapshot() != null) return;
+        String cookieOwner = com.example.lms.web.OwnerKeyBootstrapFilter.usableOwnerKey(ownerKey);
+        Map<String, Object> preferences = cookieOwner == null ? Map.of()
+                : chatPreferenceService.read(AttachmentOwnerIdentity.forAnonymous(cookieOwner).hash()).overrides();
+        request.bindChatSettingsSnapshot(new ChatRequestDto.ChatSettingsSnapshot(preferences,
+                settingsService.getChatAdminOverrides(), ChatRequestSettingsMerger.requestValues(request)));
+    }
+
     private java.util.Map<String, Object> mergeSessionMetaIntoRequest(ChatSession session, ChatRequestDto uiReq) {
         return ChatSessionMetaMerger.merge(objectMapper, session, uiReq, log);
     }
@@ -5122,7 +5408,7 @@ public class ChatApiController {
             return;
         }
         try {
-            ChatSession session = historyService.getSessionWithMessages(request.getSessionId());
+            ChatSession session = historyService.getSessionForRequest(request.getSessionId());
             if (session != null) {
                 mergeSessionMetaIntoRequest(session, request);
             }

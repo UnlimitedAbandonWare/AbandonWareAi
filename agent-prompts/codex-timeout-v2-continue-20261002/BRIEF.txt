@@ -1,0 +1,12 @@
+[ANTI-STOP] 이 메시지는 진행 지시다. 읽고 멈추지 말고 지금 하던 v2 작업(WP1~WP6)을 끝까지 이어서 한다.
+
+사용자 메모: 같은 v2 목표가 Codex 두 채팅에서 동시에 돌고 있는 줄 몰랐다. 다른 채팅(장부 d542bf32)은 13:48에 일시정지로 닫았다. 이제 **이 채팅(장부 26e76ed3)이 유일한 소스·스모크 담당**이다. 그 채팅이 FallbackAwareReplaySafetyTest에 넣은 +49줄 반례 테스트(모호한 TIMEOUT_SOFT 재실행 금지)는 보존하고 네 작업의 일부로 이어서 쓴다.
+
+1) 지금 바로 소유권을 기록한다(되돌릴 수 있는 로컬 단계, AUTO):
+   - `python -B scripts\agent_scope_lease.py claim` 으로 이번 대상 파일(FallbackAwareChatModel, LocalLlmProcessManager, DynamicChatModelFactory, TimedChatModelCaller, ChatWorkflow, PageController, OllamaNativeChatModel, 관련 테스트)을 taskId codex-chat-timeout-failover-v2-26e76ed3 으로 claim한다. 오늘 두 채팅 모두 claim 없이 수정해서 충돌을 못 막았다.
+   - journal에 "d542bf32 사용자 종료, 26e76ed3 단독 소유" 한 줄을 남긴다. d542bf32 장부는 수정하지 않는다.
+2) ASK_ONCE #2 답: 현재 guard 유지(1번). 단 503 본문이 Ollama `overloaded`(큐 거절)처럼 실행 전 거절이 구조적으로 확실한 경우만 다음 클라우드 1회 허용. 일반 503, `temporarily unavailable`, stalledFirstCloud timeout은 막고, 테스트 기대값은 그대로 둔 채 POLICY_CONFLICT(메서드/기대/실제/근거)로 기록한다.
+3) 리뷰에서 찾은 빈틈(queued-quarantine, shutdown orphan-future)을 좁게 고친 뒤 → 재기동 → Verify-RAG → 로컬 스모크 2회(콜드 1, 웜 1, `[codex-test]`, 127.0.0.1:18180만) → WP4 회귀 → WP5 정리(lease 해제 포함) → WP6 보고까지 간다.
+4) 금지는 v2 원본 그대로다(push/commit, 전체 suite, chat.js, 전역 timeout 상향, 유료 API, 공개 도메인 전송, 스모크 3회 이상).
+
+[ANTI-STOP] 완료 = 콜드 /chat 실제 본문 + failover 15/15(또는 POLICY_CONFLICT만 남음) + 회귀 GREEN + 보고서.

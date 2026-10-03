@@ -3,7 +3,7 @@
 ```yaml
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-01"
 sourceType: "official_public_documentation"
 reviewAfterDays: 90
 runtimeEnforcement: "unchanged"
@@ -78,6 +78,13 @@ API 키 이름·존재, `free_local`/`low_cost`/`paid_quality` 분류, 모델의
 
 이전 `groq-free-limits.md`는 [`groq-limits.md`](./groq-limits.md)로 병합되었다.
 숫자표 중복 없이 링크 호환성을 유지하기 위해 기존 파일은 리디렉션 stub로 남겨둔다.
+
+## Review log
+
+- 2026-10-01 (devin, zero-cost-audit-1001-ad4cad7a): Brave `monthlyQuota` 2000↔공식
+  1,000회 불일치 경고, Groq guard 실효 한도·`qwen/qwen3.8-27b` 미등록, Gemini
+  throttle fail-open 주의, Tavily 구현체 2원화(basic/advanced credits) 반영.
+  공개 가격·한도 원자료 재캡처 없음 — `capturedAt` 보존, `reviewedAt`만 갱신.
 
 ## Date rules
 

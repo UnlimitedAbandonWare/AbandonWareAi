@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "awx.toolchain.lock.v1",
+  "lockedAt": "2026-09-30T00:00:00+00:00",
+  "lockedBy": "aw-dev bootstrap --plan (manual seed)",
+  "requirements": {
+    "python": {"version": ">=3.9", "preferred": "3.11", "resolution": "AWX_PYTHON > bindings.local.json > uv cpython > PATH"},
+    "java": {"version": "17.x", "preferred": "Temurin 17.0.13", "resolution": "JAVA_HOME or PATH"},
+    "gradle": {"version": "8.7", "source": "repo wrapper gradlew.bat", "resolution": "gradle/wrapper/gradle-wrapper.properties distributionUrl"},
+    "node": {"version": ">=18", "required": "for jev_gateway_smoke.mjs smoke paths", "resolution": "PATH"},
+    "git": {"version": ">=2.x", "resolution": "PATH"},
+    "powershell": {"version": ">=5.1", "note": "no pwsh required; -NoProfile everywhere"}
+  },
+  "constraints": [
+    "no package installation under this directive",
+    "no global environment mutation",
+    "no paid or live providers; vercelCalls must stay 0 on mock paths",
+    "product defaults untouched: mode=off, free-only, allow-paid=false"
+  ]
+}

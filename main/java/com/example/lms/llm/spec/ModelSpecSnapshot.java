@@ -67,6 +67,10 @@ public record ModelSpecSnapshot(
         return key(provider, model);
     }
 
+    public ModelRoleProfile roleProfile() {
+        return ModelRoleProfile.fromCatalog(this);
+    }
+
     public static String key(String provider, String model) {
         String p = safe(provider);
         String m = safe(model);

@@ -15,6 +15,30 @@ import java.util.concurrent.atomic.AtomicLong;
  * once the reset time passes.</p>
  */
 public class BraveRateLimitState {
+    private final java.util.concurrent.ConcurrentHashMap<String, BraveRateLimitState> lanes =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final AtomicLong cooldownUntilEpochMs = new AtomicLong();
+    private final java.util.concurrent.atomic.AtomicInteger consecutive429 =
+            new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicLong penaltyEmaMilli = new AtomicLong();
+
+    /** Only fixed lane labels are accepted; credentials never become map keys. */
+    public BraveRateLimitState forLane(String lane) {
+        return "free".equals(lane) || "base".equals(lane)
+                ? lanes.computeIfAbsent(lane, ignored -> new BraveRateLimitState()) : this;
+    }
+
+    public AtomicLong cooldownUntilEpochMs() { return cooldownUntilEpochMs; }
+    public java.util.concurrent.atomic.AtomicInteger consecutive429() { return consecutive429; }
+    public AtomicLong penaltyEmaMilli() { return penaltyEmaMilli; }
+    public boolean isBlocked(long now) {
+        return quotaExhaustedUntilEpochMs.get() > now || cooldownUntilEpochMs.get() > now;
+    }
+    public void clearLaneLimits() {
+        lanes.clear();
+        clearQuotaLatch();
+        cooldownUntilEpochMs.set(0L);
+    }
 
     private final AtomicLong lastUpdatedEpochMs = new AtomicLong(0L);
 

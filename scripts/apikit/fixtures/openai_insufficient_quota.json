@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "expect": "QUOTA_OR_BALANCE",
+  "expect_code": "insufficient_quota",
+  "http_status": 429,
+  "body": {"error": {"message": "You exceeded your current quota, please check your plan and billing details.", "type": "insufficient_quota", "param": null, "code": "insufficient_quota"}},
+  "note": "429 + insufficient_quota must classify QUOTA_OR_BALANCE, not RATE_LIMIT"
+}

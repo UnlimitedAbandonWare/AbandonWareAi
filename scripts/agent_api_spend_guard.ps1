@@ -13,6 +13,17 @@ function Get-AgentSpendFingerprint {
     return ($Purpose,$Provider,$Model,$Caller,$ProbeId) -join '|'
 }
 
+function Test-AgentPaidKillSwitch {
+    # Kill switch (SSOT configs/agent-api-spend-guard.yaml: paid_default_on: true).
+    # Paid agent calls are ON by default; only an explicit false value blocks.
+    return ($env:AWX_AGENT_ALLOW_PAID_MODELS -match '^(0|false|no|off)$')
+}
+
+function Test-AgentProviderIsLocal {
+    param([string]$Provider)
+    return ([string]$Provider -match '^(ollama|local|lmstudio|llamacpp|llamafile)$')
+}
+
 function Write-AgentSpendLog {
     param(
         [string]$Purpose,[string]$Provider,[string]$Model,[string]$Tier,[string]$Why,
@@ -33,6 +44,10 @@ function Assert-AgentSpendAllow {
     }
     if ($script:AgentSpendSuccess.ContainsKey($fp)) {
         Write-AgentSpendLog -Purpose $Purpose -Provider $Provider -Model $Model -Tier 'n/a' -Why 'verification_replay_blocked' -Caller $Caller -Cache 'hit_skip' -ErrorClass 'skipped' -EstCostClass 'local0'
+        return $false
+    }
+    if ((Test-AgentPaidKillSwitch) -and -not (Test-AgentProviderIsLocal $Provider)) {
+        Write-AgentSpendLog -Purpose $Purpose -Provider $Provider -Model $Model -Tier 'paid_quality' -Why 'paid_blocked_kill_switch' -Caller $Caller -Cache 'forced' -ErrorClass 'blocked' -EstCostClass 'llm_paid'
         return $false
     }
     $m = [string]$Model

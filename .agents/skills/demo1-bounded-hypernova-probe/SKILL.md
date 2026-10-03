@@ -38,7 +38,7 @@ generated output, or another worker's dirty HYPERNOVA files.
 
 ## Desktop Intake
 
-Run from `C:\AbandonWare\demo-1\demo-1\src`:
+Run from `<repo>`:
 
 ```powershell
 $indexOp = (Test-Path ".git\MERGE_HEAD") -or (Test-Path ".git\CHERRY_PICK_HEAD") -or (Test-Path ".git\rebase-merge") -or (Test-Path ".git\rebase-apply")

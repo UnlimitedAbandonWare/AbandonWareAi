@@ -55,6 +55,43 @@ class GeneralGraphSourceAuthorityTest {
         assertEquals(after.consentEpoch(), authority.bindPolicy(initial, null).orElseThrow().consentEpoch());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"user-edit", "assistant-edit", "user-delete", "assistant-delete", "revoke", "owner", "role"})
+    void understandingPairRejectsMutationOfEitherSourceOrPolicy(String mutation) {
+        var scope = authority.bindPolicy(authorized(), MemoryProfile.LIGHT).orElseThrow();
+        var user = message(21, "user", "synthetic question");
+        var assistant = message(22, "assistant", "synthetic answer");
+        long userRevision = GeneralGraphSourceAuthority.sourceRevision(user);
+        long assistantRevision = GeneralGraphSourceAuthority.sourceRevision(assistant);
+        switch (mutation) {
+            case "user-edit" -> user.setContent("edited question");
+            case "assistant-edit" -> assistant.setContent("edited answer");
+            case "user-delete" -> when(messages.findById(21L)).thenReturn(Optional.empty());
+            case "assistant-delete" -> when(messages.findById(22L)).thenReturn(Optional.empty());
+            case "revoke" -> authority.bindPolicy(scope, MemoryProfile.OFF);
+            case "owner" -> session.setOwnerKey("other-owner");
+            case "role" -> assistant.setRole("system");
+        }
+        AtomicInteger writes = new AtomicInteger();
+        assertTrue(authority.withCurrentSourcePair(scope.ownerNamespace(), 7, scope.consentEpoch(),
+                21, userRevision, 22, assistantRevision, pair -> writes.incrementAndGet()).isEmpty());
+        assertEquals(0, writes.get());
+    }
+
+    @Test void understandingPairLocksBothAndPreservesRolesWithDescendingIds() {
+        var scope = authority.bindPolicy(authorized(), MemoryProfile.LIGHT).orElseThrow();
+        var user = message(22, "user", "synthetic question");
+        var assistant = message(21, "assistant", "synthetic answer");
+        var pair = authority.withCurrentSourcePair(scope.ownerNamespace(), 7, scope.consentEpoch(),
+                22, GeneralGraphSourceAuthority.sourceRevision(user), 21,
+                GeneralGraphSourceAuthority.sourceRevision(assistant), p -> p).orElseThrow();
+        assertEquals("synthetic question", pair.user().text());
+        assertEquals("synthetic answer", pair.assistant().text());
+        var order = inOrder(messages);
+        order.verify(messages).findById(21L);
+        order.verify(messages).findById(22L);
+    }
+
     @Test
     void correctedOrDeletedOriginalCannotCommitTheOldEvidence() {
         var scope = authority.bindPolicy(authorized(), null).orElseThrow();

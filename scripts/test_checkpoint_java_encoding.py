@@ -5,6 +5,24 @@ from scripts.codex_work_checkpoint import secret_free, CheckpointError
 FIELD="to"+"ken"
 
 class JavaEncodingTest(unittest.TestCase):
+    def test_exact_bm25_nul_separator_preserves_java_reference_analysis(self):
+        path = "main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java"
+        expression = 'String '+FIELD+'=codec.encode(bytes);\n'
+        separator = 'if (!seenInList.add(listKey + "' + r'\u0000' + '" + stableKey)) {}'
+        secret_free((expression+separator).encode(),path)
+        secret_free(Path(path).read_bytes(),path)
+
+    def test_changed_nul_separator_and_adjacent_literals_remain_strict(self):
+        path = "main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java"
+        expression = 'String '+FIELD+'=codec.encode(bytes);\n'
+        separator = 'if (!seenInList.add(listKey + "' + r'\u0000' + '" + stableKey)) {}'
+        for text, other_path in (
+                (expression+separator, "main/java/Other.java"),
+                (expression+separator.replace("stableKey","otherKey"),path),
+                (expression+separator+'String '+FIELD+'="synthetic-value";',path)):
+            with self.subTest(path=other_path),self.assertRaises(CheckpointError):
+                secret_free(text.encode(),other_path)
+
     def test_byte_variable_encoding_and_ellipsis(self):
         text='class Sample {String '+FIELD+'=HexFormat.of().formatHex(bytes);long time;String hint="\\u2026";}'
         secret_free(text.encode(),"Sample.java")

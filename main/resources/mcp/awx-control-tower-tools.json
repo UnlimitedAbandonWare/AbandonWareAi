@@ -1356,6 +1356,38 @@
       }
     },
     {
+      "name": "answer_trace_bundle_read",
+      "aliases": ["answer.trace_bundle_read"],
+      "command": "python scripts/awx_mcp_toolbox.py answer_trace_bundle_read",
+      "readOnly": true,
+      "nodeRoles": ["desktop"],
+      "description": "Validate one already downloaded answer trace ZIP against the existing export schema and checksums without extraction or returning private contents. Integrity does not prove server origin or full event history.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "archive_path": { "type": "string" }
+        },
+        "required": ["archive_path"]
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "ok": { "type": "boolean" },
+          "decision": { "type": "string" },
+          "failReason": { "type": "string" },
+          "eventCount": { "type": "integer" },
+          "historyComplete": { "type": "boolean" },
+          "eventStatus": { "type": "string" },
+          "sourceStatus": { "type": "object" },
+          "eventsTruncated": { "type": "boolean" },
+          "ringScope": { "type": "string" },
+          "durableScope": { "type": "string" },
+          "proofScope": { "type": "string" }
+        },
+        "required": ["ok", "decision"]
+      }
+    },
+    {
       "name": "trace_snapshot_probe",
       "aliases": ["trace.snapshot", "trace.snapshot_probe"],
       "command": "python scripts/awx_mcp_toolbox.py trace_snapshot_probe",

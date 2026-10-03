@@ -276,7 +276,7 @@ const UNKNOWN_ANSWER_MODES = new Set(["unknown", "none", "null", "undefined", "-
 const ANSWER_COMPLETE_MODES = new Set(["CHAT", "RAG", "HISTORY_CURRENT_TURN", "HISTORY_RECENT", "DIRECT_LITERAL"]);
 const STREAM_STALE_WAIT_MS = 60000;
 const STREAM_SERVER_MODEL_BUDGET_MS = 90000;
-const STREAM_SERVER_WEB_BUDGET_MS = 30000;
+const STREAM_SERVER_WEB_BUDGET_MS = 600000;
 const STREAM_SERVER_EVIDENCE_BUDGET_MS = 120000;
 const SERVER_CANCEL_TIMEOUT_MS = 1500;
 const FINAL_ACK_TIMEOUT_MS = 1500;
@@ -1351,6 +1351,17 @@ function restoreStoredControlSettings() {
   const settings = storedControlSettings();
   if (!settings) return false;
   localControlOverrideActive = settings.source === "user";
+  const model = String(restoredSessionSetting(settings, "model", "modelId") ?? "").trim();
+  if (model && dom.modelSelect
+      && !Array.from(dom.modelSelect.options || []).some((option) => option.value === model)) {
+    // Preserve the selected identity until the asynchronous catalog verifies availability.
+    const pending = document.createElement("option");
+    pending.value = model;
+    pending.textContent = model + " · 사용 가능 여부 확인 필요";
+    pending.disabled = true;
+    pending.selected = true;
+    dom.modelSelect.prepend(pending);
+  }
   applyRestoredSessionSettings({ settings }, { source: "stored-controls", persist: false });
   return true;
 }
@@ -3376,6 +3387,12 @@ const renderTraceSignalDetail = (signal, pipeline, assistant) => {
   appendTraceSignalLabel(detail, "events", signal.eventCount);
   appendTraceSignalLabel(detail, "failure", signal.failureClass || pipeline.failureClass);
   appendTraceSignalLabel(detail, "reason", signal.reasonCode || pipeline.disabledReason);
+  const search = pipeline.agentWebSearch;
+  if (search && ["OK", "FAIL_SOFT", "SKIPPED"].includes(search.status)) {
+    appendTraceSignalLabel(detail, "web search", search.status);
+    appendTraceSignalLabel(detail, "search reason", search.reasonCode);
+    appendTraceSignalLabel(detail, "search results", search.returnedCount);
+  }
   Object.entries(signal.stageCounts || {}).forEach(([stage, count]) => {
     appendTraceSignalLabel(detail, stage, count);
   });
@@ -5832,6 +5849,12 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
   } else if (type === "session") {
     const sid = sessionIdFromPayload(payload);
     const runToken = runTokenFromPayload(payload);
+    const dockSignal = payload?.traceSignal;
+    if (dockSignal && typeof CustomEvent === "function" && typeof document.dispatchEvent === "function") {
+      document.dispatchEvent(new CustomEvent("awx:trace-turn", {
+        detail: { requestIdHash: dockSignal.requestIdHash, traceIdHash: dockSignal.traceIdHash }
+      }));
+    }
     if (sid) {
       if (!rememberActiveRunIdentity(sid, runToken)) {
         activeSessionId = sid;
@@ -6042,6 +6065,11 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
       }, bubble?.parentElement || dom.chatMessages);
     }
     if (type === "trace") {
+      if (typeof CustomEvent === "function" && typeof document.dispatchEvent === "function") {
+        document.dispatchEvent(new CustomEvent("awx:trace-turn", {
+          detail: { requestIdHash: signal.requestIdHash, traceIdHash: signal.traceIdHash }
+        }));
+      }
       renderTraceSignalDetail(signal, pipeline, bubble);
       renderScoreDeltaDetail(signal, bubble);
       if (payload.html) renderTraceHtml(payload, bubble);
@@ -6621,6 +6649,8 @@ async function sendMessageUnlocked(text) {
   if (currentSessionId) payload.sessionId = currentSessionId;
   const attachmentIds = pendingAttachments.map(item => item.id).filter(Boolean).slice(0, MAX_PENDING_ATTACHMENTS);
   if (attachmentIds.length) payload.attachmentIds = attachmentIds;
+  payload.attachmentGraphConsent = attachmentIds.length > 0 && $("attachmentGraphConsent")?.checked === true;
+  payload.contextPreparationRequested = attachmentIds.length > 0 && $("contextPreparationRequested")?.checked === true;
   appendMessage("user", text);
   const loaderId = `assistant-${Date.now()}-${++assistantMessageSequence}`;
   beginChatTransitionDebugTurn(`turn:${assistantMessageSequence}`, "new-turn");
@@ -6757,18 +6787,15 @@ function isActiveStreamRenderTarget(assistant, controller) {
 }
 
 function streamClientDeadlineMs(payload = {}) {
-  return null;
+  return streamServerBudgetMs(payload);
 }
 
 function streamServerBudgetMs(payload = {}) {
   // Rendered from the same server property used by admission. Keep legacy
   // bounded defaults only when an older page has no admitted policy.
   const configured = Number(document.querySelector('meta[name="chat-request-budget-ms"]')?.getAttribute("content"));
-  if (Number.isInteger(configured) && configured > 0 && configured <= 3600000) return configured;
-  const searchMode = String(payload?.searchMode || "").toUpperCase();
-  if (payload?.useRag === true || searchMode === "FORCE_DEEP") return STREAM_SERVER_EVIDENCE_BUDGET_MS;
-  if (payload?.useWebSearch === true && searchMode !== "OFF") return STREAM_SERVER_WEB_BUDGET_MS;
-  return STREAM_SERVER_MODEL_BUDGET_MS;
+  if (Number.isInteger(configured) && configured > 0) return configured;
+  return 600000;
 }
 
 function streamServerBudgetHeaders(payload = {}) {
@@ -6791,6 +6818,9 @@ function generationIdempotencyHeaders(payload) {
 
 async function streamChat(payload, loaderId, options = {}) {
   const assistant = document.getElementById(loaderId);
+  if (payload?.attach !== true && typeof CustomEvent === "function" && typeof document.dispatchEvent === "function") {
+    document.dispatchEvent(new CustomEvent("awx:trace-turn", { detail: {} }));
+  }
   const streamOwnedActiveAssistant = assistant && !activeStreamAssistant;
   if (streamOwnedActiveAssistant) {
     activeStreamAssistant = assistant;
@@ -6800,7 +6830,20 @@ async function streamChat(payload, loaderId, options = {}) {
   streamController = new AbortController();
   const currentStreamController = streamController;
   const streamAbortRequested = () => currentStreamController?.signal?.aborted;
-  const streamStartedAt = nowMs();
+  const previousStartedAt = Number(assistant?.dataset?.streamStartedAt);
+  const streamStartedAt = payload?.attach === true && Number.isFinite(previousStartedAt)
+    ? previousStartedAt : nowMs();
+  let firstAnswerSeen = payload?.attach === true && assistant?.dataset?.streamAnswerSeen === "true";
+  let streamSseStarted = payload?.attach === true && assistant?.dataset?.streamSseStartMs != null;
+  if (assistant?.dataset) {
+    assistant.dataset.streamStartedAt = String(streamStartedAt);
+    assistant.dataset.streamAnswerSeen = String(firstAnswerSeen);
+    if (payload?.attach !== true) {
+      assistant.dataset.streamStartedEpochMs = String(Date.now());
+      delete assistant.dataset.streamSseStartMs;
+      delete assistant.dataset.streamFirstAnswerMs;
+    }
+  }
   const streamWaitMs = () => {
     const elapsedMs = Math.max(0, Math.round(nowMs() - streamStartedAt));
     return elapsedMs;
@@ -6824,6 +6867,8 @@ async function streamChat(payload, loaderId, options = {}) {
       coreReason: "client deadline"
     });
     clientDeadlineReject?.(streamClientDeadlineError(safeElapsedMs));
+    // Exact server cancellation can wait for identity; the local transport cannot.
+    currentStreamController.abort();
   }
   let streamHeartbeatTimer = null;
   const stopStreamHeartbeat = () => {
@@ -6847,15 +6892,18 @@ async function streamChat(payload, loaderId, options = {}) {
       markAssistantClientWait(assistant, elapsedMs);
       setCoreStatus("streaming", streamHeartbeatDetail);
     }
-    if (clientDeadlineMs != null && elapsedMs >= clientDeadlineMs) {
+    // Fail fast without a validated SSE start; live streams keep the original total deadline.
+    const effectiveDeadlineMs = firstAnswerSeen || streamSseStarted
+      ? clientDeadlineMs : Math.min(5000, clientDeadlineMs);
+    if (clientDeadlineMs != null && elapsedMs >= effectiveDeadlineMs) {
       triggerStreamClientDeadline(elapsedMs);
     }
-  }, 5000);
+  }, 250);
   activeStreamHeartbeatTimer = streamHeartbeatTimer;
   try {
     const streamUrl = chatTraceRequestUrl(payload?.attach === true
       ? "/api/chat/stream?attach=true" : "/api/chat/stream");
-    const response = await fetch(streamUrl, {
+    const responsePromise = fetch(streamUrl, {
       method: "POST",
       headers: withChatCorrelationHeaders({
         "Content-Type": "application/json",
@@ -6867,9 +6915,13 @@ async function streamChat(payload, loaderId, options = {}) {
       body: JSON.stringify(payload),
       signal: currentStreamController.signal
     });
+    const response = clientDeadlinePromise == null ? await responsePromise
+      : await Promise.race([responsePromise, clientDeadlinePromise]);
     if (streamAbortRequested()) throw streamAbortError();
     if (!response.ok) {
-      const bounded = await readBoundedFailureBody(response, 1200);
+      const bodyPromise = readBoundedFailureBody(response, 1200);
+      const bounded = clientDeadlinePromise == null ? await bodyPromise
+        : await Promise.race([bodyPromise, clientDeadlinePromise]);
       const meta = classifyChatFailure({
         status: response.status,
         boundedText: bounded.text,
@@ -6888,6 +6940,17 @@ async function streamChat(payload, loaderId, options = {}) {
     }
     applyChatResponseHeaders(response, { allowSessionIdentity: false });
     if (streamAbortRequested()) throw streamAbortError();
+    if (!streamSseStarted && !firstAnswerSeen && clientDeadlineMs != null
+      && streamWaitMs() >= Math.min(5000, clientDeadlineMs)) {
+      triggerStreamClientDeadline(streamWaitMs());
+      throw streamClientDeadlineError(streamWaitMs());
+    }
+    streamSseStarted = true;
+    if (assistant?.dataset) {
+      if (assistant.dataset.streamSseStartMs == null) assistant.dataset.streamSseStartMs = String(streamWaitMs());
+      assistant.dataset.streamHttpStatus = String(response.status);
+      assistant.dataset.streamRequestId = String(responseHeader(response, "x-request-id") || "").slice(0, 128);
+    }
     const reader = response.body.getReader();
     let terminalEventSeen = false;
     let terminalFailureMeta = null;
@@ -6914,6 +6977,21 @@ async function streamChat(payload, loaderId, options = {}) {
         if (streamAbortRequested()) throw streamAbortError();
         if (isActiveStreamRenderTarget(assistant, currentStreamController)) {
           renderChatEvent(eventPayload, assistant, effectiveType);
+          if (effectiveType === "session" && assistant?.dataset) {
+            const requestHash = eventPayload?.traceSignal?.requestIdHash;
+            if (/^hash:[a-f0-9]{12,64}$/i.test(requestHash || "")) assistant.dataset.streamRequestHash = requestHash;
+          }
+          // The renderer removes reasoning tags before appending accessible text.
+          // SSE liveness and first visible answer remain separate observations.
+          const visibleAnswer = (effectiveType === "token" || effectiveType === "message" || effectiveType === "final")
+            && String(assistant?.dataset?.ariaText || "").trim().length > 0;
+          if (visibleAnswer && assistant?.dataset && assistant.dataset.streamFirstAnswerMs == null) {
+            assistant.dataset.streamFirstAnswerMs = String(streamWaitMs());
+          }
+          if (terminalEventSeen || visibleAnswer) {
+            firstAnswerSeen = true;
+            if (assistant?.dataset) assistant.dataset.streamAnswerSeen = "true";
+          }
         } else {
           const terminalLatch = isAssistantStreamStopped(assistant)
             || streamRenderSuppressed
@@ -6954,7 +7032,10 @@ async function streamChat(payload, loaderId, options = {}) {
     }
     parser.finish();
     if (terminalFailureMeta) throw chatFailureError(terminalFailureMeta);
-    if (finalAckPromise) await finalAckPromise;
+    if (finalAckPromise) {
+      if (clientDeadlinePromise == null) await finalAckPromise;
+      else await Promise.race([finalAckPromise, clientDeadlinePromise]);
+    }
     if (!terminalEventSeen) {
       const exactRun = activeRunIdentitySnapshot();
       if (exactRun) {
@@ -6965,6 +7046,9 @@ async function streamChat(payload, loaderId, options = {}) {
       throw chatFailureError(classifyChatFailure({ protocolCode: "stream_incomplete" }));
     }
   } finally {
+    if (typeof CustomEvent === "function" && typeof document.dispatchEvent === "function") {
+      document.dispatchEvent(new CustomEvent("awx:trace-turn", { detail: { complete: true } }));
+    }
     stopStreamHeartbeat();
     if (streamOwnedActiveAssistant && activeStreamAssistant === assistant) activeStreamAssistant = null;
     syncSessionSelectionCapability();
@@ -7060,6 +7144,14 @@ function renderAttachChips() {
   if (!list) return;
   list.replaceChildren();
   list.hidden = pendingAttachments.length === 0;
+  const consentLabel = $("attachmentGraphConsentLabel");
+  if (consentLabel) consentLabel.hidden = pendingAttachments.length === 0;
+  const consent = $("attachmentGraphConsent");
+  if (consent) consent.checked = false;
+  const preparationLabel = $("contextPreparationLabel");
+  if (preparationLabel) preparationLabel.hidden = pendingAttachments.length === 0;
+  const preparation = $("contextPreparationRequested");
+  if (preparation) preparation.checked = false;
   pendingAttachments.forEach((item, index) => {
     const chip = document.createElement("li");
     chip.className = "attach-chip" + (item.error ? " error" : "");

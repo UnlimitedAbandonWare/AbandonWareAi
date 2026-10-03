@@ -1,0 +1,96 @@
+@demo1-project-root @agent-scope-lease @demo1-main-chat-surface @demo1-api-spec-drift-guard @demo1-agent-code-evidence-gate @regression-check @positive-negative-neutral-judge @demo1-agent-api-spend-guard @demo1-uaw-harmony-foundation
+
+# DEVIN 지시서: /settings·역할 라우팅 작업의 보조(가드·검증 도구·룰), 제품 소스 수정 없음
+작성: 2026-10-02 08:15 KST (Grok Bot) / Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+Codex가 PASTE_CODEX_settings-page-routing-v3_20261002.txt로 /settings 페이지와 여섯 역할 라우팅을 구현하는 동안, Devin은 그 작업이 금지선을 넘지 않았는지 기계적으로 판정하는 읽기 전용 도구 3개와 룰·스킬을 만들고, Codex 결과물을 검증한다. main/ 아래 제품 소스는 한 줄도 고치지 않는다. 완료 기준은 Acceptance 전부 PASS(Codex 미완료로 못 돌린 항목은 NOT_RUN + 이유).
+
+## 1. 확인한 사실 (2026-10-02 08:10 KST)
+- Codex 지시서 사본: agent-prompts\codex-settings-page-routing-v3-20261002\BRIEF.txt, 참고자료 ref\ (19파일: v1.md, v2.md, FIND_X_settings_uaw_harmony_v3_ko.md, Abandon_X_settings_routing_v3_addendum.txt, contracts\v3-test-matrix.json, reference\v2-test-matrix.json, evidence\source-anchors-v3.json, inventory.csv 등). 이 폴더 파일만 직접 열고 agent-prompts 전체 검색은 금지.
+- 08:00 기준 settings.html·settings-page.js·chat-settings-bridge.js·settings-routing.js·SettingsPageController·RoutingProfile* 전부 없음(Codex가 새로 만듦).
+- /api/settings는 SettingsController.java:16, ModelSettingsController.java:19 두 곳이 이미 사용. 새 endpoint는 /api/settings/routing/* 만 허용.
+- 다른 세션 미커밋 변경(M): main/resources/static/js/chat.js(이미 +104/-12, 08:12 확인), main/resources/templates/chat-ui.html, PolicyBasedModelRouter, ChatWorkflow, ChatStreamSignalBuilder, ChatRunRegistry, DynamicChatModelFactory, LlmRouterAspect, ChatApiController.
+- chat.settings.routing 키는 아직 어떤 properties에도 없음. properties: application.properties, application-interview/patch/proxy/ultra/verification.properties.
+- 기존 도구: scripts\main_chat_target_probe.py(있음, 재사용). 파이썬 테스트 위치 관례: scripts\test_*.py. 룰 폴더 .windsurf\rules\ (demo1-hard-constraints.md, demo1-session-ownership.md, demo1-default-target-main-chat.md 등). SSOT: .devin\RULES_SSOT.md.
+- 리스 폴더 __patch_drop__\source-edit-locks 에는 09-27 오래된 clean-* 1건뿐. 도구 __patch_drop__\source_edit_lease_contract.ps1.
+
+## 2. 공통 규칙
+- 리스 topic: devin-settings-assist. 쓰기 허용 경로는 아래 4곳뿐: scripts\settings_*.py, scripts\test_settings_*.py, .windsurf\rules\demo1-settings-routing-guard.md, .agents\skills\demo1-settings-routing-assist\. 그리고 .devin\RULES_SSOT.md에 포인터 1줄, 보고서 docs\diagnostics\settings-routing-v3-20261002\.
+- Codex 리스(codex-settings-routing-v3)가 잡은 파일, main\ 아래 모든 파일, chat-ui.html, chat.js는 읽기만.
+- 도구는 전부 읽기 전용: 파일·git diff 읽기, HTTP GET(및 아래 명시한 순수 POST)만. 서버 재기동·설정 변경·DB 쓰기 금지.
+- 유료 호출 0, 외부 LLM 호출 0. 공개 kro.kr은 GET만, 채팅 전송 0.
+- 되돌릴 수 있는 로컬 판단은 Self-Ask(긍정/부정/반례 → 중립 판정)로 정하고 AUTO 진행.
+
+## 3. 작업 (WP)
+### WP1 기준선 스냅숏 (가장 먼저, Codex 수정이 더 쌓이기 전에)
+scripts\settings_routing_guard.py --snapshot
+- 위 9개 M 파일(chat.js 포함) 각각의 git diff -U0 를 var\settings-guard\baseline-<yyyymmdd-HHmm>.json 에 저장(파일별 sha256, 추가/삭제 줄 목록).
+- 이미 Codex 신규 파일이 생겼으면 그 목록과 생성 시각도 기록하고 "baseline_after_codex_start=true"로 표시(숨기지 말 것).
+
+### WP2 금지선 가드
+scripts\settings_routing_guard.py --check [--baseline <파일>] --json
+판정 항목(각각 PASS/FAIL/WARN):
+- G1 chat.js: 기존 다른 세션 diff(+104/-12)가 있으므로 "diff 없음"이 아니라 기준선 sha256과 현재 sha256이 같으면 PASS(이번 세션 변경 0). 사용자 확정 기준(08:12).
+- G2 chat-ui.html: 기준선 대비 새로 늘어난 줄 ≤ 2, 기준선의 다른 세션 추가 줄이 모두 남아 있음.
+- G3 다른 세션 hunk 보존: 나머지 7개 M 파일(chat.js·chat-ui.html 제외)에서 기준선의 추가/삭제 줄이 그대로 존재.
+- G4 금지 파일 무변경: 보안(ChatOpenSecurityConfig, AdminTokenGuardFilter, security 패키지), domain 엔티티·schema·migration, SettingsController.java, ModelSettingsController.java, PageController, chat.js, static/assets/interview/**. 기준선 이후 바뀌면 FAIL.
+- G5 flag 기본값: 모든 application*.properties와 @Value 기본값에서 chat.settings.routing.enabled 가 true로 설정되지 않음(키가 없으면 PASS + "absent").
+- G6 endpoint 범위: 새로 생긴 @RequestMapping/@PostMapping/@GetMapping 중 /settings(페이지)와 /api/settings/routing/* 외에 /api/settings 루트를 건드리면 FAIL.
+- G7 비밀값 흔적: 새·수정 파일에서 sk-, AKIA, Bearer 실값, api[_-]?key=값 패턴 → FAIL(값은 출력하지 말고 파일:줄만).
+- G8 새 테이블·DSL 흔적: 새 @Entity, CREATE TABLE, 새 *.sql 이 생기면 FAIL.
+출력: 사람이 읽는 표 + --json 결과(verdict, items[]). 종료코드는 FAIL 있으면 1.
+
+### WP3 테스트 매트릭스 추적
+scripts\settings_test_matrix_check.py
+- ref\contracts\v3-test-matrix.json(32), ref\reference\v2-test-matrix.json(64)의 ID와 Codex 지시서의 테스트 클래스명(SettingsCapabilityProjectionTest, SettingsPlanProjectionTest, SettingsPageControllerTest, RoutingSettingsControllerTest, RoutingSettingsPersistenceTest, RoutingRunSnapshotTest, SettingsSnapshotCompatibilityTest, RoleRoutingConsumptionTest, RoutingFallbackBoundaryTest, RoutingFactoryArgumentsTest, SettingsRoutingIntegrationTest, RoutingOutcomeProjectionTest, RoutingOutcomeAccessTest, RoutingRedactionTest, SettingsOutcomeProjectionTest, SettingsRoutingPageTest)와 노드 테스트(settings-core, settings-routing, settings-harmony .test.cjs)를 src\test\java·src\test\js 에서 찾는다.
+- 클래스별 존재 여부, @Test/test( 개수, 테스트 본문에 V3-xx·V2-xx ID 문자열이 언급된 것 매핑. 96개를 전부 요구하지 말고 "커버/미커버/명시적 제외" 표만 만든다.
+- 이미 빌드 결과가 있으면 build\test-results\test\*.xml 에서 해당 클래스 tests/failures/skipped만 읽는다. Gradle 실행은 하지 않는다.
+
+### WP4 라이브 확인 프로브
+scripts\settings_page_probe.py
+- 127.0.0.1:18180: GET /settings(200, 제목/핵심 DOM id), GET /chat(200, 제목 AbandonWare AI, "INTERVIEW DEMO" 없음, /settings 링크 존재, chat-settings-bridge.js script 존재), GET /api/settings 응답의 키 이름 목록만(값 출력 금지, 기준선과 키 집합 비교).
+- /api/settings/routing/* 이 생겼으면 read·preview 성격의 POST만 1회씩, save는 절대 호출하지 않는다. v2 문서상 어느 것이 순수한지 코드로 먼저 확인하고, 불명확하면 호출하지 않고 NOT_RUN.
+- https://abandonwareai.kro.kr/chat 과 /settings 는 GET만(같은 백엔드라 로컬과 일치하는지 확인).
+- 기존 main_chat_target_probe.py 판정(MAIN_OK 등)을 import 또는 subprocess로 재사용.
+- 결과 verdict: SETTINGS_OK / SETTINGS_MISSING / MAIN_BROKEN / UNREACHABLE.
+
+### WP5 테스트·룰·스킬
+- scripts\test_settings_routing_guard.py, test_settings_test_matrix_check.py, test_settings_page_probe.py: 임시 디렉터리·가짜 git diff·가짜 HTTP 응답(fixture)으로 PASS/FAIL 양쪽을 검증. 실제 네트워크 사용 금지. pytest로 이 3개 파일만 실행.
+- .windsurf\rules\demo1-settings-routing-guard.md: 규칙 S1~S7 (chat.js 이번 세션 변경 0 = 기준선 sha256 동일, chat-ui.html ≤2줄, 보안·schema·기존 /api/settings 계약 불변, flag 기본 false, 다른 세션 hunk 보존, save POST 금지·유료 호출 0, Devin은 main\ 수정 금지). 각 규칙에 대응 가드 항목(G1~G8) 표기.
+- .agents\skills\demo1-settings-routing-assist\SKILL.md: 언제 쓰는지, 세 도구 실행 순서(snapshot → check → matrix → probe), 판정 해석.
+- .devin\RULES_SSOT.md에 새 룰 포인터 1줄.
+
+### WP6 Codex 결과 검증 보고
+- Codex가 보고를 냈거나 Phase A 신규 파일이 생겼으면 guard --check, matrix, probe를 차례로 돌려 docs\diagnostics\settings-routing-v3-20261002\DEVIN_VERIFY.md 작성.
+- Codex가 아직 진행 중이면 기준선과 도구만 준비하고 WP6은 NOT_RUN(WAIT_CODEX)로 보고. 기다리느라 멈춰 있지 말 것.
+- FAIL이 나와도 Devin이 고치지 않는다. 파일:줄, 어떤 G 항목, Codex에게 줄 한 줄 수정 요청 문장을 적는다.
+
+## 4. HOLD
+main\ 아래 모든 제품 소스·템플릿·정적 파일, chat-ui.html·chat.js, properties 값 변경, 18180 서버 재기동·프로필 변경, kro.kr 배포·cloudflared, ChatApiController 세션 소유권 영역, Gradle 테스트 실행(필요하면 Codex 담당), GPT Pro 문서를 근거로 한 기능 재추가.
+
+## 5. ASK_ONCE
+없음. 판단이 필요하면 Self-Ask로 정하고 보고서에 근거를 적는다. 가드가 Codex 작업을 FAIL로 판정한 경우에만 보고서 맨 위에 "사용자 확인 필요" 한 줄.
+
+## 6. 절대 금지
+push/pull/commit, git add -A, reset --hard, checkout/restore/stash, force-push, global clean, 전체 테스트 스위트, .secrets/.env 읽기·비밀값 출력, AbandonWare3 재추가, admin/PROTO_OPEN 강화, 다른 세션 리스·스테이징·hunk 건드리기, 데이터셋 삭제, 유료/외부 LLM 호출, 공개 채팅 전송, routing save POST 호출.
+
+## 7. Acceptance
+D1 baseline JSON 생성, 9개 M 파일 sha256과 hunk 기록(경로·크기 보고).
+D2 guard --check 실행 결과 G1~G8 판정표(Codex 진행 상태와 무관하게 실행 가능).
+D3 matrix 결과표 생성(클래스 16 + 노드 3 존재/개수).
+D4 probe 실행 결과(로컬·kro.kr), 불가하면 NOT_RUN + 이유.
+D5 pytest scripts\test_settings_routing_guard.py scripts\test_settings_test_matrix_check.py scripts\test_settings_page_probe.py 전부 PASS, 실행 건수 > 0.
+D6 룰·스킬·SSOT 포인터 파일 존재(크기 보고).
+D7 git status로 Devin 변경이 허용 경로에만 있음을 증명, main\ 변경 0.
+D8 DEVIN_VERIFY.md 작성 또는 WAIT_CODEX 사유.
+
+## 8. 보고 형식
+1) 맨 위: 외부/실행 오류와 원인(없으면 "없음")
+2) 판정 DONE/PARTIAL/BLOCKED, WP1~6 상태표
+3) D1~D8 PASS/FAIL/NOT_RUN + 증거(명령·건수·출력 요약)
+4) 가드 FAIL 항목과 Codex에게 줄 수정 요청 문장
+5) 만든 파일 목록과 크기
+
+## [ANTI-STOP]
+이 지시서와 ref를 읽은 것만으로는 완료가 아니다. 읽자마자 리스를 잡고 WP1 스냅숏부터 실행한다. Codex 완료를 기다리느라 멈추지 말고 WP1~5를 끝낸 뒤 WP6 판정까지 마친다. Acceptance D1~D8을 모두 판정하기 전에는 멈추지 않는다.

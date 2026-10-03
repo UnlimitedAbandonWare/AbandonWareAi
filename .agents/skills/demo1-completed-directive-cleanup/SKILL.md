@@ -53,7 +53,7 @@ patches require the preserved applied patch binding. Temporary work is limited
 to explicitly listed `.tmp`, `.temp`, `.scratch`, and `.draft` files. No recursive
 deletion, broad glob, active PatchDrop bundle deletion, or cleanup of other tasks.
 
-Run `scripts/test_cleanup_completed_tasks.ps1` alongside the legacy directive
+Run `.agents\skills\demo1-completed-directive-cleanup\scripts\test_cleanup_completed_tasks.ps1` alongside the legacy directive
 tests and `python -B -m unittest discover -s scripts -p test_codex_completion_cleanup_hook.py`.
 The existing standalone-directive contract below remains supported unchanged.
 
@@ -216,6 +216,6 @@ copies are not left in a backup queue. Journal failure prevents further deletes.
   path, deleting reusable instructions, or reapplying the completed patch after
   a cleanup failure invalidates this skill.
 
-Run `scripts/test_cleanup_completed_directives.ps1` and the Docker hook tests
+Run `.agents\skills\demo1-completed-directive-cleanup\scripts\test_cleanup_completed_directives.ps1` and the Docker hook tests
 for the affected boundary. Tests use isolated host-local fixtures; actual
 Desktop execution remains separately evidenced.

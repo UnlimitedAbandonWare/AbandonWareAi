@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
 <title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
-<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=audio-policy-0926" defer></script><script src="app.js?v=audio-policy-0926" defer></script>
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-memory-3" defer></script><script src="app.js?v=focus-memory-3" defer></script>
 <style>
 #app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
 #app > * { margin-bottom:16px; }
@@ -60,6 +60,11 @@
 <label for="nf-enabled">노바 음성 호출</label><input id="nf-enabled" class="focusable" type="checkbox">
 <label for="nf-recall">내가 저장한 기억 조회</label><input id="nf-recall" class="focusable" type="checkbox">
 <label for="nf-remember">선택한 사실 저장 허용</label><input id="nf-remember" class="focusable" type="checkbox">
+<label for="nf-memory-mode">기억 모드</label><select id="nf-memory-mode" class="focusable"><option value="">위 두 스위치 그대로</option><option value="OFF">끔 · 조회와 저장 모두 안 함</option><option value="RECALL">조회만</option><option value="FULL">조회 + 선택 저장</option></select>
+<label for="nf-graph-mode">기억 연결 확장</label><select id="nf-graph-mode" class="focusable"><option value="OFF">끔(기본)</option><option value="AUTO">관계형 질문에서 자동</option><option value="ON">항상 내 기억 안에서 확장</option></select>
+<label for="nf-max-evidence">기억 근거 최대 건수(1~8)</label><input id="nf-max-evidence" class="focusable" type="number" min="1" max="8" step="1" value="4">
+<label for="nf-embed-prefer">기억 임베딩 경로</label><select id="nf-embed-prefer" class="focusable"><option value="LOCAL_THEN_CLOUD">로컬 우선 · 허용 시 클라우드 대체</option><option value="LOCAL_ONLY">로컬만</option><option value="CLOUD_ONLY">클라우드만(설정된 경우)</option></select>
+<label for="nf-web-unknown">모를 때 웹 재시도</label><select id="nf-web-unknown" class="focusable"><option value="">서버 정책 따름(기본)</option><option value="false">이 프로필에서는 끔</option><option value="true">허용(서버가 켠 경우에만)</option></select>
 <label for="nf-wake">호출어</label><input id="nf-wake" class="focusable" type="text" value="노바" maxlength="16">
 <label for="nf-target">답변을 읽을 화면</label><select id="nf-target" class="focusable"><option value="auto">연결된 안경 · 없으면 휴대폰</option><option value="lens">안경</option><option value="fold">이 휴대폰</option></select>
 <label for="nf-answer-target">답변 위치</label><select id="nf-answer-target" class="focusable"><option value="AUTO">자동</option><option value="API_ONLY">API만</option><option value="LOCAL_ONLY">로컬만</option></select>
@@ -86,7 +91,8 @@
 <label for="nf-hold">마지막 내용 유지(ms)</label><input id="nf-hold" class="focusable" type="number" min="2000" max="15000" step="1000" value="5000">
 <label for="nf-fade">천천히 사라지는 시간(ms)</label><input id="nf-fade" class="focusable" type="number" min="200" max="1000" step="100" value="400">
 </div><button id="nf-save" class="focusable" type="submit" disabled>노바 설정 저장</button><button id="nf-reload" class="focusable" type="button">서버 설정 다시 불러오기</button></form>
-<p id="nf-model-status" class="hint" role="status">모델 목록 확인 중</p><p class="hint">변경한 답변 설정은 다음에 확정되는 질문부터 적용됩니다. <span id="nf-jev-status">Jev: JEV_NOT_CONFIGURED · 기존 검색 판단을 사용합니다.</span></p>
+<p id="nf-model-status" class="hint" role="status">모델 목록 확인 중</p><p class="hint">변경한 답변 설정은 다음에 확정되는 질문부터 적용됩니다. <span id="nf-jev-status">Jev: 확인 중</span></p>
+<p class="hint"><span id="nf-jev-surfaces" hidden></span></p>
 <img id="nf-snapshot-preview" hidden alt="시험 촬영 미리보기" style="max-width:160px;border-radius:8px">
 <p id="nf-snapshot-test-status" class="hint" role="status"></p>
 <p id="nf-status" class="hint" role="status">음성 호출은 기본으로 꺼져 있습니다. 직접 대화를 열 수도 있습니다. 사진 힌트를 켜면 확정된 노바 질문마다 폴드 후면으로 사진 한 장을 찍어 AI에 보내고, 촬영 직후 카메라는 해제되며 실패하면 사진 없이 답변합니다.</p>
@@ -134,8 +140,9 @@
 <label for="ld-cooldown">힌트 생성 쿨다운(초 · 1~120)</label><input id="ld-cooldown" class="focusable" type="number" min="1" max="120" step="1" value="10">
 <label for="ld-force">강제 힌트 주기(초 · 1~600)</label><input id="ld-force" class="focusable" type="number" min="1" max="600" step="1" value="180">
 <label for="ld-hint-chars">힌트 목표 길이(자)</label><input id="ld-hint-chars" class="focusable" type="number" min="240" max="1100" step="10" value="1000">
+<label for="ld-preset">표시 프리셋</label><select id="ld-preset" class="focusable"><option value="">직접 조정</option><option value="DEFAULT">기본 (26px · 전사 4줄 · 힌트 11줄)</option><option value="READ_EASY">읽기 편함 (30px · 8줄)</option><option value="DENSE">정보 많음 (22px · 힌트 13줄)</option></select>
 </div>
-<div class="actions"><button id="ld-apply" class="focusable" type="button">안경 표시 적용</button><button id="ld-reset" class="focusable" type="button">기본값 복원</button></div>
+<div class="actions"><button id="ld-preset-apply" class="focusable" type="button">프리셋 적용</button><button id="ld-apply" class="focusable" type="button">안경 표시 적용</button><button id="ld-reset" class="focusable" type="button">기본값 복원</button></div>
 <p id="ld-status" class="hint" role="status">전사는 항상 작은 회색 · 표시 유지·넘김과 생성 주기(조용시간/쿨다운/강제힌트)는 저장 후·재접속 후 실제로 바뀝니다. 강제 힌트 기본 180초를 줄이지 않습니다.</p>
 </details>
 <details id="hint-context"><summary class="focusable" tabindex="0">힌트 맥락 설정</summary>

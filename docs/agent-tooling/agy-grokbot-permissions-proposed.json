@@ -1,0 +1,43 @@
+{
+  "schema": "awx.agy-permissions-proposal.v1",
+  "contract": "DEMO1-DEVIN-AGY-GROKBOT-UPGRADE-20261002",
+  "createdKst": "2026-10-02",
+  "status": "proposed-not-applied",
+  "note": "Grok Bot 모드 전용 권한 축소안. 기존 전역 settings.json의 command(regex:.*)/write_file(/**)을 빼고 Grok Bot 역할에 필요한 범위만 남긴다. 적용은 ASK_ONCE #2 승인 후 — 전역 settings는 그때까지 불변.",
+  "workspaceSupport": {
+    "checked": "agy workspace skills(.agents/skills/)는 자동 발견됨; 워크스페이스 단위 toolPermission 파일은 미확인 — builtin:skills/agy-customizations + cli.log 근거. 미지원 시 전역 settings 백업 후 적용.",
+    "candidatePath": ".agents/settings.json (미지원 가능성 있음)"
+  },
+  "proposed": {
+    "agentMode": "accept-edits",
+    "permissions": {
+      "allow": [
+        "write_file(C:/Users/nninn/Downloads/**)",
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/agent-prompts/**)",
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/data/agent-handoff/**)",
+        "command(regex:^python\\s+-B\\s+scripts/(brief_save|agent_signal_digest|demo1_vibe_skill_router)\\b.*$)",
+        "command(regex:^python\\s+-B\\s+scripts/agent_scope_lease\\.py\\s+(who|check|show)\\b.*$)",
+        "command(regex:^(Get-Content|Get-ChildItem|Get-Item|Select-String|git\\s+(status|diff|log|show))\\b.*$)",
+        "command(regex:^F:\\\\git\\\\cmd\\\\git\\.exe\\s+(status|diff|log|show)\\b.*$)"
+      ],
+      "deny": [
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/main/**)",
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/src/test/**)",
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/frontend/**)",
+        "write_file(**/.secrets/**)",
+        "write_file(C:/Users/nninn/.grok/**)",
+        "write_file(C:/Users/nninn/.gemini/**)",
+        "command(regex:.*gradlew.*)",
+        "command(regex:.*git\\s+(add|commit|push|pull|reset|clean|checkout|restore|stash|merge|rebase).*)"
+      ],
+      "ask": [
+        "command(regex:.*)",
+        "write_file(C:/AbandonWare/demo-1/demo-1/src/**)"
+      ]
+    }
+  },
+  "removedFromCurrent": [
+    "command(regex:.*) — 사실상 전부 허용",
+    "write_file(/**) — 전 드라이브 쓰기 허용"
+  ]
+}

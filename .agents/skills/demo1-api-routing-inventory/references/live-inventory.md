@@ -1,6 +1,6 @@
 # Live inventory snapshot (2026-09-25 KST)
 
-Machine: DESKTOP-M5NOV6K (`7dd2c567-8c78-46c0-8732-b129fbc48cae`) · Root: `C:\AbandonWare\demo-1\demo-1\src`
+Machine: DESKTOP-M5NOV6K (`7dd2c567-8c78-46c0-8732-b129fbc48cae`) · Root: `<repo>`
 
 ## Ollama models (`ollama ls`)
 

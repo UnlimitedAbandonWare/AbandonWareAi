@@ -13,7 +13,7 @@ E3의 실제 Spring 연결·세션과 E4의 공식 Simulator 관측을 맡는다
 
 ## 서버 시작과 자동 준비
 
-사용자가 Display 서버를 켜거나 필요한 서비스를 자동으로 준비하라고 하면 [startup-contract.md](references/startup-contract.md)를 읽고 그 실행 호스트에서 진단 → 기존 서버 시작 → 준비 확인을 수행한다. 시작 권한이 이미 있으면 같은 승인을 다시 묻지 않는다. Ollama는 기존 `LocalLlmProcessManager`에 맡긴다. 읽기 전용 `scripts/startup_doctor.py`는 Java·Ollama·환경변수 존재·loopback health만 관측하며 서비스를 실행하거나 설정을 변경하지 않는다. 원격 서버를 Notebook의 localhost로 대신 검사하지 않는다. 진단 결과만으로 실제 sync나 Desktop 완료를 기록하지 않는다.
+사용자가 Display 서버를 켜거나 필요한 서비스를 자동으로 준비하라고 하면 [startup-contract.md](references/startup-contract.md)를 읽고 그 실행 호스트에서 진단 → 기존 서버 시작 → 준비 확인을 수행한다. 시작 권한이 이미 있으면 같은 승인을 다시 묻지 않는다. Ollama는 기존 `LocalLlmProcessManager`에 맡긴다. 읽기 전용 `.\.agents\skills\demo1-meta-display-verification\scripts\startup_doctor.py`는 Java·Ollama·환경변수 존재·loopback health만 관측하며 서비스를 실행하거나 설정을 변경하지 않는다. 원격 서버를 Notebook의 localhost로 대신 검사하지 않는다. 진단 결과만으로 실제 sync나 Desktop 완료를 기록하지 않는다.
 
 ## 현재 증거부터
 
@@ -52,3 +52,5 @@ source-backed client 결함을 찾으면 현재 사용자 수정 범위에서 [s
 - redaction/rollback: 기존 scanner는 count만 기록한다. 질문/답변/토큰/cookie/internal path 원문을 남기지 않는다. 이번 관측 기록만 정정하고 실제 guard/원본 증거는 보존한다. 스킬 제거는 이 폴더·역할 참조·task binding 항목만 복구한다.
 - 중복 방지 근거: E3/E4 실제 실행 판단만 분리했다. 기존 client fixture·Browser 도구·공식 toolkit·Desktop proof gate를 재사용한다.
 - 반증 사례: fixture GREEN으로 실제 RAG를 PASS 처리하거나, ordinary viewport를 공식 Simulator로 기록하거나, 없는 latency를 0으로 채우면 실패다.
+
+- 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

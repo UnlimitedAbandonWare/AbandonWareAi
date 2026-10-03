@@ -2,6 +2,8 @@
 package com.example.lms.service.rag.pre;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.guard.GuardContext;
+import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.service.rag.detector.GameDomainDetector;
 import com.example.lms.service.rag.pre.CognitiveState;
 import com.example.lms.service.knowledge.KnowledgeBaseService;
@@ -64,7 +66,10 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
         // CognitiveStateExtractor를 통해 ExecutionMode를 조회한다.  벡터 검색 모드에서는
         // 추가적인 전처리를 수행하지 않고 원문을 그대로 반환하여 쿼리 임베딩을 위한
         // 텍스트가 손상되지 않도록 한다.
-        try {
+        String cognitiveSkip = cognitiveSkipReason();
+        if (cognitiveSkip != null) {
+            traceCognitiveSkipped("enrich", original, cognitiveSkip);
+        } else try {
             var cs = cognitiveStateExtractor.extract(original);
             if (cs != null && cs.executionMode() == CognitiveState.ExecutionMode.VECTOR_SEARCH) {
                 // 원문에서 제어문자 제거 및 앞뒤 공백만 정리한다.
@@ -139,6 +144,11 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
     }
 
     public Optional<CognitiveState> extractCognitiveState(String q) {
+        String cognitiveSkip = cognitiveSkipReason();
+        if (cognitiveSkip != null) {
+            traceCognitiveSkipped("extractCognitiveState", q, cognitiveSkip);
+            return Optional.empty();
+        }
         try { return Optional.ofNullable(cognitiveStateExtractor.extract(q)); }
         catch (Exception stateEx) {
             String errorType = SafeRedactor.traceLabelOrFallback(stateEx.getClass().getSimpleName(), "unknown");
@@ -198,6 +208,39 @@ public class GuardrailQueryPreprocessor implements QueryContextPreprocessor {
         String subject = subjectResolver.resolve(q, domain).orElse(null);
         if (!StringUtils.hasText(subject)) return Map.of();
         return knowledgeBase.getAllRelationships(domain, subject);
+    }
+
+    /**
+     * 인지 상태 추출(LLM 호출)을 이번 요청에서 생략할 이유. null 이면 정상 실행.
+     * 저사양/고부하 로컬 레인의 다이나믹 fail-soft fast path:
+     * - prior_failure: 같은 요청 안에서 extract 가 이미 실패/타임아웃됨 — 재호출
+     *   시 같은 지연을 다시 지불하므로 건너뛰고 기존 로컬 파이프라인(타이포·정규화)만 수행.
+     * - cheap_mode / bypass_mode: GuardContext가 경량 검색/바이패스 레인을 지정 — 모드
+     *   분류용 무거운 추출을 생략하고 원문 전진. 추출 생략은 기존 catch 경로와 동일하게
+     *   비벡터 모드로 해석되어 안전하다.
+     */
+    private static String cognitiveSkipReason() {
+        if (Boolean.TRUE.equals(TraceStore.get("query.guardrail.suppressed.cognitiveState"))) {
+            return "prior_failure";
+        }
+        GuardContext ctx = GuardContextHolder.get();
+        if (ctx != null && ctx.isCheapSearchMode()) {
+            return "cheap_mode";
+        }
+        if (ctx != null && ctx.isBypassMode()) {
+            return "bypass_mode";
+        }
+        return null;
+    }
+
+    private static void traceCognitiveSkipped(String stage, String query, String reason) {
+        String safeStage = SafeRedactor.traceLabelOrFallback(stage, "unknown");
+        String safeReason = SafeRedactor.traceLabelOrFallback(reason, "unknown");
+        TraceStore.inc("query.guardrail.cognitiveSkipped.count");
+        TraceStore.put("query.guardrail.cognitiveSkipped", true);
+        TraceStore.put("query.guardrail.cognitiveSkipped.stage", safeStage);
+        TraceStore.put("query.guardrail.cognitiveSkipped.reason", safeReason);
+        TraceStore.put("query.guardrail.cognitiveSkipped.queryHash", SafeRedactor.hash12(query));
     }
 
     private static void traceGuardrailFailure(String stage, String query, Throwable error) {

@@ -19,6 +19,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,8 +27,19 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any
+
+try:
+    from awx_paths import ROOT as _AWX_ROOT, resolve as _awx_resolve
+except ImportError:  # producer-kit copy without the registry
+    _AWX_ROOT = Path(__file__).resolve().parents[1]
+
+    def _awx_resolve(_key, **kw):
+        return _AWX_ROOT
+_AWX_ROOT_WIN = str(_AWX_ROOT)
+_AWX_ROOT_FWD = _AWX_ROOT_WIN.replace("\\", "/")
 
 try:
     from scripts.awx_shared_state import Change, Conflict, apply_changes, read_optional, plain_path
@@ -200,6 +212,7 @@ TOOL_ALIASES = {
     "agent.db.snapshot": "agent_db_snapshot",
     "trace.snapshot": "trace_snapshot_probe",
     "trace.snapshot_probe": "trace_snapshot_probe",
+    "answer.trace_bundle_read": "answer_trace_bundle_read",
     "supabase.probe": "supabase_context_probe",
     "supabase.context_probe": "supabase_context_probe",
     "supabase.snapshot": "supabase_schema_snapshot",
@@ -1279,6 +1292,7 @@ def main() -> int:
             "harmony_scan": harmony_scan,
             "agent_db_snapshot": agent_db_snapshot,
             "trace_snapshot_probe": trace_snapshot_probe,
+            "answer_trace_bundle_read": answer_trace_bundle_read,
             "supabase_context_probe": supabase_context_probe,
             "supabase_schema_snapshot": supabase_schema_snapshot,
             "supabase_schema_snapshot_import": supabase_schema_snapshot_import,
@@ -4660,7 +4674,7 @@ def mcp_node_setup_next_action(patchdrop_root: Path, role: str, topic: str = "")
             "python3" if role == "macmini" else "python",
             "scripts/awx_mcp_node_setup.py",
             source_root.replace("\\", "/") if role == "macmini" else source_root,
-            "C:/AbandonWare/demo-1/demo-1/src" if role == "macmini" else "C:\\AbandonWare\\demo-1\\demo-1\\src",
+            _AWX_ROOT_FWD if role == "macmini" else _AWX_ROOT_WIN,
             config_path,
             role,
             quote_fn=sh_quote if role == "macmini" else ps_quote,
@@ -4712,8 +4726,8 @@ def collect_external_evidence_next_action(
             "rawSecretPatternHits": 0,
         },
         "producerCommands": [
-            f"python scripts/awx_mcp_node_smoke.py --root <producer-local-worktree> --canonical-root C:\\AbandonWare\\demo-1\\demo-1\\src --node-role {role_slug}",
-            f"python scripts/awx_mcp_producer_handoff.py --source-root <producer-local-worktree> --canonical-root C:\\AbandonWare\\demo-1\\demo-1\\src --patchdrop-root <PatchDrop> --producer-script <PatchDrop>\\producer_bundle.py --node-role {role_slug} --topic {topic_slug} --pathspec <relative/source/path>",
+            f"python scripts/awx_mcp_node_smoke.py --root <producer-local-worktree> --canonical-root {_AWX_ROOT_WIN} --node-role {role_slug}",
+            f"python scripts/awx_mcp_producer_handoff.py --source-root <producer-local-worktree> --canonical-root {_AWX_ROOT_WIN} --patchdrop-root <PatchDrop> --producer-script <PatchDrop>\\producer_bundle.py --node-role {role_slug} --topic {topic_slug} --pathspec <relative/source/path>",
         ],
         "decision": "evidence_needed",
     }
@@ -4912,7 +4926,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
 
     source_root_raw = safe_scalar(payload.get("source_root") or payload.get("root") or ".", 500)
     patchdrop_root_raw = safe_scalar(payload.get("patchdrop_root") or "__patch_drop__", 500)
-    canonical_root_raw = safe_scalar(payload.get("canonical_root") or "C:/AbandonWare/demo-1/demo-1/src", 500)
+    canonical_root_raw = safe_scalar(payload.get("canonical_root") or _AWX_ROOT_FWD, 500)
     shared_root_raw = safe_scalar(payload.get("shared_root") or source_root_raw, 500)
     topic = safe_scalar(payload.get("topic") or "patchdrop-handoff", 120)
     raw_pathspec = payload.get("pathspec") or payload.get("pathspecs") or []
@@ -4996,7 +5010,7 @@ def producer_command_plan(payload: dict[str, Any]) -> dict[str, Any]:
     shared_source = is_shared_source_path(source_root_raw)
     desktop_canonical = (
         is_relative_to_path(source_root, canonical_root)
-        or is_relative_to_path(source_root, Path("C:/AbandonWare/demo-1/demo-1/src"))
+        or is_relative_to_path(source_root, Path(_AWX_ROOT_FWD))
     )
     source_root_kind = "shared-root" if shared_source else ("desktop-canonical" if desktop_canonical else "local-worktree")
     source_isolation = {
@@ -5213,7 +5227,7 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
             "failReason": "unsupported-node-role",
         }
 
-    canonical_root = safe_scalar(payload.get("canonical_root") or "C:/AbandonWare/demo-1/demo-1/src", 500)
+    canonical_root = safe_scalar(payload.get("canonical_root") or _AWX_ROOT_FWD, 500)
     producer_canonical_root_raw = safe_scalar(
         payload.get("producer_canonical_root") or str(resolve_path(canonical_root)),
         500,
@@ -5255,7 +5269,7 @@ def desktop_dispatch_packet(payload: dict[str, Any]) -> dict[str, Any]:
     )
     default_roots = {
         "macmini": "/Users/nninn/agent/macmini/awx-macmini",
-        "notebook": "C:/AbandonWare/worktrees/awx-notebook",
+        "notebook": str(_awx_resolve("worktree.notebook")).replace("\\", "/"),
     }
     default_patchdrop_roots = {
         "macmini": "/Volumes/WinSrc/demo-1/demo-1/src/__patch_drop__",
@@ -6517,6 +6531,104 @@ def agent_db_snapshot(payload: dict[str, Any]) -> dict[str, Any]:
             "failReason": exc.__class__.__name__,
             "message": safe_message(str(exc), 160),
         }
+
+
+def answer_trace_bundle_read(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate one existing answer trace export without extracting or exposing its contents.
+
+    Checksums establish archive integrity, not the identity of the server that
+    produced it. The caller remains responsible for obtaining the ZIP through
+    the existing owner-checked HTTP route.
+    """
+    def reject(reason: str) -> dict[str, Any]:
+        return {"ok": False, "decision": "answer_trace_bundle_rejected", "failReason": reason}
+
+    raw_path = payload.get("archive_path", payload.get("archivePath"))
+    if not isinstance(raw_path, str) or not raw_path or not raw_path.lower().endswith(".zip"):
+        return reject("invalid_archive")
+    try:
+        path = Path(raw_path).absolute()  # Do not resolve a caller-supplied symlink.
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 1_048_576:
+            return reject("invalid_archive")
+        allowed = {"summary.json", "trace.json", "events.ndjson", "README.txt", "manifest.json"}
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            names = [member.filename for member in members]
+            if (len(names) > 5 or len(names) != len(set(names))
+                    or not {"summary.json", "README.txt", "manifest.json"}.issubset(names)
+                    or any(name not in allowed for name in names)):
+                return reject("invalid_member")
+            if any(stat.S_IFMT(member.external_attr >> 16) == stat.S_IFLNK for member in members):
+                return reject("invalid_member")
+            if sum(member.file_size for member in members) > 262_144:
+                return reject("oversize_bundle")
+            files: dict[str, bytes] = {}
+            for member in members:
+                with archive.open(member) as stream:
+                    data = stream.read(262_145)
+                if len(data) != member.file_size or len(data) > 262_144:
+                    return reject("oversize_bundle")
+                files[member.filename] = data
+        manifest = json.loads(files["manifest.json"])
+        if not isinstance(manifest, dict):
+            return reject("invalid_manifest")
+        if manifest.get("schema") != "awx.answer-trace-bundle.v1":
+            return reject("unsupported_schema")
+        checksums = manifest.get("checksumsSha256")
+        if not isinstance(checksums, dict) or set(checksums) != (set(files) - {"manifest.json"}):
+            return reject("invalid_manifest")
+        for name, expected in checksums.items():
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                return reject("invalid_manifest")
+            if not hmac.compare_digest(hashlib.sha256(files[name]).hexdigest(), expected):
+                return reject("checksum_mismatch")
+        sources = manifest.get("sources")
+        if not isinstance(sources, dict) or not all(isinstance(sources.get(key), dict)
+                                                    for key in ("summary", "trace", "events", "logs")):
+            return reject("invalid_manifest")
+        for key, filename in (("trace", "trace.json"), ("events", "events.ndjson")):
+            if sources[key].get("status") not in {"available", "unavailable"}:
+                return reject("source_mismatch")
+            if (sources[key].get("status") == "available") != (filename in files):
+                return reject("source_mismatch")
+        if sources["summary"].get("status") != "available" or sources["logs"].get("status") != "unavailable":
+            return reject("source_mismatch")
+        for name in ("summary.json", "trace.json"):
+            if name in files and not isinstance(json.loads(files[name]), dict):
+                return reject("invalid_content")
+        request_hash = manifest.get("requestIdHash")
+        trace_hash = manifest.get("traceIdHash")
+        if trace_hash is not None and (not isinstance(trace_hash, str)
+                                       or not re.fullmatch(r"hash:[0-9a-f]{12}", trace_hash)):
+            return reject("invalid_correlation")
+        event_count = 0
+        if "events.ndjson" in files:
+            if not isinstance(request_hash, str) or not re.fullmatch(r"hash:[0-9a-f]{12}", request_hash):
+                return reject("invalid_correlation")
+            for line in files["events.ndjson"].splitlines():
+                event = json.loads(line)
+                if (not isinstance(event, dict) or event.get("requestIdHash") != request_hash
+                        or (trace_hash is not None and event.get("traceIdHash") != trace_hash)):
+                    return reject("invalid_correlation")
+                event_count += 1
+            if (event_count == 0 or event_count > 200 or sources["events"].get("count") != event_count
+                    or sources["events"].get("historyComplete") is not False):
+                return reject("source_mismatch")
+        if (manifest.get("ringScope") != "current_process_only"
+                or manifest.get("durableScope") != "existing_chat_store"):
+            return reject("invalid_manifest")
+        result = {"ok": True, "decision": "answer_trace_bundle_verified",
+                "eventCount": event_count, "historyComplete": False,
+                "eventStatus": sources["events"].get("status"),
+                "sourceStatus": {key: sources[key]["status"] for key in ("summary", "trace", "events", "logs")},
+                "ringScope": "current_process_only", "durableScope": "existing_chat_store",
+                "proofScope": "archive_integrity_only"}
+        if isinstance(sources["events"].get("truncated"), bool):
+            result["eventsTruncated"] = sources["events"]["truncated"]
+        return result
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile, RuntimeError):
+        return reject("invalid_archive")
 
 
 def trace_snapshot_probe(payload: dict[str, Any]) -> dict[str, Any]:
@@ -9082,7 +9194,7 @@ def target_is_protected_canonical(payload: dict[str, Any], target_dir: Path) -> 
     configured = payload.get("canonical_root")
     if isinstance(configured, str) and configured.strip():
         roots.append(resolve_path(configured))
-    roots.append(Path("C:/AbandonWare/demo-1/demo-1/src").resolve())
+    roots.append(Path(_AWX_ROOT_FWD).resolve())
     return any(is_relative_to_path(target_dir, root) for root in roots)
 
 

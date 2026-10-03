@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "mdasain-wp2-live-observation.v1",
+  "taskId": "mdasain-wp2-closeout-f8d2d60a",
+  "observedAtUtc": "2026-09-27T11:37:00Z/11:47:00Z",
+  "runtime": {
+    "reused": true,
+    "codexRunId": "20260927-201725-1ae48ab5",
+    "serverPort": 18180,
+    "mgmtPort": 18181,
+    "healthHttp": 200
+  },
+  "webSearchFlag": "OFF (never toggled; both probes sent useWebSearch=false)",
+  "endpoints": {
+    "GET /api/diagnostics/debug/events": 200,
+    "GET /api/diagnostics/debug/fingerprints": 200,
+    "GET /admin/debug-events": 200,
+    "POST /api/chat/sync": 503
+  },
+  "debugEventWhereCounts": {
+    "api.credential.resolved": 10,
+    "api.route.attempt": 2,
+    "api.route.decision": 0,
+    "api.spend.decision": 0,
+    "ModelGuard.verify": 2,
+    "ChatWorkflow.promptBuild": 2,
+    "ChatWorkflow.promptContextComposer": 2,
+    "RagEvidenceAttributionService.promoteForPrompt": 2,
+    "CancelShieldExecutorServicePostProcessor": 2,
+    "NovaReactorContextPropagationHook.afterPropertiesSet": 1
+  },
+  "inventoryRuntime": {
+    "where": "api.credential.resolved",
+    "parsedEnvNameCount": 39,
+    "presentCount": 25,
+    "absentCount": 14,
+    "valuesEmitted": false
+  },
+  "routeEventsLive": [
+    {
+      "where": "api.route.attempt",
+      "level": "WARN",
+      "fields": ["purpose", "provider", "model", "endpointClass", "attempt", "errorClass"],
+      "provider": "local",
+      "model": "gemma4:26b",
+      "endpointClass": "127.0.0.1:11434",
+      "attempt": 1,
+      "errorClass": "timeout_soft",
+      "requestId": "hash:6886c61a57a6",
+      "secretFields": "none"
+    },
+    {
+      "where": "api.route.attempt",
+      "level": "WARN",
+      "fields": ["purpose", "provider", "model", "endpointClass", "attempt", "errorClass"],
+      "provider": "local",
+      "model": "gemma4:26b",
+      "endpointClass": "127.0.0.1:11434",
+      "attempt": 1,
+      "errorClass": "timeout_soft",
+      "requestId": "hash:2f7cadaff941",
+      "secretFields": "none"
+    }
+  ],
+  "credentialVsRoute": "KeyResolver/boot lookups (10x) emit only api.credential.resolved; no route/spend events from lookup-only paths",
+  "probesSent": 2,
+  "probePayload": "{message:'Reply with exactly: OK', useWebSearch:false, useRag:false, maxTokens:8}",
+  "localLaneNote": "gemma4:26b timeout_soft x2 -> HTTP 503; local Ollama lane latency fact, not a WP2 defect",
+  "wp8": {
+    "servedPage": "/admin/debug-events",
+    "http": 200,
+    "eventSignalSummaryPresent": true,
+    "whyRouteCorrelation": "present"
+  },
+  "verificationRuns": {
+    "compileJava": { "runId": "7066136b-99ed-4310-9dab-6d5fe07af34f", "exit": 0 },
+    "wp2FocusedSuite": { "runId": "6adf9ae1-4323-4a0b-8471-1fa971652564", "exit": 0, "tests": 73, "failures": 0, "errors": 0, "skipped": 0 }
+  }
+}

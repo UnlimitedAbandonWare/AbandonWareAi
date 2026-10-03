@@ -45,10 +45,71 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
     /** Simple wrapper of a named EmbeddingStore. */
     public record NamedStore(String id, EmbeddingStore<TextSegment> store) {}
 
+    /** Per-invocation primary write facts; optional mirrors are not receipt targets. */
+    public interface ReceiptWriter {
+        List<WriteTarget> addAllWithReceipt(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments);
+    }
+    public record WriteTarget(String requestedId, String id, String namespace, String writerId) {
+        @Override public String toString() { return "WriteTarget[writer=" + writerId + "]"; }
+    }
+
+    public static List<WriteTarget> primaryTargets(EmbeddingStore<TextSegment> writer,
+            List<String> requestedIds, List<String> actualIds) {
+        while (writer instanceof FingerprintAwareEmbeddingStore fingerprint) writer = fingerprint.primaryWriteDelegate();
+        if (actualIds == null || actualIds.size() != requestedIds.size()
+                || actualIds.stream().anyMatch(id -> id == null || id.isBlank())
+                || new HashSet<>(actualIds).size() != actualIds.size()) {
+            throw new RuntimeException(new TimeoutException("primary_write_identity_unconfirmed"));
+        }
+        String namespace = "not_observed", writerId = "not_observed";
+        if (writer instanceof com.example.lms.service.vector.UpstashVectorStoreAdapter upstash) {
+            namespace = upstash.namespace(); writerId = "upstash";
+        } else if (writer instanceof com.example.lms.service.vector.PineconeVectorStoreAdapter pinecone) {
+            namespace = pinecone.namespace(); writerId = "pinecone";
+        } else if (writer instanceof dev.langchain4j.store.embedding.inmemory.InMemoryEmbeddingStore<?>) {
+            namespace = "not_applicable"; writerId = "memory";
+        }
+        List<WriteTarget> targets = new ArrayList<>();
+        for (int i = 0; i < requestedIds.size(); i++) {
+            targets.add(new WriteTarget(requestedIds.get(i), actualIds.get(i), namespace, writerId));
+        }
+        return List.copyOf(targets);
+    }
+
+    public static List<WriteTarget> writeWithReceipt(EmbeddingStore<TextSegment> store,
+            List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
+        if (store instanceof FederatedEmbeddingStore federation) return federation.addAllWithReceipt(ids, embeddings, segments);
+        if (store instanceof ReceiptWriter writer) return writer.addAllWithReceipt(ids, embeddings, segments);
+        store.addAll(ids, embeddings, segments);
+        return primaryTargets(store, ids, ids);
+    }
+
+    public List<WriteTarget> addAllWithReceipt(List<String> ids, List<Embedding> embeddings, List<TextSegment> segments) {
+        Map<String, List<WriteTarget>> targets = new ConcurrentHashMap<>();
+        FederatedWriteResult result = writeAllWithinDeadline(ids, embeddings, segments, searchTimeoutMs, targets);
+        if (result.succeededCount() != stores.size()) {
+            if (result.outcomes().values().stream().anyMatch(s -> s == FederatedStoreWriteStatus.UNKNOWN_COMMIT
+                    || s == FederatedStoreWriteStatus.DEADLINE_EXCEEDED || s == FederatedStoreWriteStatus.WORKER_UNFINISHED)) {
+                throw new RuntimeException(new TimeoutException("federated_write_unconfirmed"));
+            }
+            throw new IllegalStateException("federated_required_write_failed");
+        }
+        return stores.stream().flatMap(s -> targets.getOrDefault(s.id(), List.of()).stream()).toList();
+    }
+
+    private static boolean commitTimeout(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof TimeoutException || cause instanceof java.net.SocketTimeoutException) return true;
+            if (cause.getCause() == cause) break;
+        }
+        return false;
+    }
+
     enum FederatedStoreWriteStatus {
         SUCCEEDED,
         DEADLINE_EXCEEDED,
         WORKER_UNFINISHED,
+        UNKNOWN_COMMIT,
         FAILED
     }
 
@@ -208,6 +269,12 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
             List<dev.langchain4j.data.embedding.Embedding> embeddings,
             List<TextSegment> segments,
             long timeoutMs) {
+        return writeAllWithinDeadline(ids, embeddings, segments, timeoutMs, null);
+    }
+
+    private FederatedWriteResult writeAllWithinDeadline(
+            List<String> ids, List<Embedding> embeddings, List<TextSegment> segments,
+            long timeoutMs, Map<String, List<WriteTarget>> receiptTargets) {
         if (stores == null || stores.isEmpty()) {
             throw new IllegalStateException("FederatedEmbeddingStore has no upstream stores (stores=empty)");
         }
@@ -241,7 +308,7 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
                     }
                     try {
                         FederatedStoreWriteStatus status = writeToStore(
-                                ns, admittedIds, admittedEmbeddings, admittedSegments);
+                                ns, admittedIds, admittedEmbeddings, admittedSegments, receiptTargets);
                         return new WriteWorkerResult(status, System.nanoTime());
                     } finally {
                         lease.finish();
@@ -604,9 +671,10 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
             NamedStore ns,
             List<String> ids,
             List<dev.langchain4j.data.embedding.Embedding> embeddings,
-            List<TextSegment> segments) {
+            List<TextSegment> segments, Map<String, List<WriteTarget>> receiptTargets) {
         try {
-            ns.store().addAll(ids, embeddings, segments);
+            if (receiptTargets == null) ns.store().addAll(ids, embeddings, segments);
+            else receiptTargets.put(ns.id(), writeWithReceipt(ns.store(), ids, embeddings, segments));
             return FederatedStoreWriteStatus.SUCCEEDED;
         } catch (dev.langchain4j.exception.UnsupportedFeatureException uf) {
             log.debug("Federated addAll unsupported ids path store={}", safeStoreId(ns.id()));
@@ -615,7 +683,8 @@ public class FederatedEmbeddingStore implements EmbeddingStore<TextSegment> {
         } catch (Exception e) {
             log.warn("Federated addAll failed on store {}. errorHash={} errorLength={}",
                     safeStoreId(ns.id()), SafeRedactor.hashValue(messageOf(e)), messageLength(e));
-            return FederatedStoreWriteStatus.FAILED;
+            return receiptTargets != null && commitTimeout(e)
+                    ? FederatedStoreWriteStatus.UNKNOWN_COMMIT : FederatedStoreWriteStatus.FAILED;
         }
     }
 

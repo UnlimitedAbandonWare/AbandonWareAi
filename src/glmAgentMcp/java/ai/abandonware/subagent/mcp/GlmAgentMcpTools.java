@@ -56,7 +56,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
     private static final long MIN_TIMEOUT_MS = 100L;
     private static final long MAX_TIMEOUT_MS = 120_000L;
     private static final int MAX_CONTEXT_PROPERTIES = 16;
-    private static final int MAX_CONTEXT_STRING_LENGTH = 1_024;
+    private static final int MAX_CONTEXT_STRING_LENGTH = 4_000;
+    private static final int MAX_CONTEXT_TOTAL_LENGTH = 12_000;
     private static final List<String> CONSENSUS_ROLES = List.of("support", "falsify", "neutral");
     private static final List<String> INDEPENDENT_CONSENSUS_ROLES = List.of("support", "falsify");
     private static final List<LlmFailureClass> CONSENSUS_ERROR_PRECEDENCE = List.of(
@@ -152,7 +153,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
     private ToolOutcome delegate(Map<String, Object> arguments, String correlationId) {
         String taskText = requiredString(arguments, "task", 12_000);
         String role = optionalLabel(arguments, "role", "analysis");
-        Map<String, Object> context = reviewRoutingContext(context(arguments));
+        List<String> inputWarnings = new ArrayList<>();
+        Map<String, Object> context = reviewRoutingContext(context(arguments, inputWarnings));
         List<String> constraints = constraints(arguments);
         Map<String, Object> expectedOutputSchema = boundedObject(
                 arguments, "expectedOutputSchema", 32, 8_000);
@@ -174,14 +176,15 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         GlmExecutionPacket.Validation validation = validateExecutionPacket
                 ? GlmExecutionPacket.validate(result.output())
                 : null;
-        return ToolOutcome.from(result, validation);
+        return ToolOutcome.from(result, validation).withExtraWarnings(inputWarnings);
     }
 
     private ToolOutcome review(Map<String, Object> arguments, String correlationId) {
         String diff = nullableString(arguments, "diff", 16_000);
-        Map<String, Object> suppliedContext = context(arguments);
+        List<String> inputWarnings = new ArrayList<>();
+        Map<String, Object> suppliedContext = context(arguments, inputWarnings);
         if (diff == null && suppliedContext.isEmpty()) {
-            throw new IllegalArgumentException("diff_or_context_required");
+            throw new InvalidInputException("diff_or_context_required");
         }
         String reviewRubric = optionalString(arguments, "reviewRubric",
                 "Check correctness, safety, reversibility, and missing evidence.", 4_000);
@@ -204,7 +207,7 @@ public final class GlmAgentMcpTools implements AutoCloseable {
                 new SubagentProviderChain.AttemptBudget(),
                 deadlineNanos(timeout(arguments, DEFAULT_TIMEOUT_MS)),
                 ignored -> { });
-        return ToolOutcome.fromReview(result);
+        return ToolOutcome.fromReview(result).withExtraWarnings(inputWarnings);
     }
 
     private static Map<String, Object> reviewRoutingContext(Map<String, Object> context) {
@@ -218,7 +221,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
                                   String correlationId,
                                   long workDeadlineNanos) throws Exception {
         String question = requiredString(arguments, "question", 8_000);
-        Map<String, Object> baseContext = context(arguments);
+        List<String> inputWarnings = new ArrayList<>();
+        Map<String, Object> baseContext = context(arguments, inputWarnings);
         SubagentProviderChain.AttemptBudget attemptBudget = new SubagentProviderChain.AttemptBudget();
         List<Future<SubagentResult>> futures = new ArrayList<>(CONSENSUS_ROLES.size());
         List<Map<String, Object>> results = new ArrayList<>(
@@ -360,9 +364,11 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         payload.put("hostMutationAllowed", adjudication.valid()
                 && "APPLY".equals(adjudication.verdict())
                 && succeeded == CONSENSUS_ROLES.size());
-        payload.put("warnings", succeeded == CONSENSUS_ROLES.size()
-                ? (adjudication.valid() ? List.of() : List.of("neutral_contract_invalid"))
+        List<String> warnings = new ArrayList<>(inputWarnings);
+        warnings.addAll(succeeded == CONSENSUS_ROLES.size()
+                ? (adjudication.valid() ? List.<String>of() : List.of("neutral_contract_invalid"))
                 : List.of("consensus_degraded"));
+        payload.put("warnings", List.copyOf(warnings));
         payload.put("errorClass", errorClass.name());
         payload.put("retryable", consensusRetryable(errorClass));
         payload.put("blockedExternal", results.stream().anyMatch(
@@ -396,6 +402,12 @@ public final class GlmAgentMcpTools implements AutoCloseable {
                         timeoutOutcome(correlationId, toolName)))
                 .onErrorResume(CancellationException.class, failure -> Mono.just(
                         cancelledOutcome(correlationId, toolName)))
+                .onErrorResume(InvalidInputException.class, failure -> Mono.just(
+                        invalidInputOutcome(correlationId, toolName, failure)))
+                .onErrorResume(IllegalArgumentException.class, failure -> Mono.just(
+                        isReasonCode(failure.getMessage())
+                                ? invalidInputOutcome(correlationId, toolName, failure.getMessage())
+                                : failedOutcome(correlationId, toolName)))
                 .onErrorResume(Throwable.class, failure -> Mono.just(
                         failedOutcome(correlationId, toolName)))
                 .map(this::toCallToolResult)
@@ -489,6 +501,36 @@ public final class GlmAgentMcpTools implements AutoCloseable {
     private static ToolOutcome failedOutcome(String correlationId, String toolName) {
         return errorOutcome(correlationId, toolName,
                 "FAILED", "UNKNOWN", false, "tool_failed");
+    }
+
+    private static ToolOutcome invalidInputOutcome(String correlationId,
+                                                   String toolName,
+                                                   InvalidInputException failure) {
+        ToolOutcome base = errorOutcome(correlationId, toolName,
+                "INVALID_INPUT", "INPUT_INVALID", true, "invalid_input");
+        Map<String, Object> payload = new LinkedHashMap<>(base.payload());
+        payload.put("reasonCode", failure.getMessage());
+        if (failure.key() != null) {
+            payload.put("key", failure.key());
+        }
+        if (failure.limit() != null) {
+            payload.put("limit", failure.limit());
+        }
+        if (failure.actual() != null) {
+            payload.put("actual", failure.actual());
+        }
+        return new ToolOutcome(Map.copyOf(payload), true, "INPUT_INVALID");
+    }
+
+    private static ToolOutcome invalidInputOutcome(String correlationId,
+                                                   String toolName,
+                                                   String reasonCode) {
+        return invalidInputOutcome(correlationId, toolName,
+                new InvalidInputException(reasonCode));
+    }
+
+    private static boolean isReasonCode(String message) {
+        return message != null && message.matches("[a-z][a-z0-9_]{2,63}");
     }
 
     private static ToolOutcome errorOutcome(String correlationId,
@@ -753,12 +795,14 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return List.of();
         }
         if (!(raw instanceof List<?> values) || values.size() > 16) {
-            throw new IllegalArgumentException("invalid_constraints");
+            throw new InvalidInputException("invalid_constraints", "constraints",
+                    16, raw instanceof List<?> list ? list.size() : -1);
         }
         List<String> constraints = new ArrayList<>(values.size());
         for (Object value : values) {
             if (!(value instanceof String text) || text.isBlank() || text.length() > 512) {
-                throw new IllegalArgumentException("invalid_constraints");
+                throw new InvalidInputException("invalid_constraints", "constraints",
+                        512, value instanceof String s ? s.length() : -1);
             }
             constraints.add(text);
         }
@@ -774,13 +818,14 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return Map.of();
         }
         if (!(raw instanceof Map<?, ?> input) || input.size() > maxProperties) {
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidInputException("invalid_" + key, key,
+                    maxProperties, raw instanceof Map<?, ?> map ? map.size() : -1);
         }
         Map<String, Object> copy = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : input.entrySet()) {
             if (!(entry.getKey() instanceof String field)
                     || !field.matches("[A-Za-z$][A-Za-z0-9$._-]{0,63}")) {
-                throw new IllegalArgumentException("invalid_" + key);
+                throw new InvalidInputException("invalid_" + key, key);
             }
             copy.put(field, entry.getValue());
         }
@@ -792,13 +837,14 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         try {
             String serialized = McpJsonDefaults.getMapper().writeValueAsString(value);
             if (serialized.length() > maximumLength) {
-                throw new IllegalArgumentException(reasonCode);
+                throw new InvalidInputException(reasonCode, null,
+                        maximumLength, serialized.length());
             }
             return serialized;
         } catch (IllegalArgumentException invalid) {
             throw invalid;
         } catch (Exception failure) {
-            throw new IllegalArgumentException(reasonCode);
+            throw new InvalidInputException(reasonCode);
         }
     }
 
@@ -839,28 +885,54 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         };
     }
 
-    private static Map<String, Object> context(Map<String, Object> arguments) {
+    private static Map<String, Object> context(Map<String, Object> arguments,
+                                               List<String> inputWarnings) {
         Object raw = arguments.get("context");
         if (raw == null) {
             return Map.of();
         }
-        if (!(raw instanceof Map<?, ?> input) || input.size() > MAX_CONTEXT_PROPERTIES) {
-            throw new IllegalArgumentException("invalid_context");
+        if (!(raw instanceof Map<?, ?> input)) {
+            throw new InvalidInputException("invalid_context", "context");
         }
+        if (input.size() > MAX_CONTEXT_PROPERTIES) {
+            throw new InvalidInputException("invalid_context", "context",
+                    MAX_CONTEXT_PROPERTIES, input.size());
+        }
+        boolean clip = optionalBoolean(arguments, "clipOversizedContext", false);
         Map<String, Object> sanitized = new LinkedHashMap<>();
         for (Map.Entry<?, ?> entry : input.entrySet()) {
             if (!(entry.getKey() instanceof String key)
                     || !key.matches("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")) {
-                throw new IllegalArgumentException("invalid_context_key");
+                throw new InvalidInputException("invalid_context_key", "context");
             }
             Object value = entry.getValue();
             if (value == null || value instanceof Boolean || value instanceof Number) {
                 sanitized.put(key, value == null ? "null" : value);
-            } else if (value instanceof String text && text.length() <= MAX_CONTEXT_STRING_LENGTH) {
-                sanitized.put(key, text);
+            } else if (value instanceof String text) {
+                if (text.length() <= MAX_CONTEXT_STRING_LENGTH) {
+                    sanitized.put(key, text);
+                } else if (clip) {
+                    sanitized.put(key, text.substring(0, MAX_CONTEXT_STRING_LENGTH));
+                    inputWarnings.add("context_clipped key=" + key
+                            + " originalLen=" + text.length()
+                            + " sha12=" + SafeRedactor.hash12(text));
+                } else {
+                    throw new InvalidInputException("invalid_context_value", key,
+                            MAX_CONTEXT_STRING_LENGTH, text.length());
+                }
             } else {
-                throw new IllegalArgumentException("invalid_context_value");
+                throw new InvalidInputException("invalid_context_value", key);
             }
+        }
+        String serialized;
+        try {
+            serialized = McpJsonDefaults.getMapper().writeValueAsString(sanitized);
+        } catch (Exception failure) {
+            throw new InvalidInputException("invalid_context", "context");
+        }
+        if (serialized.length() > MAX_CONTEXT_TOTAL_LENGTH) {
+            throw new InvalidInputException("invalid_context_total", "context",
+                    MAX_CONTEXT_TOTAL_LENGTH, serialized.length());
         }
         return Map.copyOf(sanitized);
     }
@@ -868,7 +940,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
     private static String requiredString(Map<String, Object> arguments, String key, int maxLength) {
         Object value = arguments.get(key);
         if (!(value instanceof String text) || text.isBlank() || text.length() > maxLength) {
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidInputException("invalid_" + key, key, maxLength,
+                    value instanceof String s ? s.length() : -1);
         }
         return text;
     }
@@ -882,7 +955,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return fallback;
         }
         if (!(value instanceof String text) || text.isBlank() || text.length() > maxLength) {
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidInputException("invalid_" + key, key, maxLength,
+                    value instanceof String s ? s.length() : -1);
         }
         return text;
     }
@@ -893,7 +967,8 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return null;
         }
         if (!(value instanceof String text) || text.isBlank() || text.length() > maxLength) {
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidInputException("invalid_" + key, key, maxLength,
+                    value instanceof String s ? s.length() : -1);
         }
         return text;
     }
@@ -906,7 +981,7 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return fallback;
         }
         if (!(value instanceof Boolean flag)) {
-            throw new IllegalArgumentException("invalid_" + key);
+            throw new InvalidInputException("invalid_" + key, key);
         }
         return flag;
     }
@@ -932,11 +1007,11 @@ public final class GlmAgentMcpTools implements AutoCloseable {
             return fallback;
         }
         if (!(value instanceof Number number)) {
-            throw new IllegalArgumentException("invalid_timeout");
+            throw new InvalidInputException("invalid_timeout", "timeoutMs");
         }
         long timeoutMs = number.longValue();
         if (timeoutMs < MIN_TIMEOUT_MS || timeoutMs > MAX_TIMEOUT_MS) {
-            throw new IllegalArgumentException("invalid_timeout");
+            throw new InvalidInputException("invalid_timeout", "timeoutMs");
         }
         return timeoutMs;
     }
@@ -981,6 +1056,7 @@ public final class GlmAgentMcpTools implements AutoCloseable {
                 "validateExecutionPacket", Map.of(
                         "type", "boolean",
                         "description", "When true, validate the returned host execution packet separately from the advisory output hint."),
+                "clipOversizedContext", clipSchema(),
                 "timeoutMs", timeoutSchema()), List.of("task"));
     }
 
@@ -989,6 +1065,7 @@ public final class GlmAgentMcpTools implements AutoCloseable {
                 "diff", boundedString(1, 16_000),
                 "reviewRubric", boundedString(1, 4_000),
                 "context", contextSchema(),
+                "clipOversizedContext", clipSchema(),
                 "timeoutMs", timeoutSchema()), List.of()));
         schema.put("anyOf", List.of(
                 Map.of("required", List.of("diff")),
@@ -1000,6 +1077,7 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         return objectSchema(Map.of(
                 "question", boundedString(1, 8_000),
                 "context", contextSchema(),
+                "clipOversizedContext", clipSchema(),
                 "timeoutMs", timeoutSchema()), List.of("question"));
     }
 
@@ -1033,11 +1111,24 @@ public final class GlmAgentMcpTools implements AutoCloseable {
     }
 
     private static Map<String, Object> contextSchema() {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("maxProperties", MAX_CONTEXT_PROPERTIES);
+        schema.put("description", "Bounded context map; each string value <= 4000 chars "
+                + "and the whole serialized object <= 12000 chars. clipOversizedContext=true "
+                + "clips over-limit string values instead of rejecting.");
+        schema.put("additionalProperties", Map.of(
+                "type", List.of("string", "number", "integer", "boolean", "null"),
+                "maxLength", MAX_CONTEXT_STRING_LENGTH));
+        return Map.copyOf(schema);
+    }
+
+    private static Map<String, Object> clipSchema() {
         return Map.of(
-                "type", "object",
-                "maxProperties", MAX_CONTEXT_PROPERTIES,
-                "additionalProperties", Map.of(
-                        "type", List.of("string", "number", "integer", "boolean", "null")));
+                "type", "boolean",
+                "description", "When true, over-limit context string values are clipped to the "
+                        + "per-value maximum and a context_clipped warning is recorded instead "
+                        + "of rejecting the call.");
     }
 
     private static Map<String, Object> outputSchema(String toolName) {
@@ -1150,10 +1241,60 @@ public final class GlmAgentMcpTools implements AutoCloseable {
         ToolOutcome execute(String correlationId) throws Exception;
     }
 
+    private static final class InvalidInputException extends IllegalArgumentException {
+        private final String key;
+        private final Integer limit;
+        private final Integer actual;
+
+        private InvalidInputException(String reasonCode) {
+            this(reasonCode, null, null, null);
+        }
+
+        private InvalidInputException(String reasonCode, String key) {
+            this(reasonCode, key, null, null);
+        }
+
+        private InvalidInputException(String reasonCode, String key, Integer limit, Integer actual) {
+            super(reasonCode);
+            this.key = key;
+            this.limit = limit;
+            this.actual = actual;
+        }
+
+        private String key() {
+            return key;
+        }
+
+        private Integer limit() {
+            return limit;
+        }
+
+        private Integer actual() {
+            return actual;
+        }
+    }
+
     private record ToolOutcome(Map<String, Object> payload, boolean error, String errorClass) {
         private ToolOutcome {
             payload = payload == null ? Map.of("status", "FAILED") : payload;
             errorClass = Objects.requireNonNullElse(errorClass, "UNKNOWN").toUpperCase(Locale.ROOT);
+        }
+
+        private ToolOutcome withExtraWarnings(List<String> extra) {
+            if (extra == null || extra.isEmpty()) {
+                return this;
+            }
+            Map<String, Object> copy = new LinkedHashMap<>(payload);
+            List<String> warnings = new ArrayList<>();
+            Object existing = copy.get("warnings");
+            if (existing instanceof List<?> list) {
+                for (Object item : list) {
+                    warnings.add(String.valueOf(item));
+                }
+            }
+            warnings.addAll(extra);
+            copy.put("warnings", List.copyOf(warnings));
+            return new ToolOutcome(Map.copyOf(copy), error, errorClass);
         }
 
         private static ToolOutcome from(SubagentResult result) {

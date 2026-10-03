@@ -1,0 +1,1849 @@
+{
+  "schemaVersion": "awx.category-cleanup-scan.v1",
+  "contract": "DEMO1-DEVIN-CATEGORY-CLEANUP-TARGETS-20260928",
+  "generatedAtUtc": "2026-09-28T13:07:57.335803+00:00",
+  "root": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "readOnly": true,
+  "note": "verdict_hint 는 힌트. 최종 판정은 3중 증명 확인 후 사람이 내린다.",
+  "c1_junk": [
+    {
+      "path": "main/java/com/example/lms/config/MatrixConfig.java",
+      "pkg": "(default)",
+      "kinds": [
+        "pkg-mismatch",
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/ChatService_copy.java",
+      "pkg": "(default)",
+      "kinds": [
+        "name-trap",
+        "pkg-mismatch",
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/ChatService_old.java",
+      "pkg": "(default)",
+      "kinds": [
+        "name-trap",
+        "pkg-mismatch",
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/config/JpaBatchConfig.java",
+      "pkg": "com.example.lms.config",
+      "kinds": [
+        "pkg-mismatch"
+      ],
+      "annotations": [
+        "Configuration"
+      ],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/LangChainChatService.java",
+      "pkg": "com.example.lms.service",
+      "kinds": [
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/patch/ChatOrchestratorPatch.java",
+      "pkg": "com.example.lms.service",
+      "kinds": [
+        "pkg-mismatch"
+      ],
+      "annotations": [
+        "ConditionalOnProperty",
+        "Service"
+      ],
+      "testPinned": true
+    },
+    {
+      "path": "main/java/com/example/lms/service/rag/EnhancedSearchService.java",
+      "pkg": "com.example.lms.service",
+      "kinds": [
+        "pkg-mismatch"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/rag/test_mod.java",
+      "pkg": "(default)",
+      "kinds": [
+        "name-trap",
+        "pkg-mismatch"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/RagConfig.java",
+      "pkg": "com.example.lms.service",
+      "kinds": [
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/RagRetrievalService.java",
+      "pkg": "com.example.lms.service",
+      "kinds": [
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    },
+    {
+      "path": "main/java/com/example/lms/service/trace/TraceHtmlSoakWebKpiCopyCalloutRenderer.java",
+      "pkg": "com.example.lms.service.trace",
+      "kinds": [
+        "name-trap"
+      ],
+      "annotations": [],
+      "testPinned": true
+    },
+    {
+      "path": "main/java/service/rag/rerank/DppDiversityReranker.java",
+      "pkg": "(default)",
+      "kinds": [
+        "pkg-mismatch",
+        "comment-or-empty"
+      ],
+      "annotations": [],
+      "testPinned": false
+    }
+  ],
+  "c2_packages": [
+    {
+      "group": "(default)",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/lms/config/MatrixConfig.java",
+        "main/java/com/example/lms/service/ChatService_copy.java",
+        "main/java/com/example/lms/service/ChatService_old.java",
+        "main/java/com/example/lms/service/rag/test_mod.java",
+        "main/java/service/rag/rerank/DppDiversityReranker.java"
+      ]
+    },
+    {
+      "group": "ai.abandonware.nova",
+      "files": 146,
+      "scanned": false,
+      "autoconfigs": [
+        "ai.abandonware.nova.autoconfig.NovaDebugPortAutoConfiguration",
+        "ai.abandonware.nova.autoconfig.NovaFailurePatternAutoConfiguration",
+        "ai.abandonware.nova.autoconfig.NovaOrchestrationAutoConfiguration",
+        "ai.abandonware.nova.autoconfig.NovaOpsStabilizationAutoConfiguration",
+        "ai.abandonware.nova.autoconfig.NovaZero100AutoConfiguration"
+      ],
+      "allImporterCount": 116,
+      "liveImporterCount": 53,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/LmsApplication.java",
+        "main/java/com/example/lms/api/OutboxDiagnosticsController.java",
+        "main/java/com/example/lms/api/WebFailSoftDiagnosticsController.java",
+        "main/java/com/example/lms/assist/ConversateApiCueService.java",
+        "main/java/com/example/lms/assist/ConversateCueRoutingPolicy.java"
+      ],
+      "testPinnedCount": 94,
+      "verdictHint": "WIRED-NOT-SCANNED(autoconfig/import)",
+      "samplePaths": [
+        "main/java/ai/abandonware/nova/autoconfig/NovaDebugPortAutoConfiguration.java",
+        "main/java/ai/abandonware/nova/autoconfig/NovaFailurePatternAutoConfiguration.java",
+        "main/java/ai/abandonware/nova/autoconfig/NovaOpsStabilizationAutoConfiguration.java",
+        "main/java/ai/abandonware/nova/autoconfig/NovaOrchestrationAutoConfiguration.java",
+        "main/java/ai/abandonware/nova/autoconfig/NovaZero100AutoConfiguration.java",
+        "main/java/ai/abandonware/nova/boot/embedding/MatryoshkaEmbeddingModelPostProcessor.java",
+        "main/java/ai/abandonware/nova/boot/embedding/MatryoshkaEmbeddingNormalizer.java",
+        "main/java/ai/abandonware/nova/boot/exec/CancelShieldExecutorService.java"
+      ]
+    },
+    {
+      "group": "ai.abandonware.subagent",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 1,
+      "liveImporterCount": 1,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/LmsApplication.java"
+      ],
+      "testPinnedCount": 0,
+      "verdictHint": "WIRED-NOT-SCANNED(autoconfig/import)",
+      "samplePaths": [
+        "main/java/ai/abandonware/subagent/SubagentFlowRuntimeConfiguration.java",
+        "main/java/ai/abandonware/subagent/SubagentV1Controller.java"
+      ]
+    },
+    {
+      "group": "app",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/app/prompt/PromptManifestLoader.java"
+      ]
+    },
+    {
+      "group": "com.abandonware.ai",
+      "files": 364,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 114,
+      "liveImporterCount": 40,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/api/PublicRequestBudgetGuard.java",
+        "main/java/com/example/lms/api/RagOrchestratorController.java",
+        "main/java/com/example/lms/api/internal/InternalAgentToolController.java",
+        "main/java/com/example/lms/assist/ConversateApiCueService.java",
+        "main/java/com/example/lms/config/AcmeWebSearchAdapterConfig.java"
+      ],
+      "testPinnedCount": 55,
+      "verdictHint": "WIRED-NOT-SCANNED(autoconfig/import)",
+      "samplePaths": [
+        "main/java/com/abandonware/ai/addons/budget/TimeBudget.java",
+        "main/java/com/abandonware/ai/addons/budget/TimeBudgetContext.java",
+        "main/java/com/abandonware/ai/addons/budget/TimeBudgetFilter.java",
+        "main/java/com/abandonware/ai/addons/cache/SingleFlightRegistry.java",
+        "main/java/com/abandonware/ai/addons/complexity/ComplexityGatingCoordinator.java",
+        "main/java/com/abandonware/ai/addons/complexity/ComplexityResult.java",
+        "main/java/com/abandonware/ai/addons/complexity/ComplexityTag.java",
+        "main/java/com/abandonware/ai/addons/complexity/HintsHolder.java"
+      ]
+    },
+    {
+      "group": "com.abandonware.patch",
+      "files": 16,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 3,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 2,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/com/abandonware/patch/config/OnnxLimiterBeanPostProcessor.java",
+        "main/java/com/abandonware/patch/config/OnnxLimiterConfiguration.java",
+        "main/java/com/abandonware/patch/config/PatchAutoConfiguration.java",
+        "main/java/com/abandonware/patch/fusion/CvarAggregator.java",
+        "main/java/com/abandonware/patch/fusion/IdentityScoreCalibrator.java",
+        "main/java/com/abandonware/patch/fusion/ScoreCalibrator.java",
+        "main/java/com/abandonware/patch/guard/CitationGate.java",
+        "main/java/com/abandonware/patch/guard/FinalSigmoidGate.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.cache",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/cache/SingleFlightExecutor.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.context",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/context/MatrixTransformer.java",
+        "main/java/com/abandonwareai/context/PortfolioSynthesizer.java",
+        "main/java/com/abandonwareai/context/scoring/AugmentabilityScorer.java",
+        "main/java/com/abandonwareai/context/scoring/AuthorityScorer.java",
+        "main/java/com/abandonwareai/context/scoring/NoveltyScorer.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.critic",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/critic/CircuitBreaker.java",
+        "main/java/com/abandonwareai/critic/CriticService.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.evolver",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/evolver/ArtPlateEvolver.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.extreme",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/extreme/ExtremeZSystemHandler.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.fusion",
+      "files": 7,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/fusion/BodeClamp.java",
+        "main/java/com/abandonwareai/fusion/dbvmx/DbvmXGate.java",
+        "main/java/com/abandonwareai/fusion/DeltaProjector.java",
+        "main/java/com/abandonwareai/fusion/MpAwareFuser.java",
+        "main/java/com/abandonwareai/fusion/MpLawNormalizer.java",
+        "main/java/com/abandonwareai/fusion/ScoreCalibrator.java",
+        "main/java/com/abandonwareai/fusion/WeightedPowerMean.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.gate",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/gate/MoEGate.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.guard",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/guard/AutorunPreflightGate.java",
+        "main/java/com/abandonwareai/guard/CitationGate.java",
+        "main/java/com/abandonwareai/guard/FinalSigmoidGate.java",
+        "main/java/com/abandonwareai/guard/ReflectionProxyGuard.java",
+        "main/java/com/abandonwareai/guard/VersionPurityChecker.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.mcp",
+      "files": 3,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/mcp/McpSessionRouter.java",
+        "main/java/com/abandonwareai/mcp/McpToolRegistry.java",
+        "main/java/com/abandonwareai/mcp/McpTransport.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.nlp",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/nlp/alias/TileConceptResolver.java",
+        "main/java/com/abandonwareai/nlp/alias/TileDictionary.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.nova",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/nova/BravePlanMarker.java",
+        "main/java/com/abandonwareai/nova/RuleBreakInterceptor.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.overdrive",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/overdrive/AngerOverdriveNarrower.java",
+        "main/java/com/abandonwareai/overdrive/OverdriveGuard.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.planner",
+      "files": 3,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/com/abandonwareai/planner/KAllocationPolicy.java",
+        "main/java/com/abandonwareai/planner/PlanLoader.java",
+        "main/java/com/abandonwareai/planner/PlannerNexus.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.rerank",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/rerank/CrossEncoderGate.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.resilience",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/resilience/cfvm/CfvmController.java",
+        "main/java/com/abandonwareai/resilience/cfvm/RawMatrixBuffer.java",
+        "main/java/com/abandonwareai/resilience/cfvm/RawSlotExtractor.java",
+        "main/java/com/abandonwareai/resilience/cfvm/RawTile.java",
+        "main/java/com/abandonwareai/resilience/cfvm/RetrievalOrderServiceAdapter.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.selfask",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/selfask/SubQuestionPlanner.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.telemetry",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/telemetry/compaction/SimHash64Reducer.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.vision",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/vision/mpc/MirrorPerfectCube.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.zerobreak",
+      "files": 8,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/zerobreak/context/ZeroBreakContext.java",
+        "main/java/com/abandonwareai/zerobreak/controller/ZeroBreakAdminController.java",
+        "main/java/com/abandonwareai/zerobreak/gate/AutorunPreflightGate.java",
+        "main/java/com/abandonwareai/zerobreak/gate/CitationGate.java",
+        "main/java/com/abandonwareai/zerobreak/gate/FinalSigmoidGate.java",
+        "main/java/com/abandonwareai/zerobreak/interceptor/RuleBreakInterceptor.java",
+        "main/java/com/abandonwareai/zerobreak/sanitizer/PIISanitizer.java",
+        "main/java/com/abandonwareai/zerobreak/strategy/PlannerNexus.java"
+      ]
+    },
+    {
+      "group": "com.abandonwareai.zsystem",
+      "files": 3,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/abandonwareai/zsystem/BudgetContext.java",
+        "main/java/com/abandonwareai/zsystem/CancelSignal.java",
+        "main/java/com/abandonwareai/zsystem/TimeBudget.java"
+      ]
+    },
+    {
+      "group": "com.acme.aicore",
+      "files": 31,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 12,
+      "liveImporterCount": 5,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/config/AcmeWebSearchAdapterConfig.java",
+        "main/java/com/example/lms/config/LangChainConfig.java",
+        "main/java/com/example/lms/config/alias/NineTileAliasCorrector.java",
+        "main/java/com/example/lms/trace/LlmTraceAspect.java",
+        "main/java/com/example/lms/trace/PromptTraceAspect.java"
+      ],
+      "testPinnedCount": 7,
+      "verdictHint": "WIRED-NOT-SCANNED(autoconfig/import)",
+      "samplePaths": [
+        "main/java/com/acme/aicore/adapters/ranking/MpAwareWeightedRrfRanking.java",
+        "main/java/com/acme/aicore/adapters/ranking/WeightedRrfRanking.java",
+        "main/java/com/acme/aicore/adapters/search/BraveMapper.java",
+        "main/java/com/acme/aicore/adapters/search/BraveSearchProvider.java",
+        "main/java/com/acme/aicore/adapters/search/CachedWebSearch.java",
+        "main/java/com/acme/aicore/adapters/search/NaverSearchProvider.java",
+        "main/java/com/acme/aicore/app/QueryPlanner.java",
+        "main/java/com/acme/aicore/common/WebClientConfig.java"
+      ]
+    },
+    {
+      "group": "com.example.guard",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/guard/FinalQualityGate.java",
+        "main/java/com/example/guard/RiskScorer.java"
+      ]
+    },
+    {
+      "group": "com.example.infra",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/infra/cache/SingleFlightExecutor.java"
+      ]
+    },
+    {
+      "group": "com.example.lms",
+      "files": 1412,
+      "scanned": true,
+      "autoconfigs": [
+        "com.example.lms.agent.context.AgentDbContextAutoConfiguration"
+      ],
+      "allImporterCount": 374,
+      "liveImporterCount": 6,
+      "liveImporterSamples": [
+        "main/java/com/nova/protocol/alloc/SimpleRiskKAllocator.java",
+        "main/java/com/nova/protocol/config/NovaProtocolConfig.java",
+        "main/java/com/nova/protocol/fusion/BodeClamp.java",
+        "main/java/com/nova/protocol/fusion/CvarAggregator.java",
+        "main/java/com/nova/protocol/fusion/NovaNextFusionService.java"
+      ],
+      "testPinnedCount": 542,
+      "verdictHint": "SCANNED(LIVE)",
+      "samplePaths": [
+        "main/java/com/example/lms/agent/AgentTraceSuppressions.java",
+        "main/java/com/example/lms/agent/AutonomousExplorationService.java",
+        "main/java/com/example/lms/agent/context/AgentDbContextAutoConfiguration.java",
+        "main/java/com/example/lms/agent/context/AgentDbContextController.java",
+        "main/java/com/example/lms/agent/context/AgentDbContextPromptInjector.java",
+        "main/java/com/example/lms/agent/context/AgentDbContextProperties.java",
+        "main/java/com/example/lms/agent/context/AgentDbContextProvider.java",
+        "main/java/com/example/lms/agent/context/AgentPipelineHealthController.java"
+      ]
+    },
+    {
+      "group": "com.example.moe",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/com/example/moe/AblationRunner.java",
+        "main/java/com/example/moe/FeatureCollector.java",
+        "main/java/com/example/moe/GateVector.java",
+        "main/java/com/example/moe/MultiSourceMoE.java",
+        "main/java/com/example/moe/TensorOps.java"
+      ]
+    },
+    {
+      "group": "com.example.patch",
+      "files": 4,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 4,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/com/example/patch/FlowJoinerBridge.java",
+        "main/java/com/example/patch/OcrTesseractReflect.java",
+        "main/java/com/example/patch/OtelTracerBridge.java",
+        "main/java/com/example/patch/RateLimiterSelector.java"
+      ]
+    },
+    {
+      "group": "com.example.rag",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/rag/fusion/calib/IsotonicCalibrator.java",
+        "main/java/com/example/rag/fusion/calib/ScoreCalibrator.java",
+        "main/java/com/example/rag/fusion/WeightedRRF.java",
+        "main/java/com/example/rag/planner/QueryComplexityClassifier.java",
+        "main/java/com/example/rag/qc/QueryComplexityGate.java"
+      ]
+    },
+    {
+      "group": "com.example.rerank",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/rerank/cross/SemaphoreGate.java"
+      ]
+    },
+    {
+      "group": "com.example.retrieval",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/retrieval/KAllocator.java"
+      ]
+    },
+    {
+      "group": "com.example.risk",
+      "files": 6,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/com/example/risk/ListingContext.java",
+        "main/java/com/example/risk/NoOpRiskModelProvider.java",
+        "main/java/com/example/risk/RealRiskModelProvider.java",
+        "main/java/com/example/risk/RiskFeatureExtractor.java",
+        "main/java/com/example/risk/RiskModelProvider.java",
+        "main/java/com/example/risk/RiskScorer.java"
+      ]
+    },
+    {
+      "group": "com.example.search",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/com/example/search/plan/MultiQueryPlan.java"
+      ]
+    },
+    {
+      "group": "com.nova.protocol",
+      "files": 24,
+      "scanned": true,
+      "autoconfigs": [],
+      "allImporterCount": 11,
+      "liveImporterCount": 3,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/risk/TopKShrinkerAspect.java",
+        "main/java/com/example/lms/service/rag/fusion/WeightedReciprocalRankFuser.java",
+        "main/java/com/example/lms/service/rag/orchestrator/OrchestratorHypernovaFusionBridge.java"
+      ],
+      "testPinnedCount": 7,
+      "verdictHint": "SCANNED(LIVE)",
+      "samplePaths": [
+        "main/java/com/nova/protocol/alloc/RiskKAllocator.java",
+        "main/java/com/nova/protocol/alloc/SimpleRiskKAllocator.java",
+        "main/java/com/nova/protocol/config/NovaProperties.java",
+        "main/java/com/nova/protocol/config/NovaProtocolConfig.java",
+        "main/java/com/nova/protocol/context/BraveContext.java",
+        "main/java/com/nova/protocol/context/PlanContext.java",
+        "main/java/com/nova/protocol/context/RuleBreakContext.java",
+        "main/java/com/nova/protocol/filter/RuleBreakInterceptor.java"
+      ]
+    },
+    {
+      "group": "config",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/config/OrchestrationConfig.java",
+        "main/java/config/RagP1Config.java"
+      ]
+    },
+    {
+      "group": "guard",
+      "files": 5,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 2,
+      "liveImporterCount": 1,
+      "liveImporterSamples": [
+        "main/java/com/example/lms/guard/AnswerSanitizer.java"
+      ],
+      "testPinnedCount": 0,
+      "verdictHint": "WIRED-NOT-SCANNED(autoconfig/import)",
+      "samplePaths": [
+        "main/java/guard/CitationGate.java",
+        "main/java/guard/FinalQualityGate.java",
+        "main/java/guard/FinalSigmoidGate.java",
+        "main/java/guard/PIISanitizer.java",
+        "main/java/guard/SigmoidQualityGate.java"
+      ]
+    },
+    {
+      "group": "infra",
+      "files": 4,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/infra/cache/SingleFlightCache.java",
+        "main/java/infra/cache/SingleFlightExecutor.java",
+        "main/java/infra/kafka/KafkaTopics.java",
+        "main/java/infra/upstash/UpstashBackedWebCache.java"
+      ]
+    },
+    {
+      "group": "integrations",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 1,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/integrations/mcp/McpClient.java",
+        "main/java/integrations/mcp/tools/MCPPingTool.java"
+      ]
+    },
+    {
+      "group": "otel",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/otel/TelemetryProps.java"
+      ]
+    },
+    {
+      "group": "planner",
+      "files": 3,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 2,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/planner/model/PlanSpec.java",
+        "main/java/planner/PlanLoader.java",
+        "main/java/planner/PlannerNexus.java"
+      ]
+    },
+    {
+      "group": "router",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/router/joiner/ActivationJoiner.java",
+        "main/java/router/joiner/FlowJoiner.java"
+      ]
+    },
+    {
+      "group": "scheduler",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/scheduler/IndexingScheduler.java",
+        "main/java/scheduler/IndexJobLock.java"
+      ]
+    },
+    {
+      "group": "service",
+      "files": 39,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 2,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 6,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/service/guard/RerankerConcurrencyGuard.java",
+        "main/java/service/guard/TimeBudget.java",
+        "main/java/service/NaverSearchService.java",
+        "main/java/service/ocr/OcrResultNormalizer.java",
+        "main/java/service/onnx/OnnxCrossEncoderReranker.java",
+        "main/java/service/onnx/OnnxCrossEncoderRerankerPatch.java",
+        "main/java/service/plan/PlanLoader.java",
+        "main/java/service/plan/PlanSelector.java"
+      ]
+    },
+    {
+      "group": "strategy",
+      "files": 12,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/strategy/core/budget/CancellationToken.java",
+        "main/java/strategy/core/budget/TimeBudget.java",
+        "main/java/strategy/guard/AutorunPreflightGate.java",
+        "main/java/strategy/guard/PiiSanitizer.java",
+        "main/java/strategy/infra/upstash/SingleFlightRegistry.java",
+        "main/java/strategy/plan/PlanDslLoader.java",
+        "main/java/strategy/PlanLoader.java",
+        "main/java/strategy/RetrievalOrderService.java"
+      ]
+    },
+    {
+      "group": "telemetry",
+      "files": 1,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 1,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/telemetry/LoggingSseEventPublisher.java"
+      ]
+    },
+    {
+      "group": "tools",
+      "files": 3,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 0,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 1,
+      "verdictHint": "TEST-PINNED-DORMANT?",
+      "samplePaths": [
+        "main/java/tools/fallback/FallbackRetrieveTool.java",
+        "main/java/tools/fallback/OutboxSendTool.java",
+        "main/java/tools/trace/OrchestrationTraceTool.java"
+      ]
+    },
+    {
+      "group": "trace",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 6,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/trace/RequestIdHeaderFilter.java",
+        "main/java/trace/TraceContext.java"
+      ]
+    },
+    {
+      "group": "web",
+      "files": 2,
+      "scanned": false,
+      "autoconfigs": [],
+      "allImporterCount": 1,
+      "liveImporterCount": 0,
+      "liveImporterSamples": [],
+      "testPinnedCount": 0,
+      "verdictHint": "DORMANT_CANDIDATE(3증명 필요)",
+      "samplePaths": [
+        "main/java/web/RuleBreakInterceptor.java",
+        "main/java/web/TraceFilter.java"
+      ]
+    }
+  ],
+  "c3_runtime": {
+    "springBootApps": [
+      {
+        "path": "main/java/com/abandonware/ai/agent/AgentApplication.java",
+        "annotations": [
+          "SpringBootApplication"
+        ],
+        "scanBase": [
+          "com.abandonware.ai.agent",
+          "com.example.lms"
+        ]
+      },
+      {
+        "path": "main/java/com/example/lms/LmsApplication.java",
+        "annotations": [
+          "SpringBootApplication"
+        ],
+        "scanBase": [
+          "com.example.lms",
+          "com.nova.protocol"
+        ]
+      }
+    ],
+    "gradleMainClasses": [
+      "com.example.lms.tools.HarmonyBuildScanner",
+      "com.example.lms.tools.ScoringRunner",
+      "com.example.lms.LmsApplication"
+    ],
+    "applicationFiles": [
+      {
+        "name": "application-ablation-aggressive.yml",
+        "bytes": 337
+      },
+      {
+        "name": "application-ablation-balanced.yml",
+        "bytes": 333
+      },
+      {
+        "name": "application-ablation-conservative.yml",
+        "bytes": 341
+      },
+      {
+        "name": "application-deepgram-local.yml",
+        "bytes": 231
+      },
+      {
+        "name": "application-desktop-gpu-node.yml",
+        "bytes": 5659
+      },
+      {
+        "name": "application-dev.yml",
+        "bytes": 3087
+      },
+      {
+        "name": "application-example.yml",
+        "bytes": 2150
+      },
+      {
+        "name": "application-features-example.yml",
+        "bytes": 1955
+      },
+      {
+        "name": "application-graph-rag.yml",
+        "bytes": 892
+      },
+      {
+        "name": "application-jammini.yml",
+        "bytes": 1545
+      },
+      {
+        "name": "application-learning.yml",
+        "bytes": 635
+      },
+      {
+        "name": "application-llm.yaml",
+        "bytes": 37315
+      },
+      {
+        "name": "application-local-llm.yml",
+        "bytes": 8035
+      },
+      {
+        "name": "application-local.yml",
+        "bytes": 6558
+      },
+      {
+        "name": "application-macmini-control-plane.yml",
+        "bytes": 5200
+      },
+      {
+        "name": "application-merge16.yml",
+        "bytes": 1668
+      },
+      {
+        "name": "application-meta-display.yml",
+        "bytes": 9983
+      },
+      {
+        "name": "application-nova-next.yml",
+        "bytes": 1292
+      },
+      {
+        "name": "application-patch.properties",
+        "bytes": 415
+      },
+      {
+        "name": "application-patch.yml",
+        "bytes": 1831
+      },
+      {
+        "name": "application-prod.yml",
+        "bytes": 2872
+      },
+      {
+        "name": "application-proj-override.yml",
+        "bytes": 1902
+      },
+      {
+        "name": "application-proxy.properties",
+        "bytes": 769
+      },
+      {
+        "name": "application-recency30.yml",
+        "bytes": 1264
+      },
+      {
+        "name": "application-secrets.yml",
+        "bytes": 2715
+      },
+      {
+        "name": "application-ultra.properties",
+        "bytes": 13738
+      },
+      {
+        "name": "application-verification.properties",
+        "bytes": 5509
+      },
+      {
+        "name": "application-zombie.yml",
+        "bytes": 261
+      },
+      {
+        "name": "application.disabled.yml",
+        "bytes": 2164
+      },
+      {
+        "name": "application.properties",
+        "bytes": 42294
+      },
+      {
+        "name": "application.properties.example",
+        "bytes": 140
+      },
+      {
+        "name": "application.yml",
+        "bytes": 31716
+      }
+    ],
+    "planFiles": [
+      "README.md",
+      "UAW_thumbnail.v1.yaml",
+      "ap11_finance_special.v1.yaml",
+      "ap1_auth_web.v1.yaml",
+      "ap3_vec_dense.v1.yaml",
+      "ap9_cost_saver.v1.yaml",
+      "brave.v1.yaml",
+      "brave.yaml",
+      "document_evidence.v1.yaml",
+      "hyper_nova.v1.yaml",
+      "kg_first.v1.yaml",
+      "projection_agent.v1.yaml",
+      "recency_first.v1.yaml",
+      "rulebreak.v1.yaml",
+      "safe.v1.yaml",
+      "safe_autorun.v1.yaml",
+      "safe_autorun.yaml",
+      "zero100.v1.yaml",
+      "zero_break.v1.yaml",
+      "zero_break.yaml"
+    ]
+  },
+  "c4_surface": {
+    "skillDirs": 130,
+    "skillLooseFiles": 4,
+    "agentPromptDirs": 64,
+    "agentPromptFiles": 38,
+    "diagEntries": 42,
+    "ruleFiles": {
+      ".clinerules": 12,
+      ".grok/rules": 8,
+      ".codex": 9,
+      ".devin": 14,
+      ".windsurf/rules": 4
+    },
+    "scriptsByExt": {
+      ".bat": 2,
+      ".py": 213,
+      ".ps1": 161,
+      ".sh": 8,
+      ".js": 16,
+      ".cjs": 17,
+      ".java": 1,
+      ".json": 1,
+      ".md": 3,
+      ".mjs": 1,
+      ".txt": 1
+    },
+    "rootBat": [
+      "Agent-Port.bat",
+      "Agent-Scope.bat",
+      "Close-Meta-Display.bat",
+      "Close-RAG.bat",
+      "Debug-Meta-Display.bat",
+      "Debug-RAG.bat",
+      "Debug-Session.bat",
+      "Ops-Surface-Thin.bat",
+      "Read-RAG-Debug.bat",
+      "Safe-Cleanup.bat",
+      "Start-Grok-CLI.bat",
+      "Start-Meta-Display.bat",
+      "Start-RAG.bat",
+      "Status-RAG.bat",
+      "Verify-Meta-Display.bat",
+      "Verify-RAG.bat",
+      "Vibe-Max-Agency.bat",
+      "Watch-Agents.bat",
+      "Watch-Rtx3090.bat",
+      "gradlew.bat"
+    ]
+  },
+  "c5_ghosts": {
+    "referencedTotal": 402,
+    "missingCount": 79,
+    "missing": [
+      {
+        "ref": "Debug-AI.bat",
+        "docs": [
+          "agent-prompts/devin-primitive-debug-ai-ideas-20260926/DEVIN_KICKOFF.md",
+          "agent-prompts/devin-primitive-debug-ai-ideas-20260926/IDEAS.md",
+          "agent-prompts/devin-primitive-debug-ai-ideas-20260926/PASTE_TO_DEVIN.md"
+        ]
+      },
+      {
+        "ref": "Invoke-Devin.bat",
+        "docs": [
+          "agent-prompts/clean-agent-loadout-harmony-20260926/CLEAN_KICKOFF.md"
+        ]
+      },
+      {
+        "ref": "run.bat",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/Invoke-Devin.ps1",
+        "docs": [
+          "agent-prompts/clean-agent-loadout-harmony-20260926/CLEAN_KICKOFF.md",
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json"
+        ]
+      },
+      {
+        "ref": "scripts/advance_autograder_probe.ps1",
+        "docs": [
+          ".agents/skills/demo1-macsrc-defect-intake/SKILL.md",
+          "docs/superpowers/plans/2026-07-29-docker-autograder-implementation.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md"
+        ]
+      },
+      {
+        "ref": "scripts/analyze_build_errors.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/att_ctx_handoff_checklist.ps1",
+        "docs": [
+          "docs/diagnostics/att-ctx-devin-assist-20260928/A5-scripts-inventory.md"
+        ]
+      },
+      {
+        "ref": "scripts/bench_sweep.sh",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/build_error_guard.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/build_llamacpp.sh",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/catalog.py",
+        "docs": [
+          ".agents/skills/demo1-adaptive-rule-lab/SKILL.md",
+          ".agents/skills/demo1-devin-source-orchestrator/playbooks/playbooks.json",
+          "docs/adaptive-rule-lab-completion-2026-09-14.md",
+          "docs/superpowers/specs/2026-09-14-adaptive-skill-rule-catalog-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/changed.py",
+        "docs": [
+          ".agents/skills/demo1-completed-directive-cleanup/references/request-contract.md",
+          ".agents/skills/demo1-completed-directive-cleanup/references/task-cleanup-contract.md"
+        ]
+      },
+      {
+        "ref": "scripts/cleanup_completed_directives.ps1",
+        "docs": [
+          ".agents/skills/demo1-completed-directive-cleanup/references/task-cleanup-contract.md",
+          "docs/AGENT_ARTIFACT_SCOPE.md"
+        ]
+      },
+      {
+        "ref": "scripts/codex_residuals_preflight.ps1",
+        "docs": [
+          "agent-prompts/clean-codex-residuals-assist-20260927/PASTE_CLEAN.txt"
+        ]
+      },
+      {
+        "ref": "scripts/collect_build_errors.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/compile_and_collect_errors.bat",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/compile_and_collect_errors.sh",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/demo1_patch_potential_guard_contract_tests.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-patch-potential-guard-red-campaign-amendment.md",
+          "docs/superpowers/plans/2026-07-31-patch-potential-guard.md",
+          "docs/superpowers/specs/2026-07-31-patch-potential-guard-design.md",
+          "docs/superpowers/specs/2026-07-31-patch-potential-guard-existing-asset-extension-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/demo1_peer_signal_read.py",
+        "docs": [
+          "agent-prompts/codex-devin-peer-signal-bridge-20260926/brief.md"
+        ]
+      },
+      {
+        "ref": "scripts/demo1_root_doctor.ps1",
+        "docs": [
+          "docs/diagnostics/mAWSain-assist-20260927/A1-toolbox-inventory.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_ollama_model_download.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-ollama-model-tooling-implementation.md",
+          "docs/superpowers/specs/2026-07-31-desktop-local-model-autopilot-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_ollama_model_preflight.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-ollama-model-tooling-implementation.md",
+          "docs/superpowers/specs/2026-07-31-desktop-local-model-autopilot-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_ollama_model_promote.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-ollama-model-tooling-implementation.md",
+          "docs/superpowers/specs/2026-07-31-desktop-local-model-autopilot-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_patchdrop_auto_intake_lib.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/specs/2026-07-31-notebook-desktop-auto-intake-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_patchdrop_auto_intake_tests.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/specs/2026-07-31-notebook-desktop-auto-intake-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_patchdrop_autoconsume.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-patchdrop-autoconsume-implementation.md",
+          "docs/superpowers/specs/2026-07-31-desktop-patchdrop-autoconsume-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/desktop_task_preflight.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-patchdrop-autoconsume-implementation.md",
+          "docs/superpowers/specs/2026-07-31-desktop-patchdrop-autoconsume-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/devin_cli.py",
+        "docs": [
+          "docs/operations/mcp-subscription-model-routing.md"
+        ]
+      },
+      {
+        "ref": "scripts/devin_client.py",
+        "docs": [
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json",
+          "docs/diagnostics/quarantine-seed-harmony-0928/00_SEED_INVENTORY.md",
+          "docs/diagnostics/quarantine-seed-harmony-0928/seed_mine.md"
+        ]
+      },
+      {
+        "ref": "scripts/docker_autograder.py",
+        "docs": [
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json",
+          "docs/superpowers/plans/2026-07-29-docker-autograder-implementation.md",
+          "docs/superpowers/specs/2026-07-29-docker-autograder-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/evaluate_failure_routes.py",
+        "docs": [
+          ".agents/skills/demo1-adaptive-verifier-escalation/SKILL.md",
+          "docs/superpowers/plans/2026-08-04-adaptive-verifier-escalation.md",
+          "docs/superpowers/specs/2026-08-04-adaptive-verifier-escalation-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/evaluators.py",
+        "docs": [
+          "docs/superpowers/plans/2026-09-14-adaptive-skill-rule-catalog.md"
+        ]
+      },
+      {
+        "ref": "scripts/experiment.py",
+        "docs": [
+          ".agents/skills/demo1-adaptive-rule-lab/references/experiment-contract.md",
+          "docs/superpowers/plans/2026-09-14-adaptive-skill-rule-catalog.md",
+          "docs/superpowers/specs/2026-09-14-adaptive-skill-rule-catalog-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/glgo_extract_final_merged0_sequences.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/init_skill.py",
+        "docs": [
+          "docs/superpowers/specs/2026-07-29-macsrc-defect-session-skill-family-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/invoke_consolidated_program.ps1",
+        "docs": [
+          "agent-prompts/awx_desktop_notebook_consolidated_source_directive_20260806.md",
+          "agent-prompts/awx_desktop_notebook_consolidated_source_directive_20260815.md",
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json"
+        ]
+      },
+      {
+        "ref": "scripts/invoke_docker_autograder.ps1",
+        "docs": [
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json",
+          "docs/diagnostics/quarantine-seed-harmony-0928/00_SEED_INVENTORY.md",
+          "docs/diagnostics/quarantine-seed-harmony-0928/seed_mine.md"
+        ]
+      },
+      {
+        "ref": "scripts/junit_adapter.py",
+        "docs": [
+          ".agents/skills/demo1-adaptive-rule-lab/references/experiment-contract.md"
+        ]
+      },
+      {
+        "ref": "scripts/labio.py",
+        "docs": [
+          "docs/superpowers/plans/2026-09-14-adaptive-skill-rule-catalog.md"
+        ]
+      },
+      {
+        "ref": "scripts/macsrc_smb_patch_guard.ps1",
+        "docs": [
+          ".agents/skills/demo1-macsrc-smb-direct-patch/SKILL.md",
+          "docs/superpowers/plans/2026-07-31-patch-potential-guard-existing-asset-extension.md",
+          "docs/superpowers/plans/2026-07-31-patch-potential-guard.md",
+          "docs/superpowers/plans/2026-07-31-ydrive-smb-canonical-workspace.md"
+        ]
+      },
+      {
+        "ref": "scripts/merge_boundary_contract_check.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/metrics.py",
+        "docs": [
+          "docs/superpowers/plans/2026-09-14-adaptive-skill-rule-catalog.md"
+        ]
+      },
+      {
+        "ref": "scripts/mgain_trace_verify_matrix.py",
+        "docs": [
+          "docs/PROJECT_STATUS.md"
+        ]
+      },
+      {
+        "ref": "scripts/new_artifact_trace_manifest.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-30-artifact-trace-curator.md",
+          "docs/superpowers/plans/2026-07-30-artifact-trace-integrity-verifier.md",
+          "docs/superpowers/specs/2026-07-30-artifact-trace-curator-design.md",
+          "docs/superpowers/specs/2026-07-30-artifact-trace-integrity-verifier-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/new_docker_autograder_job.ps1",
+        "docs": [
+          ".agents/skills/demo1-docker-autograder/SKILL.md",
+          ".agents/skills/demo1-docker-autograder/references/docker-autograder-contract.md",
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json"
+        ]
+      },
+      {
+        "ref": "scripts/new_guard_session_plan.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-29-macsrc-defect-session-skill-family.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md",
+          "docs/superpowers/specs/2026-09-14-scoped-lock-and-skill-roles-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/new_postprocess_packet.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-29-docker-autograder-implementation.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-defect-session-skill-family.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md",
+          "docs/superpowers/plans/2026-07-31-patch-potential-guard-existing-asset-extension.md"
+        ]
+      },
+      {
+        "ref": "scripts/next_step.py",
+        "docs": [
+          "docs/meta-display-verification.md",
+          "docs/diagnostics/artifact-refine-0928/00_SEED_MINE.md",
+          "docs/diagnostics/artifact-refine-0928/02_ghost_refs.json",
+          "docs/diagnostics/quarantine-seed-harmony-0928/00_SEED_INVENTORY.md"
+        ]
+      },
+      {
+        "ref": "scripts/notebook_signal_priority.py",
+        "docs": [
+          "docs/superpowers/specs/2026-08-02-notebook-signal-priority-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/patchdrop_opportunistic_pickup_contract_tests.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-desktop-opportunistic-patchdrop-pickup.md",
+          "docs/superpowers/specs/2026-07-31-desktop-opportunistic-patchdrop-pickup-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/prepare_autograder_probe.ps1",
+        "docs": [
+          ".agents/skills/demo1-macsrc-defect-intake/SKILL.md",
+          "docs/superpowers/plans/2026-07-29-docker-autograder-implementation.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md"
+        ]
+      },
+      {
+        "ref": "scripts/prepare_defect_intent.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-29-macsrc-defect-session-skill-family.md"
+        ]
+      },
+      {
+        "ref": "scripts/prepare_patch_tri_query.ps1",
+        "docs": [
+          ".agents/skills/demo1-macsrc-patch-postprocessor/SKILL.md",
+          "docs/superpowers/plans/2026-07-29-docker-autograder-implementation.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md"
+        ]
+      },
+      {
+        "ref": "scripts/probe_mainfw.py",
+        "docs": [
+          ".agents/skills/mainfw-safe-repair/SKILL.md",
+          "docs/diagnostics/uaw-vibe-longrun-20260928/00_HARMONY_MAP.md"
+        ]
+      },
+      {
+        "ref": "scripts/quick_validate.py",
+        "docs": [
+          "docs/superpowers/plans/2026-09-14-python-diagnostic-meta-skill.md"
+        ]
+      },
+      {
+        "ref": "scripts/resolve_desktop_directive_target.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-08-05-demo1-desktop-y-to-c-rebinding.md",
+          "docs/superpowers/specs/2026-08-05-demo1-desktop-y-to-c-rebinding-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/run_local_llm.sh",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/run_smoke.sh",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/smoke_agent_db_schema.ps1",
+        "docs": [
+          "agent-prompts/agents/demo1_db_schema_source_patch_9h/system_ko.md"
+        ]
+      },
+      {
+        "ref": "scripts/startup_doctor.py",
+        "docs": [
+          ".agents/skills/demo1-meta-display-verification/SKILL.md",
+          "docs/meta-display-verification.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_artifact_trace_manifest.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-30-artifact-trace-integrity-verifier.md",
+          "docs/superpowers/specs/2026-07-30-artifact-trace-integrity-verifier-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_cleanup_completed_directives.ps1",
+        "docs": [
+          ".agents/skills/demo1-completed-directive-cleanup/SKILL.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_cleanup_completed_tasks.ps1",
+        "docs": [
+          ".agents/skills/demo1-completed-directive-cleanup/SKILL.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_demo1_ops_surface_thin.ps1",
+        "docs": [
+          "agent-prompts/devin-ops-surface-thin-20260926/DEVIN_KICKOFF.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_demo1_stochastic_tool_lab_skill.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_rag_debug_trail_matrix.py",
+        "docs": [
+          "agent-prompts/devin-primitive-debug-ai-ideas-20260926/THE_ONE.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_adapter.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_cli.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_contracts.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_scoring.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_selftest.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_stochastic_tool_lab_tri_query.py",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-notebook-desktop-tooling-auto-intake.md",
+          "docs/superpowers/plans/2026-07-31-stochastic-tool-lab.md"
+        ]
+      },
+      {
+        "ref": "scripts/test_triage_browser_source_change.py",
+        "docs": [
+          "docs/superpowers/specs/2026-08-01-triage-browser-source-changes-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/tri_query_directive_postprocess.ps1",
+        "docs": [
+          ".agents/skills/demo1-memory-integrity-autopatch/SKILL.md",
+          "docs/superpowers/plans/2026-07-29-macsrc-pipeline-sharpening.md"
+        ]
+      },
+      {
+        "ref": "scripts/triage_browser_source_change.py",
+        "docs": [
+          "docs/superpowers/specs/2026-08-01-triage-browser-source-changes-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/validate_counter_evidence_skill_family.py",
+        "docs": [
+          ".agents/skills/demo1-triangulating-counter-evidence/SKILL.md",
+          "docs/superpowers/specs/2026-07-12-counter-evidence-harmony-postprocess-design.md"
+        ]
+      },
+      {
+        "ref": "scripts/validate_demo1_skill_family.ps1",
+        "docs": [
+          "docs/superpowers/plans/2026-07-31-demo1-source-edit-three-way-preflight.md"
+        ]
+      },
+      {
+        "ref": "scripts/verify_soak_trace.py",
+        "docs": [
+          "agent-prompts/madasin-codex-design-recovery-20260926/evidence/source_inventory.json"
+        ]
+      },
+      {
+        "ref": "scripts/zombie_candidate_audit.py",
+        "docs": [
+          ".agents/skills/abandonware-desktop-zombie-purge-safe-patch/SKILL.md"
+        ]
+      }
+    ],
+    "stemPairs": [
+      [
+        "agent_machine_context.ps1",
+        "agent_machine_context.py"
+      ],
+      [
+        "agent_port_lease.ps1",
+        "agent_port_lease.py"
+      ],
+      [
+        "agent_scope_lease.ps1",
+        "agent_scope_lease.py"
+      ],
+      [
+        "agent_work_guard.ps1",
+        "agent_work_guard.py"
+      ],
+      [
+        "awx_mcp_toolbox.ps1",
+        "awx_mcp_toolbox.py"
+      ],
+      [
+        "db_gap_scanner.ps1",
+        "db_gap_scanner.py"
+      ],
+      [
+        "fix_build.ps1",
+        "fix_build.sh"
+      ],
+      [
+        "lease_conflict_autoflow.ps1",
+        "lease_conflict_autoflow.py"
+      ],
+      [
+        "start-https-tunnel.bat",
+        "start-https-tunnel.ps1"
+      ]
+    ]
+  }
+}

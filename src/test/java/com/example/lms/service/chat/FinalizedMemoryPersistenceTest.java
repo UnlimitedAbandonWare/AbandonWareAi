@@ -114,6 +114,23 @@ class FinalizedMemoryPersistenceTest {
         }
     }
 
+    @Test void fatalErrorStopsAllLaterStagesWithoutSuppression() {
+        for (Error fatal : List.of(new OutOfMemoryError("synthetic only"), new AssertionError("synthetic fatal"),
+                new LinkageError("synthetic linkage"))) {
+            AtomicInteger later = new AtomicInteger();
+            List<String> suppressed = new ArrayList<>();
+            Error observed = assertThrows(Error.class, () -> FinalizedMemoryPersistence.persist(
+                    null, CancellationException::new, (name, failure) -> suppressed.add(name),
+                    stage("learning", () -> { throw fatal; }),
+                    stage("memory", later::incrementAndGet),
+                    stage("understanding", later::incrementAndGet),
+                    stage("reinforcement", later::incrementAndGet)));
+            org.junit.jupiter.api.Assertions.assertSame(fatal, observed);
+            assertEquals(0, later.get());
+            assertTrue(suppressed.isEmpty());
+        }
+    }
+
     private static FinalizedMemoryPersistence.Stage stage(String name, Runnable action) {
         return new FinalizedMemoryPersistence.Stage(name, action);
     }

@@ -5,6 +5,7 @@ import ai.abandonware.nova.orch.aop.LlmRouterAspect;
 import com.abandonware.ai.addons.budget.TimeBudget;
 import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.llm.gateway.HybridLlmGatewayProbeService;
+import com.example.lms.llm.ChatGptOAuthRegistration;
 import com.example.lms.service.rag.orchestrator.UnifiedRagOrchestrator;
 import com.example.lms.service.rag.retriever.LocalBm25Retriever;
 import com.example.lms.search.TraceStore;
@@ -29,6 +30,7 @@ public class ConversateApiCueService {
     private static final double SINGLE_SEARCH_RESERVATION_USD=.01;
     private static final class RequestCost {
         double remaining;int attempts;long generationDeadline;
+        boolean oauthRequired, oauthTerminal;
         RequestCost(double remaining){this.remaining=remaining;}
     }
     private final LlmRouterProperties routes;
@@ -38,6 +40,8 @@ public class ConversateApiCueService {
     private final Environment env;
     private final Clock clock;
     private final ConversateCueRoutingPolicy policy;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    void setChatGptOAuthRegistration(ChatGptOAuthRegistration registration) { policy.setChatGptOAuth(registration); }
     @org.springframework.beans.factory.annotation.Autowired(required=false) private ConversateLocalCardGenerator localSupport;
     @org.springframework.beans.factory.annotation.Autowired(required=false) private JevDecisionAdvisor jevAdvisor;
     @org.springframework.beans.factory.annotation.Autowired(required=false) private com.example.lms.debug.ApiFailureRecorder failureRecorder;
@@ -73,6 +77,9 @@ public class ConversateApiCueService {
         debug.put("selectedProvider","none");debug.put("selectedModel","none");debug.put("hintHash","none");
         debug.put("retrievalMs",0L);debug.put("compressionMs",0L);debug.put("refinementMs",0L);debug.put("hintGenerationMs",0L);
         int attempts=0;boolean complex=false;int searchAttempts=0;var cost=new RequestCost(requestCostLimit());
+        // Reserved: no product caller sets oauthRequired=true; this cue lane is reached only by tests.
+        // Activating it requires a separate directive; classifier/Display retain their existing lane.
+        cost.oauthRequired = false;
         debug.put("maxRequestUsd",cost.remaining);debug.put("retrievalEstimatedCostUsd",0d);debug.put("billedCostUsd","not_observed");
         try{
             var window=ConversateHintInputWindow.select(boundedContext(recent),question,
@@ -99,6 +106,7 @@ public class ConversateApiCueService {
                     :jevAdvisor.advise("cue",question,cueDecision);
             debug.put("jevMode",jev.mode());debug.put("jevDecision",jev.decision());debug.put("jevReasonCode",jev.reasonCode());
             debug.put("jevApplied",false);
+            if(jev.latencyMs()>=0)debug.put("jevLatencyMs",jev.latencyMs());
             if(jev.usable()&&!"NO_CUE".equals(cueDecision)){
                 String revised=switch(jev.verdict()){
                     case WEB,HYBRID,SCOPED_RAG->"RAG_CUE";
@@ -106,6 +114,7 @@ public class ConversateApiCueService {
                     case CLARIFY->cueDecision;};
                 if(!revised.equals(cueDecision)){cueDecision=revised;debug.put("cueDecision",cueDecision);debug.put("decisionSource","jev");debug.put("jevApplied",true);}
             }
+            var mode=UnknownAnswerPolicy.mode(jev);
             if(gate.topicChanged()||!gate.contextRelevant())selected=List.of();
             debug.put("contextUsed",selected.size());debug.put("ragNeeded",cueDecision.equals("RAG_CUE"));
             debug.put("hintPath",cueDecision.equals("RAG_CUE")?"RAG":"FAST");
@@ -129,11 +138,15 @@ public class ConversateApiCueService {
                 long retrievalBegan=System.nanoTime();
                 // Local BM25 selects from caller-authorized prepared material, never a global/private corpus.
                 var index=new LocalBm25Retriever();var prepared=new LinkedHashMap<String,PreparedMaterialReader.Material>();
-                if(!publicDisplay)for(var material:materials){String id="p"+prepared.size();prepared.put(id,material);index.add(new LocalBm25Retriever.Doc(id,material.text()));}
+                if(!publicDisplay&&mode!=UnknownAnswerPolicy.Mode.WEB)for(var material:materials){String id="p"+prepared.size();prepared.put(id,material);index.add(new LocalBm25Retriever.Doc(id,material.text()));}
                 for(var match:index.topK(query,3)){var material=prepared.get(match.id);addEvidence(evidence,titles,material.text(),material.sourceId());}
-                if(evidence.isEmpty()&&retrieval!=null&&!cancelled()&&costLimitsEnforced()&&cost.remaining<SINGLE_SEARCH_RESERVATION_USD)
+                // SCOPED_RAG는 명시 플래그 없이 웹 확장을 하지 않는다 — 우선순위는 UnknownAnswerPolicy가 고정한다.
+                boolean webExpansion=UnknownAnswerPolicy.defaultWebAllowed(mode,scopedWebEnabled());
+                if(evidence.isEmpty()&&retrieval!=null&&!cancelled()&&!webExpansion)
+                    debug.put("retrievalSkipped",mode.name()+"_PRECEDENCE");
+                if(evidence.isEmpty()&&retrieval!=null&&!cancelled()&&webExpansion&&costLimitsEnforced()&&cost.remaining<SINGLE_SEARCH_RESERVATION_USD)
                     debug.put("retrievalFailure","SEARCH_COST_BUDGET_EXHAUSTED");
-                if(evidence.isEmpty()&&retrieval!=null&&!cancelled()&&(!costLimitsEnforced()||cost.remaining>=SINGLE_SEARCH_RESERVATION_USD)){
+                if(evidence.isEmpty()&&retrieval!=null&&!cancelled()&&webExpansion&&(!costLimitsEnforced()||cost.remaining>=SINGLE_SEARCH_RESERVATION_USD)){
                     cost.remaining-=SINGLE_SEARCH_RESERVATION_USD;
                     debug.put("retrievalEstimatedCostUsd",SINGLE_SEARCH_RESERVATION_USD);
                     debug.put("searchNeeded",true);
@@ -157,7 +170,7 @@ public class ConversateApiCueService {
             var hint=callGroundedHint(question,finalContext,finalEvidence,cueDecision.equals("RAG_CUE"),gate.quality(),cost,targetChars);
             attempts+=hint.attempts();long generationMs=hint.elapsedMs();
             var hintDiagnostics=new ArrayList<Map<String,Object>>(hint.diagnostics());
-            if(hint.value()!=null&&hint.value().insufficient()&&canSupplement(retrievalTrace)&&!cancelled()
+            if(!cost.oauthRequired&&hint.value()!=null&&hint.value().insufficient()&&canSupplement(retrievalTrace)&&!cancelled()
                     &&cost.attempts<limit("max-attempts-per-stage",3,1,3)
                     &&(!costLimitsEnforced()||cost.remaining>0)
                     &&cost.generationDeadline-System.nanoTime()>1_500_000_000L){
@@ -191,8 +204,53 @@ public class ConversateApiCueService {
                     }
                 }
             }
+            // 모름 신호(insufficient·빈 답·no-evidence 템플릿): 기존 보강이 못 붙은 경우에만,
+            // 요청당 한 번의 유한 웹 검색으로 증거를 보충한다. NO_CUE 게이트는 건드리지 않는다.
+            var unknownTrigger=hint.value()==null?null
+                    :hint.value().insufficient()?UnknownAnswerPolicy.Trigger.INSUFFICIENT_EVIDENCE
+                    :UnknownAnswerPolicy.classify(hint.value().text());
+            boolean webAttempted=searchAttempts>0||retrievalTrace.containsKey("conversate.web.singleCycle");
+            var unknown=UnknownAnswerPolicy.decide(mode,false,scopedWebEnabled(),unknownWebEnabled(),webAttempted,unknownTrigger);
+            debug.put("unknownTrigger",unknownTrigger==null?"none":unknownTrigger.name());
+            debug.put("unknownWebMode",mode.name());debug.put("unknownWeb",unknown.reason());
+            if(!cost.oauthRequired&&unknown.webAllowed()&&retrieval!=null&&!cancelled()
+                    &&cost.attempts<limit("max-attempts-per-stage",3,1,3)
+                    &&(!costLimitsEnforced()||cost.remaining>=SINGLE_SEARCH_RESERVATION_USD)
+                    &&cost.generationDeadline-System.nanoTime()>1_500_000_000L){
+                if(costLimitsEnforced())cost.remaining-=SINGLE_SEARCH_RESERVATION_USD;
+                retrievalTrace.put("conversate.web.unknownSupplement",true);searchAttempts++;
+                long supplementBegan=System.nanoTime();
+                var additional=retrieve(query,retrievalTrace,debug,
+                        Math.min(3000,Math.max(0,(cost.generationDeadline-System.nanoTime())/1_000_000-1500)));
+                debug.put("retrievalMs",((Number)debug.get("retrievalMs")).longValue()+elapsed(supplementBegan));
+                boolean added=false;
+                for(var doc:additional){
+                    if(doc==null||doc.snippet==null)continue;
+                    String text=compress(doc.snippet);
+                    if(text.isBlank()||evidence.stream().anyMatch(e->e.text().equals(text)))continue;
+                    if(!added&&evidence.size()==3)evidence.remove(2);
+                    if(evidence.size()==3)break;
+                    addEvidence(evidence,titles,text,doc.title);added=true;
+                }
+                debug.put("ragDocuments",evidence.size());debug.put("evidenceChars",evidence.stream().mapToInt(e->e.text().length()).sum());
+                if(added){
+                    captureEvidenceDigests(debug,evidence);
+                    var supplemented=List.copyOf(evidence);
+                    int usableCount=usableEvidence(supplemented).size();
+                    debug.put("usableEvidenceCount",usableCount);debug.put("evidenceStatus",usableCount==0?"FRAGMENTED":"AVAILABLE");
+                    var enriched=callGroundedHint(question,finalContext,supplemented,true,gate.quality(),cost,targetChars);
+                    attempts+=enriched.attempts();generationMs+=enriched.elapsedMs();hintDiagnostics.addAll(enriched.diagnostics());
+                    if(enriched.value()!=null&&!enriched.value().insufficient()&&UnknownAnswerPolicy.classify(enriched.value().text())==null){
+                        hint=enriched;debug.put("supplementStatus","GROUNDED_UNKNOWN_WEB");debug.put("evidenceStatus","AVAILABLE");
+                    }else{
+                        debug.put("supplementStatus","RETAINED_UNKNOWN_HINT");
+                        debug.put("supplementFailure",enriched.value()==null?enriched.failure():"EVIDENCE_INSUFFICIENT");
+                    }
+                }else debug.put("unknownWebOutcome","no_new_evidence");
+            }
             debug.put("selectedProvider",hint.provider());debug.put("selectedModel",hint.model());debug.put("hintGenerationMs",generationMs);
             debug.put("hintAttempts",List.copyOf(hintDiagnostics));
+            if(cost.oauthRequired)debug.put("billingSource",ChatGptOAuthRegistration.BILLING_SOURCE);
             debug.put("fallback",Boolean.TRUE.equals(debug.get("fallback"))||hint.attempts()>1||hint.value()==null);
             if(hint.value()==null)return supportFallback(hint.failure(),question,selected,attempts,complex?1:0,searchAttempts,debug,began,true);
             if(cancelled())return outcome("CANCELLED",null,attempts,complex?1:0,searchAttempts,debug,began);
@@ -380,6 +438,11 @@ public class ConversateApiCueService {
         debug.put("stageCalls",Map.of("cueAdmission",0,"retrieval",search,"finalGeneration",attempts,"transcriptPostprocess",0));
         debug.put("costLimitsEnforced",costLimitsEnforced());debug.put("currency","USD");
         debug.put("requestReservedUsd",reserved);
+        if(ChatGptOAuthRegistration.BILLING_SOURCE.equals(debug.get("billingSource"))){
+            debug.put("usageEstimatedCostUsd","not_applicable");debug.put("requestReservedUsd","not_applicable");
+            debug.put("usageCostCoverage","not_applicable");debug.put("currency","not_applicable");
+            debug.put("costEvidence","subscription_usage_not_invoice");
+        }
         debug.put("totalLatencyMs",elapsed(began));debug.put("status",reason);debug.put("apiAttempts",attempts);
         LOG.info("conversate.cue {}",debug);
         return new ConversateAnswerPipeline.Outcome(reason,card,attempts,complex,((Number)debug.get("hintGenerationMs")).longValue(),search,0)
@@ -392,7 +455,9 @@ public class ConversateApiCueService {
     private <T> CallResult<T> call(ConversateCardPrompt.Request request,boolean gate,int quality,RequestCost cost,Function<JsonNode,T> parse,boolean direct){
         long began=System.nanoTime();String failure="API_UNAVAILABLE",provider="none",model="none";int attempts=0;
         var diagnostics=new ArrayList<Map<String,Object>>();
+        if(cost.oauthTerminal)return new CallResult<>(null,"chatgpt_oauth","none",0,"CHATGPT_OAUTH_TERMINAL",0,List.of());
         long stageMs=Math.min(TimeBudgetContext.get().remainingMillis(),direct?12000:limit(gate?"gate-timeout-ms":"hint-timeout-ms",gate?3000:6500,500,10000));
+        if(cost.oauthRequired)stageMs=Math.min(stageMs,3000);
         if(cost.generationDeadline==0)cost.generationDeadline=System.nanoTime()+Math.max(0,stageMs)*1_000_000;
         long deadline=cost.generationDeadline;var used=new HashSet<String>();
         var failedRoutes=new ArrayList<String[]>();
@@ -410,12 +475,18 @@ public class ConversateApiCueService {
             long remaining=(deadline-System.nanoTime())/1_000_000;
             var demand=new ConversateCueRoutingPolicy.Demand(gate,quality,inputTokens,outputTokens,remaining,cost.remaining);
             skippedRoutes.clear();
-            var reservation=policy.reserve(demand,used,skippedRoutes);if(reservation==null)break;
+            var reservation=policy.reserve(demand,used,skippedRoutes,cost.oauthRequired);
+            if(reservation==null){
+                if(cost.oauthRequired){cost.oauthTerminal=true;failure="CHATGPT_OAUTH_UNAVAILABLE";}
+                break;
+            }
             var choice=reservation.choice();String key=choice.key();used.add(key);var cfg=routes.getModels().get(key);
-            cost.remaining=Math.max(0,cost.remaining-reservation.reservedUsd());
-            provider=safeLabel(cfg.getProvider());model=safeLabel(cfg.getName());attempts++;cost.attempts++;
+            boolean oauth=ChatGptOAuthRegistration.isRoute(key);
+            if(!oauth)cost.remaining=Math.max(0,cost.remaining-reservation.reservedUsd());
+            provider=oauth?ChatGptOAuthRegistration.PROVIDER:safeLabel(cfg.getProvider());
+            model=oauth?ChatGptOAuthRegistration.model(key):safeLabel(cfg.getName());attempts++;cost.attempts++;
             long started=System.nanoTime();var inherited=TimeBudgetContext.get();
-            boolean alternative=attempts<maxAttempts
+            boolean alternative=!oauth&&attempts<maxAttempts
                     &&!policy.candidates(new ConversateCueRoutingPolicy.Demand(gate,quality,inputTokens,outputTokens,remaining,cost.remaining),used).isEmpty();
             // Reserve fallback time only when another eligible route can actually use it.
             long attemptMs=!alternative?remaining:gate?Math.max(1,remaining/2):
@@ -429,13 +500,19 @@ public class ConversateApiCueService {
             attempt.put("recentSuccessRate",choice.successRate());attempt.put("serviceTier","standard");
             attempt.put("fallbackReason",attempts==1?"none":failure);
             attempt.put("structuredOutput",Set.of("openai","gemini").contains(provider.toLowerCase(Locale.ROOT))?"json_schema":"json_object");
+            if(oauth){
+                attempt.put("billingSource",ChatGptOAuthRegistration.BILLING_SOURCE);
+                attempt.put("estimatedCost","not_applicable");attempt.put("reservedCostUsd","not_applicable");
+                attempt.put("usageEstimatedCostUsd","not_applicable");attempt.put("currency","not_applicable");
+                attempt.put("structuredOutput","prompt_only");attempt.put("serviceTier","subscription");
+            }
             attempt.put("routesSkipped",List.copyOf(skippedRoutes));
             attempt.put("escalationReason",gate||quality<=2?"none":quality==4?"EXPERT_DIFFICULTY":"REASONING_DIFFICULTY");
             dev.langchain4j.model.output.TokenUsage usage=null;T value=null;boolean success=false;String attemptFailure="none";
             try{
                 var response=router.apiAttempt(key,(int)Math.max(1,attemptMs),outputTokens,cueJsonSchema).chat(request.messages());
                 usage=response==null?null:response.tokenUsage();recordUsage(attempt,usage);
-                if(attempt.get("actualTokens") instanceof Map<?,?>)
+                if(!oauth&&attempt.get("actualTokens") instanceof Map<?,?>)
                     attempt.put("usageEstimatedCostUsd",policy.estimate(key,usage.inputTokenCount(),usage.outputTokenCount()));
                 if(Thread.currentThread().isInterrupted())throw new java.util.concurrent.CancellationException();
                 // A completed valid response may outlive its advisory slice but never the stage/request deadline.
@@ -464,6 +541,12 @@ public class ConversateApiCueService {
                         quotaExhausted(error)?"API_QUOTA_EXHAUSTED":attempt.containsKey("outputChars")?"GENERATION_INVALID_OUTPUT":
                         error instanceof RuntimeException r?ConversateLocalCardGenerator.classify(r):"GENERATION_INPUT_REJECTED";
                 attemptFailure=failure;attempt.put("errorType",error.getClass().getSimpleName());attempt.put("status",failure);
+                if(oauth){
+                    cost.oauthTerminal=true;
+                    if(error instanceof com.example.lms.llm.gateway.LlmGatewayException gateway)
+                        attempt.put("oauthReason",gateway.reasonCode());
+                    failure="CHATGPT_OAUTH_TERMINAL";
+                }
                 if("GENERATION_INVALID_OUTPUT".equals(failure))attempt.put("outputValidation",outputValidation(error));
                 // A later fallback may serve the user; the original failure still goes on record here.
                 if(!"CANCELLED".equals(failure))failedRoutes.add(new String[]{provider,model});
@@ -490,11 +573,14 @@ public class ConversateApiCueService {
                 }catch(RuntimeException ignored){}
                 return new CallResult<>(value,provider,model,attempts,"none",elapsed(began),List.copyOf(diagnostics));
             }
-            if("CANCELLED".equals(failure))break;
+            if(cost.oauthTerminal||"CANCELLED".equals(failure))break;
         }
         // With zero attempts the skip reasons are the only evidence of why no route was tried.
         if(diagnostics.isEmpty()&&!skippedRoutes.isEmpty())
             diagnostics.add(Map.of("rowKind","routeSelection","status",failure,"routesSkipped",List.copyOf(skippedRoutes)));
+        if(cost.oauthRequired&&!failure.startsWith("CHATGPT_OAUTH_")){
+            cost.oauthTerminal=true;failure="CHATGPT_OAUTH_UNAVAILABLE";
+        }
         return new CallResult<>(null,provider,model,attempts,failure,elapsed(began),List.copyOf(diagnostics));
     }
     /** Current cue-route health for the diagnostics view; configured provider/model names only, no secrets. */
@@ -536,6 +622,7 @@ public class ConversateApiCueService {
     }
     private ConversateAnswerPipeline.Outcome supportFallback(String reason,String question,List<String> context,int attempts,int complex,int search,Map<String,Object> debug,long began,boolean useful){
         debug.put("fallbackReason",reason);
+        if(reason.startsWith("CHATGPT_OAUTH_"))return outcome(reason,null,attempts,complex,search,debug,began);
         if(useful&&localSupport!=null&&!cancelled()&&env.getProperty("conversate.cue.local-support-enabled",Boolean.class,true)){
             var bounded=boundedContext(context,8,4096);
             var result=localSupport.suggestSupport(question,bounded,clock.millis());
@@ -552,6 +639,8 @@ public class ConversateApiCueService {
         return outcome(reason,null,attempts,complex,search,debug,began);
     }
     private boolean costLimitsEnforced(){return env.getProperty("conversate.cost.enforce-limits",Boolean.class,true);}
+    private boolean unknownWebEnabled(){return env.getProperty("conversate.cue.unknown-web-enabled",Boolean.class,true);}
+    private boolean scopedWebEnabled(){return env.getProperty("conversate.cue.scoped-web-enabled",Boolean.class,false);}
     private double requestCostLimit(){if(!costLimitsEnforced())return 0;Double value=env.getProperty("conversate.cue.max-request-usd",Double.class,.50);return value!=null&&Double.isFinite(value)&&value>=0?Math.min(value,.50):0;}
     private int limit(String field,int fallback,int min,int max){return Math.max(min,Math.min(max,env.getProperty("conversate.cue."+field,Integer.class,fallback)));}
     private static List<String> boundedContext(List<String> context){return boundedContext(context,12,8192);}
@@ -636,4 +725,3 @@ public class ConversateApiCueService {
     private static boolean cancelled(){return Thread.currentThread().isInterrupted()||TimeBudgetContext.get()!=null&&TimeBudgetContext.get().expired();}
     private static long elapsed(long start){return Math.max(0,(System.nanoTime()-start)/1_000_000);}
 }
-

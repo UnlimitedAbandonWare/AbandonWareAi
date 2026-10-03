@@ -59,7 +59,7 @@ Emit `demo1.adaptive-verifier-escalation.v1` with action, post-probe action,
 terminal route, reason codes, probe, role packet references, provenance groups,
 call counts, `independenceProven`, `orderStable`, `routeGatePassed`, evidence needs,
 and a redacted compact line. Read [the evaluation contract](references/evaluation-contract.md)
-before schema or metric work. Run `scripts/evaluate_failure_routes.py` only for
+before schema or metric work. Run `.\.agents\skills\demo1-adaptive-verifier-escalation\scripts\evaluate_failure_routes.py` only for
 sealed offline `EVALUATE` fixtures; it never dispatches agents or authorizes mutation.
 
 ## Common mistakes

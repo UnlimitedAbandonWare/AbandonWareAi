@@ -4,6 +4,7 @@
 .DESCRIPTION
     Scans Java source to quantify design-vs-implementation DB persistence gaps.
     Wraps db_gap_scanner.py or runs standalone analysis via Select-String.
+    SSOT: scripts/db_gap_scanner.py preferred; -SkipPython keeps standalone mode.
 .EXAMPLE
     .\scripts\db_gap_scanner.ps1
     .\scripts\db_gap_scanner.ps1 -OutputDir data\db-gap-report\after

@@ -1,4 +1,6 @@
-# Agent/dev spend guard — does NOT hard-cap production traffic.
+# Agent/dev spend guard — does NOT spend-cap production traffic.
+# Wall-clock timeouts are a separate contract: public.request-budget.max-time-budget-ms
+# (application-llm.yaml, ~300s) bounds every request; this file never lifts it.
 version: "2026-09-17"
 activation:
   env_any_true: [AWX_AGENT_SPEND_GUARD]
@@ -6,6 +8,8 @@ activation:
   spring_profiles: [agent-spend-guard]
 
 policy:
+  # Spend-blocking OFF only — NOT a timeout waiver. The request wall-clock
+  # budget (public.request-budget.max-time-budget-ms) stays bounded regardless.
   production_hard_caps: false
   dedupe_identical_probes: true
   skip_successful_verification_replay: true

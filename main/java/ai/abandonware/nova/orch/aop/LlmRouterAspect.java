@@ -73,6 +73,7 @@ public class LlmRouterAspect {
     private static final Logger log = LoggerFactory.getLogger(LlmRouterAspect.class);
 
     private final Environment env;
+    private final com.example.lms.routing.ApiRoutingPolicySnapshot routingPolicy;
     private final LlmRouterProperties props;
     private final LlmRouterBandit bandit;
 
@@ -126,6 +127,7 @@ public class LlmRouterAspect {
             ModelRuntimeHealthTracker modelRuntimeHealthTracker,
             GeminiGateway geminiGateway) {
         this.env = env;
+        this.routingPolicy = new com.example.lms.routing.ApiRoutingPolicySnapshot(env);
         this.props = props;
         this.bandit = bandit;
         this.modelGuardProps = modelGuardProps;
@@ -139,6 +141,26 @@ public class LlmRouterAspect {
 
     @Around("execution(* com.example.lms.llm.DynamicChatModelFactory.lcWithTimeout(..))")
     public Object aroundLcWithTimeout(ProceedingJoinPoint pjp) throws Throwable {
+        Object[] originalArgs = pjp.getArgs();
+        com.example.lms.routing.RoutingInvocation roleInvocation = originalArgs != null && originalArgs.length == 10
+                && originalArgs[9] instanceof com.example.lms.routing.RoutingInvocation invocation ? invocation : null;
+        if (roleInvocation != null) {
+            if (props == null || !props.isEnabled() || bandit == null)
+                throw new IllegalStateException("routing_runtime_unsupported");
+            CallArgs bounded = CallArgs.parse(originalArgs);
+            String target = bounded.requestedModelId;
+            if (!target.startsWith("llmrouter.")) throw new IllegalArgumentException("routing_registered_route_required");
+            String key = target.substring("llmrouter.".length());
+            var cfg = props.getModels().get(key);
+            if (!roleCandidateAllowed(bounded,key,cfg)) throw new IllegalStateException("routing_candidate_unavailable");
+            return routeWithGateway(new LlmRouterBandit.Selected(key,cfg),bounded);
+        }
+        if (originalArgs != null && originalArgs.length > 0 && originalArgs[0] instanceof String requested
+                && com.example.lms.llm.ChatGptOAuthRegistration.isRoute(requested)) {
+            // The factory owns this explicit route, including self-invoked prepared answers.
+            // Never alias, bandit-select, or catch it in the API-key fallback below.
+            return pjp.proceed();
+        }
         if (props == null || !props.isEnabled() || bandit == null) {
             return pjp.proceed();
         }
@@ -173,8 +195,21 @@ public class LlmRouterAspect {
             try { return routeWithGateway(new LlmRouterBandit.Selected(key, cfg), ca); }
             catch (RuntimeException failure) { throw com.example.lms.llm.ModelSelectionException.failure(failure); }
         }
-        // 1) Resolve llmrouter.* directly.
-        LlmRouterBandit.Selected sel = bandit.pick(
+        // API-first uses registered order; a manual selection above stays exact.
+        LlmRouterBandit.Selected sel = null;
+        if (apiFirstEnabled() && isAutoRouterRequest(ca.requestedModelId)) {
+            sel = nextEligibleSelection(null, ca, java.util.Set.of(), true);
+            if (sel == null) {
+                TraceStore.put("llm.gateway.fallbackReason", "cloud_unavailable");
+                sel = nextEligibleSelection(null, ca, java.util.Set.of(), false);
+            }
+        } else if (ca.requestedModelId != null && !ca.requestedModelId.startsWith("llmrouter.")) {
+            final String requested = ca.requestedModelId;
+            sel = props.getModels().entrySet().stream().sorted(Map.Entry.comparingByKey())
+                    .filter(e -> requested.equals(e.getValue().getName()))
+                    .map(e -> new LlmRouterBandit.Selected(e.getKey(), e.getValue())).findFirst().orElse(null);
+        }
+        if (sel == null && !(apiFirstEnabled() && isAutoRouterRequest(ca.requestedModelId))) sel = bandit.pick(
                 ca.requestedModelId, gatewayFilter(ca), "route:primary", 0L);
         if (sel != null) {
             return routeWithGateway(sel, ca);
@@ -182,6 +217,9 @@ public class LlmRouterAspect {
         ChatModel allLocalOpenFallback = routeWhenAllAutoLocalEndpointsOpen(ca);
         if (allLocalOpenFallback != null) {
             return allLocalOpenFallback;
+        }
+        if (isAutoRouterRequest(ca.requestedModelId)) {
+            throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
         }
 
         // 2) Otherwise proceed; if OpenAI key is missing, optionally fall back to
@@ -202,22 +240,57 @@ public class LlmRouterAspect {
     }
 
     private LlmRouterBandit.RouteEligibilityFilter gatewayFilter(CallArgs ca) {
-        if (gatewayProbeService == null || !gatewayProbeService.isEnforce()) {
-            return LlmRouterBandit.RouteEligibilityFilter.always();
-        }
-        return (key, cfg) -> {
-            if (cfg != null && cfg.isFallbackOnly()) {
-                return false;
+        return new LlmRouterBandit.RouteEligibilityFilter() {
+            @Override public boolean eligible(String key, LlmRouterProperties.ModelConfig cfg) {
+                if (!roleCandidateAllowed(ca,key,cfg) || !automaticRouteAllowed(cfg) || cfg.isFallbackOnly() || gatewayProbeService == null)
+                    return false;
+                RoutingEligibility eligibility = gatewayProbeService.evaluate(key, cfg, stage(ca, cfg));
+                if (gatewayBreadcrumbPublisher != null) gatewayBreadcrumbPublisher.publishEligibility(eligibility);
+                return eligibility != null && eligibility.eligible();
             }
-            RoutingEligibility eligibility = gatewayProbeService.evaluate(key, cfg, stage(ca, cfg));
-            if (gatewayBreadcrumbPublisher != null) {
-                gatewayBreadcrumbPublisher.publishEligibility(eligibility);
+            @Override public int tier(String key, LlmRouterProperties.ModelConfig cfg) {
+                return routeTier(cfg);
             }
-            return eligibility == null || eligibility.eligible();
         };
     }
 
+    private int routeTier(LlmRouterProperties.ModelConfig cfg) {
+        if (cfg == null) return Integer.MAX_VALUE;
+        String provider = firstNonBlank(cfg.getProvider(), providerForBaseUrl(cfg.getBaseUrl()));
+        if (apiFirstEnabled()) {
+            if (isLocalEligibilityProvider(provider)) return 10000;
+            var order = java.util.Arrays.stream(firstNonBlank(get("llmrouter.api-first.route-order"), "")
+                    .split(",")).map(String::trim).toList();
+            String key = props.getModels().entrySet().stream().filter(e -> e.getValue() == cfg)
+                    .map(Map.Entry::getKey).findFirst().orElse("");
+            int priority = order.indexOf(key);
+            return priority < 0 ? 1000 : priority;
+        }
+        return routingPolicy.tier("llm", isLocalEligibilityProvider(provider) ? "ollama_chat" : provider);
+    }
+
+    private boolean apiFirstEnabled() {
+        return props != null && props.isEnabled()
+                && bool("llmrouter.api-first.enabled", "LLMROUTER_API_FIRST", false);
+    }
+
+    private boolean automaticRouteAllowed(LlmRouterProperties.ModelConfig cfg) {
+        if (cfg == null || !cfg.isEnabled()) return false;
+        String provider = firstNonBlank(cfg.getProvider(), providerForBaseUrl(cfg.getBaseUrl()));
+        if (apiFirstEnabled() && (com.example.lms.llm.ChatGptOAuthRegistration.PROVIDER.equals(provider)
+                || !StringUtils.hasText(cfg.getProvider()) || "embedding".equalsIgnoreCase(cfg.getStage()))) return false;
+        // In API-first mode the registered chat routes own execution order;
+        // the legacy tier table still enforces agent spend admission when active.
+        if (apiFirstEnabled() && !isLocalEligibilityProvider(provider))
+            return !routingPolicy.agentModeActive()
+                    || routingPolicy.automaticModelAllowed(provider, cfg.getName(), false, cfg.getStage());
+        return routingPolicy.automaticModelAllowed(provider, cfg.getName(), isLocalEligibilityProvider(provider), cfg.getStage());
+    }
+
     /** One API attempt for bounded callers that own their fallback budget. Never enters local/auto fallback. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.llm.ChatGptOAuthRegistration chatGptOAuth;
+
     public ChatModel apiAttempt(String routeKey, int timeoutMs, int maxTokens) {
         return apiAttempt(routeKey, timeoutMs, maxTokens, null);
     }
@@ -226,6 +299,13 @@ public class LlmRouterAspect {
         structured-output contract keep the existing JSON-object mode. */
     public ChatModel apiAttempt(String routeKey, int timeoutMs, int maxTokens,
             dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema) {
+        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(routeKey)) {
+            if (chatGptOAuth == null)
+                throw com.example.lms.llm.ChatGptOAuthRegistration.unavailable("chatgpt_oauth_not_configured");
+            var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            long remaining = budget == null ? timeoutMs : Math.min(timeoutMs, budget.remainingMillis());
+            return chatGptOAuth.modelFor(routeKey, remaining);
+        }
         var cfg = props.getModels().get(routeKey);
         if (cfg == null || !cfg.isEnabled() || !StringUtils.hasText(cfg.getProvider())
                 || isLocalEligibilityProvider(cfg.getProvider())) {
@@ -317,8 +397,10 @@ public class LlmRouterAspect {
                 long allowed = prior == null ? timeoutMs : prior.remainingMillis();
                 try {
                     TraceStore.put("llm.gateway.preselectionFallbackCount", 0L);
-                    TimeBudgetContext.set(TimeBudget.untilNanoDeadline(System.nanoTime()
-                            + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(0, allowed))));
+                    if (!com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution()) {
+                        TimeBudgetContext.set(TimeBudget.untilNanoDeadline(System.nanoTime()
+                                + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(Math.max(0, allowed))));
+                    }
                     return invokeDelegate(
                             routeWithGateway(original, ca, new java.util.LinkedHashSet<>(), boundedPrimary, original, protocol),
                             messages, request);
@@ -329,6 +411,7 @@ public class LlmRouterAspect {
 
     private ChatModel routeWithGateway(LlmRouterBandit.Selected sel, CallArgs ca, java.util.Set<String> visited,
             ChatModel providedPrimary, LlmRouterBandit.Selected original, String providedProtocol) {
+        if (!roleCandidateAllowed(ca,sel.key(),sel.cfg())) throw new IllegalStateException("routing_candidate_unavailable");
         if (visited.size() >= 64 || !visited.add(sel.key())) failRoute(sel.key(), null, "route_cycle");
         if (sel.cfg() == null) {
             failRoute(sel.key(), null, "missing_route_config");
@@ -346,7 +429,7 @@ public class LlmRouterAspect {
             if (com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId))
                 throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
             LlmRouterBandit.Selected fallback = preferCloudOnLocalFailure()
-                    ? nextEligibleCloudSelection(original, ca, visited) : runtimeDeviceFallbackSelection(sel, ca);
+                    ? nextEligibleSelection(original, ca, visited, true) : runtimeDeviceFallbackSelection(sel, ca);
             if (fallback == null || !localLlmProcessManager.isAvailable(fallback.cfg().getBaseUrl())) {
                 fallback = eligibleFallbackSelection(sel, ca);
             }
@@ -371,7 +454,7 @@ public class LlmRouterAspect {
                 throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
             if (gatewayProbeService.isEnforce() && eligibility != null && !eligibility.eligible()) {
                 LlmRouterBandit.Selected fallback = preferCloudOnLocalFailure()
-                        ? nextEligibleCloudSelection(original, ca, visited) : deviceFallbackSelection(sel, ca, eligibility);
+                        ? nextEligibleSelection(original, ca, visited, true) : deviceFallbackSelection(sel, ca, eligibility);
                 if (fallback == null) {
                     fallback = eligibleFallbackSelection(sel, ca);
                 }
@@ -406,12 +489,12 @@ public class LlmRouterAspect {
             }
             boolean preferCloud = preferCloudOnLocalFailure();
             LlmRouterBandit.Selected fallback = preferCloud
-                    ? nextEligibleCloudSelection(original, ca, visited)
+                    ? nextEligibleSelection(original, ca, visited, true)
                     : repickUncontendedLocalArm(ca, visited);
             if (fallback == null) {
                 fallback = preferCloud
                         ? repickUncontendedLocalArm(ca, visited)
-                        : nextEligibleCloudSelection(original, ca, visited);
+                        : nextEligibleSelection(original, ca, visited, true);
             }
             if (fallback == null) {
                 fallback = eligibleFallbackSelection(sel, ca);
@@ -434,9 +517,10 @@ public class LlmRouterAspect {
 
         LlmRouterBandit.Selected cloudFallback = fallbackSelection(sel);
         boolean deviceFallbackConfigured = hasConfiguredDeviceFallback(sel);
-        boolean lazyFallbackPossible = !com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId)
+        boolean lazyFallbackPossible = (ca.routingInvocation == null || ca.routingInvocation.extraAvailable())
+                && !com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId)
                 && gatewayFailureClassifier != null
-                && (deviceFallbackConfigured || cloudFallback != null
+                && (apiFirstEnabled() || deviceFallbackConfigured || cloudFallback != null
                 || (gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled()));
         AtomicReference<ModelRuntimeHealthTracker.RequestAttemptRoute> primaryRoute = new AtomicReference<>();
         ChatModel primary;
@@ -452,31 +536,33 @@ public class LlmRouterAspect {
                     sel.cfg()), sel.key());
         }
         if (!lazyFallbackPossible) {
-            return primary;
+            return roleBound(primary,sel,ca,!sel.key().equals(original.key()));
         }
         if (primary instanceof ExpectedFailureChatModel) {
             return primary;
         }
         String requestTimelineId = capturedRequestTimelineId();
         AtomicReference<ModelRuntimeHealthTracker.RequestAttemptRoute> fallbackRoute = new AtomicReference<>();
-        return new FallbackAwareChatModel(primary,
+        FallbackAwareChatModel fallbackAware = new FallbackAwareChatModel(roleBound(primary,sel,ca,!sel.key().equals(original.key())),
                 (failureClass, usedRoutes) -> {
+                    if (routingPolicy.agentModeActive() && usedRoutes.size() > routingPolicy.maxClassifiedRetries())
+                        return null;
                     var considered = new java.util.LinkedHashSet<>(usedRoutes);
                     for (int selectionAttempt = 0; selectionAttempt < Math.min(64, props.getModels().size()); selectionAttempt++) {
                     TimeBudget remainingBudget = TimeBudgetContext.get();
                     if (remainingBudget != null && remainingBudget.remainingMillis() <= 0) return null;
                     LlmRouterBandit.Selected candidate = null;
                     boolean usesDeviceFallback = false;
-                    if (preferCloudOnLocalFailure()) candidate = nextEligibleCloudSelection(original, ca, considered);
+                    if (preferCloudOnLocalFailure() && !apiFirstEnabled()) candidate = nextEligibleSelection(original, ca, considered, ca.routingInvocation==null);
                     if (candidate == null && usedRoutes.size() <= 1
                             && (failureClass == LlmFailureClass.GPU_DEVICE_LOST
                             || failureClass == LlmFailureClass.VRAM_OOM)) {
-                        candidate = runtimeDeviceFallbackSelection(sel, ca);
+                        candidate = ca.routingInvocation == null ? runtimeDeviceFallbackSelection(sel, ca) : null;
                         if (candidate != null && considered.contains(candidate.key())) candidate = null;
                         usesDeviceFallback = candidate != null;
                     }
                     if (candidate == null) {
-                        candidate = nextEligibleCloudSelection(original, ca, considered);
+                        candidate = nextEligibleSelection(original, ca, considered, !apiFirstEnabled() && ca.routingInvocation==null);
                     }
                     if (candidate != null && localLlmProcessManager != null
                             && !localLlmProcessManager.isAvailable(candidate.cfg().getBaseUrl())) candidate = null;
@@ -510,7 +596,7 @@ public class LlmRouterAspect {
                     }
                     if (fallbackModel == null || fallbackModel instanceof ExpectedFailureChatModel) continue;
                     return new FallbackAwareChatModel.ResolvedFallback(
-                            fallbackModel,
+                            roleBound(fallbackModel,candidate,ca,true),
                             candidate.key(),
                             fallbackRoute.get());
                     }
@@ -522,9 +608,10 @@ public class LlmRouterAspect {
                 modelRuntimeHealthTracker,
                 requestTimelineId,
                 primaryRoute.get(),
-                gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled()
+                apiFirstEnabled() ? 2 : gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled()
                         && isLocalEligibilityProvider(sel.cfg().getProvider()) ? 2 : 1)
                 .withMaskedFallbackReporter(this::reportMaskedFallback);
+        return apiFirstEnabled() ? fallbackAware.withApiFirstPolicy() : fallbackAware;
     }
 
     private boolean preferCloudOnLocalFailure() {
@@ -545,8 +632,22 @@ public class LlmRouterAspect {
     }
 
     private static CallArgs withoutLibraryRetries(CallArgs ca) {
-        return new CallArgs(ca.requestedModelId, ca.temperature, ca.topP, ca.frequencyPenalty,
-                ca.presencePenalty, ca.maxTokens, ca.timeoutSeconds, 0);
+        CallArgs copy = new CallArgs(ca.requestedModelId, ca.temperature, ca.topP, ca.frequencyPenalty,
+                ca.presencePenalty, ca.maxTokens, ca.timeoutSeconds, 0,ca.observedContext,ca.routingInvocation);
+        copy.cueJson=ca.cueJson;copy.cueJsonSchema=ca.cueJsonSchema;copy.cueTimeoutMs=ca.cueTimeoutMs;
+        return copy;
+    }
+
+    private boolean roleCandidateAllowed(CallArgs ca,String key,LlmRouterProperties.ModelConfig cfg) {
+        if(ca==null || ca.routingInvocation==null)return true;
+        return cfg!=null && cfg.isEnabled() && ca.routingInvocation.matches("llmrouter."+key,cfg.getName(),
+                firstNonBlank(cfg.getProvider(),providerForBaseUrl(cfg.getBaseUrl())))
+                && ca.routingInvocation.matchesEndpoint("llmrouter."+key,ModelRuntimeHealthTracker.endpointIdentityHash(cfg.getBaseUrl()));
+    }
+
+    private ChatModel roleBound(ChatModel model,LlmRouterBandit.Selected selected,CallArgs ca,boolean fallback) {
+        return ca.routingInvocation==null?model:ca.routingInvocation.wrap(model,
+                ca.routingInvocation.candidate("llmrouter."+selected.key()).orElseThrow(),fallback);
     }
 
     private boolean localAdmissionEnabled() {
@@ -574,8 +675,7 @@ public class LlmRouterAspect {
             return false;
         }
         String provider = firstNonBlank(cfg.getProvider(), providerForBaseUrl(cfg.getBaseUrl()));
-        return isLocalEligibilityProvider(provider)
-                || isLocalGatewayRoute(cfg.getBaseUrl(), cfg.getName());
+        return isLocalEligibilityProvider(provider);
     }
 
     private boolean localSlotSaturated(LlmRouterProperties.ModelConfig cfg) {
@@ -619,6 +719,7 @@ public class LlmRouterAspect {
 
     /** 포화된 로컬 arm을 제외한 로컬 전용 bandit 재선택 (cross-local 모델 hop). */
     private LlmRouterBandit.Selected repickUncontendedLocalArm(CallArgs ca, java.util.Set<String> visited) {
+        if(ca.routingInvocation!=null)return nextEligibleSelection(null,ca,visited,false);
         if (bandit == null || props == null || props.getModels() == null) {
             return null;
         }
@@ -676,31 +777,62 @@ public class LlmRouterAspect {
         }
     }
 
-    private LlmRouterBandit.Selected nextEligibleCloudSelection(LlmRouterBandit.Selected primary, CallArgs ca,
-            java.util.Set<String> usedRoutes) {
-        if (gatewayProbeService == null || !gatewayProbeService.cloudFallbackEnabled()
+    private LlmRouterBandit.Selected nextEligibleSelection(LlmRouterBandit.Selected primary, CallArgs ca,
+            java.util.Set<String> usedRoutes, boolean cloudOnly) {
+        if (gatewayProbeService == null || (cloudOnly && !apiFirstEnabled() && !gatewayProbeService.cloudFallbackEnabled())
                 || props == null || props.getModels() == null) return null;
         java.util.LinkedHashSet<String> ordered = new java.util.LinkedHashSet<>();
+        if(ca!=null && ca.routingInvocation!=null){
+            if(!ca.routingInvocation.extraAvailable())return null;
+            for(var candidate:ca.routingInvocation.fallbackCandidates())
+                if(candidate.target().startsWith("llmrouter."))ordered.add(candidate.target().substring("llmrouter.".length()));
+        } else {
+        if (primary != null) ordered.add(primary.key());
         LlmRouterBandit.Selected cursor = primary;
         for (int i = 0; i < Math.min(64, props.getModels().size()); i++) {
             cursor = fallbackSelection(cursor);
             if (cursor == null || !ordered.add(cursor.key())) break;
         }
         props.getModels().keySet().stream().sorted().forEach(ordered::add);
+        }
         java.util.Set<String> usedEndpoints = new java.util.HashSet<>();
+        java.util.Set<String> usedProviders = new java.util.HashSet<>();
         for (String key : usedRoutes) {
             var cfg = props.getModels().get(key);
-            if (cfg != null) usedEndpoints.add(endpointModelIdentity(cfg));
+            if (cfg != null) {
+                usedEndpoints.add(endpointModelIdentity(cfg));
+                if (!isLocalEligibilityProvider(cfg.getProvider())) usedProviders.add(cfg.getProvider());
+            }
         }
-        for (String key : ordered) {
+        for (String key : ca!=null && ca.routingInvocation!=null ? ordered : ordered.stream()
+                .sorted(java.util.Comparator.comparingInt(k -> routeTier(props.getModels().get(k)))).toList()) {
             var cfg = props.getModels().get(key);
-            if (cfg == null || !cfg.isEnabled() || usedRoutes.contains(key)
+            if (!roleCandidateAllowed(ca,key,cfg) || !automaticRouteAllowed(cfg) || usedRoutes.contains(key)
                     || usedEndpoints.contains(endpointModelIdentity(cfg))) continue;
             String provider = firstNonBlank(cfg.getProvider(), providerForBaseUrl(cfg.getBaseUrl()));
-            if ("local".equalsIgnoreCase(provider) || "ollama".equalsIgnoreCase(provider)) continue;
+            boolean local = isLocalEligibilityProvider(provider);
+            if (apiFirstEnabled() && !local && (usedProviders.contains(provider) || usedProviders.size() >= 2)) continue;
+            if(ca!=null && ca.routingInvocation!=null && !local && !apiFirstEnabled())continue;
+            if(ca!=null && ca.routingInvocation!=null && local && !apiFirstEnabled() && !gatewayProbeService.localFailoverEnabled()){
+                var device=primary==null?null:validatedDeviceFallbackSelection(primary,ca,false);
+                if(device==null || !device.key().equals(key))continue;
+            }
+            if ((cloudOnly && local) || (!local && !apiFirstEnabled() && !gatewayProbeService.cloudFallbackEnabled())) continue;
             RoutingEligibility eligibility = gatewayProbeService.evaluate(key, cfg, stage(ca, cfg));
             if (eligibility == null || !eligibility.eligible()) continue;
-            if (!preservesRequirements(primary.cfg(), cfg, eligibility)) {
+            if (apiFirstEnabled() && local) {
+                if (localSlotSaturated(cfg)) {
+                    markLocalContended(new LlmRouterBandit.Selected(key, cfg));
+                    TraceStore.put("llm.gateway.fallbackReason", "local_contended");
+                    continue;
+                }
+                // Existing read-only resident check never warms or queues a model.
+                if (!gatewayProbeService.contextPreparationReady(cfg.getBaseUrl(), cfg.getName())) {
+                    TraceStore.put("llm.gateway.fallbackReason", "local_unavailable");
+                    continue;
+                }
+            }
+            if (!preservesRequirements(primary==null?null:primary.cfg(), cfg, eligibility)) {
                 TraceStore.put("llm.gateway.fallback.skippedReason", "capability_unverified"); continue;
             }
             if (localLlmProcessManager != null && !localLlmProcessManager.isAvailable(cfg.getBaseUrl())) continue;
@@ -783,7 +915,7 @@ public class LlmRouterAspect {
     }
 
     private LlmRouterBandit.Selected eligibleFallbackSelection(LlmRouterBandit.Selected selected, CallArgs ca) {
-        LlmRouterBandit.Selected fallback = fallbackSelection(selected);
+        LlmRouterBandit.Selected fallback = nextEligibleSelection(selected, ca, java.util.Set.of(selected.key()), false);
         if (fallback != null && gatewayProbeService.isEnforce()) {
             RoutingEligibility eligibility = gatewayProbeService.evaluate(
                     fallback.key(), fallback.cfg(), stage(ca, fallback.cfg()));
@@ -863,12 +995,13 @@ public class LlmRouterAspect {
         }
 
         LlmRouterBandit.Selected cloud = explicitCloudFallbackSelection();
+        if (cloud != null) cloud = nextEligibleSelection(cloud, callArgs, java.util.Set.of(), true);
         if (cloud != null) {
             RoutingEligibility cloudEligibility = gatewayProbeService.evaluate(
                     cloud.key(), cloud.cfg(), stage(callArgs, cloud.cfg()));
             if (cloudEligibility == null || !cloudEligibility.eligible()
                     || isLocalEligibilityProvider(cloudEligibility.provider())) {
-                cloud = nextEligibleCloudSelection(cloud, callArgs, java.util.Set.of(cloud.key()));
+                cloud = nextEligibleSelection(cloud, callArgs, java.util.Set.of(cloud.key()), true);
                 cloudEligibility = cloud == null ? null : gatewayProbeService.evaluate(
                         cloud.key(), cloud.cfg(), stage(callArgs, cloud.cfg()));
             }
@@ -963,7 +1096,9 @@ public class LlmRouterAspect {
             return null;
         }
         LlmRouterProperties.ModelConfig fallbackCfg = props.getModels().get(fallbackKey);
-        if (fallbackKey.equals(selected.key()) || fallbackCfg == null || !fallbackCfg.isEnabled()) {
+        if(callArgs.routingInvocation!=null && (!callArgs.routingInvocation.extraAvailable()
+                || !roleCandidateAllowed(callArgs,fallbackKey,fallbackCfg)))return null;
+        if (fallbackKey.equals(selected.key()) || !automaticRouteAllowed(fallbackCfg)) {
             return rejectDeviceFallback(
                     selected, "device_fallback_unavailable", failClosed);
         }
@@ -1173,6 +1308,12 @@ public class LlmRouterAspect {
         if (modelName == null || rawBaseUrl == null) {
             failRoute(key, rawBaseUrl, "missing_route_config");
         }
+        if (routingPolicy.agentModeActive()) {
+            String provider = firstNonBlank(cfg.getProvider(), providerForBaseUrl(rawBaseUrl));
+            var spend = com.example.lms.routing.AgentApiSpendGuard.beforeCall(routingPolicy,
+                    "llm_factory_build", provider, modelName, "LlmRouterAspect", key, false);
+            if (!spend.allow()) failRoute(key, rawBaseUrl, spend.why());
+        }
 
         String baseUrl = normalizeBaseUrl(rawBaseUrl);
         long routeTimeoutMs = routeTimeoutMillis(ca.cueTimeoutMs > 0 ? ca.cueTimeoutMs : Math.max(1_000L, ca.timeoutMs), attemptRole);
@@ -1294,8 +1435,19 @@ public class LlmRouterAspect {
             }
         }
 
-        Double temperature = ModelCapabilities.sanitizeTemperature(modelName, ca.temperature);
-        Double topP = ModelCapabilities.sanitizeTopP(modelName, ca.topP);
+        String samplingEffort = ca.cueJson && (modelName.contains("gpt-oss") || modelName.startsWith("gpt-5.6"))
+                ? "low" : null;
+        var sampling = com.example.lms.llm.OpenAiSamplingContract.resolve(baseUrl, modelName, samplingEffort);
+        Double temperature = switch (sampling.temperature()) {
+            case OMIT -> null;
+            case SEND -> ca.temperature;
+            case LEGACY -> ModelCapabilities.sanitizeTemperature(modelName, ca.temperature);
+        };
+        Double topP = switch (sampling.topP()) {
+            case OMIT -> null;
+            case SEND -> ca.topP;
+            case LEGACY -> ModelCapabilities.sanitizeTopP(modelName, ca.topP);
+        };
         Double freq = ModelCapabilities.sanitizeFrequencyPenalty(modelName, ca.frequencyPenalty);
         Double pres = ModelCapabilities.sanitizePresencePenalty(modelName, ca.presencePenalty);
 
@@ -1341,8 +1493,8 @@ public class LlmRouterAspect {
                     "openai_chat_completions", ca, cfg);
         }
 
-        String apiKey = resolveApiKeyForBaseUrl(baseUrl);
-        boolean localGatewayRoute = isLocalGatewayRoute(baseUrl, modelName);
+        String apiKey = resolveApiKeyForBaseUrl(baseUrl, cfg.getProvider());
+        boolean localGatewayRoute = isLocalEligibilityProvider(cfg.getProvider());
         if (localGatewayRoute) {
             LocalLlmGatewaySecurity.assertLocalGatewayEndpointAllowed(
                     baseUrl,
@@ -1378,7 +1530,8 @@ public class LlmRouterAspect {
                             topP,
                             ollamaNativeNumGpu(),
                             modelRuntimeHealthTracker,
-                            attemptRole),
+                            attemptRole,
+                            com.example.lms.llm.DynamicChatModelFactory.validatedContextCapacity(ca.observedContext,modelName,baseUrl)),
                     modelName,
                     cfg);
             publishSelectedRoute(
@@ -1458,7 +1611,8 @@ public class LlmRouterAspect {
         // maxTokens)
         b.modelName(modelName);
 
-        ChatModel routedModel = verifyResponseModelIfRequired(b.build(), modelName, cfg);
+        ChatModel routedModel = verifyResponseModelIfRequired(
+                com.example.lms.llm.DynamicChatModelFactory.buildOpenAiSdkModel(b, baseUrl), modelName, cfg);
         publishSelectedRoute(
                 key,
                 modelName,
@@ -1699,7 +1853,12 @@ public class LlmRouterAspect {
     }
 
     private String resolveApiKeyForBaseUrl(String baseUrl) {
-        String provider = providerForBaseUrl(baseUrl);
+        return resolveApiKeyForBaseUrl(baseUrl, null);
+    }
+
+    private String resolveApiKeyForBaseUrl(String baseUrl, String registeredProvider) {
+        String provider = StringUtils.hasText(registeredProvider)
+                ? registeredProvider.toLowerCase(Locale.ROOT) : providerForBaseUrl(baseUrl);
         if ("groq".equals(provider)) {
             return requireProviderKey(provider, resolveGroqApiKey(), "missing GROQ_API_KEY", baseUrl);
         }
@@ -2270,6 +2429,8 @@ public class LlmRouterAspect {
         final int timeoutSeconds;
         final long timeoutMs;
         final Integer maxRetriesOverride;
+        final com.example.lms.llm.spec.ModelSpecSnapshot observedContext;
+        final com.example.lms.routing.RoutingInvocation routingInvocation;
         boolean cueJson;
         dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema;
         long cueTimeoutMs;
@@ -2283,6 +2444,13 @@ public class LlmRouterAspect {
                 Integer maxTokens,
                 int timeoutSeconds,
                 Integer maxRetriesOverride) {
+            this(requestedModelId,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,
+                    timeoutSeconds,maxRetriesOverride,null,null);
+        }
+
+        private CallArgs(String requestedModelId,Double temperature,Double topP,Double frequencyPenalty,
+                Double presencePenalty,Integer maxTokens,int timeoutSeconds,Integer maxRetriesOverride,
+                com.example.lms.llm.spec.ModelSpecSnapshot observedContext,com.example.lms.routing.RoutingInvocation routingInvocation) {
             this.requestedModelId = requestedModelId;
             this.temperature = temperature;
             this.topP = topP;
@@ -2292,6 +2460,7 @@ public class LlmRouterAspect {
             this.timeoutSeconds = timeoutSeconds;
             this.timeoutMs = (long) timeoutSeconds * 1000L;
             this.maxRetriesOverride = maxRetriesOverride;
+            this.observedContext=observedContext;this.routingInvocation=routingInvocation;
         }
 
         static CallArgs parse(Object[] args) {
@@ -2329,7 +2498,7 @@ public class LlmRouterAspect {
             }
 
             // overload 3: (String, Double, Double, Double, Double, Integer, int, Integer)
-            if (args.length == 8) {
+            if (args.length >= 8 && args.length <= 10) {
                 return new CallArgs(
                         modelId,
                         safeDouble(args[1]),
@@ -2338,7 +2507,9 @@ public class LlmRouterAspect {
                         safeDouble(args[4]),
                         safeIntObj(args[5]),
                         safeInt(args[6]),
-                        safeIntObj(args[7]));
+                        safeIntObj(args[7]),
+                        args.length>=9 && args[8] instanceof com.example.lms.llm.spec.ModelSpecSnapshot snapshot ? snapshot : null,
+                        args.length==10 && args[9] instanceof com.example.lms.routing.RoutingInvocation invocation ? invocation : null);
             }
 
             return null;

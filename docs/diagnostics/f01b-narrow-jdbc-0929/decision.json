@@ -1,0 +1,9 @@
+{
+  "scope": "B-narrow",
+  "task_ask": false,
+  "callbacks": false,
+  "schema": null,
+  "tm_proof": null,
+  "status": "assist_scripts_ready",
+  "devin_product_java_diff": 0
+}

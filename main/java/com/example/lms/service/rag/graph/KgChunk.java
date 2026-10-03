@@ -31,11 +31,11 @@ public record KgChunk(
 
     public boolean hasPrivateSource() {
         return privateScope != null && privateScope.memoryEnabled() && privateScope.matchesSession(sessionId)
-                && GeneralGraphSourceAuthority.sourceMessageId(sourceId) > 0 && sourceRevision > 0;
+                && GeneralGraphSourceAuthority.isPrivateSourceId(sourceId) && sourceRevision > 0;
     }
 
     public boolean isPublicManual() {
-        return privateScope == null && "graphdb_manual_learning".equals(ingestLane)
+        return privateScope == null && sourceId.isBlank() && "graphdb_manual_learning".equals(ingestLane)
                 && "GRAPHDB_MANUAL_LEARNING".equals(docType);
     }
 
@@ -76,7 +76,7 @@ public record KgChunk(
         ingestLane = safeMeta(ingestLane);
         sourceId = sourceId == null ? "" : sourceId;
         if (privateScope != null && (!privateScope.matchesSession(sessionId) || !privateScope.memoryEnabled()
-                || GeneralGraphSourceAuthority.sourceMessageId(sourceId) <= 0 || sourceRevision <= 0)) {
+                || !GeneralGraphSourceAuthority.isPrivateSourceId(sourceId) || sourceRevision <= 0)) {
             throw new IllegalArgumentException("graph_source_scope");
         }
     }

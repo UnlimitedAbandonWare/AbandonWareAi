@@ -26,8 +26,10 @@ import sys
 import time
 from pathlib import Path
 
+from awx_paths import resolve as _awx_resolve
+
 SCHEMA = "awx.agent-work-guard.v2"
-CANONICAL = Path(r"C:\AbandonWare\demo-1\demo-1\src")
+CANONICAL = _awx_resolve("repo.root")
 RETRY_LIMIT = 3
 LEDGER_TTL_S = 24 * 3600
 LEDGER_MAX = 200
@@ -502,24 +504,30 @@ def verdict_for_cmd(root: Path, cmd: str, ledger=None, agent="unknown",
 
 
 def emit_payload(agent: str, blocked: bool, reason: str, nxt: str,
-                 extra=None) -> dict:
+                 extra=None):
+    """Per-host stdout payload. None means: write nothing (exit 0 = allow).
+
+    Codex strict-parses PreToolUse/PostToolUse output: decision "allow"/
+    "approve" is an unsupported field and marks the hook run failed. A Codex
+    success is exit 0 with empty stdout, so the allow path returns None; the
+    verdict detail still lands in the hook trace file.
+    """
     extra = extra or {}
     text = ("work-guard: %s — %s" % (reason, nxt)).strip(" —")
     if agent == "grok":
         payload = {"decision": "deny" if blocked else "allow", "reason": text}
     elif agent == "codex":
-        if blocked:
-            payload = {
-                "decision": "block",
-                "reason": text,
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": text,
-                },
-            }
-        else:
-            payload = {"decision": "allow", "reason": ""}
+        if not blocked:
+            return None
+        payload = {
+            "decision": "block",
+            "reason": text,
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": text,
+            },
+        }
     elif agent == "devin":
         payload = {"decision": "block" if blocked else "approve",
                    "reason": text if blocked else ""}
@@ -548,7 +556,7 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
             payload = emit_payload(agent, False, "", "")
             write_trace(root, {"phase": "exit", "event": hook_event,
                                "toolName": tool_name, "toolUseId": call_id,
-                               "decision": payload.get("decision"), "exit": 0,
+                               "decision": (payload or {}).get("decision"), "exit": 0,
                                "elapsedMs": int((time.time() - started) * 1000)})
             return payload, 0
         if "post" in hook_event.lower():
@@ -569,8 +577,9 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
                         recorded.append(record(root, rel, "ok", cause or "ok",
                                                ledger, agent, actor, call_id))
             payload = emit_payload(agent, False, "", "")
-            payload["recorded"] = recorded
-            payload["result"] = "fail" if failed else "ok"
+            if payload is not None:
+                payload["recorded"] = recorded
+                payload["result"] = "fail" if failed else "ok"
             write_trace(root, {"phase": "exit", "event": hook_event,
                                "toolName": tool_name, "toolUseId": call_id,
                                "decision": "allow", "exit": 0,
@@ -582,22 +591,29 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
                                    verdict["next"], verdict)
             write_trace(root, {"phase": "exit", "event": hook_event,
                                "toolName": tool_name, "toolUseId": call_id,
-                               "decision": payload.get("decision"), "exit": 2,
+                               "decision": (payload or {}).get("decision"), "exit": 2,
                                "elapsedMs": int((time.time() - started) * 1000)})
             return payload, 2
         payload = emit_payload(agent, False, "", "", verdict)
         write_trace(root, {"phase": "exit", "event": hook_event,
                            "toolName": tool_name, "toolUseId": call_id,
-                           "decision": payload.get("decision"), "exit": 0,
+                           "decision": (payload or {}).get("decision"), "exit": 0,
                            "elapsedMs": int((time.time() - started) * 1000)})
         return payload, 0
     except Exception as exc:
+        # Guard errors are environmental, not policy: fail open (exit 0,
+        # per-agent allow payload) so a broken ledger cannot storm the host.
+        try:
+            agent = detect_agent(event)
+        except Exception:
+            agent = "unknown"
         write_trace(root, {"phase": "exit", "event": hook_event,
                            "toolName": tool_name, "toolUseId": call_id,
-                           "decision": "allow", "exit": 1,
+                           "decision": "allow", "exit": 0,
+                           "error": type(exc).__name__,
                            "elapsedMs": int((time.time() - started) * 1000)})
-        return {"decision": "allow", "reason": "work-guard-error:%s"
-                % type(exc).__name__}, 1
+        sys.stderr.write("work-guard-error:%s\n" % type(exc).__name__)
+        return emit_payload(agent, False, "", ""), 0
 
 
 def advise(root: Path, findings: list, ledger=None) -> dict:
@@ -754,12 +770,15 @@ def main(argv=None) -> int:
     try:
         event = json.loads(raw) if raw.strip() else {}
     except ValueError:
-        print(json.dumps({"decision": "allow", "reason": "hook-json-unreadable"}))
-        return 1
+        # Unreadable event JSON is a transport problem, not a policy decision:
+        # soft-fail open on every host (exit 0, empty stdout, reason on stderr).
+        sys.stderr.write("work-guard: hook-json-unreadable\n")
+        return 0
     payload, code = hook(root, event, a.ledger)
-    if code == 2:
+    if code == 2 and payload:
         sys.stderr.write(payload.get("reason") or "work-guard-block")
-    print(json.dumps(payload, ensure_ascii=True))
+    if payload is not None:
+        print(json.dumps(payload, ensure_ascii=True))
     return code
 
 

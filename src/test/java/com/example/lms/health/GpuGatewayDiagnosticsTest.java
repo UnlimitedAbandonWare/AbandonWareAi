@@ -131,6 +131,56 @@ class GpuGatewayDiagnosticsTest {
     }
 
     @Test
+    void diagnosticEndpointsFollowEffectiveRequestBaseUrlWhenGatewayPropsDisagree() {
+        MockEnvironment env = new MockEnvironment()
+                .withProperty("awx.node.control-plane", "true")
+                .withProperty("awx.node.heavy-workloads-allowed", "true")
+                .withProperty("awx.gpu-gateway.enabled", "true")
+                .withProperty("awx.gpu-gateway.require-auth-for-remote", "false")
+                .withProperty("llm.base-url", "http://request-primary.example:11435/v1")
+                .withProperty("awx.gpu-gateway.primary-chat-base-url", "http://diag-primary.example:11435/v1")
+                .withProperty("llm.fast.base-url", "http://request-fast.example:11435/v1")
+                .withProperty("awx.gpu-gateway.fast-base-url", "http://diag-fast.example:11435/v1")
+                .withProperty("embedding.base-url", "http://request-embed.example:11435/api/embed")
+                .withProperty("awx.gpu-gateway.embedding-base-url", "http://diag-embed.example:11435/api/embed");
+
+        Map<String, Object> snapshot = GpuGatewayDiagnostics.snapshot(env);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> endpoints = (Map<String, Object>) snapshot.get("endpoints");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> primary = (Map<String, Object>) endpoints.get("primaryChat");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> fast = (Map<String, Object>) endpoints.get("fastHelper");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> embed = (Map<String, Object>) endpoints.get("embedding");
+
+        assertEquals("request-primary.example", primary.get("endpointHost"));
+        assertEquals("request-fast.example", fast.get("endpointHost"));
+        assertEquals("request-embed.example", embed.get("endpointHost"));
+        assertFalse(String.valueOf(snapshot).contains("diag-primary.example"));
+        assertFalse(String.valueOf(snapshot).contains("diag-fast.example"));
+        assertFalse(String.valueOf(snapshot).contains("diag-embed.example"));
+    }
+
+    @Test
+    void diagnosticEndpointsFallBackToGatewayPropsWhenRequestPropsMissing() {
+        MockEnvironment env = new MockEnvironment()
+                .withProperty("awx.node.control-plane", "true")
+                .withProperty("awx.node.heavy-workloads-allowed", "true")
+                .withProperty("awx.gpu-gateway.enabled", "true")
+                .withProperty("awx.gpu-gateway.require-auth-for-remote", "false")
+                .withProperty("awx.gpu-gateway.primary-chat-base-url", "http://diag-primary.example:11435/v1");
+
+        Map<String, Object> snapshot = GpuGatewayDiagnostics.snapshot(env);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> endpoints = (Map<String, Object>) snapshot.get("endpoints");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> primary = (Map<String, Object>) endpoints.get("primaryChat");
+
+        assertEquals("diag-primary.example", primary.get("endpointHost"));
+    }
+
+    @Test
     void gpuGatewayDiagnosticsDoesNotUseExactEmptyCatchBlocks() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/health/GpuGatewayDiagnostics.java"));
 

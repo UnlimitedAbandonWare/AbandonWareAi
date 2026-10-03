@@ -5,7 +5,10 @@ import java.util.*;
 /** Focus settings are independent of the ordinary caption/cue clocks. */
 public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQuietMs,int followupIdleMs,
                                 int wakeListenTimeoutMs,Presentation presentation,boolean recallEnabled,boolean rememberFactsEnabled,
-                                Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext) {
+                                Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory) {
+    public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext){
+        this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,answerSelection,recentContext,null);
+    }
     public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection answerSelection){
         this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,answerSelection,null);
     }
@@ -56,6 +59,21 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
             allowedFallbackIds=List.copyOf(new LinkedHashSet<>(allowedFallbackIds));
         }
     }
+    /** Opt-in Focus memory/graph policy. A null mode keeps the legacy recall/remember switches;
+        OFF|RECALL|FULL override them. graphMode gates only the private co-mention expansion —
+        it is opt-in and OFF by default. webOnUnknown null inherits the server policy. */
+    public record Memory(Mode mode,GraphMode graphMode,Integer maxEvidence,EmbeddingPrefer embeddingPrefer,Boolean webOnUnknown) {
+        public Memory {
+            if(graphMode==null)graphMode=GraphMode.OFF;
+            if(maxEvidence==null)maxEvidence=4;
+            range(maxEvidence,1,8);
+            if(embeddingPrefer==null)embeddingPrefer=EmbeddingPrefer.LOCAL_THEN_CLOUD;
+        }
+        public enum Mode { OFF,RECALL,FULL }
+        public enum GraphMode { OFF,AUTO,ON }
+        public enum EmbeddingPrefer { LOCAL_ONLY,LOCAL_THEN_CLOUD,CLOUD_ONLY }
+        public static Memory defaults(){return new Memory(null,GraphMode.OFF,4,EmbeddingPrefer.LOCAL_THEN_CLOUD,null);}
+    }
     private static boolean validModelId(String id){return id!=null&&id.length()<=180&&id.matches("[a-zA-Z0-9][a-zA-Z0-9._/:+-]*");}
     public NovaFocusSettings {
         if(wakeWord==null||wakeWord.isBlank()||wakeWord.codePointCount(0,wakeWord.length())>16||wakeWord.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("invalid_nova_settings");
@@ -65,6 +83,10 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
     public Snapshot snapshotOrDefault(){return snapshot==null?Snapshot.defaults():snapshot;}
     public AnswerSelection answerSelectionOrDefault(){return answerSelection==null?AnswerSelection.defaults():answerSelection;}
     public RecentContext recentContextOrDefault(){return recentContext==null?RecentContext.defaults():recentContext;}
-    public static NovaFocusSettings defaults(){return new NovaFocusSettings(false,"노바",1200,20000,8000,Presentation.defaults(),false,false,Snapshot.defaults(),AnswerSelection.defaults(),RecentContext.defaults());}
+    public Memory memoryOrDefault(){return memory==null?Memory.defaults():memory;}
+    /** An explicit memory mode overrides the legacy switches; without one the booleans stay authoritative. */
+    public boolean effectiveRecallEnabled(){var mode=memoryOrDefault().mode();return mode==null?recallEnabled:mode!=Memory.Mode.OFF;}
+    public boolean effectiveRememberFactsEnabled(){var mode=memoryOrDefault().mode();return mode==null?rememberFactsEnabled:mode==Memory.Mode.FULL;}
+    public static NovaFocusSettings defaults(){return new NovaFocusSettings(false,"노바",1200,20000,8000,Presentation.defaults(),false,false,Snapshot.defaults(),AnswerSelection.defaults(),RecentContext.defaults(),Memory.defaults());}
     private static void range(int value,int min,int max){if(value<min||value>max)throw new IllegalArgumentException("invalid_nova_settings");}
 }

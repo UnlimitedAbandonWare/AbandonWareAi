@@ -14,6 +14,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StandardPromptBuilderAttachmentContextTest {
+    @Test void rendersFilenameRoleRevisionAndOriginalLocatorBesideLocalBody() {
+        var doc=Document.from("Alpha original body",new Metadata(Map.of(
+            "source","attachment","sourceId","attachment:33333333-3333-3333-3333-333333333333","sourceRevision",2L,
+            "displayName","report.md","documentRole","test_report","locator","member:docs/report.md:L1-L3")));
+        String prompt=new StandardPromptBuilder().build(List.of(PromptContext.builder().localDocs(List.of(doc)).build()),"report");
+        assertTrue(prompt.contains("report.md"));assertTrue(prompt.contains("test_report"));
+        assertTrue(prompt.contains("rev 2"));assertTrue(prompt.contains("member:docs/report.md:L1-L3"));
+        assertTrue(prompt.contains("DATA_ONLY"));assertTrue(prompt.contains("Alpha original body"));
+    }
 
     private final StandardPromptBuilder builder = new StandardPromptBuilder();
 

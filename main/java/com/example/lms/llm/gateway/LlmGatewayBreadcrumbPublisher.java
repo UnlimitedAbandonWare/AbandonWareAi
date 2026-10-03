@@ -1,6 +1,9 @@
 package com.example.lms.llm.gateway;
 
 import ai.abandonware.nova.config.LlmRouterProperties;
+import com.example.lms.debug.DebugEventLevel;
+import com.example.lms.debug.DebugEventStore;
+import com.example.lms.debug.DebugProbeType;
 import com.example.lms.routing.ApiRoutingDebug;
 import com.example.lms.search.TraceStore;
 import com.example.lms.telemetry.SseEventPublisher;
@@ -22,16 +25,24 @@ public class LlmGatewayBreadcrumbPublisher {
 
     private final ObjectProvider<SseEventPublisher> ssePublisherProvider;
     private final ObjectProvider<LlmRouterProperties> routerPropsProvider;
+    private final ObjectProvider<DebugEventStore> debugEventStoreProvider;
 
     public LlmGatewayBreadcrumbPublisher(ObjectProvider<SseEventPublisher> ssePublisherProvider) {
-        this(ssePublisherProvider, null);
+        this(ssePublisherProvider, null, null);
+    }
+
+    public LlmGatewayBreadcrumbPublisher(ObjectProvider<SseEventPublisher> ssePublisherProvider,
+            ObjectProvider<LlmRouterProperties> routerPropsProvider) {
+        this(ssePublisherProvider, routerPropsProvider, null);
     }
 
     @Autowired
     public LlmGatewayBreadcrumbPublisher(ObjectProvider<SseEventPublisher> ssePublisherProvider,
-            ObjectProvider<LlmRouterProperties> routerPropsProvider) {
+            ObjectProvider<LlmRouterProperties> routerPropsProvider,
+            ObjectProvider<DebugEventStore> debugEventStoreProvider) {
         this.ssePublisherProvider = ssePublisherProvider;
         this.routerPropsProvider = routerPropsProvider;
+        this.debugEventStoreProvider = debugEventStoreProvider;
     }
 
     public void publishEligibility(RoutingEligibility eligibility) {
@@ -62,6 +73,10 @@ public class LlmGatewayBreadcrumbPublisher {
         emit("llm.gateway.fallback", payload);
         ApiRoutingDebug.failure("llm", provider, modelOf(from), endpointClassOf(from), 1, null,
                 errorClass, fallbackTo);
+        Map<String, Object> route = routeData("llm", provider, modelOf(from), endpointClassOf(from),
+                1, null, errorClass, fallbackTo, null, null);
+        emitDebugEvent("api.route.decision", DebugEventLevel.WARN,
+                "api.route.decision.fallback." + fpLabel(provider), route);
     }
 
     public void publishFailure(String routeKey, LlmFailureClass failureClass, Throwable failure) {
@@ -79,6 +94,91 @@ public class LlmGatewayBreadcrumbPublisher {
         emit("llm.gateway.failure", payload);
         ApiRoutingDebug.failure("llm", provider, modelOf(cfg), endpointClassOf(cfg), 1, null,
                 errorClass, null);
+        Map<String, Object> route = routeData("llm", provider, modelOf(cfg), endpointClassOf(cfg),
+                1, null, errorClass, null, null, null);
+        emitDebugEvent("api.route.attempt", DebugEventLevel.WARN,
+                "api.route.attempt.failure." + fpLabel(provider), route);
+    }
+
+    /**
+     * Record an actual route selection in {@link DebugEventStore}. Payload is
+     * restricted to the api-routing.yaml debug.fields allowlist; unknown fields
+     * are simply omitted.
+     */
+    public void publishDecision(String purpose, String provider, String model, String endpointClass,
+            int attempt, Integer httpStatus, String errorClass, String fallbackTo,
+            Boolean keyPresent, String keySource) {
+        emitDebugEvent("api.route.decision", DebugEventLevel.INFO,
+                "api.route.decision." + fpLabel(provider),
+                routeData(purpose, provider, model, endpointClass, attempt, httpStatus,
+                        errorClass, fallbackTo, keyPresent, keySource));
+    }
+
+    /**
+     * Record a spend-guard decision in {@link DebugEventStore}. whyCode must be
+     * a value from agent-api-spend-guard.yaml; it is kept on this separate
+     * projection and never added to route payloads.
+     */
+    public void publishSpendDecision(String purpose, String provider, String model,
+            String whyCode, boolean allowed) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        putIfNonNull(data, "purpose", purpose);
+        putIfNonNull(data, "provider", provider);
+        putIfNonNull(data, "model", model);
+        putIfNonNull(data, "why_code", whyCode);
+        data.put("allowed", allowed);
+        emitDebugEvent("api.spend.decision", allowed ? DebugEventLevel.INFO : DebugEventLevel.WARN,
+                "api.spend.decision." + fpLabel(provider) + "." + fpLabel(whyCode), data);
+    }
+
+    private static Map<String, Object> routeData(String purpose, String provider, String model,
+            String endpointClass, int attempt, Integer httpStatus, String errorClass,
+            String fallbackTo, Boolean keyPresent, String keySource) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        putIfNonNull(data, "purpose", purpose);
+        putIfNonNull(data, "provider", provider);
+        putIfNonNull(data, "model", model);
+        putIfNonNull(data, "endpointClass", endpointClass);
+        data.put("attempt", attempt);
+        putIfNonNull(data, "httpStatus", httpStatus);
+        putIfNonNull(data, "errorClass", errorClass);
+        putIfNonNull(data, "fallbackTo", fallbackTo);
+        putIfNonNull(data, "keyPresent", keyPresent);
+        putIfNonNull(data, "keySource", keySource);
+        return data;
+    }
+
+    private static void putIfNonNull(Map<String, Object> data, String key, Object value) {
+        if (value != null) {
+            data.put(key, value);
+        }
+    }
+
+    private static String fpLabel(String value) {
+        if (value == null || value.isBlank()) {
+            return "unknown";
+        }
+        return SafeRedactor.traceLabelOrFallback(value, "unknown");
+    }
+
+    private void emitDebugEvent(String where, DebugEventLevel level, String fingerprint,
+            Map<String, Object> data) {
+        try {
+            DebugEventStore store = debugEventStoreProvider == null ? null
+                    : debugEventStoreProvider.getIfAvailable();
+            if (store == null) {
+                return;
+            }
+            store.emit(DebugProbeType.MODEL_GUARD, level, fingerprint,
+                    "[AWX][api-route] " + where + " observed", where, data, null);
+        } catch (RuntimeException ex) {
+            try {
+                TraceStore.put("llm.gateway.debugEvent.suppressed.stage", "debugEvent.emit");
+            } catch (Exception ignore) {
+                // fail-soft: suppression trace itself must never break callers
+            }
+            traceSuppressed("debugEvent.emit");
+        }
     }
 
     private LlmRouterProperties.ModelConfig routeConfig(String key) {

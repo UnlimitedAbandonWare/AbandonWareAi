@@ -49,6 +49,34 @@ public final class ModelCapabilities {
     private ModelCapabilities() {
     }
 
+    /** Loadout eligibility is distinct from the legacy sampling constraints. */
+    public enum Support { YES, NO, UNKNOWN }
+
+    public record Profile(Support toolCalling, Support jsonSchema, Support reasoningControl,
+                          Integer contextTokens, Integer outputTokens, Set<String> modalities,
+                          Set<String> reasoningEfforts, Set<String> verifiedEndpoints) {
+        public Profile {
+            toolCalling = toolCalling == null ? Support.UNKNOWN : toolCalling;
+            jsonSchema = jsonSchema == null ? Support.UNKNOWN : jsonSchema;
+            reasoningControl = reasoningControl == null ? Support.UNKNOWN : reasoningControl;
+            contextTokens = contextTokens != null && contextTokens > 0 ? contextTokens : null;
+            outputTokens = outputTokens != null && outputTokens > 0 ? outputTokens : null;
+            modalities = modalities == null ? Set.of() : Set.copyOf(modalities);
+            reasoningEfforts = reasoningEfforts == null ? Set.of() : Set.copyOf(reasoningEfforts);
+            verifiedEndpoints = verifiedEndpoints == null ? Set.of() : Set.copyOf(verifiedEndpoints);
+        }
+        public Profile(Support tools, Support schema, Support reasoning, Integer context, Integer output, Set<String> modalities) {
+            this(tools, schema, reasoning, context, output, modalities, Set.of(), Set.of());
+        }
+        public Profile(Support tools, Support schema, Support reasoning, Integer context, Integer output,
+                       Set<String> modalities, Set<String> reasoningEfforts) {
+            this(tools, schema, reasoning, context, output, modalities, reasoningEfforts, Set.of());
+        }
+        public static Profile unknown() {
+            return new Profile(Support.UNKNOWN, Support.UNKNOWN, Support.UNKNOWN, null, null, Set.of());
+        }
+    }
+
     /**
      * [추가] 모델 ID를 정규화하여 반환합니다. (예: "model:fallback" -> "model")
      */

@@ -2,7 +2,7 @@
 
 `@objective-executor @demo1-devin-source-orchestrator`
 
-작업 루트는 `C:\AbandonWare\demo-1\demo-1\src` (정본, 다른 워크트리·복사본 아님). 애플리케이션 소스만 고친다.
+작업 루트는 `<repo>` (정본, 다른 워크트리·복사본 아님). 애플리케이션 소스만 고친다.
 
 0. 먼저 점검만 한다: `python -B scripts/agent_preflight.py --root .` 와 `python -B scripts/work_journal.py list --active` 결과 JSON을 그대로 붙인다(요약 금지).
 1. `agent-prompts/devin-20260924-fold6-camera/setup_audit_20260924.md` 를 읽는다(현재 리스·파일 해시·금지 항목·전달물 상태).
