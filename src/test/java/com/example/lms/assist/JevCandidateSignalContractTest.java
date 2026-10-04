@@ -92,6 +92,51 @@ class JevCandidateSignalContractTest {
             assertTrue(f.sent.get().question().length()<=1200);
         }
     }
+    static Fixture loopback(JevChoiceContractTest.Fixture wire)throws Exception {
+        MockEnvironment env=environment().withProperty("demo.jev.decision-wait-ms","3000")
+                .withProperty("demo.jev.request-timeout-ms","2000")
+                .withProperty("demo.jev.endpoint","http://127.0.0.1:"+wire.server.getAddress().getPort()+"/v1/evaluate");
+        JevGatewayClient client=new JevGatewayClient(name->"synthetic");
+        return new Fixture(env,client::evaluateChoices);
+    }
+    @Test void loopbackForeignResponseIdKeepsOriginalObjectsInOrder()throws Exception {
+        assertInvalidLoopbackBatch(JevChoiceContractTest.CANDIDATE_FOREIGN);
+    }
+    @Test void loopbackRawDuplicateResponseIdKeepsOriginalObjectsInOrder()throws Exception {
+        assertInvalidLoopbackBatch(JevChoiceContractTest.CANDIDATE_DUPLICATE);
+    }
+    @Test void loopbackMissingResponseIdKeepsOriginalObjectsInOrder()throws Exception {
+        assertInvalidLoopbackBatch(JevChoiceContractTest.CANDIDATE_MISSING);
+    }
+    static void assertInvalidLoopbackBatch(String rawResponse)throws Exception {
+        try(var wire=new JevChoiceContractTest.Fixture();var f=loopback(wire)) {
+            wire.response=rawResponse;
+            var baseline=new ArrayList<>(candidates().subList(0,2));
+            var result=rerank(f,baseline,key(),admission());
+            assertEquals("invalid_response",com.example.lms.search.TraceStore.get("rag.jev.candidate.reasonCode"));
+            assertEquals(baseline.size(),result.size());
+            for(int i=0;i<baseline.size();i++)assertSame(baseline.get(i),result.get(i));
+            assertEquals(1,wire.calls.get());
+        }
+    }
+    @Test void loopbackAcceptedSignalsStablyReorderOnlyFourOriginalObjects()throws Exception {
+        try(var wire=new JevChoiceContractTest.Fixture();var f=loopback(wire)) {
+            wire.response=JevChoiceContractTest.CANDIDATE_GOOD.substring(0,JevChoiceContractTest.CANDIDATE_GOOD.length()-2)
+                    +",\"relevance2\":{\"choice\":\"UNCERTAIN\",\"probability\":0.99},\"relevance3\":{\"choice\":\"IRRELEVANT\",\"probability\":0.99}}}";
+            var baseline=candidates();
+            var bodies=baseline.stream().map(row->row.textSegment().text()).toList();
+            var metadata=baseline.stream().map(row->new LinkedHashMap<>(row.textSegment().metadata().toMap())).toList();
+            var result=rerank(f,baseline,key(),admission());
+            assertEquals("applied",com.example.lms.search.TraceStore.get("rag.jev.candidate.reasonCode"));
+            assertEquals(baseline.size(),result.size());
+            int[] order={1,2,0,3,4};
+            for(int i=0;i<order.length;i++)assertSame(baseline.get(order[i]),result.get(i));
+            assertEquals(bodies,baseline.stream().map(row->row.textSegment().text()).toList());
+            assertEquals(metadata,baseline.stream().map(row->row.textSegment().metadata().toMap()).toList());
+            assertEquals(4,JevChoiceContractTest.JSON.readTree(wire.body.get()).path("questions").size());
+            assertEquals(1,wire.calls.get());
+        }
+    }
     @Test void malformedMissingAndLowConfidenceResultsKeepBaseline() throws Exception {
         for(String reason:List.of("upstream_error","missing","low_confidence")) {
             try(Fixture f=new Fixture(environment(),(request,questions)-> {

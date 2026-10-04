@@ -158,6 +158,19 @@ class AgentsMdBudgetTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertTrue(any("HEADING_MISSING Redaction" in f for f in failures), failures)
 
+    def test_required_small_stub_fits_but_byte_ceiling_still_blocks(self):
+        src = write_fixture(self.tmp)
+        original = src.read_bytes()
+        src.write_bytes(original + b" " * (30_213 - len(original)))
+        code, failures = amb.check_file(src)
+        self.assertEqual(0, code, failures)
+        src.write_bytes(original + b" " * (30_301 - len(original)))
+        code, failures = amb.check_file(src)
+        self.assertEqual(1, code)
+        self.assertTrue(any(f.startswith("SIZE_OVER") for f in failures), failures)
+        self.assertEqual(24_000, amb.CRITICAL_LIMIT)
+        self.assertLess(amb.HARD_LIMIT, 32_768)
+
     def test_critical_after_limit_fails(self):
         filler = "<!-- BEGIN PAD -->\n" + ("pad\n" * 9000) + "<!-- END PAD -->\n"
         src = write_fixture(self.tmp, "# T\n" + filler + FIXTURE.split("\n", 1)[1])

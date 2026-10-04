@@ -70,6 +70,10 @@
 ## Codex Auto-Decide Defaults
 - 선택 질문 전 자동 결정 기본표(codex_question_classifier.py) — 승인 퀴즈 전에. — 상세: `docs/agents-rules/DEMO1-CODEX-AUTO-DECIDE.md`
 <!-- END DEMO1-CODEX-AUTO-DECIDE -->
+<!-- BEGIN DEMO1-STACK-FIT-GATE -->
+## Stack-Fit Gate
+- 새 기술·서버·데몬·SaaS·재작성: stack_fit_guard 판정 후 부분 DECLINE+대안. — 상세: `docs/agents-rules/DEMO1-STACK-FIT-GATE.md`.
+<!-- END DEMO1-STACK-FIT-GATE -->
 <!-- BEGIN DEMO1-GROK-SUBSCRIPTION-REVIEW -->
 ## Grok Subscription Review
 - 명시적 Grok 요청/독립 리뷰 필요 시 — 실행 전 수용 윈도우 증거 필요. — 상세: `docs/agents-rules/DEMO1-GROK-SUBSCRIPTION-REVIEW.md`

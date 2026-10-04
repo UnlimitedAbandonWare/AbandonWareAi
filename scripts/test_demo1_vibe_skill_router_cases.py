@@ -86,5 +86,16 @@ class SkillRoutingCasesTest(unittest.TestCase):
         self.assertEqual(len(names), len(set(names)))
 
 
+class StackFitRoutingCasesTest(unittest.TestCase):
+    def test_nest_introduction_routes_to_stack_fit(self):
+        self.assertEqual(route("NestJS 도입해줘")["primary"], "demo1-stack-fit-pushback")
+
+    def test_nested_json_bug_does_not_route_to_stack_fit(self):
+        self.assertNotEqual(route("nested json 버그")["primary"], "demo1-stack-fit-pushback")
+
+    def test_existing_spring_endpoint_does_not_route_to_stack_fit(self):
+        self.assertNotEqual(route("Spring 컨트롤러에 엔드포인트 추가")["primary"], "demo1-stack-fit-pushback")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

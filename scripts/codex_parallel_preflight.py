@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -128,11 +129,42 @@ def quota_summary(root, plan, lane_id):
             "ollamaGpuLoadFree": not gpu_taken}
 
 
+def peer_occupied_paths(root, task_id, scope):
+    """중복 목표 피어가 실제로 점유한 파일 — release 전 claim target, 열린 coop
+    writer의 changedPaths, live lease targetPaths(lease.taskIdHash=sha256(taskId))
+    중 내 scope와 겹치는 것의 합집합."""
+    mine = [lib.canon(p) for p in scope or []]
+    found = set()
+    for claim in lib.iter_claims(root):
+        if claim.get("released") or claim.get("taskId") != task_id:
+            continue
+        found.update(lib.overlapping(
+            mine, [lib.canon(t.get("path")) for t in claim.get("targets") or []]))
+        found.update(lib.overlapping(
+            mine, [lib.canon(r) for r in claim.get("reservePaths") or []]))
+    state = lib.load_coop_state(root)
+    for writer in (state.get("writers") or {}).values():
+        if writer.get("taskId") != task_id or writer.get("state") not in lib.WRITER_OPEN:
+            continue
+        found.update(lib.overlapping(
+            mine, [lib.canon(c) for c in writer.get("changedPaths") or []]))
+    task_hash = hashlib.sha256(str(task_id).encode("utf-8")).hexdigest() if task_id else None
+    for lease in lib.iter_source_leases(root):
+        if lease.get("taskIdHash") != task_hash or lib.lease_lifecycle(lease) != "live":
+            continue
+        found.update(lib.overlapping(
+            mine, [lib.canon(t) for t in lease.get("targetPaths") or []]))
+    return sorted(p for p in found if p)
+
+
 def summary_ko(verdict, role, dups, violations, quota_info):
     if violations:
         return f"레인 위반 {len(violations)}건 — write 범위 밖 변경 감지, INTEGRATOR에 보고"
     if verdict == "DUPLICATE_GOAL_LIVE":
-        return (f"같은 목표 라이브 중복 {len(dups)}건 — 이 채팅은 {role}: "
+        peers = ", ".join(
+            f"{d.get('taskId')}·점유{len(d.get('occupiedPaths') or [])}파일"
+            for d in dups[:3]) or "-"
+        return (f"같은 목표 라이브 중복 {len(dups)}건({peers}) — 이 채팅은 {role}: "
                 "읽기 전용 검증 또는 사용자 확인 후 진행")
     if verdict == "DUPLICATE_GOAL_QUIET":
         return f"조용한 중복 목표 — {role}: 상대 마지막 checkpoint를 baseline으로 인수"
@@ -187,6 +219,8 @@ def run(root, args):
     decision = lib.role_decision(root, key, scope, exclude_task=args.task,
                                  live_minutes=args.live_minutes,
                                  plan=plan, lane=lane_id)
+    for dup in decision.get("duplicates") or []:
+        dup["occupiedPaths"] = peer_occupied_paths(root, dup.get("taskId"), scope)
     if plan is not None and lane_id:
         lane = lib.plan_lane(plan, lane_id)
         if lane is not None and decision["role"] == "OWNER":

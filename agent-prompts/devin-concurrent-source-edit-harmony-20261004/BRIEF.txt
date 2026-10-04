@@ -1,0 +1,97 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 아래 4대 다중 세션 충돌/오탐 해소 작업을 순서대로 직접 구현하고 테스트까지 완수해야 합니다.
+@awx-cooperative-verification
+
+[DEVIN 지시서] 다중 세션 소스 수정 충돌 및 토큰 오탐 해소 — 2026-10-04 19:35 KST
+파일 ID: PASTE_DEVIN_CONCURRENT_SOURCE_EDIT_HARMONY_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+동일 체크아웃(`C:\AbandonWare\demo-1\demo-1\src`)에서 다중 세션 동시 소스 수정 시 발생하는 4대 병목(coop 토큰 시크릿 오탐, 체크포인트 lease-drift 불일치, agent_scope 임시 매니페스트 경로 에러, preflight 미호출)을 해소한다.
+
+### 1. 사실 (읽기 전용 확인, 2026-10-04 19:25~19:35 KST)
+- 10-04 19:25 `codex-bm25-rules-alignment-11f041e0`: `agent_scope check` 임시 매니페스트 에러 발생 및 `AGENTS.md` 장시간 독점 리스로 타 세션 블록.
+- 10-04 18:47 `codex-chat-recall-id-seam-resume-c14f0a7e`: `coop_verify writer-begin`이 32자리 UUID `writerToken` 평문을 출력해 시크릿 스캐너에 걸림 (검사 A5 secret-output-zero FAIL 루프).
+- 10-03 17:00 `codex-api3-stream-failed-3a621fe8` vs `5850b5bb`: 동일 버그/동일 파일(`ChatApiController.java`) 4초 차 동시 착수 충돌 및 `guardedSourceEdit` 조기 해제로 `source-lease-drift` 체크포인트 거부 발생.
+- 10-02 사고(`parallel-session-incident-20261002.md`): `codex_parallel_preflight.py`가 지시서에 포함되지 않아 중복 착수 방지 실패.
+
+### 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+### 기준 해시 표
+| 경로 | sha12 | git | 권한 |
+|---|---|---|---|
+| scripts/coop_verify.py | 66119c17d66d | - | 수정 |
+| scripts/test_coop_verify.py | 9a65c669cea7 | - | 수정 |
+| scripts/codex_work_checkpoint.py | 6724b8a8d100 | - | 수정 |
+| scripts/test_codex_work_checkpoint.py | 51a2351300b9 | - | 수정 |
+| scripts/agent_scope_lease.py | d10bb71c5deb | - | 수정 |
+| scripts/test_agent_scope_lease.py | b59f0ffe6618 | - | 수정 |
+| scripts/codex_parallel_preflight.py | 2d459cb17c0e | - | 수정 |
+| scripts/test_codex_parallel_preflight.py | 8f52bfd58c9a | - | 수정 |
+| docs/agent-tooling/codex-parallel-quickstart-ko.md | 4897931e0557 | - | 수정 |
+
+### WP1 [Devin] coop_verify.py writerToken 평문 노출 마스킹
+- 증거: `scripts/coop_verify.py:403, 418` 32-hex UUID stdout 출력.
+- RED: `python -B -c "import subprocess, json; p=subprocess.run(['python', '-B', 'scripts/coop_verify.py', 'writer-begin', '--agent', 'test', '--path', 'README.md'], capture_output=True, text=True); d=json.loads(p.stdout); assert len(d.get('writerToken','')) == 32"; 'exit=' + str($LASTEXITCODE)`
+- 최소 수정: `writer-begin` emit 시 stdout JSON의 `writerToken`을 앞뒤 4자리 마스킹(`val[:4]+'...'+val[-4:]`) 처리. 토큰 검증은 세션 파일로 유지. `scripts/test_coop_verify.py`에 마스킹 검증 추가.
+- GREEN: `python -B scripts/test_coop_verify.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: `writer-begin` 표준출력에 32자리 평문 UUID 미노출.
+
+### WP2 [Devin] codex_work_checkpoint.py의 source-lease-drift 오탐 방지
+- 증거: `codex-api3-stream-failed-3a621fe8` journal:49: 단위 테스트 후 `finish` 시 lease drift 거부.
+- RED: `python -B scripts/test_codex_work_checkpoint.py; "exit=$LASTEXITCODE"`
+- 최소 수정: `codex_work_checkpoint.py` `finish` 시, 체크포인트 사이클 동안 정상 획득되어 편집 후 verified 완료된 소유 리스 기록이 확인되면 `source-lease-drift` 거부 없이 정상 봉인.
+- GREEN: `python -B scripts/test_codex_work_checkpoint.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: guardedSourceEdit 후 단위 검증 완료 시점까지 lease drift 없이 체크포인트 봉인 성공.
+
+### WP3 [Devin] agent_scope_lease.py check 임시 매니페스트 정규화 및 문서 락 안내
+- 증거: `scripts/agent_scope_lease.py:112`의 `tempfile.mkstemp` 경로 Windows PowerShell 전달 시 `target-evidence-unavailable` 발생.
+- RED: `python -B scripts/test_agent_scope_lease.py; "exit=$LASTEXITCODE"`
+- 최소 수정:
+  1) `scripts/agent_scope_lease.py`: `manifest_path`를 `Path(manifest_path).resolve().as_posix()` 정규화.
+  2) `AGENTS.md` 등 순수 Markdown 파일 단독 check 시 "Markdown 문서는 독점 lease 없이 journal+checkpoint 권장(DEMO1-WORK-LEDGER §2)" 가이드 제공.
+- GREEN: `python -B scripts/test_agent_scope_lease.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: `agent_scope_lease.py check --path <경로>`가 exit 6 없이 정상 판정(0/7) 반환.
+
+### WP4 [Devin] codex_parallel_preflight.py 원라인 진입 강화 및 규칙 반영
+- 증거: `parallel-session-incident-20261002.md`: preflight 누락으로 동일 목표 중복 편집 발생.
+- RED: `python -B scripts/test_codex_parallel_preflight.py; "exit=$LASTEXITCODE"`
+- 최소 수정:
+  1) `scripts/codex_parallel_preflight.py`: 중복 목표(`DUPLICATE_GOAL_LIVE`) 감지 시 상대 taskId 및 점유 파일 요약 출력.
+  2) `docs/agent-tooling/codex-parallel-quickstart-ko.md`에 필수 1번 preflight 스텝 반영.
+- GREEN: `python -B scripts/test_codex_parallel_preflight.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: 병렬 착수 시 원라인 preflight로 중복 목표와 점유 파일 식별.
+
+### 5. HOLD
+- 타 세션 활성 리스(`lifecycle: live`)와 경로가 겹칠 경우 해당 파일만 HOLD하고 겹치지 않는 파일만 계속 진행한다.
+- 4개 테스트 스위트 중 기존에 통과하던 테스트가 실패하면 즉시 HOLD하고 원인을 진단한다.
+
+### 6. ASK_ONCE
+- U-1: `coop_verify.py` writerToken 저장 방식
+  - (a) 권장: stdout에 앞뒤 4자리 마스킹 출력 + `.coop-token-<batchId>` 파일 격리
+  - (b) stdout에서 토큰 필드 생략하고 batchId만 사용
+- U-2: Markdown 파일 리스 요청 시 동작
+  - (a) 권장: 리스는 허용하되 "Markdown은 독점 리스 비권장" 가이드 출력
+  - (b) Markdown 단독 리스를 차단하고 journal 전용 강제
+
+### 7. 절대 금지
+- git push, git pull, git commit, git add -A 금지.
+- remote 추가 금지.
+- 비밀값, API 키, 인증 토큰의 평문 로그 출력 금지.
+- PROTO_OPEN 상태 준수: 인증 게이트를 신설하거나 변경하지 않음.
+- 제품 Java/RAG 프로덕션 로직 변경 금지.
+
+### 8. Acceptance
+- A1 (WP1 대응): `coop_verify writer-begin` 시 stdout 평문 UUID 미노출, 마스킹 출력, `test_coop_verify.py` 100% PASS.
+- A2 (WP2 대응): `codex_work_checkpoint.py` 소유 세션에 대해 `source-lease-drift` 오탐 없이 `finish` exit 0 봉인.
+- A3 (WP3 대응): `agent_scope_lease.py check` 임시 매니페스트 에러 없이 동작, Markdown 락 완화 가이드 제공.
+- A4 (WP4 대응): `test_codex_parallel_preflight.py` PASS 및 규칙 문서 업데이트 완료.
+- NOT_RUN: 제품 Spring Boot 앱 재기동이나 live API 실호출은 범위 밖이므로 NOT_RUN_LIVE로 남긴다.
+
+### 9. 보고 형식
+외부 API: 호출 0건 ($0)
+- 변경 파일 목록 및 해시
+- 4개 테스트 스위트 개별 exit 코드 및 결과
+- 미실행 항목(NOT_RUN) 및 사유
+
+[ANTI-STOP] 모든 작업 패키지는 실제 코드 수정과 테스트 실행으로 검증해야 하며, 단순히 계획만 작성하고 멈추지 마십시오.

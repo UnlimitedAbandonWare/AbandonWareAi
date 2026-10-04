@@ -225,6 +225,8 @@ class ChatWorkflowS7PromptBoundaryContractTest {
         var choice=new ChatModelCatalogService.Choice("s7-recording-fake","fixture","fixture",
             "s7-recording-fake","configured",true,"","unknown","synthetic");
         when(catalog.resolve("s7-recording-fake")).thenReturn(java.util.Optional.of(choice));
+        when(catalog.resolve(eq("s7-recording-fake"), nullable(String.class)))
+                .thenAnswer(call -> catalog.resolve(call.getArgument(0, String.class)));
         ReflectionTestUtils.setField(fixture.workflow(),"chatModelCatalogService",catalog);
         var chat=mock(ChatService.class);
         var timeline=new java.util.concurrent.atomic.AtomicReference<Object>();
@@ -321,6 +323,9 @@ class ChatWorkflowS7PromptBoundaryContractTest {
             assertTrue(satisfiesS7Contract(COMPLIANT_RESPONSE));
             assertEquals(COMPLIANT_RESPONSE, result.content(),
                     "the full workflow must preserve a compliant structured S7 answer");
+            verify(modelRouter, times(1)).routeMain(
+                    anyString(), nullable(String.class), anyString(), anyInt(),
+                    eq("s7-recording-fake"), eq(S7_QUERY), eq(false));
             verify(modelRouter, times(1)).route(
                     anyString(), nullable(String.class), anyString(), anyInt(), eq("s7-recording-fake"));
             verifyNoInteractions(verifier, answerExpander, ensembleFinalAnswerService);
@@ -402,6 +407,9 @@ class ChatWorkflowS7PromptBoundaryContractTest {
         RecordingPromptBuilder promptBuilder = new RecordingPromptBuilder();
         RecordingModel model = new RecordingModel(response);
         ModelRouter modelRouter = mock(ModelRouter.class);
+        when(modelRouter.routeMain(
+                anyString(), nullable(String.class), anyString(), anyInt(), anyString(),
+                anyString(), eq(false))).thenCallRealMethod();
         when(modelRouter.route(
                 anyString(), nullable(String.class), anyString(), anyInt(), anyString()))
                 .thenReturn(model);

@@ -828,7 +828,30 @@ def run_path(root, name):
     return relative_path(root, name)
 
 
-def lease_check(root, manifest):
+def lease_released(root, ref):
+    """이 manifest에 기록된 leaseId의 정상 `release` 이벤트가 남아 있으면
+    lease 파일 부재는 중도 소실이 아니라 정상 해제다 (finish 전용 완화).
+    quarantine·삭제는 release 행이 없어 여전히 drift로 거부된다."""
+    lease_id = str((ref or {}).get("leaseId") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", lease_id):
+        return False
+    events = root / "__patch_drop__" / "source-edit-events" / (lease_id + ".jsonl")
+    try:
+        lines = events.read_bytes().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("event") == "release" \
+                and row.get("leaseId") == lease_id:
+            return True
+    return False
+
+
+def lease_check(root, manifest, allow_released=False):
     if not manifest.get("lease"):
         require(all(artifact(t["path"]) for t in manifest["targets"]), "source-owner-lease-required")
         return
@@ -836,7 +859,11 @@ def lease_check(root, manifest):
     require(ref["path"].startswith("__patch_drop__/source-edit-locks/") and
             ref["path"].endswith("/lease.json"), "source-lease-path")
     data = contents(relative_path(root, ref["path"]))
-    require(data is not None, "source-lease-drift")
+    if data is None:
+        # begin~seal 동안 정상 획득·검증됐고 finish 시점에 release 기록만 남은
+        # 소유 lease는 drift가 아니라 완료된 주기다.
+        require(allow_released and lease_released(root, ref), "source-lease-drift")
+        return
     if digest(data) != ref["sha256"]:
         # A heartbeat renewal rewrites expiresAtUtc/heartbeat fields — same
         # lease, changed bytes. Pass only when the identity fields recorded
@@ -1201,7 +1228,7 @@ def finish(root, run_relative, exit_code, command_id, log=""):
                      failureCounts=counts, verificationEvidenceMode="caller-observed",
                      logSha256=digest(log.encode("utf-8")), restoredCount=0)
         try:
-            lease_check(root, manifest)
+            lease_check(root, manifest, allow_released=True)
             restore = []
             # Validate the entire set before the first restoration write.
             for i, target in enumerate(manifest["targets"]):
@@ -1214,7 +1241,7 @@ def finish(root, run_relative, exit_code, command_id, log=""):
                 state.update(status="restoring", nextAction="finish-owned-rollback")
                 save(run, state)
                 for path, target, before in restore:
-                    lease_check(root, manifest)
+                    lease_check(root, manifest, allow_released=True)
                     require(digest(contents(path)) == state["postimages"][target["path"]], "postimage-drift")
                     if digest(before) == state["postimages"][target["path"]]:
                         continue

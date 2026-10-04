@@ -1,5 +1,6 @@
 package com.example.lms.assist;
 
+import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.util.StringUtils;
@@ -105,8 +106,12 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
             if(status>=500&&status<=599)return wireFail(status,"upstream_error");
             if(status>=300&&status<400)return wireFail(status,"redirect");
             if(status!=200)return wireFail(status,"http_"+status);
+            boolean candidateBatch=questions!=null&&!questions.isEmpty()
+                    &&questions.stream().allMatch(JevChoiceAdvisor.RELEVANCE::contains);
             JsonNode node;
-            try{node=JSON.readTree(data);}catch(Exception bad){return wireFail(status,"invalid_response");}
+            try{node=candidateBatch
+                    ?JSON.readerFor(JsonNode.class).with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(data)
+                    :JSON.readTree(data);}catch(Exception bad){return wireFail(status,"invalid_response");}
             if(node==null||!node.isObject())return wireFail(status,"invalid_response");
             String reported=node.path("model").asText("");
             if(!StringUtils.hasText(reported))return wireFail(status,"model_unverified");
@@ -115,6 +120,13 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
             if(!reported.equalsIgnoreCase(requested)&&!reported.equalsIgnoreCase(alias))return wireFail(status,"wrong_model");
             var answers=node.path("answers");
             if(!answers.isObject())return wireFail(status,"invalid_response");
+            if(candidateBatch){
+                Set<String> expected=new HashSet<>();
+                for(var question:questions)expected.add(question.id());
+                Set<String> actual=new HashSet<>();
+                answers.fieldNames().forEachRemaining(actual::add);
+                if(!actual.equals(expected))return wireFail(status,"invalid_response");
+            }
             return new WireResponse(status,node,null,null);
         }catch(BoundedHttpBody.TooLarge oversized){
             return wireFail(oversized.httpStatus(),"oversized_response");

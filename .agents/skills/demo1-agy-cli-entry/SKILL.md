@@ -64,6 +64,10 @@ root `<repo>`.
   them to check lists (user decision 2026-09-30). Jev keys
   (`AI_GATEWAY_API_KEY`) are owned by `scripts/apikit`, not tools/agents.
 
+## agy model/update probes (2026-10-04)
+- `scripts\agy_model_latest.ps1` — launcher one-liner `[agy-model] LATEST_OK|NEWER_AVAILABLE|CHECK_SKIPPED update=…` (`AWX_AGY_MODEL_CHECK=0` skips it).
+- `AWX_AGY_MODEL=latest` → `--model <newest same family+tier>`; `AWX_AGY_MODEL=<id>` pins; unset keeps the /config pick (default). Self-update is the built-in `auto_updater.go` — never force `agy update` live.
+
 ## demo-1 hard constraints (still binding on agy)
 
 - Project root is `<repo>`; minimal diff; no secret

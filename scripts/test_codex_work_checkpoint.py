@@ -261,6 +261,59 @@ class WorkCheckpointTest(unittest.TestCase):
         self.assertEqual(b"original", source.read_bytes())
         self.assertTrue(lease_path.exists())
 
+    def leased_source_cycle(self, lease_id="0123456789abcdef0123456789abcdef"):
+        source = self.root / "scripts/example.py"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(b"original")
+        lease_name = "__patch_drop__/source-edit-locks/owned.lock/lease.json"
+        lease_path = self.root / lease_name
+        lease_path.parent.mkdir(parents=True, exist_ok=True)
+        lease_path.write_text(json.dumps(dict(
+            leaseId=lease_id, root=str(self.root), ownerId="synthetic-owner",
+            mutationAllowed=True, coordinationMode="target-scoped",
+            targetPaths=["scripts/example.py"],
+            expiresAtUtc=(datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat())))
+        CP.begin(self.root, self.run, ["scripts/example.py"], decision(), lease_name)
+        source.write_bytes(b"new")
+        CP.seal(self.root, self.run)
+        return source, lease_path, lease_id
+
+    def write_lease_events(self, lease_id, events):
+        events_dir = self.root / "__patch_drop__" / "source-edit-events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        rows = [{"event": name, "atUtc": datetime.now(timezone.utc).isoformat(),
+                 "leaseId": lease_id, "targetPaths": ["scripts/example.py"],
+                 "reason": "", "waitMs": 0, "ownerHash": "0" * 64,
+                 "taskIdHash": "0" * 64} for name in events]
+        (events_dir / (lease_id + ".jsonl")).write_text(
+            "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+
+    def test_released_lease_finish_seals_without_drift_hold(self):
+        # begin~seal 동안 정상 획득·검증된 소유 lease가 단위 검증 후 release만
+        # 남기고 사라진 경우 — source-lease-drift 오탐 없이 verified 봉인 (WP2).
+        source, lease_path, lease_id = self.leased_source_cycle()
+        self.write_lease_events(lease_id, ("acquire", "release"))
+        lease_path.unlink()
+        result = CP.finish(self.root, self.run, 0, "source-test")
+        self.assertEqual("verified", result["status"])
+        self.assertEqual(b"new", source.read_bytes())
+
+    def test_released_lease_finish_still_rolls_back_failed_verification(self):
+        source, lease_path, lease_id = self.leased_source_cycle()
+        self.write_lease_events(lease_id, ("acquire", "release"))
+        lease_path.unlink()
+        result = CP.finish(self.root, self.run, 1, "source-test")
+        self.assertEqual("rolled_back", result["status"])
+        self.assertEqual(b"original", source.read_bytes())
+
+    def test_missing_lease_without_release_event_still_holds(self):
+        source, lease_path, lease_id = self.leased_source_cycle()
+        lease_path.unlink()  # release 기록 없는 부재 = 중도 소실, 여전히 drift
+        result = CP.finish(self.root, self.run, 0, "source-test")
+        self.assertEqual("hold", result["status"])
+        self.assertEqual("source-lease-drift", result["firstBlockingRule"])
+        self.assertEqual(b"new", source.read_bytes())
+
     def test_mid_rollback_race_reports_partial_and_preserves_foreign_bytes(self):
         second = self.root / "docs/second.md"
         second.write_bytes(b"second original")

@@ -314,6 +314,29 @@ def emit(payload) -> int:
     return 0
 
 
+def mask_token(value) -> str:
+    """stdout은 스캐너에 잡히는 표면이라 토큰은 앞뒤 4자리만 남긴다.
+    실제 값은 <store>/.coop-token-<batchId> 에만 기록한다."""
+    text = str(value or "")
+    if len(text) <= 8:
+        return text
+    return text[:4] + "..." + text[-4:]
+
+
+def token_file(directory: Path, batch_id) -> Path:
+    return directory / (".coop-token-" + clean_name(batch_id, "batch-id"))
+
+
+def read_token_file(directory: Path, batch_id):
+    try:
+        doc = json.loads(token_file(directory, batch_id).read_bytes() or b"{}")
+    except (OSError, ValueError):
+        return None
+    if isinstance(doc, dict) and doc.get("editBatchId") == batch_id:
+        return doc.get("writerToken")
+    return None
+
+
 def cmd_status(root, directory, args, cfg) -> int:
     now = datetime.now(timezone.utc)
     state = load_state(directory)
@@ -414,16 +437,25 @@ def cmd_writer_begin(root, directory, args, cfg) -> int:
         if intent:
             state["validationIntentAtUtc"] = now.isoformat()
         save_state(directory, state)
+        ck.write_json(token_file(directory, batch_id), {
+            "schemaVersion": SCHEMA, "editBatchId": batch_id,
+            "writerToken": writer["writerToken"], "writtenAtUtc": now.isoformat()})
     return emit({"schemaVersion": SCHEMA, "action": "writer-begin",
-                 "editBatchId": batch_id, "writerToken": writer["writerToken"],
+                 "editBatchId": batch_id,
+                 "writerToken": mask_token(writer["writerToken"]),
+                 "writerTokenMasked": True,
+                 "tokenFile": token_file(directory, batch_id).name,
                  "state": "EDITING", "changedPaths": paths,
                  "inflightVerifyOverlap": inflight,
                  "validationIntent": intent})
 
 
-def _owned_writer(state, batch_id: str, batch_token: str) -> dict:
+def _owned_writer(state, batch_id: str, batch_token: str, directory=None) -> dict:
     writer = state["writers"].get(batch_id)
     ck.require(writer is not None, "writer-unknown")
+    if not batch_token and directory is not None:
+        # 마스킹된 stdout을 본 세션은 .coop-token-<batchId> 파일에서 토큰을 읽는다.
+        batch_token = read_token_file(directory, batch_id)
     ck.require(batch_token and writer.get("writerToken") == batch_token,
                "writer-token-mismatch")
     return writer
@@ -433,7 +465,7 @@ def cmd_writer_heartbeat(root, directory, args, cfg) -> int:
     now = datetime.now(timezone.utc)
     with exclusive_lock(directory, ".coop.lock", "coordination-locked"):
         state = load_state(directory)
-        writer = _owned_writer(state, args.batch_id, args.token)
+        writer = _owned_writer(state, args.batch_id, args.token, directory)
         ck.require(writer.get("state") in WRITER_OPEN, "writer-closed")
         writer["heartbeatAtUtc"] = now.isoformat()
         if args.source_changed:
@@ -449,7 +481,7 @@ def cmd_writer_checkpoint(root, directory, args, cfg) -> int:
     now = datetime.now(timezone.utc)
     with exclusive_lock(directory, ".coop.lock", "coordination-locked"):
         state = load_state(directory)
-        writer = _owned_writer(state, args.batch_id, args.token)
+        writer = _owned_writer(state, args.batch_id, args.token, directory)
         ck.require(writer.get("state") in WRITER_OPEN, "writer-closed")
         writer["state"] = "CHECKPOINT"
         writer["heartbeatAtUtc"] = now.isoformat()
@@ -467,7 +499,7 @@ def cmd_writer_end(root, directory, args, cfg) -> int:
     now = datetime.now(timezone.utc)
     with exclusive_lock(directory, ".coop.lock", "coordination-locked"):
         state = load_state(directory)
-        writer = _owned_writer(state, args.batch_id, args.token)
+        writer = _owned_writer(state, args.batch_id, args.token, directory)
         ck.require(writer.get("state") != "RELEASED", "writer-already-released")
         writer["state"] = "RELEASED"
         writer["endedAtUtc"] = now.isoformat()
@@ -476,6 +508,10 @@ def cmd_writer_end(root, directory, args, cfg) -> int:
         state["lastSourceChangeAtUtc"] = now.isoformat()
         refresh_ticket_states(state, now, cfg)
         save_state(directory, state)
+        try:
+            token_file(directory, args.batch_id).unlink()
+        except OSError:
+            pass
     return emit({"schemaVersion": SCHEMA, "action": "writer-end",
                  "editBatchId": args.batch_id, "state": "RELEASED",
                  "note": "release is not a success verdict"})
@@ -839,19 +875,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("writer-heartbeat", help="liveness only; never resets quiet")
     s.add_argument("--batch-id", required=True)
-    s.add_argument("--token", required=True)
+    s.add_argument("--token", help="생략 시 <store>/.coop-token-<batchId>를 읽는다")
     s.add_argument("--source-changed", action="store_true")
     s.set_defaults(func=cmd_writer_heartbeat)
 
     s = sub.add_parser("writer-checkpoint", help="close a logical batch; yields verify slot")
     s.add_argument("--batch-id", required=True)
-    s.add_argument("--token", required=True)
+    s.add_argument("--token", help="생략 시 <store>/.coop-token-<batchId>를 읽는다")
     s.add_argument("--path", action="append", default=[])
     s.set_defaults(func=cmd_writer_checkpoint)
 
     s = sub.add_parser("writer-end", help="release the batch (not a success verdict)")
     s.add_argument("--batch-id", required=True)
-    s.add_argument("--token", required=True)
+    s.add_argument("--token", help="생략 시 <store>/.coop-token-<batchId>를 읽는다")
     s.set_defaults(func=cmd_writer_end)
 
     s = sub.add_parser("request", help="store/merge a durable verify ticket")

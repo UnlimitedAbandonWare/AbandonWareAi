@@ -74,8 +74,24 @@ set "PASSED_ARGS=%*"
 if not "%PASSED_ARGS%"=="%PASSED_ARGS:--effort=%" set "EFFORT_FLAG="
 if defined EFFORT_FLAG echo [Start-Agy-CLI] AWX_AGY_EFFORT=%AWX_AGY_EFFORT%: reasoning effort flag attached
 
+REM  Latest-model notification + opt-in model flag (Mode B, 2026-10-04).
+REM  One status line per launch (AWX_AGY_MODEL_CHECK=0 skips it). Opt-in:
+REM    AWX_AGY_MODEL=latest -> --model <newest same family/tier id>
+REM    AWX_AGY_MODEL=<id>   -> --model <id>
+REM  Unset (default) attaches no --model flag; the /config pick is kept.
+REM  An explicit --model in your own args wins, same as --effort.
+set "MODEL_FLAG="
+if /i "%AWX_AGY_MODEL%"=="latest" (
+    for /f "usebackq delims=" %%M in (`powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agy_model_latest.ps1" -Pick`) do set "MODEL_FLAG=--model %%M"
+) else if defined AWX_AGY_MODEL (
+    set "MODEL_FLAG=--model %AWX_AGY_MODEL%"
+)
+if defined PASSED_ARGS if not "%PASSED_ARGS%"=="%PASSED_ARGS:--model=%" set "MODEL_FLAG="
+if defined MODEL_FLAG echo [Start-Agy-CLI] AWX_AGY_MODEL=%AWX_AGY_MODEL%: model flag attached
+if not "%AWX_AGY_MODEL_CHECK%"=="0" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agy_model_latest.ps1"
+
 if not "%AWX_CONTEXT_PREAMBLE%"=="0" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agent_context_preamble.ps1" -Agent agy
-"%AGY%" %YOLO_FLAG% %EFFORT_FLAG% %*
+"%AGY%" %YOLO_FLAG% %EFFORT_FLAG% %MODEL_FLAG% %*
 set "EXITCODE=%ERRORLEVEL%"
 
 echo.

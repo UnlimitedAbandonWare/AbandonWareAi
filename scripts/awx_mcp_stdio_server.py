@@ -37,7 +37,7 @@ MANIFEST_PATH = ROOT / "main" / "resources" / "mcp" / "awx-control-tower-tools.j
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "awx-control-tower"
 # Includes both text and structuredContent, measured after JSON escaping.
-MAX_TOOL_RESULT_BYTES = 262144
+MAX_TOOL_RESULT_BYTES = 32768
 
 HANDLERS = {
     "device_work": toolbox.device_work,
@@ -74,12 +74,12 @@ HANDLERS = {
 }
 
 
+# handler_entered lifecycle events belong to the worker subprocess only.
+_IN_TOOL_WORKER = False
+
+
 def main() -> int:
     return tool_worker() if "--tool-worker" in sys.argv else StdioSession().run()
-
-
-class ToolCancelled(BaseException):
-    """Control flow, deliberately outside business exception handlers."""
 
 
 def lifecycle_event(event: str, **fields: Any) -> None:
@@ -90,9 +90,10 @@ def lifecycle_event(event: str, **fields: Any) -> None:
 def tool_worker() -> int:
     """Internal execution mode of this bridge, never an additional MCP server.
 
-    The parent assigns process ownership before sending work. Cancellation is
-    checked at Python execution boundaries; a blocked native call is stopped by
-    the parent's bounded owned-process cleanup. Prior side effects are not undone.
+    The parent assigns process ownership before sending work. Cooperative
+    cancellation and the owned-worker deadline bound Python work; a blocked
+    native call is stopped by the parent's bounded owned-process cleanup.
+    Prior side effects are not undone.
     """
     request = json.loads(sys.stdin.readline())
     cancelled = threading.Event()
@@ -103,29 +104,14 @@ def tool_worker() -> int:
         cancelled.set()
 
     threading.Thread(target=receive_cancel, name="awx-worker-control", daemon=True).start()
-    handler_codes = {handler.__code__ for handler in HANDLERS.values() if hasattr(handler, "__code__")}
-    entered = False
-
-    def checkpoint(frame, event, arg):
-        nonlocal entered
-        if cancelled.is_set():
-            raise ToolCancelled()
-        if not entered and event == "call" and frame.f_code in handler_codes:
-            entered = True
-            lifecycle_event("handler_entered")
-        return checkpoint
-
-    try:
-        with redirect_stdout(sys.stderr), review_adapter.owned_worker(
-                OwnedWorker, time.monotonic() + request.pop("_awxWorkerBudgetSeconds", 120), cancelled):
-            sys.settrace(checkpoint)
-            reply = handle_request(request)
-    except ToolCancelled:
+    global _IN_TOOL_WORKER
+    _IN_TOOL_WORKER = True
+    with redirect_stdout(sys.stderr), review_adapter.owned_worker(
+            OwnedWorker, time.monotonic() + request.pop("_awxWorkerBudgetSeconds", 120), cancelled):
+        reply = handle_request(request)
+    if cancelled.is_set() or reply is None:
         return 0
-    finally:
-        sys.settrace(None)
-    if reply is not None:
-        print(json.dumps(reply, ensure_ascii=True, separators=(",", ":")), flush=True)
+    print(json.dumps(reply, ensure_ascii=True, separators=(",", ":")), flush=True)
     return 0
 
 
@@ -711,6 +697,8 @@ def call_tool(params: dict[str, Any]) -> dict[str, Any]:
     output_schema = registration.get("output_schema")
     started = time.monotonic()
     try:
+        if _IN_TOOL_WORKER:
+            lifecycle_event("handler_entered")
         raw = HANDLERS[tool_name](arguments)
         if (not isinstance(raw, dict) or ("ok" in raw and type(raw["ok"]) is not bool)
                 or ((raw.get("ok") is not False or tool_name in ("codex_review_change", "grok_review_change", "kimi_review_change")) and output_schema is not None and not schema_matches(raw, output_schema))):

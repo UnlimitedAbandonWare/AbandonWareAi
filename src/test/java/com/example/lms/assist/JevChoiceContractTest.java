@@ -15,6 +15,13 @@ class JevChoiceContractTest {
     static final ObjectMapper JSON=new ObjectMapper();
     static final List<ChoiceQuestion> QUESTIONS=List.of(WEB_NEED,COMPLEXITY);
     static final String GOOD="{\"model\":\"jev\",\"answers\":{\"webNeed\":{\"type\":\"choice\",\"choice\":\"LIGHT\",\"probabilities\":{\"NONE\":0.1,\"LIGHT\":0.9,\"DEEP\":0}},\"complexity\":{\"type\":\"choice\",\"choice\":\"SIMPLE\",\"probabilities\":{\"SIMPLE\":0.8,\"AMBIGUOUS\":0.2,\"COMPLEX\":0}}}}";
+    static final String CANDIDATE_GOOD="{\"model\":\"jev\",\"answers\":{\"relevance0\":{\"choice\":\"IRRELEVANT\",\"probability\":0.99},\"relevance1\":{\"choice\":\"RELEVANT\",\"probability\":0.99}}}";
+    static final String CANDIDATE_FOREIGN=CANDIDATE_GOOD.substring(0,CANDIDATE_GOOD.length()-2)
+            +",\"relevance99\":{\"choice\":\"RELEVANT\",\"probability\":0.99}}}";
+    // Raw JSON preserves both keys; serializing a Map would erase the defect.
+    static final String CANDIDATE_DUPLICATE=CANDIDATE_GOOD.substring(0,CANDIDATE_GOOD.length()-2)
+            +",\"relevance0\":{\"choice\":\"IRRELEVANT\",\"probability\":0.99}}}";
+    static final String CANDIDATE_MISSING="{\"model\":\"jev\",\"answers\":{\"relevance0\":{\"choice\":\"IRRELEVANT\",\"probability\":0.99}}}";
     static final class Fixture implements AutoCloseable {
         final HttpServer server;final AtomicInteger calls=new AtomicInteger();final AtomicReference<String> body=new AtomicReference<>();
         String response=GOOD;
@@ -45,6 +52,24 @@ class JevChoiceContractTest {
             var result=f.evaluate("Synthetic question",QUESTIONS,8192).result();
             assertEquals("LIGHT",result.answers().get("webNeed").choice());
             assertFalse(result.answers().get("complexity").schemaValid());
+        }
+    }
+    @Test void candidateBatchRejectsForeignResponseId()throws Exception{
+        assertInvalidCandidateBatch(CANDIDATE_FOREIGN);
+    }
+    @Test void candidateBatchRejectsRawDuplicateResponseId()throws Exception{
+        assertInvalidCandidateBatch(CANDIDATE_DUPLICATE);
+    }
+    @Test void candidateBatchRejectsMissingResponseId()throws Exception{
+        assertInvalidCandidateBatch(CANDIDATE_MISSING);
+    }
+    static void assertInvalidCandidateBatch(String rawResponse)throws Exception{
+        try(var f=new Fixture()){
+            f.response=rawResponse;
+            var result=f.evaluate("synthetic",RELEVANCE.subList(0,2),8192).result();
+            assertEquals("invalid_response",result.reasonCode());
+            assertTrue(result.answers().isEmpty());
+            assertEquals(1,f.calls.get());
         }
     }
     @Test void missingProbabilityNeverBecomesCertain()throws Exception{

@@ -17,13 +17,13 @@ class CatalogContractTest(unittest.TestCase):
 
     def test_subscription_review_adds_one_tool_and_preserves_all_existing_contracts(self):
         tools = self.manifest['tools']
-        self.assertEqual(30, len(tools))
+        self.assertEqual(31, len(tools))
         before_grok = [row for row in tools if row['name'] not in {'grok_review_change', 'kimi_review_change', 'device_work'}]
         preserved = json.dumps(before_grok, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
-        self.assertEqual('696b68f29ea7e73c2f06409decb474f44bf41f6e1317b4cb1ccf19390a76ac4f', hashlib.sha256(preserved).hexdigest())
+        self.assertEqual('0f7e4dc37f53892a0b53f992cb4dfe93ff73a96cc8ee07f8326930a11e5d9309', hashlib.sha256(preserved).hexdigest())
         previous = [row for row in before_grok if row['name'] != 'codex_review_change']
         encoded = json.dumps(previous, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
-        self.assertEqual('802d7156186cec250d9c28fea6c2514c754b693b03cbf830d6c0084eff1aa307', hashlib.sha256(encoded).hexdigest())
+        self.assertEqual('a6a3d920d96a8539829dcffb4bf6d91aaedf6cb2ecbb046befc972e9816a3d6a', hashlib.sha256(encoded).hexdigest())
         review = next(row for row in tools if row['name'] == 'codex_review_change')
         self.assertFalse(review['input_schema']['additionalProperties'])
         self.assertFalse(review['output_schema']['additionalProperties'])

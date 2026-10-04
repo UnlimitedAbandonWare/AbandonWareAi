@@ -90,8 +90,10 @@ class CoopVerifyTest(unittest.TestCase):
         return self._call(CV.cmd_status, self.args(agent=agent))[1]
 
     def writer_end(self, w):
+        # 마스킹 이후 호출자는 .coop-token-<batchId> 파일 경로로 토큰을 찾는다
+        # (token=None -> 파일 폴백 경로를 그대로 검증한다).
         return self._call(CV.cmd_writer_end, self.args(
-            batch_id=w["editBatchId"], **{"token": w["writerToken"]}))
+            batch_id=w["editBatchId"], token=None))
 
     def state(self):
         return CV.load_state(self.store_dir())
@@ -248,13 +250,15 @@ class CoopVerifyTest(unittest.TestCase):
             "'--path','src/watched.py'],"
             "capture_output=True,text=True)\n"
             "tok=json.loads(w.stdout)\n"
+            "tf=pathlib.Path(r'" + str(self.store_dir()) + "')/('.coop-token-'+tok['editBatchId'])\n"
+            "realtok=json.loads(tf.read_text())['writerToken']\n"
             "subprocess.run(cv+['writer-heartbeat','--batch-id',tok['editBatchId'],"
-            "'--token',tok['writerToken'],'--source-changed'])\n"
+            "'--token',realtok,'--source-changed'])\n"
             "original=pathlib.Path(scr).read_text()\n"
             "pathlib.Path(scr).write_text(original+'# touched\\n')\n"
             "pathlib.Path(scr).write_text(original)\n"
             "subprocess.run(cv+['writer-end','--batch-id',tok['editBatchId'],"
-            "'--token',tok['writerToken']])\n")
+            "'--token',realtok])\n")
         self.request(command=[sys.executable, "-c", inner])
         code, res = self.run_once()
         self.assertEqual(code, CV.EXIT_INVALIDATED)
@@ -304,6 +308,30 @@ class CoopVerifyTest(unittest.TestCase):
             self._call(CV.cmd_writer_heartbeat, self.args(
                 batch_id=w["editBatchId"], **{"token": "wrong-token"}))
         self.assertIn("writer-token-mismatch", str(caught.exception))
+
+    # -- WP1: writer-begin stdout은 평문 토큰을 노출하지 않는다 ------------------
+    def test_writer_begin_stdout_masks_token_but_file_carries_it(self):
+        capture = io.StringIO()
+        with contextlib.redirect_stdout(capture):
+            code = CV.cmd_writer_begin(self.root, self.store_dir(),
+                                       self.args(agent="masked"), self.cfg)
+        self.assertEqual(code, 0)
+        raw = capture.getvalue()
+        res = json.loads(raw)
+        real = self.state()["writers"][res["editBatchId"]]["writerToken"]
+        self.assertEqual(res["writerToken"], real[:4] + "..." + real[-4:])
+        self.assertNotIn(real, raw)
+        token_path = self.store_dir() / (".coop-token-" + res["editBatchId"])
+        doc = json.loads(token_path.read_text(encoding="utf-8"))
+        self.assertEqual(doc["writerToken"], real)
+        # 파일 폴백 경로로 heartbeat/end가 동작하고 end가 토큰 파일을 정리한다.
+        code, _ = self._call(CV.cmd_writer_heartbeat, self.args(
+            batch_id=res["editBatchId"], token=None))
+        self.assertEqual(code, 0)
+        code, _ = self._call(CV.cmd_writer_end, self.args(
+            batch_id=res["editBatchId"], token=None))
+        self.assertEqual(code, 0)
+        self.assertFalse(token_path.exists())
 
 
 if __name__ == "__main__":

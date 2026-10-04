@@ -1,0 +1,443 @@
+{
+  "schemaVersion": 1,
+  "serialization": "JSON-compatible YAML 1.2; stdlib json reader; edit this one SSOT",
+  "story": "Java Spring Boot 3 + Next.js BFF + RAG(LangChain4j·LangGraph4j·Lucene nori)",
+  "verifiedOn": "2026-10-04",
+  "verifiedHead": "42c8c860a241776e21ff47a0b5d1301a4b99bfc0",
+  "adopt": [
+    {
+      "id": "spring-boot",
+      "dependency": "org.springframework.boot:spring-boot-starter",
+      "evidence": "build.gradle.kts:94",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-web",
+      "dependency": "org.springframework.boot:spring-boot-starter-web",
+      "evidence": "build.gradle.kts:95",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-webflux",
+      "dependency": "org.springframework.boot:spring-boot-starter-webflux",
+      "evidence": "build.gradle.kts:96",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-aop",
+      "dependency": "org.springframework.boot:spring-boot-starter-aop",
+      "evidence": "build.gradle.kts:97",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-data-jpa",
+      "dependency": "org.springframework.boot:spring-boot-starter-data-jpa",
+      "evidence": "build.gradle.kts:98",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-actuator",
+      "dependency": "org.springframework.boot:spring-boot-starter-actuator",
+      "evidence": "build.gradle.kts:99",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-validation",
+      "dependency": "org.springframework.boot:spring-boot-starter-validation",
+      "evidence": "build.gradle.kts:100",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-security",
+      "dependency": "org.springframework.boot:spring-boot-starter-security",
+      "evidence": "build.gradle.kts:101",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "spring-cache",
+      "dependency": "org.springframework.boot:spring-boot-starter-cache",
+      "evidence": "build.gradle.kts:104",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "caffeine",
+      "dependency": "com.github.ben-manes.caffeine:caffeine",
+      "evidence": "build.gradle.kts:105",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "resilience4j",
+      "dependency": "io.github.resilience4j:resilience4j-spring-boot3",
+      "evidence": "build.gradle.kts:109",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "resilience4j-reactor",
+      "dependency": "io.github.resilience4j:resilience4j-reactor",
+      "evidence": "build.gradle.kts:120",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "lucene-core",
+      "dependency": "org.apache.lucene:lucene-core",
+      "evidence": "build.gradle.kts:110",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "lucene-queryparser",
+      "dependency": "org.apache.lucene:lucene-queryparser",
+      "evidence": "build.gradle.kts:111",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "lucene-common",
+      "dependency": "org.apache.lucene:lucene-analysis-common",
+      "evidence": "build.gradle.kts:112",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "lucene-nori",
+      "dependency": "org.apache.lucene:lucene-analysis-nori",
+      "evidence": "build.gradle.kts:113",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "opentelemetry",
+      "dependency": "io.opentelemetry:opentelemetry-api",
+      "evidence": "build.gradle.kts:115",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "jsoup",
+      "dependency": "org.jsoup:jsoup",
+      "evidence": "build.gradle.kts:116",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "pdfbox",
+      "dependency": "org.apache.pdfbox:pdfbox",
+      "evidence": "build.gradle.kts:118",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "okhttp",
+      "dependency": "com.squareup.okhttp3:okhttp",
+      "evidence": "build.gradle.kts:121",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "retrofit",
+      "dependency": "com.squareup.retrofit2:retrofit",
+      "evidence": "build.gradle.kts:122",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "retrofit-jackson",
+      "dependency": "com.squareup.retrofit2:converter-jackson",
+      "evidence": "build.gradle.kts:123",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "retrofit-rxjava",
+      "dependency": "com.squareup.retrofit2:adapter-rxjava2",
+      "evidence": "build.gradle.kts:124",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "langchain4j",
+      "dependency": "dev.langchain4j:langchain4j",
+      "evidence": "build.gradle.kts:134",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "langchain4j-openai",
+      "dependency": "dev.langchain4j:langchain4j-open-ai",
+      "evidence": "build.gradle.kts:135",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "langgraph4j",
+      "dependency": "org.bsc.langgraph4j:langgraph4j-core",
+      "evidence": "build.gradle.kts:136",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "mysql",
+      "dependency": "com.mysql:mysql-connector-j",
+      "evidence": "build.gradle.kts:139",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "h2",
+      "dependency": "com.h2database:h2",
+      "evidence": "build.gradle.kts:142",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "next",
+      "dependency": "next",
+      "evidence": "frontend/package.json:14",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "postcss",
+      "dependency": "postcss",
+      "evidence": "frontend/package.json:15",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "react",
+      "dependency": "react",
+      "evidence": "frontend/package.json:16",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "react-dom",
+      "dependency": "react-dom",
+      "evidence": "frontend/package.json:17",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "@soniox/node",
+      "dependency": "@soniox/node",
+      "evidence": "main/resources/soniox-sidecar/package.json:7",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "ws",
+      "dependency": "ws",
+      "evidence": "main/resources/soniox-sidecar/package.json:7",
+      "declared": true,
+      "operationalEvidence": "not_observed"
+    }
+  ],
+  "trial": [
+    {
+      "id": "neo4j",
+      "dependency": "org.neo4j.driver:neo4j-java-driver",
+      "evidence": "build.gradle.kts:114",
+      "usageEvidence": "main/java/com/example/lms/service/rag/kg/Neo4jKnowledgeGraphClient.java:116",
+      "classification": "선택적 disabledReason 경계; 확장 운영은 확인 필요",
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "langgraph-postgres-saver",
+      "dependency": "org.bsc.langgraph4j:langgraph4j-postgres-saver",
+      "evidence": "build.gradle.kts:137",
+      "usageEvidence": "main/java/com/example/lms/service/rag/langgraph/RagGraphExecutor.java:104",
+      "classification": "MemorySaver 기본 경계; Postgres 선택/운영은 확인 필요",
+      "operationalEvidence": "not_observed"
+    },
+    {
+      "id": "jedis",
+      "dependency": "redis.clients:jedis",
+      "evidence": "build.gradle.kts:117",
+      "usageEvidence": "main/java/com/example/lms/service/redis/RedisCooldownService.java:36",
+      "classification": "쿨다운 소유자 배선 있음; Redis 운영은 확인 필요",
+      "operationalEvidence": "not_observed"
+    }
+  ],
+  "hold": [
+    {
+      "tech": "nestjs",
+      "pattern": "(?<![A-Za-z0-9_])(?:nestjs|nest\\.js|nest)(?![A-Za-z0-9_])|@nestjs/|네스트\\s*(?:JS|제이\\s*에스)",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6"
+    },
+    {
+      "tech": "express",
+      "pattern": "(?<![A-Za-z0-9_])express(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": true
+    },
+    {
+      "tech": "fastify",
+      "pattern": "(?<![A-Za-z0-9_])fastify(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": true
+    },
+    {
+      "tech": "koa",
+      "pattern": "(?<![A-Za-z0-9_])koa(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": true
+    },
+    {
+      "tech": "fastapi",
+      "pattern": "(?<![A-Za-z0-9_])fastapi(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": false
+    },
+    {
+      "tech": "flask",
+      "pattern": "(?<![A-Za-z0-9_])flask(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": false
+    },
+    {
+      "tech": "django",
+      "pattern": "(?<![A-Za-z0-9_])django(?![A-Za-z0-9_])",
+      "why": "Java Spring + Next BFF 역할을 중복하는 별도 제품 서버는 런타임/운영 비용을 추가한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6",
+      "serverOnly": false
+    },
+    {
+      "tech": "go-server",
+      "pattern": "(?<![A-Za-z0-9_])go(?![A-Za-z0-9_])",
+      "why": "별도 언어의 상시 서버는 기존 Java 17 서버와 포트폴리오 이야기를 분산한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96",
+      "serverOnly": true
+    },
+    {
+      "tech": "rust-server",
+      "pattern": "(?<![A-Za-z0-9_])rust(?![A-Za-z0-9_])",
+      "why": "별도 언어의 상시 서버는 기존 Java 17 서버와 포트폴리오 이야기를 분산한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96",
+      "serverOnly": true
+    },
+    {
+      "tech": "kotlin-server",
+      "pattern": "(?<![A-Za-z0-9_])kotlin(?![A-Za-z0-9_])",
+      "why": "별도 언어의 상시 서버는 기존 Java 17 서버와 포트폴리오 이야기를 분산한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96",
+      "serverOnly": true
+    },
+    {
+      "tech": "kafka",
+      "pattern": "(?<![A-Za-z0-9_])kafka(?![A-Za-z0-9_])",
+      "why": "새 큐 인프라에는 운영 근거가 필요하다; 기존 bounded queue의 한계를 먼저 입증한다.",
+      "instead": "기존 프로세스 내 bounded executor/queue 재사용 — main/java/com/example/lms/api/PublicRequestBudgetGuard.java:297"
+    },
+    {
+      "tech": "rabbitmq",
+      "pattern": "(?<![A-Za-z0-9_])rabbitmq(?![A-Za-z0-9_])",
+      "why": "새 큐 인프라에는 운영 근거가 필요하다; 기존 bounded queue의 한계를 먼저 입증한다.",
+      "instead": "기존 프로세스 내 bounded executor/queue 재사용 — main/java/com/example/lms/api/PublicRequestBudgetGuard.java:297"
+    },
+    {
+      "tech": "bullmq",
+      "pattern": "(?<![A-Za-z0-9_])bullmq(?![A-Za-z0-9_])",
+      "why": "새 큐 인프라에는 운영 근거가 필요하다; 기존 bounded queue의 한계를 먼저 입증한다.",
+      "instead": "기존 프로세스 내 bounded executor/queue 재사용 — main/java/com/example/lms/api/PublicRequestBudgetGuard.java:297"
+    },
+    {
+      "tech": "new-vector-db",
+      "pattern": "(?<![A-Za-z0-9_])(?:qdrant|weaviate|milvus|chromadb|chroma)(?![A-Za-z0-9_])|(?:새|new)\\s*(?:벡터\\s*(?:DB|데이터베이스)|vector\\s*(?:DB|database))",
+      "why": "새 벡터 DB 도입보다 기존 저장소 경계와 fallback을 우선한다.",
+      "instead": "기존 EmbeddingStore 경계 재사용 — main/java/com/example/lms/vector/config/FederatedVectorStorePatchConfig.java:52"
+    },
+    {
+      "tech": "new-rdbms",
+      "pattern": "(?:새|new)\\s*(?:RDBMS|관계형\\s*(?:DB|데이터베이스)|RDB|database)|(?<![A-Za-z0-9_])(?:cockroachdb|mariadb|postgresql|postgres)(?![A-Za-z0-9_])",
+      "why": "새 RDBMS 운영 전 기존 H2/MySQL JPA 소유자의 한계를 입증한다.",
+      "instead": "기존 H2/MySQL JPA 저장소 재사용 — main/java/com/example/lms/repository/ChatMessageRepository.java:15"
+    },
+    {
+      "tech": "docker-runtime",
+      "pattern": "(?<![A-Za-z0-9_])(?:docker|kubernetes|k8s)(?![A-Za-z0-9_])",
+      "why": "런타임 전환은 기존 실행 계약을 바꾼다; docs/agents-rules/DEMO1-PROTOTYPE-LIGHT.md:7",
+      "instead": "기존 BAT 런타임 진입점 재사용 — Start-RAG.bat:1"
+    },
+    {
+      "tech": "new-saas",
+      "pattern": "(?:새|new)\\s*SaaS(?:\\s*(?:계정|account))?",
+      "why": "새 SaaS 계정은 prototype-light 규칙에 직접 충돌한다 — docs/agents-rules/DEMO1-PROTOTYPE-LIGHT.md:8",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96",
+      "directConflict": true
+    },
+    {
+      "tech": "daemon",
+      "pattern": "(?:상시|새|new|persistent)\\s*(?:데몬|daemon)",
+      "why": "새 상시 데몬은 prototype-light 규칙에 직접 충돌한다 — docs/agents-rules/DEMO1-PROTOTYPE-LIGHT.md:8",
+      "instead": "파일 기반 검증 ticket 재사용 — scripts/coop_verify.py:6",
+      "directConflict": true
+    },
+    {
+      "tech": "background-watcher",
+      "pattern": "(?:새\\s*)?(?:백그라운드\\s*워처|background\\s*watcher)",
+      "why": "새 background watcher는 prototype-light 규칙에 직접 충돌한다 — docs/agents-rules/DEMO1-PROTOTYPE-LIGHT.md:8",
+      "instead": "파일 기반 검증 ticket 재사용 — scripts/coop_verify.py:6",
+      "directConflict": true
+    },
+    {
+      "tech": "state-server",
+      "pattern": "(?:새\\s*)?(?:상태\\s*서버|state\\s*server)",
+      "why": "새 state server는 coop-verify 규칙에 직접 충돌한다 — docs/agents-rules/DEMO1-COOP-VERIFY-RAILS.md:9",
+      "instead": "작업별 파일 journal 재사용 — scripts/work_journal.py:10",
+      "directConflict": true
+    },
+    {
+      "tech": "framework-rewrite",
+      "pattern": "(?:Spring|스프링).{0,35}(?:다른\\s*프레임워크|another\\s*framework)|(?:새\\s*프레임워크|new\\s*framework)",
+      "why": "대형 프레임워크 재작성 전에 현재 Spring 소유자에서 최소 변경을 우선한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96"
+    },
+    {
+      "tech": "node-server",
+      "pattern": "(?:새|new)\\s*(?:Node(?:\\.js)?|노드)\\s*(?:server|서버)|\\.listen\\s*\\(",
+      "serverOnly": true,
+      "why": "새 Node HTTP 서버는 기존 Spring/Next 소유자와 운영 역할을 중복한다.",
+      "instead": "Spring @RestController 재사용 — main/java/com/example/lms/api/ChatApiController.java:96; Next POST route handler 재사용 — frontend/src/app/api/chat/sync/route.js:6"
+    }
+  ],
+  "exemptions": {
+    "sameLibraryVersionChange": true,
+    "sameFamilyModules": [
+      "org.apache.lucene:lucene-",
+      "dev.langchain4j:langchain4j-",
+      "org.bsc.langgraph4j:langgraph4j-",
+      "org.springframework.boot:spring-boot-starter-",
+      "io.github.resilience4j:resilience4j-",
+      "com.squareup.retrofit2:"
+    ],
+    "testOnlyDependencies": [
+      "pytest",
+      "vitest",
+      "jest",
+      "@playwright/test",
+      "unittest"
+    ],
+    "readOnlyComparison": true,
+    "oneShotStdlibScripts": true
+  },
+  "actionPattern": "설치|(?<![A-Za-z0-9_])install(?![A-Za-z0-9_])|도입|추가|마이그레이션|전환|갈아타|새로\\s*만들|옮겨|띄우|재작성|(?<![A-Za-z0-9_])(?:introduce|add|adopt|migrate|rewrite|create|launch|switch)(?![A-Za-z0-9_])|(?:큐|queue).{0,25}(?:Kafka|RabbitMQ|BullMQ)로",
+  "serverContextPattern": "서버|server|런타임|runtime|백엔드|backend|listen\\s*\\(|express\\s*\\(|fastify\\s*\\("
+}

@@ -180,6 +180,29 @@ class AgentScopeLeaseTests(unittest.TestCase):
         flow = row["leaseConflictAutoflow"]
         self.assertEqual(flow["staleReclaim"]["reclaimed"], [])
 
+    def test_check_markdown_only_path_adds_guidance(self):
+        (self.root / "docs").mkdir(exist_ok=True)
+        (self.root / "docs" / "note.md").write_text("# note\n")
+        proc, row = self.call("check", "--path", "docs/note.md", expect=0)
+        self.assertTrue(row["allowed"])
+        self.assertIn("journal+checkpoint", row["markdownGuidance"])
+
+    def test_check_mixed_paths_skip_markdown_guidance(self):
+        (self.root / "docs").mkdir(exist_ok=True)
+        (self.root / "docs" / "note.md").write_text("# note\n")
+        proc, row = self.call("check", "--path", "docs/note.md",
+                              "--path", "target.txt", expect=0)
+        self.assertNotIn("markdownGuidance", row)
+
+    def test_claim_markdown_acquires_with_guidance(self):
+        (self.root / "docs").mkdir(exist_ok=True)
+        (self.root / "docs" / "note.md").write_text("# note\n")
+        proc, row = self.call("claim", "--agent", "devin",
+                              "--path", "docs/note.md", expect=0)
+        self.assertTrue(row["acquired"])
+        self.assertIn("journal+checkpoint", row["markdownGuidance"])
+        self.call("done", "--task", row["taskId"], expect=0)
+
     def test_attach_to_existing_task_releases_all_claims(self):
         first = self.claim(agent="codex")
         proc, second = self.call("claim", "--agent", "devin",

@@ -34,7 +34,12 @@ python -B scripts/codex_lane_plan.py --goal-key DEMO1-XXX-날짜 `
 - `write=` 목록이 계약이다. 범위 밖 파일이 필요하면 직접 고치지 말고
   INTEGRATOR 레인에 인계한다.
 
-## 3) 각 채팅의 첫 행동 — preflight
+## 3) 각 채팅의 첫 행동 — preflight (필수 1번 스텝)
+
+**모든 병렬 채팅의 필수 첫 명령이다 — 레인이 있든 없든, 첫 소스 쓰기 전에
+반드시 한 번 실행한다.** 2026-10-02 사고는 지시서에 이 줄이 빠져 두 채팅이
+같은 목표를 동시 착수하면서 일어났다. 이 한 줄이 같은 목표의 살아있는
+세션, 점유 파일, 미신고 편집을 단번에 보여 준다.
 
 ```powershell
 python -B scripts/codex_parallel_preflight.py --root . `
@@ -47,7 +52,7 @@ python -B scripts/codex_parallel_preflight.py --root . `
 | verdict | role | 의미 / 행동 |
 |---|---|---|
 | `CLEAR` | OWNER | 정상 착수. `nextCommands`의 claim → writer-begin → quota 순으로 진행 |
-| `DUPLICATE_GOAL_LIVE` | VERIFIER | 같은 목표의 살아있는 채팅 있음 → 읽기 전용 검증만, 수정 금지 |
+| `DUPLICATE_GOAL_LIVE` | VERIFIER | 같은 목표의 살아있는 채팅 있음 → 읽기 전용 검증만, 수정 금지. 상대는 `duplicates[]`의 `taskId`·`occupiedPaths`(claim·lease·writer가 실제 점유 중인 파일)로 식별 |
 | `DUPLICATE_GOAL_QUIET` | TAKEOVER | 상대가 오래 조용 → 상대 checkpoint postimage를 baseline으로 인수 |
 | `DUPLICATE_GOAL_HANDOFF` | TAKEOVER | 상대가 handoff.json 남김 → 그 패킷 필드대로 인수 |
 | `FOREIGN_CLAIM_OVERLAP` | WAIT | 다른 목표가 범위 일부 점유 → `freeScope`만 진행하거나 대기 |

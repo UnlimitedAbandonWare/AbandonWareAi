@@ -100,7 +100,7 @@ def synthetic_tool_result(monkeypatch, payload):
 def test_complete_tool_result_budget_counts_both_representations(monkeypatch, payload):
     response = synthetic_tool_result(monkeypatch, payload)
     encoded = json.dumps(response, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-    assert len(encoded) <= 262144
+    assert len(encoded) <= stdio.MAX_TOOL_RESULT_BYTES
     assert response["isError"] is True
     failure = response["structuredContent"]
     assert failure["reason"] == "tool_result_size_limit"
@@ -120,9 +120,9 @@ def test_small_tool_result_remains_complete_and_redacted(monkeypatch):
 def test_result_budget_is_inclusive_at_complete_envelope_boundary(monkeypatch):
     response = synthetic_tool_result(monkeypatch, "x")
     overhead = len(json.dumps(response, ensure_ascii=True, separators=(",", ":")).encode("utf-8")) - 2
-    payload_size = (262144 - overhead) // 2
+    payload_size = (stdio.MAX_TOOL_RESULT_BYTES - overhead) // 2
     at_limit = synthetic_tool_result(monkeypatch, "x" * payload_size)
     assert at_limit["isError"] is False
-    assert len(json.dumps(at_limit, ensure_ascii=True, separators=(",", ":")).encode("utf-8")) <= 262144
+    assert len(json.dumps(at_limit, ensure_ascii=True, separators=(",", ":")).encode("utf-8")) <= stdio.MAX_TOOL_RESULT_BYTES
     over_limit = synthetic_tool_result(monkeypatch, "x" * (payload_size + 1))
     assert over_limit["isError"] is True

@@ -206,6 +206,41 @@ class PreflightScenarios(unittest.TestCase):
         self.assertEqual(before,
                          hashlib.sha256(claim_path.read_bytes()).hexdigest())
 
+    def test_s9_duplicate_live_reports_peer_task_and_occupied_files(self):
+        # WP4: DUPLICATE_GOAL_LIVE 시 상대 taskId와 실제 점유 파일이 드러나야 한다.
+        task = "peer-same-goal-aaaabbbb"
+        self.peer_journal(task=task, age_min=3)
+        self.write_claim(task, "peer-topic", ["scripts/held.py"])
+        lock = (self.root / "__patch_drop__" / "source-edit-locks"
+                / "peer-topic.lock")
+        lock.mkdir(parents=True)
+        (lock / "lease.json").write_text(json.dumps({
+            "leaseId": "0" * 32, "topic": "peer-topic",
+            "taskIdHash": hashlib.sha256(task.encode()).hexdigest(),
+            "ownerProcessId": 0,
+            "expiresAtUtc": iso(now() + timedelta(hours=1)),
+            "targetPaths": ["scripts/leased.py"]}), encoding="utf-8")
+        coop = self.root / "data/agent-handoff/coop-verify"
+        coop.mkdir(parents=True)
+        (coop / "state.json").write_text(json.dumps({
+            "schemaVersion": "awx.coop-verify.v1",
+            "writers": {"b1": {"editBatchId": "b1", "taskId": task,
+                              "state": "EDITING",
+                              "heartbeatAtUtc": iso(now()),
+                              "changedPaths": ["scripts/writing.py"]}},
+            "tickets": {}}), encoding="utf-8")
+        proc, row = self.call(
+            "--goal-key", GOAL,
+            "--scope", "src/test/java,scripts/held.py,scripts/leased.py,scripts/writing.py")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-300:])
+        self.assertEqual(row["verdict"], "DUPLICATE_GOAL_LIVE")
+        dup = row["duplicates"][0]
+        self.assertEqual(dup["taskId"], task)
+        self.assertEqual(sorted(dup["occupiedPaths"]),
+                         ["scripts/held.py", "scripts/leased.py",
+                          "scripts/writing.py"])
+        self.assertIn(task, row["summaryKo"])
+
     def test_s8_case_and_backslash_paths_match(self):
         self.write_journal("peer-case-gggghhhh",
                            f"{GOAL}: case twin",

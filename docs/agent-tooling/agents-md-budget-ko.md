@@ -34,8 +34,11 @@
 python -B scripts\agents_md_budget.py check
 ```
 
-exit 0이어야 한다. 실패 조건: 전체 30,000 B 초과 / 핵심 블록이 24,000 B
+exit 0이어야 한다. 실패 조건: 전체 30,300 B 초과 / 핵심 블록이 24,000 B
 뒤 / 필수 `##` 제목 소실 / BEGIN-END 짝 어긋남. `report`로 예산별 절단
 위치를 본다. 되돌리기는 `restore --from <백업>`.
 
 도구: `scripts/agents_md_budget.py` · 스킬: `.agents/skills/demo1-agents-md-budget/SKILL.md`
+
+2026-10-04 Stack-Fit Gate: 기존 29,971 B 본문을 보존하고 승인된 ≤300 B 포인터를
+추가하기 위해 전체 상한만 300 B 늘렸다. 24,000 B 핵심 제한과 32 KiB 읽기 예산은 유지한다.

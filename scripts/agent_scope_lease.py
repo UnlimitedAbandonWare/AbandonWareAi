@@ -46,6 +46,8 @@ JOURNAL_PY = SCRIPT_DIR / "work_journal.py"
 AUTOFLOW_PY = SCRIPT_DIR / "lease_conflict_autoflow.py"
 MAX_ITEMS = 64
 MAX_TEXT = 400
+MARKDOWN_GUIDE = ("Markdown 문서는 독점 lease 없이 journal+checkpoint 권장"
+                  "(DEMO1-WORK-LEDGER §2)")
 
 _BAD_CHARS = re.compile(r'[:<>"|?*\x00-\x1f]')
 _RESERVED_NAME = re.compile(r'(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)')
@@ -376,6 +378,12 @@ def cmd_who(root: Path, args) -> int:
     return 0
 
 
+def markdown_only(doc: dict) -> bool:
+    return (bool(doc.get("targets")) and not doc.get("reservePaths")
+            and all(str(t.get("path", "")).endswith(".md")
+                    for t in doc["targets"]))
+
+
 def cmd_check(root: Path, args) -> int:
     if not args.path and not args.reserve_path and not args.feature:
         raise ScopeError("check-needs-path-or-feature")
@@ -386,6 +394,8 @@ def cmd_check(root: Path, args) -> int:
     if args.path or args.reserve_path:
         doc = build_manifest(root, args.path or [], args.reserve_path or [],
                              require_file=False)
+        if markdown_only(doc):
+            result["markdownGuidance"] = MARKDOWN_GUIDE
         goal_paths = [t["path"] for t in doc["targets"]] + list(doc.get("reservePaths") or [])
         if doc["targets"]:
             fd, manifest_path = tempfile.mkstemp(suffix=".json",
@@ -393,7 +403,12 @@ def cmd_check(root: Path, args) -> int:
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
                     json.dump(doc, handle)
-                proc = run_ps(root, "status", manifest=manifest_path, want_json=True)
+                # Windows 임시경로를 ps1이 그대로 받도록 POSIX형으로 정규화한다
+                # (역슬래시 경로는 status -TargetManifest에서
+                # target-evidence-unavailable을 유발할 수 있다).
+                manifest_posix = Path(manifest_path).resolve().as_posix()
+                proc = run_ps(root, "status", manifest=manifest_posix,
+                              want_json=True)
             finally:
                 try:
                     os.unlink(manifest_path)
@@ -472,6 +487,7 @@ def cmd_claim(root: Path, args) -> int:
     doc = build_manifest(root, args.path or [], args.reserve_path or [])
     if len(doc["targets"]) + len(doc.get("reservePaths", [])) > MAX_ITEMS:
         raise ScopeError("claim-too-many-targets")
+    markdown_note = MARKDOWN_GUIDE if markdown_only(doc) else None
     regions = parse_regions(args.region)
     features = [str(f).strip()[:80] for f in (args.feature or []) if str(f).strip()]
 
@@ -553,6 +569,7 @@ def cmd_claim(root: Path, args) -> int:
                       "targets": doc["targets"],
                       "reservePaths": doc.get("reservePaths", []),
                       "features": features, "regions": regions,
+                      "markdownGuidance": markdown_note,
                       "ttlMinutes": args.ttl}, ensure_ascii=True))
     return 0
 

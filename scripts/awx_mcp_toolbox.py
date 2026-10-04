@@ -3408,7 +3408,12 @@ def boot_verify(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_error_mine(payload: dict[str, Any]) -> dict[str, Any]:
-    log_path = resolve_path(payload.get("log_path") or payload.get("build_log") or "build.log")
+    requested = payload.get("log_path") or payload.get("build_log")
+    log_path = resolve_path(requested or "build.log")
+    if not log_path.exists():
+        fallback = build_log_fallback_path(log_path)
+        if fallback is not None:
+            log_path = fallback
     if not log_path.exists():
         return {
             "classes": {},
@@ -3430,11 +3435,34 @@ def build_error_mine(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "logHash": stable_hash(str(log_path)),
         "logPathLength": len(str(log_path)),
+        "resolvedLogPath": log_path.as_posix(),
         "classes": classes,
         "primaryClass": next(iter(classes.keys()), "other"),
         "outputCount": sum(classes.values()),
         "decision": "build_log_mined",
     }
+
+
+def build_log_fallback_path(skip: Path) -> Path | None:
+    candidates = [
+        resolve_path("build/desktop/build.log"),
+        resolve_path("build/build.log"),
+    ]
+    diagnostics = resolve_path("var/diagnostics")
+    if diagnostics.is_dir():
+        candidates.extend(sorted(
+            (p for p in diagnostics.glob("*.log") if p.is_file()),
+            key=lambda p: p.stat().st_mtime, reverse=True))
+    candidates.append(resolve_path("build.log"))
+    build_dir = resolve_path("build")
+    if build_dir.is_dir():
+        candidates.extend(sorted(
+            (p for p in build_dir.glob("*.log") if p.is_file()),
+            key=lambda p: p.stat().st_mtime, reverse=True))
+    for candidate in candidates:
+        if candidate != skip and candidate.is_file():
+            return candidate
+    return None
 
 
 def run_pipeline(payload: dict[str, Any]) -> dict[str, Any]:

@@ -1459,6 +1459,23 @@ intents:
     forbid_families: []
     notes: Pointer only. SSOT is docs/RAG_SPARSE_STATUS.md. Product edits stay with Codex.
 
+  - intent: stack-fit-pushback
+    explicit: false
+    match:
+      - 're:(?i)(?<![A-Za-z0-9_])(?:nestjs|nest\.js|fastapi)(?![A-Za-z0-9_]).{0,40}(?:도입|추가|전환|옮겨|설치|introduce|add|adopt|migrate|install)'
+      - 're:네스트\s*(?:JS|제이\s*에스).{0,40}(?:도입|추가|전환|설치)'
+      - 새 프레임워크
+      - 프레임워크 도입
+      - 프레임워크 추가
+      - 스택 전환
+      - 포트폴리오용
+      - 이력서용
+      - 're:(?i)(도입|추가|전환|갈아타|마이그레이션).{0,12}(서버|프레임워크|큐|kafka|docker|nestjs|nest\.js|fastapi)'
+    primary_skill: demo1-stack-fit-pushback
+    optional_skill: demo1-vibe-selfask-judge-auto
+    forbid_families: []
+    notes: 새 스택 도입과 자기 제안의 부분 거절/기존 대안; SSOT configs/stack-fit.yaml, 읽기 전용 비교와 기존 버그 수정은 제외.
+
 fallback:
   primary_skill: demo1-vibe-max-agency
   development_signals:

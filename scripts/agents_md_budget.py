@@ -30,7 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 AGENTS_MD = ROOT / "AGENTS.md"
 DOCS_RULES_DIR = ROOT / "docs" / "agents-rules"
 
-HARD_LIMIT = 30_000
+# Existing rules plus the authorized <=300-byte Stack-Fit pointer still fit
+# the default 32 KiB reader; critical rules retain their separate 24 KiB cap.
+HARD_LIMIT = 30_300
 CRITICAL_LIMIT = 24_000
 BUDGETS = (24_000, 32_768, 65_536)
 
