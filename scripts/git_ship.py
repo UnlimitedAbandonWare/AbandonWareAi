@@ -744,7 +744,15 @@ def cmd_push(g: Git, args) -> dict:
         argv.append("--no-verify")
     rc, _o, e = g.run(argv, timeout=600)
     if rc != 0:
-        raise ShipError(EXIT_ERROR, f"git push failed: {sanitize(e)}")
+        # Hooks emit diagnostics on stdout; retain only rule/reason codes.
+        rules = {}
+        for rule in re.findall(r"\[AWX\]\[git-guard\]\[BLOCK\].*? rule=([a-z-]+)", _o):
+            rules[rule] = rules.get(rule, 0) + 1
+        reasons = re.findall(r"\[publish-review\]\[reason\] ([a-z-]+)", _o)
+        detail = "pre-push guard: " + ", ".join(f"{rule}={n}" for rule, n in sorted(rules.items())) if rules else ""
+        if reasons:
+            detail += ("; " if detail else "") + "publish-review: " + ", ".join(sorted(set(reasons)))
+        raise ShipError(EXIT_ERROR, f"git push failed: {detail or sanitize(e)}")
     remote_sha = ls_remote_sha(g, remote, branch)
     head = head_sha(g)
     if remote_sha != head:

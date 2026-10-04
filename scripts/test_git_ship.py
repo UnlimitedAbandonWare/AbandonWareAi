@@ -470,5 +470,27 @@ class SelectedCommitCase(ShipCase):
         self.assertEqual(self.head(),before)
         self.assertEqual(self.staged(),{'foreign.txt':'A'})
 
+
+class PushFailureDetailCase(ShipCase):
+    def test_hook_stdout_reason_codes_are_retained_without_values(self):
+        from scripts import git_ship as gs,git_ship_easy as ge
+        from unittest import mock
+        git(self.repo,'checkout','-b','ship/detail')
+        g=gs.Git(str(self.repo),GIT);real=g.run
+        marker='gsk_'+'A'*24
+        output='[AWX][git-guard][BLOCK] path=private.txt line=7 rule=openai detail='+marker+'\n'
+        def run(argv,**kw):
+            if 'push' in argv:return 1,output,'error: failed to push some refs'
+            return real(argv,**kw)
+        with mock.patch.dict(os.environ,{'AWX_PUBLISH_APPROVED':'1'}),mock.patch.object(g,'run',side_effect=run):
+            with self.assertRaises(gs.ShipError) as error:gs.cmd_push(g,ge._push_args(True))
+        self.assertIn('pre-push guard: openai=1',error.exception.message)
+        self.assertNotIn(marker,error.exception.message)
+        self.assertNotIn('private.txt',error.exception.message)
+        captured=[]
+        ge._fail_ship({},'push',error.exception,captured.append)
+        self.assertIn('pre-push guard: openai=1','\n'.join(captured))
+        self.assertNotIn(marker,'\n'.join(captured))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
