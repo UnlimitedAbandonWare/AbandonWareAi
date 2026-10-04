@@ -134,7 +134,7 @@ public class WeightedReciprocalRankFuser {
             }
             w[i] = (weight > 0.0) ? weight : 1.0;
         }
-        Map<String, Double> scores = new HashMap<>();
+        Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Content> firstAppearance = new LinkedHashMap<>();
         Map<String, List<Double>> sourceContributions = new LinkedHashMap<>();
         Map<String, Integer> firstRank = new HashMap<>();

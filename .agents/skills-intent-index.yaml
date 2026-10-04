@@ -1476,6 +1476,22 @@ intents:
     forbid_families: []
     notes: 새 스택 도입과 자기 제안의 부분 거절/기존 대안; SSOT configs/stack-fit.yaml, 읽기 전용 비교와 기존 버그 수정은 제외.
 
+  - intent: web-search-probe
+    match:
+      - 웹서치 탐침
+      - 특수 탐침
+      - Exa 탐침
+      - 에러 웹검색
+      - 웹서치 최적화
+      - web search probe
+      - 에러 지문 검색
+      - 해결력 강화 검색
+      - 웹서치 특수
+    primary_skill: demo1-web-search-probe
+    optional_skill: null
+    forbid_families: []
+    notes: 미지 에러→지문 정제→4대 탐침 플레이트(T1공식/T2이슈/T3재현/T4교차) 쿼리+3KB 골든 컨텍스트; 도구 scripts/web_search_probe_optimizer.py
+
 fallback:
   primary_skill: demo1-vibe-max-agency
   development_signals:

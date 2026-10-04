@@ -4,6 +4,7 @@ Contract DEMO1-DEVIN-COOP-VERIFY-RAILS-FOR-CODEX-20260928 — temporary roots an
 fake writer/build commands only; no Gradle, no product code, no live leases.
 """
 import contextlib
+from copy import deepcopy
 import importlib.util
 import io
 import json
@@ -98,6 +99,223 @@ class CoopVerifyTest(unittest.TestCase):
     def state(self):
         return CV.load_state(self.store_dir())
 
+    def test_request_equivalence_keeps_different_commands(self):
+        first = self.request(command=self.counter_cmd(0))
+        second = self.request(agent="other", command=self.counter_cmd(7))
+        self.assertNotEqual(first["ticketId"], second["ticketId"])
+        self.assertFalse(second["merged"])
+        code, result = self._call(CV.cmd_run_once, self.args(ticket=first["ticketId"]))
+        self.assertEqual((code, result["state"]), (0, "VERIFIED_PASS"))
+        self.assertIn(self.state()["tickets"][second["ticketId"]]["state"], CV.TICKET_OPEN)
+        code, result = self._call(CV.cmd_run_once, self.args(ticket=second["ticketId"]))
+        self.assertEqual((code, result["state"]), (CV.EXIT_FAILED, "FAILED"))
+        receipt = json.loads((self.store_dir() / result["receiptPath"]).read_text())
+        self.assertEqual(receipt["verifyCommand"], self.counter_cmd(7))
+        self.assertEqual((receipt["exitCode"], receipt["verdict"]), (7, "FAILED"))
+        self.assertEqual(self.counter.read_text(), "2")
+
+    def test_request_equivalence_keeps_overlapping_scopes(self):
+        first = self.request(scope=("src",))
+        second = self.request(agent="other", scope=("src/watched.py",),
+                              command=self.counter_cmd(7))
+        self.assertFalse(second["merged"])
+        code, _ = self._call(CV.cmd_run_once, self.args(ticket=first["ticketId"]))
+        self.assertEqual(code, 0)
+        self.assertIn(self.state()["tickets"][second["ticketId"]]["state"], CV.TICKET_OPEN)
+        code, result = self._call(CV.cmd_run_once, self.args(ticket=second["ticketId"]))
+        self.assertEqual(code, CV.EXIT_FAILED)
+        receipt = json.loads((self.store_dir() / result["receiptPath"]).read_text())
+        self.assertEqual(receipt["verifyCommand"], self.counter_cmd(7))
+        self.assertEqual((receipt["exitCode"], receipt["verdict"]), (7, "FAILED"))
+        self.assertEqual(self.counter.read_text(), "2")
+
+    def test_request_equivalence_keeps_distinct_contracts(self):
+        cases = [
+            ("task", {"task": "separate-task"}, "taskId", "separate-task"),
+            ("profile", {"profile": "separate-profile"}, "profile", "separate-profile"),
+            ("stages", {"stage": ["compile", "tests"]}, "requiredStages", ["compile", "tests"]),
+            ("timeout", {"timeout_seconds": self.cfg["build_timeout_seconds"] + 1},
+             "timeoutSeconds", self.cfg["build_timeout_seconds"] + 1),
+            ("identity", {"target_identity": "different-input"}, "targetIdentity", "different-input"),
+            ("mode", {"target_mode": "exact"}, "targetMode", "exact"),
+        ]
+        fields = ("taskId", "profile", "requiredStages", "timeoutSeconds",
+                  "targetIdentity", "targetMode", "verifyCommand", "scope", "requester")
+        for name, kwargs, field, value in cases:
+            with self.subTest(contract=name):
+                CV.save_state(self.store_dir(), CV.empty_state())
+                first = self.request(agent="original")
+                original = deepcopy(self.state()["tickets"][first["ticketId"]])
+                second = self.request(agent="other", **kwargs)
+                self.assertNotEqual(first["ticketId"], second["ticketId"])
+                self.assertFalse(second["merged"])
+                current = self.state()["tickets"]
+                self.assertEqual(len(current), 2)
+                self.assertEqual({f: current[first["ticketId"]][f] for f in fields},
+                                 {f: original[f] for f in fields})
+                self.assertEqual(current[second["ticketId"]][field], value)
+                self.assertEqual(current[second["ticketId"]]["requester"], "other")
+
+    def test_request_equivalence_merges_true_duplicates_once(self):
+        first = self.request(agent="original", profile=None,
+                             scope=("src/watched.py", "src"))
+        state = self.state()
+        oldest = "2000-01-01T00:00:00+00:00"
+        state["tickets"][first["ticketId"]]["requestedAtUtc"] = oldest
+        CV.save_state(self.store_dir(), state)
+        second = self.request(agent="other", profile="default",
+                              scope=("src", "src/watched.py", "src"),
+                              stage=["verifyCommand"], timeout_seconds=0)
+        self.assertTrue(second["merged"])
+        self.assertEqual(second["ticketId"], first["ticketId"])
+        ticket = self.state()["tickets"][first["ticketId"]]
+        self.assertEqual(ticket["requestedAtUtc"], oldest)
+        self.assertEqual(ticket["requester"], "original")
+        self.assertEqual(len(ticket["coveredRequests"]), 1)
+        self.assertEqual(ticket["coveredRequests"][0]["requester"], "other")
+        self.assertEqual(ticket["coveredRequests"][0]["taskId"], "t-task")
+        self.assertEqual(ticket["coveredRequests"][0]["verifyCommand"], self.counter_cmd())
+        self.assertEqual(len(self.state()["tickets"]), 1)
+        code, result = self.run_once()
+        self.assertEqual((code, result["state"]), (0, "VERIFIED_PASS"))
+        self.assertEqual(self.counter.read_text(), "1")
+        self.assertEqual(len(list((self.store_dir() / "receipts").glob("*.json"))), 1)
+        code, replay = self._call(CV.cmd_run_once, self.args(ticket=first["ticketId"]))
+        self.assertEqual(code, CV.EXIT_NO_TICKET)
+        self.assertEqual(replay["state"], "NO_PENDING_TICKET")
+        self.assertEqual(self.counter.read_text(), "1")
+
+    def test_request_equivalence_nonpass_preserves_pending(self):
+        for verdict in ("FAILED", "INVALIDATED", "TIMEOUT", "VERIFIED_PASS"):
+            with self.subTest(verdict=verdict):
+                CV.save_state(self.store_dir(), CV.empty_state())
+                self.counter.unlink(missing_ok=True)
+                (self.root / "src/watched.py").write_text("x = 1\n")
+                command = self.counter_cmd(7 if verdict == "FAILED" else 0)
+                if verdict == "INVALIDATED":
+                    command[2] = command[2].replace(
+                        "sys.exit(0)", "pathlib.Path('src/watched.py').write_text('changed'); sys.exit(0)")
+                if verdict == "TIMEOUT":
+                    command = [sys.executable, "-c", "import time; time.sleep(5)"]
+                first = self.request(command=command, timeout_seconds=1)
+                state = self.state()
+                pending = deepcopy(state["tickets"][first["ticketId"]])
+                pending["ticketId"] = "legacy-pending"
+                pending["requester"] = pending["agent"] = "other"
+                state["tickets"][pending["ticketId"]] = pending
+                CV.save_state(self.store_dir(), state)
+                code, result = self._call(CV.cmd_run_once, self.args(ticket=first["ticketId"]))
+                expected_code = {"FAILED": CV.EXIT_FAILED, "INVALIDATED": CV.EXIT_INVALIDATED,
+                                 "TIMEOUT": CV.EXIT_ENV, "VERIFIED_PASS": 0}[verdict]
+                self.assertEqual((code, result["state"]), (expected_code, verdict))
+                receipt = json.loads((self.store_dir() / result["receiptPath"]).read_text())
+                self.assertEqual(receipt["verdict"], verdict)
+                self.assertEqual(receipt["verifyCommand"], command)
+                if verdict == "FAILED":
+                    self.assertEqual(receipt["exitCode"], 7)
+                remaining = self.state()["tickets"][pending["ticketId"]]
+                if verdict == "VERIFIED_PASS":
+                    self.assertEqual(remaining["state"], "SUPERSEDED")
+                    self.assertEqual(remaining["supersededBy"], first["ticketId"])
+                else:
+                    self.assertIn(remaining["state"], CV.TICKET_OPEN)
+                    self.assertIsNone(remaining["supersededBy"])
+                self.assertIsNone(remaining["receiptPath"])
+                self.assertFalse((self.store_dir() / "receipts/legacy-pending.json").exists())
+                if verdict == "TIMEOUT":
+                    self.assertFalse(self.counter.exists())
+                else:
+                    self.assertEqual(self.counter.read_text(), "1")
+
+    def test_request_equivalence_unknown_inputs_do_not_merge(self):
+        fields = ("taskId", "profile", "targetMode", "targetIdentity", "scope",
+                  "verifyCommand", "requiredStages", "timeoutSeconds")
+        malformed = {"taskId": 1, "profile": [], "targetMode": 1,
+                     "targetIdentity": [], "scope": "src", "verifyCommand": "python",
+                     "requiredStages": "verifyCommand", "timeoutSeconds": True}
+        cases = [("unknown", "taskId", "unknown")]
+        cases += [("missing-" + f, f, None) for f in fields]
+        cases += [("bad-type-" + f, f, malformed[f]) for f in fields]
+        cases += [("bad-scope-item", "scope", [1]),
+                  ("bad-command-item", "verifyCommand", [1]),
+                  ("bad-stage-item", "requiredStages", [1])]
+        for name, field, value in cases:
+            with self.subTest(legacy=name):
+                CV.save_state(self.store_dir(), CV.empty_state())
+                first = self.request()
+                state = self.state()
+                complete = deepcopy(state["tickets"][first["ticketId"]])
+                legacy = state["tickets"][first["ticketId"]]
+                if name.startswith("missing-"):
+                    del legacy[field]
+                else:
+                    legacy[field] = value
+                legacy_fields = {f: deepcopy(legacy[f]) for f in fields if f in legacy}
+                CV.save_state(self.store_dir(), state)
+                second = self.request(agent="other", task="unknown" if name == "unknown" else "t-task")
+                self.assertFalse(second["merged"])
+                self.assertNotEqual(second["ticketId"], first["ticketId"])
+                current = self.state()
+                done = deepcopy(complete)
+                done.update(ticketId="finished", state="VERIFIED_PASS")
+                CV._supersede_stale_open(current, done, CV.datetime.now(CV.timezone.utc))
+                self.assertIn(current["tickets"][first["ticketId"]]["state"], CV.TICKET_OPEN)
+                self.assertEqual({f: current["tickets"][first["ticketId"]][f]
+                                  for f in fields if f in current["tickets"][first["ticketId"]]},
+                                 legacy_fields)
+                self.assertEqual(current["tickets"][second["ticketId"]]["state"],
+                                 "SUPERSEDED" if name != "unknown" else second["state"])
+
+    def test_recover_invalidates_dead_verifier_without_lock(self):
+        from unittest.mock import patch
+        first = self.request()
+        state = self.state()
+        ticket = state["tickets"][first["ticketId"]]
+        ticket.update(state="VERIFYING", verifierPid=999999)
+        before = deepcopy(ticket)
+        CV.save_state(self.store_dir(), state)
+        with patch.object(CV.ck, "pid_alive", return_value=False):
+            code, _ = self._call(CV.cmd_recover, self.args())
+        self.assertEqual(code, 0)
+        after = self.state()["tickets"][first["ticketId"]]
+        self.assertEqual(after["state"], "INVALIDATED")
+        self.assertEqual({k: v for k, v in after.items() if k != "state"},
+                         {k: v for k, v in before.items() if k != "state"})
+        self.assertFalse(self.counter.exists())
+        self.assertFalse((self.store_dir() / "receipts").exists())
+
+    def test_recover_preserves_live_or_locked_verifiers(self):
+        from unittest.mock import patch
+        cases = [("alive", os.getpid(), True, None),
+                 ("live-lock", 999999, False, os.getpid()),
+                 ("dead-lock", 999999, False, 999999),
+                 ("directory-lock", 999999, False, "directory"),
+                 ("unknown-probe", 999999, None, None)]
+        cases += [("bad-pid-" + str(i), pid, False, None)
+                  for i, pid in enumerate((None, "999999", True, 0, -1))]
+        lock = self.store_dir() / ".verify.lock"
+        for name, pid, alive, lock_pid in cases:
+            with self.subTest(safety=name):
+                if lock.is_dir():
+                    lock.rmdir()
+                else:
+                    lock.unlink(missing_ok=True)
+                first = self.request(task=name)
+                state = self.state()
+                state["tickets"][first["ticketId"]].update(state="VERIFYING", verifierPid=pid)
+                before = deepcopy(state["tickets"][first["ticketId"]])
+                CV.save_state(self.store_dir(), state)
+                if lock_pid == "directory":
+                    lock.mkdir()
+                elif lock_pid is not None:
+                    lock.write_text(json.dumps({"pid": lock_pid}))
+                with patch.object(CV.ck, "pid_alive", side_effect=lambda p:
+                                  True if p == os.getpid() else alive):
+                    code, _ = self._call(CV.cmd_recover, self.args())
+                self.assertEqual(code, 0)
+                self.assertEqual(self.state()["tickets"][first["ticketId"]], before)
+                self.assertFalse(self.counter.exists())
+
     def test_released_writer_history_is_archived_before_reusing_bounded_slot(self):
         state = CV.empty_state()
         state["writers"] = {
@@ -155,7 +373,7 @@ class CoopVerifyTest(unittest.TestCase):
                          "verify must not run while a foreign writer edits")
         self.assertEqual(self.state()["tickets"][req["ticketId"]]["state"], "DEFERRED")
 
-    # -- happy path: VERIFIED_PASS + receipt + overlapping pending SUPERSEDED --
+    # -- happy path: VERIFIED_PASS + receipt + independent overlapping pending --
     def test_pass_receipt_and_supersede(self):
         first = self.request(scope=("src",))
         self.assertEqual(first["state"], "WAITING_FOR_RUNNER")
@@ -170,8 +388,13 @@ class CoopVerifyTest(unittest.TestCase):
         data = json.loads(receipt.read_text(encoding="utf-8"))
         self.assertEqual(data["verdict"], "VERIFIED_PASS")
         self.assertEqual(data["exitCode"], 0)
-        self.assertEqual(self.state()["tickets"][overlapping["ticketId"]]["state"],
-                         "SUPERSEDED")
+        self.assertIn(self.state()["tickets"][overlapping["ticketId"]]["state"], CV.TICKET_OPEN)
+        code, result = self._call(CV.cmd_run_once, self.args(ticket=overlapping["ticketId"]))
+        self.assertEqual((code, result["ticketId"]), (0, overlapping["ticketId"]))
+        own_receipt = json.loads((self.store_dir() / result["receiptPath"]).read_text())
+        self.assertEqual(own_receipt["verifyCommand"], self.counter_cmd())
+        self.assertEqual(own_receipt["verdict"], "VERIFIED_PASS")
+        self.assertEqual(self.counter.read_text(), "2")
 
     # -- T2: single heavy verifier -------------------------------------------
     def test_t2_second_verifier_is_deferred(self):

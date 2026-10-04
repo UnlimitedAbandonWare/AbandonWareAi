@@ -4,7 +4,6 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.rag.content.Content;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -27,7 +26,8 @@ public class ReciprocalRankFuser {
         if (sourceLists == null || sourceLists.isEmpty()) {
             return List.of();
         }
-        Map<String, Double> scores = new HashMap<>();
+        // Preserve first-seen order when the stable score sort encounters ties.
+        Map<String, Double> scores = new LinkedHashMap<>();
         Map<String, Content> firstSeen = new LinkedHashMap<>();
         for (List<Content> source : sourceLists) {
             if (source == null) {

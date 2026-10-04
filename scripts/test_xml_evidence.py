@@ -122,6 +122,8 @@ def classify_verdict(log_text: str, xml: dict, gradle_exit: int | None) -> dict:
     compile_hits = _hit(COMPILE_FAIL_PATTERNS, text)
     test_task_hits = _hit(TEST_TASK_FAIL_PATTERNS, text)
     no_source = bool(NO_SOURCE_PATTERN.search(text))
+    # An empty sibling module must not veto an executed root test with XML.
+    root_test_executed = bool(re.search(r"(?m)^>\s*Task :test[ \t]*\r?$", text))
     failed = bool(failure_markers) or bool(config_hits) or bool(compile_hits) or bool(test_task_hits)
     xml_failures = xml["failures"] + xml["errors"]
 
@@ -131,7 +133,7 @@ def classify_verdict(log_text: str, xml: dict, gradle_exit: int | None) -> dict:
         verdict, note = "BASELINE_BLOCKED", "config/compile failure -- not a valid RED"
     elif xml_failures > 0 or test_task_hits:
         verdict, note = "RED", "test task failed"
-    elif no_source or xml["executed"] == 0:
+    elif (no_source and not root_test_executed) or xml["executed"] == 0:
         if gradle_exit not in (0, None):
             verdict, note = "BASELINE_BLOCKED", "nonzero exit, no test evidence"
         elif not no_source and not test_task_hits:

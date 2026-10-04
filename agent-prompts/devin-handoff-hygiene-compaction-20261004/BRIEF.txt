@@ -1,0 +1,93 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 용도가 아닙니다. 0번부터 마지막 항목까지 순서대로 실행하고 결과를 남기세요.
+@demo1-artifact-trace-curator
+
+# 0. 한 줄 목표
+`data/agent-handoff/devin-skill-friction-8eeb784c`에 방치된 202MB 더미 파일 2개를 tombstone 메타데이터로 교체하여 201.99MB를 즉시 회수하고, 핸드오프 내 무단 대용량 바이너리 방치를 영구 차단·진단하는 위생 가드 스크립트 `scripts/agent_handoff_hygiene.py` 및 테스트를 작성한다.
+
+## 1. 사실 (2026-10-04 22:15 KST 기준 라이브 트리 실측치)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/big.log` : 103,200,000 B (98.42 MB), sha12=be134435843c, 내용 100% 'x' 반복 더미
+- `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/biglog.bin` : 108,600,000 B (103.57 MB), sha12=cb6743c01e08, 내용 100% 'x' 반복 더미
+- `data/agent-handoff/` 전체 용량 683.60 MB 중 상기 2개 더미 파일이 201.99 MB (약 29.5%)를 단독 점유함.
+- `Safe-Cleanup.bat` (`scripts/demo1_safe_cleanup.ps1`)은 안전상 `data/`와 `var/`를 전면 거부(DENIED) 목록에 두어 핸드오프 비대화를 정리하지 못함.
+- `demo1-artifact-trace-curator`는 `mutationAllowed=false`, `deleteAuthorized=false` 계약으로 단순 읽기 전용 인벤토리만 수행함.
+- 작업 권한: 스크립트 및 핸드오프 도구 작성 영역(`scripts/`, `data/agent-handoff/devin-skill-friction-8eeb784c/`). 제품 소스(`main/`, `src/`) 수정 없음.
+
+## 2. 공통 규칙
+- 첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+- Git 명령 일체 금지 (no git add/commit/push/status/restore/reset).
+- 제품 런타임 소스(`main/java`, `main/resources`, `src/test/java`) 및 `var/meta-display-db/lmsdb.mv.db` 절대 수정 금지.
+- 외부 유료 API 호출 0회 ($0).
+- 라우팅: 상단 @demo1-artifact-trace-curator 준수.
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+
+## 3. 항목 (DV-01 ~ DV-04)
+
+### DV-01: 더미 바이너리 201.99MB 즉시 회수 및 Tombstone 발행
+- 타깃 파일:
+  - `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/big.log`
+  - `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/biglog.bin`
+- 사전 검증: 두 파일이 실제 'x' 반복 더미인지 앞뒤 1KB 검사.
+- 조치: 두 파일을 삭제하기 전, `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/tombstone.json` 생성.
+  - JSON 필드:
+    - `schemaVersion`: "awx.evidence_tombstone.v1"
+    - `timestampKst`: "2026-10-04 22:15:00 KST"
+    - `prunedFiles`:
+      - `{ "relPath": "big.log", "bytes": 103200000, "sha256": "be134435843c08845fc86d1ee831cbbab67c69ecfec6da85f9c4501a1c43e498", "reason": "dummy_x_character_test_residue" }`
+      - `{ "relPath": "biglog.bin", "bytes": 108600000, "sha256": "cb6743c01e089d71c4cbe27ad6e2d83296c0032b4bfae5cb19e8cf19c3547ea8", "reason": "dummy_x_character_test_residue" }`
+    - `recoveredBytes`: 211800000
+    - `recoveredMb`: 201.99
+- 삭제 완료 후 두 파일 부재 확인(`Test-Path` -> False) 및 `tombstone.json` 존재 확인.
+
+### DV-02: codex-autonomy 내 데빈 잔여물 8MB 거대 JSON 경량화
+- 타깃 파일:
+  - `data/agent-handoff/codex-autonomy/devin-report-script-triage-33e668d9/archive-plan.json` (9,298,275 B)
+  - `data/agent-handoff/codex-autonomy/devin-copy-residue-cleanup-fb5e4ceb/plan-replan.json` (8,519,277 B)
+- 조치: 위 8MB JSON들의 핵심 카운트/요약/해시를 담은 `archive-plan.summary.json` 및 `plan-replan.summary.json` (< 100 KB)을 생성하고, 원본 거대 JSON은 gzip 압축(`*.json.gz`)하여 파일 크기를 90% 이상 절감 보존하거나 원본 대체.
+
+### DV-03: 핸드오프 위생·경량화 가드 스크립트 작성 (`scripts/agent_handoff_hygiene.py`)
+- Python 표준 라이브러리만 사용 (zero-dependency).
+- 서브커맨드 / CLI 옵션:
+  - `scan [--root .] [--threshold-mb 5.0]`: `data/agent-handoff` 내 threshold 초과 대용량 파일, 더미 패턴('x' 반복, 널바이트 덩어리), 500개 이상 파편화된 디렉터리 검출 보고서 출력.
+  - `check [--root .] [--max-file-mb 10.0]`: 핸드오프 내 미승인 10MB 초과 바이너리가 존재하면 exit 1, 깨끗하면 exit 0 반환 (CI/검증용).
+  - `prune-dummy --file <relpath> [--dry-run]`: 검증된 더미 파일을 tombstone 메타데이터 남기고 안전 회수.
+
+### DV-04: 단위 테스트 작성 및 통과 검증 (`scripts/test_agent_handoff_hygiene.py`)
+- `unittest` 기반 격리 테스트 작성:
+  - 임시 디렉터리에 더미 파일(5MB 초과 'x' 반복) 및 정상 증거 파일(markdown/json) 생성.
+  - `scan` 시 더미 파일 정확 감지 검증.
+  - `check` 시 10MB 초과 바이너리 존재 시 exit 1, 없을 시 exit 0 검증.
+  - `prune-dummy` 시 tombstone.json 발행 및 용량 회수 검증.
+- 실행: `python -B scripts/test_agent_handoff_hygiene.py; "exit=$LASTEXITCODE"` -> exit 0 필수.
+
+## 4. HOLD 조건
+- `evidence/big.log` 또는 `evidence/biglog.bin`에 'x' 반복 외의 중요한 실제 세션 로그/비밀키/소스 코드가 포함되어 있을 경우 -> 즉시 중단 및 원본 보존 후 HOLD 보고.
+- `main/` 또는 `src/test/` 제품 코드가 변경 대상에 포함될 경우 -> 즉시 중단.
+
+## 5. ASK_ONCE
+- codex-autonomy 내 8MB JSON의 처리 방식: 기본값은 gzip 압축(`*.json.gz`로 90% 이상 절감) + 요약본 생성. 무응답 시 기본값 진행.
+
+## 6. 절대 금지
+- push 금지, git add -A 금지, git commit 금지.
+- remote 추가 금지.
+- 비밀 값(API 키, 토큰, 환경변수 값) 출력 금지.
+- PROTO_OPEN 인증 완화 규칙 임의 변경 금지.
+- `data/agent-handoff/devin-skill-friction-8eeb784c/report.md` 본문 삭제 금지.
+- `var/meta-display-db/` 또는 `build/` 수동 무단 삭제 금지.
+
+## 7. Acceptance (완료 기준)
+- [AC-1] `data/agent-handoff/devin-skill-friction-8eeb784c/evidence/big.log` 및 `biglog.bin` 삭제 완료, 201.99MB 회수 증명.
+- [AC-2] `evidence/tombstone.json` 정상 생성 및 sha256, original_bytes 기록 확인.
+- [AC-3] `python -B scripts/agent_handoff_hygiene.py check` 실행 시 exit 0 확인.
+- [AC-4] `python -B scripts/test_agent_handoff_hygiene.py` 단위 테스트 전체 통과 (`exit=0`).
+- [AC-5] 실행 못 한 항목은 NOT_RUN + 이유 표기, 임의 PASS 변조 없음.
+
+## 8. 보고 형식
+외부 API: 0회
+회수한 용량: 201.99 MB (big.log 98.42MB + biglog.bin 103.57MB)
+생성된 Tombstone: data/agent-handoff/devin-skill-friction-8eeb784c/evidence/tombstone.json
+신규 도구: scripts/agent_handoff_hygiene.py, scripts/test_agent_handoff_hygiene.py
+단위 테스트 결과: python -B scripts/test_agent_handoff_hygiene.py (exit=0)
+위생 검사 결과: python -B scripts/agent_handoff_hygiene.py check (exit=0)
+
+[ANTI-STOP] 위 작업이 모두 완료되고 검증 결과(exit=0)를 확인하기 전까지 작업을 중단하지 마세요.

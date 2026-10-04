@@ -22,6 +22,19 @@ import static java.util.Map.entry;
 
 class WeightedReciprocalRankFuserTest {
 
+    @Test
+    void tiedScoresKeepFirstSeenOrderAndTopKCandidate() {
+        // Text-derived keys for Z/A reverse first-seen order in the former HashMap buckets.
+        TraceStore.clear();
+        WeightedReciprocalRankFuser fuser = new WeightedReciprocalRankFuser(60, null, "");
+        Content first = Content.from(TextSegment.from("A"));
+        Content second = Content.from(TextSegment.from("Z"));
+        List<List<Content>> sources = List.of(List.of(first), List.of(second));
+
+        assertEquals(List.of(first, second), fuser.fuse(sources, 2));
+        assertEquals(List.of(first), fuser.fuse(sources, 1));
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

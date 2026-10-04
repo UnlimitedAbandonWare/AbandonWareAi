@@ -1,0 +1,91 @@
+@agent-session-watchdog
+# [ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 아래 작업을 실제로 수행하고 검증 결과를 도출해야 합니다.
+[DEVIN 지시서] 데빈·코덱스 툴 기록 누락 해소 및 코덱스 실패 타점(P11/P7/P1) 방어 수리 — 2026-10-04 22:15 KST
+파일 ID: PASTE_DEVIN_TOOL_LOGGING_AND_CODEX_GUARD_FIX_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 한 줄 목표
+Devin의 실제 툴 기록(sessions.db tool_call_state) 연동 및 agent_session_watch.py 파싱 크래시를 수정하고, Codex 세션 3대 실패 타점(P11 은닉실패, P7 Goal충돌, P1 패치미스) 방어와 툴 텔레메트리 누락을 해소한다.
+
+## 사실 (2026-10-04 22:10 KST 확인)
+1. Devin 워치독 크래시: `agent_session_watch.py scan --agent devin` 실행 시 `AttributeError: 'str' object has no attribute 'get'` exit 1 발생. 원인은 summaries/*.md를 jsonl로 읽다가 non-dict 라인 처리 부재.
+2. Devin 실제 툴 기록: 실제 Devin 툴 호출은 `%APPDATA%\devin\cli\sessions.db`의 `tool_call_state` 및 `sessions` 테이블에 저장되나, 워치독이 조회하지 않아 레포 툴 체계에서 누락됨.
+3. Codex 최근 세션(2026-10-04 rollout-*.jsonl) 실패 타점:
+   - [P11 in-output-command-failure]: PowerShell/Bash 실행 후 stdout에 `Cannot find path`(PROJECT_STATUS.md 경로 오인 등)가 찍혀 연쇄 실패 유발.
+   - [P7 goal-conflict]: 미완료 Goal이 닫히지 않아 `create_goal rejected: unfinished goal still open` 거부 반복.
+   - [P1 apply-patch-context-miss]: `apply_patch` 시 문맥 라인 불일치 실패 발생.
+4. 기준 파일 SHA12:
+   - `scripts/agent_session_watch.py` (64DC9E06EF08, 수정)
+   - `scripts/test_agent_session_watch.py` (0DDD9F0FAEE1, 수정)
+   - `scripts/agent_work_guard.py` (F1AA98216686, 읽기)
+
+## 공통 규칙
+1. 작업 시작 전 반드시 `Set-Location C:\AbandonWare\demo-1\demo-1\src`를 실행한다.
+2. 제품 소스(Java/Spring/UI) 수정 0, scripts/ 하위 스크립트만 수정한다.
+3. Git 불허: push, add -A, add ., commit, remote 추가 불허. 파일과 테스트 결과로 검증한다.
+4. 보안: 환경변수 및 비밀값(Secret/Key/Token)을 노출하지 않는다.
+5. 인증: PROTO_OPEN 원칙 준수, 추가 권한 게이트를 만들지 않는다.
+6. lease: 작업 전 `agent_scope_lease.py check --path scripts/agent_session_watch.py` claim → 작업 → done.
+
+## DV1: scripts/agent_session_watch.py 파싱 방어 및 Devin sessions.db 툴 기록 수집 구현
+- 대상: `scripts/agent_session_watch.py`
+- 내용:
+  1. `scan_generic()` JSON 파싱 방어: `rec`가 `dict`가 아니면(`isinstance(rec, dict)` 거짓) `continue` 처리.
+  2. Devin 툴 기록 스캐너 `scan_devin_db()` 구현:
+     - `%APPDATA%\devin\cli\sessions.db` 존재 시 SQLite 연결 (`sqlite3.connect`).
+     - `sessions` 테이블에서 최근 `--since-hours` 범위 세션 조회.
+     - `tool_call_state` 테이블에서 세션별 `count(*)`, 도구명(`name`), 에러 여부 집계.
+     - `discover_stores()` devin 패턴을 `cli/sessions.db` 우선 감지로 보강.
+  3. P13 대용량 세션(32MB+) 스트리밍 방식으로 툴 통계 부분 수집 보강.
+
+## DV2: scripts/test_agent_session_watch.py에 Devin DB 및 Non-Dict 방어 테스트 추가
+- 대상: `scripts/test_agent_session_watch.py`
+- 내용:
+  1. `test_generic_scan_non_dict_line_resilience`: JSONL 내 문자열/리스트 라인 방어 단위 테스트 추가.
+  2. `test_devin_sessions_db_scan`: 임시 SQLite DB에 `sessions`, `tool_call_state` 생성 후 모의 레코드 검증 테스트 추가.
+  3. 실행: `python -B scripts/test_agent_session_watch.py; "exit=$LASTEXITCODE"` (전체 PASS 확인).
+
+## DV3: Codex P11(은닉실패) 및 P7(Goal충돌) 예방 가이드 & 툴 텔레메트리 보강
+- 대상: `scripts/agent_session_watch.py`
+- 내용:
+  1. P11 `in-output-command-failure` 패턴 검출에서 `PROJECT_STATUS.md` 및 `data/agent-handoff/` 실패 경로 명확히 기록.
+  2. P7 `goal-conflict` 감지 시 "이전 활성 저널/골 정리 권고(`work_journal.py close`)" 요약 명시.
+
+## DV4: 오프라인 검증 및 3대 에이전트 스캔 증거 수집
+- 실행 검증:
+  1. `python -B scripts/test_agent_session_watch.py; "exit=$LASTEXITCODE"` (exit 0).
+  2. `python -B scripts/agent_session_watch.py scan --agent devin --since-hours 24; "exit=$LASTEXITCODE"` (크래시 없이 집계 출력).
+  3. `python -B scripts/agent_session_watch.py scan --agent codex --dir "C:\Users\nninn\.codex\sessions\2026\10\04" --since-hours 12; "exit=$LASTEXITCODE"` (타점 진단 확인).
+  4. `python -B scripts/agent_session_watch.py scan --agent all --since-hours 24; "exit=$LASTEXITCODE"` (일괄 정상 완료).
+
+## HOLD 조건
+1. sessions.db 배타 잠금으로 읽기 10초 이상 타임아웃 시 HOLD.
+2. 기존 26개 테스트 회귀 파손 발생 시 HOLD.
+
+## ASK_ONCE
+1. Devin `tool_call_state` 조회 시 세션당 몇 개까지 상세 집계할 것인가?
+   - 권장 기본값: 최근 24시간 상위 10개 세션 또는 세션당 최대 500건 집계.
+
+## 절대 금지
+1. 제품 Java/Kotlin/UI 수정 금지.
+2. Git 변경: push, add -A, commit, remote 추가 금지.
+3. 세션 파일/DB 쓰기·삭제 금지 (Read-Only).
+4. 토큰·API 키 등 비밀값 출력 금지.
+5. PROTO_OPEN 규칙 임의 변경 금지.
+
+## Acceptance (수용 기준)
+1. 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+2. [PASS] `python -B scripts/test_agent_session_watch.py` 실행 시 신규 테스트 포함 전건 성공(exit 0).
+3. [PASS] `python -B scripts/agent_session_watch.py scan --agent devin --since-hours 24` 실행 시 크래시 없이 정상 집계.
+4. [PASS] `python -B scripts/agent_session_watch.py scan --agent codex --since-hours 24` 실행 시 P11 및 P7 타점 감지.
+5. [PASS] `scripts/agent_scope_lease.py check` 소스 리스 충돌 없이 작업 완료 및 해제.
+
+## 보고 형식
+외부 API: 0건 (로컬 파이썬 및 SQLite 전용)
+1. 수행 결과 요약 (DV1 ~ DV4 달성 상태)
+2. 수정 파일 목록 및 sha12 해시 표
+3. test_agent_session_watch.py 테스트 실행 결과 로그 (테스트 개수 및 PASS)
+4. agent_session_watch.py scan --agent devin 및 --agent codex 실제 출력 스니펫
+5. 종료 상태 (DONE_OFFLINE)
+
+# [ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 위 작업을 실제로 수행하고 검증 결과를 도출해야 합니다.

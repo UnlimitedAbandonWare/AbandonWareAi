@@ -530,6 +530,26 @@ def _parse_command(args):
     raise CoopError("command-required")
 
 
+def _same_intent(a, b):
+    """Only complete, typed verification contracts can cover one another."""
+    fields = {"taskId": (str,), "profile": (str,), "targetMode": (str,),
+              "targetIdentity": (str, type(None)), "scope": (list,),
+              "verifyCommand": (list,), "requiredStages": (list,),
+              "timeoutSeconds": (int, float)}
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return False
+    for key, types in fields.items():
+        if key not in a or key not in b or type(a[key]) not in types \
+                or type(a[key]) is not type(b[key]):
+            return False
+        if isinstance(a[key], list) and any(type(v) is not str for v in a[key] + b[key]):
+            return False
+    if a["taskId"] in ("", "unknown") or b["taskId"] in ("", "unknown"):
+        return False
+    return (sorted(a["scope"]) == sorted(b["scope"])
+            and all(a[k] == b[k] for k in fields if k != "scope"))
+
+
 def cmd_request(root, directory, args, cfg) -> int:
     agent = clean_name(args.agent, "agent")
     task_id = clean_name(args.task or "unknown", "task-id")
@@ -538,6 +558,11 @@ def cmd_request(root, directory, args, cfg) -> int:
     argv_cmd = _parse_command(args)
     mode = args.target_mode
     identity = args.target_identity or None
+    intent = {"taskId": task_id, "profile": profile, "scope": scope,
+              "targetMode": mode, "targetIdentity": identity,
+              "verifyCommand": argv_cmd,
+              "requiredStages": args.stage or ["verifyCommand"],
+              "timeoutSeconds": args.timeout_seconds or cfg["build_timeout_seconds"]}
     now = datetime.now(timezone.utc)
     with exclusive_lock(directory, ".coop.lock", "coordination-locked"):
         state = load_state(directory)
@@ -545,9 +570,7 @@ def cmd_request(root, directory, args, cfg) -> int:
         if mode == "latest":
             for ticket in state["tickets"].values():
                 if (ticket.get("state") in TICKET_OPEN
-                        and ticket.get("profile") == profile
-                        and ticket.get("targetMode") == "latest"
-                        and ticket.get("scope") == scope):
+                        and _same_intent(intent, ticket)):
                     covered = ticket.setdefault("coveredRequests", [])
                     ck.require(len(covered) < MAX_COVERED, "covered-cap")
                     covered.append({"requester": agent, "taskId": task_id,
@@ -564,12 +587,8 @@ def cmd_request(root, directory, args, cfg) -> int:
         ticket_id = "cv-" + uuid.uuid4().hex[:16]
         ticket = {
             "ticketId": ticket_id, "requester": agent, "agent": agent,
-            "taskId": task_id, "profile": profile, "scope": scope,
+            **intent,
             "requestedAtUtc": now.isoformat(), "updatedAtUtc": now.isoformat(),
-            "targetMode": mode, "targetIdentity": identity,
-            "requiredStages": args.stage or ["verifyCommand"],
-            "verifyCommand": argv_cmd,
-            "timeoutSeconds": args.timeout_seconds or cfg["build_timeout_seconds"],
             "state": "DEFERRED", "deferReason": "new", "waitingOn": [],
             "coveredRequests": [], "receiptPath": None, "supersededBy": None,
         }
@@ -585,11 +604,13 @@ def cmd_request(root, directory, args, cfg) -> int:
 
 
 def _supersede_stale_open(state, done_ticket, now):
+    if done_ticket.get("state") != "VERIFIED_PASS":
+        return
     for ticket in state["tickets"].values():
         if ticket["ticketId"] == done_ticket["ticketId"]:
             continue
         if ticket.get("state") in TICKET_OPEN and ticket.get("targetMode") == "latest" \
-                and scope_overlaps(ticket.get("scope") or [], done_ticket.get("scope") or []):
+                and _same_intent(ticket, done_ticket):
             ticket["state"] = "SUPERSEDED"
             ticket["supersededBy"] = done_ticket["ticketId"]
             ticket["updatedAtUtc"] = now.isoformat()
@@ -831,6 +852,13 @@ def cmd_recover(root, directory, args, cfg) -> int:
                 writer["state"] = "BLOCKED_UNKNOWN_OWNER"
                 writer["recoveryReason"] = "stale-heartbeat-dead-owner"
                 report["blockedUnknown"].append(writer["editBatchId"])
+        # Initial absence is required; reclaiming a dead lock is not absence proof.
+        if not os.path.lexists(directory / ".verify.lock"):
+            for ticket in state["tickets"].values():
+                pid = ticket.get("verifierPid")
+                if ticket.get("state") == "VERIFYING" and type(pid) is int \
+                        and pid > 0 and ck.pid_alive(pid) is False:
+                    ticket["state"] = "INVALIDATED"
         lock = directory / ".verify.lock"
         if lock.is_file():
             pid = _holder_pid(lock)

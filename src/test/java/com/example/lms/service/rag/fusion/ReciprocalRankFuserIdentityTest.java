@@ -11,6 +11,29 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ReciprocalRankFuserIdentityTest {
     @Test
+    void tiedScoresKeepFirstSeenOrderAcrossSources() {
+        // Z/A and Y/B reverse first-seen order in the former HashMap score buckets.
+        Content first = Content.from(TextSegment.from("Z"));
+        Content second = Content.from(TextSegment.from("A"));
+        Content third = Content.from(TextSegment.from("Y"));
+        Content fourth = Content.from(TextSegment.from("B"));
+        var output = new ReciprocalRankFuser().fuse(
+                List.of(List.of(first, third), List.of(second, fourth)), 0);
+
+        assertEquals(List.of(first, second, third, fourth), output);
+    }
+
+    @Test
+    void tieAtTopKCutKeepsFirstSeenCandidate() {
+        // A precedes Z in the former HashMap score buckets despite arriving later.
+        Content first = Content.from(TextSegment.from("Z"));
+        Content second = Content.from(TextSegment.from("A"));
+        var output = new ReciprocalRankFuser().fuse(List.of(List.of(first), List.of(second)), 1);
+
+        assertEquals(List.of(first), output);
+    }
+
+    @Test
     void distinctTextsWithSameJavaHashBothSurviveFusion() {
         Content first = Content.from(TextSegment.from("Aa"));
         Content second = Content.from(TextSegment.from("BB"));

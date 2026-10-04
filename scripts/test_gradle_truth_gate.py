@@ -125,6 +125,34 @@ class ClassifyVerdictFixtures(unittest.TestCase):
         out = classify_verdict(NO_TESTS_LOG, xml, 0)
         self.assertEqual(out["verdict"], "NO_TESTS")
 
+    def test_root_execution_with_empty_app_uses_root_xml(self):
+        tmp = _xml_fixture(SUITE_PASS)
+        self.addCleanup(shutil.rmtree, tmp)
+        xml = summarize_xml(tmp)
+        out = classify_verdict(
+            "> Task :app:test NO-SOURCE\n" + GREEN_LOG, xml, 0)
+        self.assertEqual(out["verdict"], "GREEN")
+
+    def test_root_no_source_rejects_unrelated_success_xml(self):
+        tmp = _xml_fixture(SUITE_PASS)
+        self.addCleanup(shutil.rmtree, tmp)
+        out = classify_verdict(NO_TESTS_LOG, summarize_xml(tmp), 0)
+        self.assertEqual(out["verdict"], "NO_TESTS")
+
+    def test_app_only_no_source_rejects_unrelated_success_xml(self):
+        tmp = _xml_fixture(SUITE_PASS)
+        self.addCleanup(shutil.rmtree, tmp)
+        out = classify_verdict(
+            "> Task :app:test NO-SOURCE\nBUILD SUCCESSFUL", summarize_xml(tmp), 0)
+        self.assertEqual(out["verdict"], "NO_TESTS")
+
+    def test_root_execution_with_empty_app_still_requires_xml(self):
+        tmp = _xml_fixture("")
+        self.addCleanup(shutil.rmtree, tmp)
+        out = classify_verdict(
+            "> Task :app:test NO-SOURCE\n" + GREEN_LOG, summarize_xml(tmp), 0)
+        self.assertEqual(out["verdict"], "NO_TESTS")
+
     def test_no_tests_all_skipped(self):
         xml = summarize_xml(_xml_fixture(SUITE_SKIP))
         self.assertTrue(xml["allSkipped"])
