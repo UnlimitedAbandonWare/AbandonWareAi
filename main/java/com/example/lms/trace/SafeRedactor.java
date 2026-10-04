@@ -62,6 +62,7 @@ public final class SafeRedactor {
             "control.reasonCode", "control.breadcrumbId");
 
     public static boolean isTypedDiagnostic(String key, Object value) {
+        if (isLoadoutDiagnostic(key, value)) return true;
         if (DIAGNOSTIC_FLAGS.contains(key == null ? "" : key)) {
             return value instanceof Boolean;
         }
@@ -122,6 +123,39 @@ public final class SafeRedactor {
         String h = hash12(s);
         return h == null ? null : "hash:" + h;
     }
+
+    /** Exact, bounded producer fields; this never grants access to arbitrary prompt content. */
+    public static boolean isLoadoutDiagnostic(String key, Object value) {
+        if (key == null) return false;
+        return switch (key) {
+            case "prompt.loadout.applied" -> value instanceof Boolean;
+            case "prompt.loadout.inputTokens" -> (value instanceof Byte || value instanceof Short
+                    || value instanceof Integer || value instanceof Long)
+                    && ((Number) value).longValue() >= 0 && ((Number) value).longValue() <= 1_000_000;
+            case "prompt.loadout.role" -> value instanceof String s
+                    && Set.of("MAIN_DEFAULT", "MAIN_FAST", "MAIN_HIGH", "SELFASK_BQ", "SELFASK_ER", "SELFASK_RC", "UNKNOWN").contains(s);
+            case "prompt.loadout.id" -> value instanceof String s && Set.of("safe-default", "compatible").contains(s);
+            case "prompt.loadout.version" -> "1".equals(value);
+            case "prompt.loadout.policy" -> "existing".equals(value);
+            case "prompt.loadout.retrieval" -> value instanceof String s && Set.of("CURRENT", "NONE").contains(s);
+            case "prompt.loadout.countMethod" -> "CL100K_ESTIMATE".equals(value);
+            case "prompt.loadout.observation" -> value instanceof String s && Set.of("OBSERVED", "NO_OBSERVATION").contains(s);
+            case "prompt.loadout.skills" -> value instanceof List<?> refs && refs.size() <= 3
+                    && refs.stream().allMatch(ref -> ref instanceof String
+                    && com.example.lms.prompt.pose.ModelLoadoutResolver.initialSkills().stream().anyMatch(skill -> skill.ref().equals(ref)));
+            case "prompt.loadout.reasons" -> value instanceof List<?> reasons && reasons.size() <= 8
+                    && reasons.stream().allMatch(reason -> reason instanceof String && LOADOUT_REASONS.contains(reason));
+            default -> false;
+        };
+    }
+
+    private static final Set<String> LOADOUT_REASONS = Set.of(
+            "FEATURE_OFF", "INVALID_LOADOUT_CONFIG", "MISSING_LOADOUT_CONTEXT", "TOOL_NOT_APPROVED",
+            "CAPABILITY_UNCONFIRMED", "INVALID_TOKEN_BUDGET", "REQUEST_TOKEN_BUDGET", "NONFACTUAL_DIRECT",
+            "ROLE_UNCONFIRMED", "ENDPOINT_ADAPTER_UNVERIFIED", "TOKEN_LIMIT_UNCONFIRMED", "OUTPUT_LIMIT",
+            "CONTEXT_LIMIT", "CORPUS_NOT_ALLOWED", "SKILL_CONFLICT_TIE", "OPTIONAL_SKILL_TOKEN_BUDGET",
+            "COMPATIBLE_LOADOUT", "FALLBACK_RUNTIME_UNVERIFIED", "MODEL_PROFILE_UNVERIFIED",
+            "RUNTIME_IDENTITY_MISMATCH", "RUNTIME_IDENTITY_UNVERIFIED", "ENDPOINT_FALLBACK_UNVERIFIED");
 
     /** Keep a normalized correlation hash joinable when a context fallback already stored it. */
     public static String hashValueOrPreserve(String value) {
@@ -263,7 +297,7 @@ public final class SafeRedactor {
                 && QUERY_BYPASS_REASONS.contains(s)) return s;
 
         if (value instanceof DiagnosticSummary || isTypedDiagnostic(key, value)) {
-            return value;
+            return isLoadoutDiagnostic(key, value) && value instanceof List<?> list ? List.copyOf(list) : value;
         }
         if (key != null && key.startsWith("orch.events.v1.")
                 && isStandardEventLabelKey(key.substring("orch.events.v1.".length()))

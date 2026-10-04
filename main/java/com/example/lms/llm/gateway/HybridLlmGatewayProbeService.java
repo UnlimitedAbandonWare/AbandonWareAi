@@ -33,6 +33,8 @@ public class HybridLlmGatewayProbeService {
     private final Environment environment;
     @Autowired(required = false)
     private com.example.lms.agent.GroqFreeTierGuard groqFreeTierGuard;
+    @Autowired(required = false)
+    private org.springframework.beans.factory.ObjectProvider<com.example.lms.learning.gemini.GeminiGateway> geminiGateway;
     // All model names on one Ollama service share capacity. Held by the actual
     // dispatch worker, so a caller timeout cannot prematurely free the slot.
     private final java.util.concurrent.ConcurrentHashMap<String, Thread> activeLocalDispatches =
@@ -71,6 +73,24 @@ public class HybridLlmGatewayProbeService {
         meta.put("probeEnabled", properties == null || properties.getProbe().isEnabled());
         meta.put("endpointHost", endpointHost(cfg == null ? null : cfg.getBaseUrl()));
 
+        // These are the builder's mandatory admission gates, including in OBSERVE
+        // and disabled-probe modes. Discovery never creates a client or calls HTTP.
+        if ("gemini".equals(provider) && cfg != null) {
+            var gateway = geminiGateway == null ? null : geminiGateway.getIfAvailable();
+            var reasons = new ArrayList<String>();
+            if (gateway == null) reasons.add("gemini_gateway_disabled");
+            else reasons.addAll(gateway.routerReadiness().reasons());
+            if (!cfg.isEnabled() || !StringUtils.hasText(model) || !StringUtils.hasText(cfg.getBaseUrl()))
+                reasons.add("route_disabled");
+            if (!reasons.isEmpty()) {
+                meta.put("disabledReason", reasons.get(0));
+                meta.put("disabledReasons", List.copyOf(reasons));
+                return RoutingEligibility.blocked(routeKey, provider, model, stage, 0, cfg.isFallbackOnly(),
+                        List.of(reasons.contains("auth_missing") || reasons.contains("credential_alias_conflict")
+                                ? LlmFailureClass.AUTH_MISSING : LlmFailureClass.DISABLED), meta);
+            }
+        }
+
         if (properties == null || !properties.isEnabled() || cfg == null) {
             return RoutingEligibility.eligible(routeKey, provider, model, stage, 100, false, meta);
         }
@@ -86,7 +106,7 @@ public class HybridLlmGatewayProbeService {
         if (cfg.isEnabled()
                 && StringUtils.hasText(cfg.getName())
                 && StringUtils.hasText(cfg.getBaseUrl())
-                && !isLocalProvider(provider)) {
+                && !isLocalProvider(provider) && !"gemini".equals(provider)) {
             String credentialEnv = credentialEnv(provider, cfg);
             String safeCredentialEnv = safeCredentialEnv(credentialEnv);
             if (StringUtils.hasText(safeCredentialEnv)) {
@@ -537,6 +557,7 @@ public class HybridLlmGatewayProbeService {
             case "cerebras" -> "CEREBRAS_API_KEY";
             case "openrouter" -> "OPENROUTER_API_KEY";
             case "opencode" -> "OPENCODE_API_KEY";
+            case "vercel-gateway" -> "AI_GATEWAY_API_KEY";
             default -> null;
         };
     }

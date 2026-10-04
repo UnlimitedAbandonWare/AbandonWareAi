@@ -131,6 +131,7 @@ DEFAULT_CONFIG = {
         # v2 (2026-10-03): core 파일 선택 + GPT Pro 맥락 섹션. vendor/min JS는
         # 새 프로필에서만 기본 제외 — 기존 main/core/full 선택 결과는 불변.
         "ctx": {"extends": "core", "include": [], "context": True},
+        "evidence": {"extends": "ctx", "include": [], "context": True, "evidence": True},
         "brief": {"extends": "core", "include": [], "context": True,
                   "skeletonJava": True,
                   "excludePaths": ["frontend/", "main/resources/static/",
@@ -149,7 +150,7 @@ def run_git(root: Path, *args: str):
     """Read-only git call. Returns stdout str or None when git is unusable."""
     for exe in GIT_CANDIDATES:
         try:
-            proc = subprocess.run([exe, "-C", str(root), *args],
+            proc = subprocess.run([exe, "--no-optional-locks", "-C", str(root), *args],
                                   capture_output=True, timeout=120)
             if proc.returncode == 0:
                 return proc.stdout.decode("utf-8", "replace")
@@ -198,7 +199,7 @@ def resolve_flags(profiles: dict, name: str):
         chain.append(spec)
         cur = spec.get("extends")
     for spec in reversed(chain):
-        for k in ("context", "skeletonJava", "excludePaths"):
+        for k in ("context", "skeletonJava", "excludePaths", "evidence"):
             if k in spec:
                 flags[k] = spec[k]
     return flags
@@ -271,9 +272,40 @@ def read_text(path: Path):
         data = path.read_bytes()
     except OSError:
         return None
-    if b"\x00" in data[:8192]:
+    if b'\x00' in data[:8192]:
         return None
-    return data.decode("utf-8", "replace")
+    return data.decode('utf-8','replace')
+
+
+def capture_source(path):
+    """Read a stable preimage twice; core source drift is a pack HOLD."""
+    for attempt in range(2):
+        before=path.stat()
+        data=path.read_bytes()
+        check=path.read_bytes()
+        after=path.stat()
+        if (before.st_size,before.st_mtime_ns)==(after.st_size,after.st_mtime_ns) and data==check:
+            return data
+    raise ValueError('core-source-changed-during-read')
+
+
+def archive_path(path, known):
+    if not path or path.startswith(('/', '\\')) or '\\' in path or ':' in path or any(
+            p in ('', '.', '..') for p in path.split('/')) or path.casefold() in known:
+        raise ValueError('unsafe-or-duplicate-archive-path')
+    known.add(path.casefold())
+
+
+def write_fixed_zip(path, payload):
+    known=set()
+    with path.open('xb') as stream, zipfile.ZipFile(stream,'w',zipfile.ZIP_DEFLATED,allowZip64=True) as archive:
+        for name,data in sorted(payload.items()):
+            archive_path(name,known)
+            info=zipfile.ZipInfo(name,date_time=(1980,1,1,0,0,0))
+            info.create_system=3
+            info.external_attr=0o100644 << 16
+            info.compress_type=zipfile.ZIP_DEFLATED
+            archive.writestr(info,data)
 
 
 def scan_text(rel: str, text: str):
@@ -527,7 +559,9 @@ def cmd_pack(args) -> int:
     max_zip_mb = args.max_zip_mb if args.max_zip_mb is not None \
         else float(cfg.get("maxZipMb", 64))
     allow_files = {norm(p).lower() for p in cfg.get("allowFiles") or []}
-    marker = Path(os.environ.get("TEMP", str(Path.home()))) / "gptpro_pack_last.txt"
+    import uuid
+    marker = Path(os.environ.get('GPTPRO_PACK_MARKER') or str(
+        Path(os.environ.get('TEMP',str(Path.home()))) / ('gptpro_pack_'+uuid.uuid4().hex+'.txt')))
 
     head = run_git(root, "rev-parse", "--short=7", "HEAD")
     sha7 = head.strip() if head and head.strip() else "nogit"
@@ -535,6 +569,20 @@ def cmd_pack(args) -> int:
     changed = parse_porcelain(porcelain)
     dirty = bool(changed)
 
+    flags = resolve_flags(profiles, profile)
+    evidence_enabled = bool(flags.get("evidence"))
+    if evidence_enabled:
+        import gptpro_pack_evidence as gpe
+        evidence_cfg = dict(cfg.get('evidence') or {})
+        if args.evidence_days is not None:
+            evidence_cfg['evidenceDays'] = args.evidence_days
+        if args.evidence_history_days is not None:
+            evidence_cfg['evidenceHistoryDays'] = args.evidence_history_days
+        try:
+            gpe.Evidence(root,evidence_cfg,scan_text,datetime.now(KST),{})
+        except ValueError:
+            print('invalid evidence bounds: history must be 3..90 and >= recent days',file=sys.stderr)
+            return 2
     candidates, git_ok = collect(root, include_specs)
     excluded = {"dir": 0, "name": 0, "oversized": 0, "content": 0}
     secret_hits, oversized, included = [], [], []
@@ -549,6 +597,9 @@ def cmd_pack(args) -> int:
             excluded["name"] += 1
             continue
         path = root / rel
+        if evidence_enabled and not gpe.safe_file(path, allow_templates=True):
+            print("GPT Pro analysis pack FAILED: protected-source-path", file=sys.stderr)
+            return 4
         try:
             size = path.stat().st_size
         except OSError:
@@ -567,7 +618,6 @@ def cmd_pack(args) -> int:
         included.append((rel, size))
 
     # ---- v2 맥락 프로필 필터 (context 플래그가 있는 새 프로필만; 기존 프로필 불변)
-    flags = resolve_flags(profiles, profile)
     ctx_enabled = bool(flags.get("context"))
     skeleton_java = bool(flags.get("skeletonJava"))
     if ctx_enabled and gpc is None:
@@ -596,7 +646,8 @@ def cmd_pack(args) -> int:
             print(f"[gptpro-pack] scope-excluded: {len(excluded_paths)} files "
                   f"({len(xpaths)} excludePaths)")
         # vendor/min JS 기본 제외 (새 프로필만) — 이름·버전은 manifest로.
-        vend = [(r, s) for r, s in included if VENDOR_PATH.search(r.lower())]
+        vend = [(r, s) for r, s in included
+                if not evidence_enabled and VENDOR_PATH.search(r.lower())]
         if vend:
             vendor_list = []
             for rel, _ in vend:
@@ -653,6 +704,13 @@ def cmd_pack(args) -> int:
             print(f"[gptpro-pack] focus={','.join(focus)} "
                   f"main-matched={len(focus_rels)} tests-added={len(focus_tests)}")
 
+    captured = {}
+    if evidence_enabled and not (args.dry_run or args.list):
+        try:
+            captured = {rel:capture_source(root/rel) for rel,_ in included}
+        except (OSError,ValueError):
+            print('GPT Pro analysis pack FAILED: core-source-snapshot-unstable',file=sys.stderr)
+            return 4
     kst_now = datetime.now(KST)
     stamp = kst_now.strftime("%Y%m%d-%H%M")
     total = sum(s for _, s in included)
@@ -722,12 +780,33 @@ def cmd_pack(args) -> int:
                   f"{len(dropped)} dropped(budget)")
         # 맥락 섹션 생성 — 최종 included 기준.
         in_scope = lambda rl: any(spec_match(s, rl) for s in include_specs)  # noqa: E731
+        if evidence_enabled:
+            in_scope = lambda rl: (any(spec_match(s, rl) for s in include_specs)
+                                   and not name_block_reason(rl)
+                                   and gpe.safe_file(root / rl, allow_templates=True))
         git_fn = lambda *a: run_git(root, *a)  # noqa: E731
         rel_list = [r for r, _ in included]
-        sections, gen_meta = gpc.build_all(
-            root, profile, in_scope, changed, git_fn, max_file_mb, focus,
-            args.briefs, sha7, dirty, kst_now.strftime("%Y-%m-%d %H:%M KST"),
-            rel_list, scan_text)
+        original_read = gpc._read
+        if evidence_enabled:
+            def captured_read(path):
+                try:
+                    rel=path.relative_to(root).as_posix()
+                except ValueError:
+                    return None
+                if not gpe.safe_file(path,allow_templates=True):
+                    return None
+                data=captured.get(rel)
+                if data is None:
+                    data=capture_source(path) if path.is_file() else None
+                return data.decode('utf-8','replace') if data is not None and b'\x00' not in data[:8192] else None
+            gpc._read=captured_read
+        try:
+            sections, gen_meta = gpc.build_all(
+                root, profile, in_scope, changed, git_fn, max_file_mb, focus,
+                args.briefs, sha7, dirty, kst_now.strftime("%Y-%m-%d %H:%M KST"),
+                rel_list, scan_text)
+        finally:
+            gpc._read=original_read
         ctx_meta.update(gen_meta)
         if ctx_meta.get("secretLines"):
             for name, ln, pid in ctx_meta["secretLines"]:
@@ -741,6 +820,85 @@ def cmd_pack(args) -> int:
                              kst_now.strftime("%Y-%m-%d %H:%M KST"),
                              ctx=ctx_meta or None)
     readme = make_readme(root, profile)
+    if evidence_enabled:
+        # Keep old profile paths and context generator unchanged.
+        readme += "\nEvidence profile: start with 00_START_HERE.md, then manifest.json and coverage.json.\n"
+        partial = None
+        try:
+            import gptpro_pack_evidence as gpe
+            import hashlib
+            cleaner=gpe.Evidence(root,evidence_cfg,scan_text,kst_now,{})
+            extra={}
+            for arc,text in sections+[('_MANIFEST.md',manifest),('_README_FOR_GPTPRO.md',readme)]:
+                clean=cleaner.clean(arc,text)
+                if clean is None:
+                    raise ValueError('context-security-scan')
+                extra[arc]=clean.encode('utf-8')
+            core_identity=[(rel,hashlib.sha256(data).hexdigest()) for rel,data in sorted(captured.items())]
+            snapshot_id=hashlib.sha256(json.dumps([sha7,dirty,core_identity,evidence_cfg],sort_keys=True).encode()).hexdigest()
+            external=[dict(path=rel,bytes=len(data),sha256=hashlib.sha256(data).hexdigest(),snapshot=snapshot_id)
+                      for rel,data in sorted({**captured,**extra}.items())]
+            evidence = gpe.build(
+                root, evidence_cfg, git=lambda *a: run_git(root, *a),
+                scan=scan_text, included=included, changed=changed,
+                no_codex=args.no_codex,
+                now=kst_now,
+                package=dict(snapshot_id=snapshot_id,captured_at=kst_now.isoformat(),head=sha7,dirty=dirty,
+                             tool_version='evidence-schema-2',contextFiles=len(sections),external_payloads=external),
+            )
+            payload = {}
+            for rel, _ in included:
+                # The bytes rescanned here are the exact bytes written to the ZIP.
+                data = captured[rel]
+                if capture_source(root/rel) != data:
+                    raise ValueError('core-source-preimage-drift')
+                if scan_text(rel.lower(), data.decode("utf-8", "replace")):
+                    raise ValueError("source-security-or-preimage-drift")
+                payload[rel] = data
+            payload.update(extra)
+            payload.update({arc: text.encode("utf-8") for arc, text in evidence.files.items()})
+            if not any(p.startswith("main/java/") for p in payload):
+                raise ValueError("core-java-source-missing")
+            if not any(p.startswith("main/resources/") for p in payload):
+                raise ValueError("core-resources-missing")
+            if any(p.startswith(("/", "\\")) or ":" in p or ".." in p.split("/")
+                   for p in payload):
+                raise ValueError("unsafe-archive-path")
+            # Verify exact ZIP bytes before the final name and success marker exist.
+            partial = zp.with_name(zp.name + "." + uuid.uuid4().hex[:8] + ".partial")
+            write_fixed_zip(partial,payload)
+            with zipfile.ZipFile(partial) as z:
+                if z.testzip() is not None or len(z.namelist()) != len(set(z.namelist())):
+                    raise ValueError("archive-integrity")
+                for arc in z.namelist():
+                    text = z.read(arc).decode("utf-8", "replace")
+                    scan_name = "evidence.txt" if arc.startswith(gpe.PREFIX) or arc in evidence.files else arc.lower()
+                    if scan_text(scan_name, text):
+                        raise ValueError("final-secret-rescan")
+            if zp.exists():
+                raise ValueError("archive-target-created-concurrently")
+            partial.rename(zp)
+            (out_dir / (zp.stem + "_MANIFEST.md")).write_text(manifest, encoding="utf-8")
+            marker.write_text(str(zp), encoding="utf-8")
+            meta = evidence.meta
+            print(f"[gptpro-pack] zip={zp} size={zp.stat().st_size / 1048576:.2f}MB total-files={len(payload)}")
+            print(f"[gptpro-pack] branch={meta['branch']} HEAD={meta['head']} dirty={meta['dirty']}")
+            print(f"[gptpro-pack] evidence-files={meta['files']} debug={meta['categories'].get('debug', 0)} "
+                  f"tests={meta['categories'].get('tests', 0)} agent/Codex={meta['categories'].get('agent', 0)}")
+            print(f"[gptpro-pack] redactions={meta['redactions']} security-excluded={meta['securityExcluded']} "
+                  f"warnings={meta['warnings']} final-secret-hits=0")
+            print("GPT Pro analysis pack ready")
+            zip_mb=zp.stat().st_size/1048576
+            if zip_mb > max_zip_mb:
+                print(f'[gptpro-pack] WARNING: zip {zip_mb:.2f}MB > --max-zip-mb {max_zip_mb:g}.')
+            return 0
+        except Exception as error:
+            # Exception text can contain credentials or source data.
+            print(f"GPT Pro analysis pack FAILED: {type(error).__name__}", file=sys.stderr)
+            return 4
+        finally:
+            if partial is not None and partial.is_file():
+                partial.unlink()
     with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
         for arc, text in sections:
             z.writestr(arc, text)
@@ -780,7 +938,7 @@ def main(argv=None) -> int:
         prog="gptpro_pack.py",
         description="[USER-ONLY] pack demo-1 source into a secret-free zip for GPT Pro")
     p.add_argument("profile", nargs="?", default=None,
-                   help="main | core | full | ctx | brief (default: core)")
+                   help="main | core | full | ctx | brief | evidence (default: core)")
     p.add_argument("--profile", dest="profile_opt", default=None)
     p.add_argument("--root", default=None)
     p.add_argument("--out", default=None)
@@ -797,6 +955,12 @@ def main(argv=None) -> int:
                         "(default off)")
     p.add_argument("--drop-legacy", action="store_true",
                    help="ctx/brief: exclude backup/legacy/deprecated-named files")
+    p.add_argument("--evidence-days", type=int, default=None,
+                   help="evidence: recent local evidence window in days")
+    p.add_argument('--evidence-history-days',type=int,default=None,
+                   help='evidence: bounded related history, default 30 days; 3..90 and >= recent window')
+    p.add_argument("--no-codex", action="store_true",
+                   help="evidence: do not open Codex session records")
     p.add_argument("--no-pause", action="store_true",
                    help="consumed by Pack-GPTPro.bat; ignored here")
     p.add_argument("--no-explorer", action="store_true",

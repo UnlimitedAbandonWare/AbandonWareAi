@@ -6,6 +6,23 @@
   "maxFileMb": 2.0,
   "maxZipMb": 64,
   "allowFiles": [],
+  "evidence": {
+    "evidenceDays": 3,
+    "evidenceHistoryDays": 30,
+    "maxScanFiles": 5000,
+    "maxScanMb": 128,
+    "maxScanSeconds": 30,
+    "maxEvidenceMb": 24,
+    "maxFileKb": 512,
+    "rolloutDays": 3,
+    "maxRollouts": 40,
+    "maxRunDirs": 10,
+    "maxHandoffReports": 40,
+    "maxDebugFiles": 80,
+    "maxFailureLogs": 40,
+    "maxTimelineRows": 4000,
+    "maxRolloutMb": 64
+  },
   "profiles": {
     "main": {
       "include": ["main/java", "main/resources"]
@@ -45,6 +62,12 @@
       "comment": "core 파일 선택 + GPT Pro 맥락 섹션 (_START_HERE/_RULES/_CURRENT_WORK/_CHANGES/_CODE_MAP/_RUNTIME/_TEST_INDEX). vendor/min JS 기본 제외(매니페스트 기록). --focus/--briefs/--drop-legacy 지원.",
       "extends": "core",
       "context": true,
+      "include": []
+    },
+    "evidence": {
+      "extends": "ctx",
+      "context": true,
+      "evidence": true,
       "include": []
     },
     "brief": {

@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L134-L142 sha256=65a4b8ad3617607a1183307cf3f298f7b7bf3f1053ced78a04ba19567598e26b movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L140-L148 sha256=65a4b8ad3617607a1183307cf3f298f7b7bf3f1053ced78a04ba19567598e26b movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-PROVIDER-LIMITS-SSOT -->
 ## Provider limits SSOT
 - Entry point: `docs/provider-limits/README.md` (purpose, evidence tiers, refresh rules, runtime-conflict note).

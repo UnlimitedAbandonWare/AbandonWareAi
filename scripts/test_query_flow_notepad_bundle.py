@@ -5,12 +5,15 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import re
 import sqlite3
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import query_flow_notepad_bundle as cli  # noqa: E402
@@ -99,8 +102,9 @@ def write_journal(root: Path, task_id: str = "t-abc"):
 
 
 def full_fixture(root: Path):
-    write_trace(root, "2026-09-26T10:00:00Z", "aaaa")
-    write_trace(root, "2026-09-26T09:00:00Z", "bbbb", outcome="failed")
+    now = datetime.now(timezone.utc).isoformat()
+    write_trace(root, now, "aaaa")
+    write_trace(root, now, "bbbb", outcome="failed")
     write_db_export(root)
     write_logs(root)
     write_journal(root)
@@ -113,12 +117,68 @@ def full_fixture(root: Path):
 
 class CollectorsTest(unittest.TestCase):
 
+    def test_top_n_keeps_latest_with_bounded_storage(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Latest events are deliberately at the end; equal timestamps use
+            # path then physical line, not enumeration order or dict comparison.
+            f = write_trace(root, "2026-10-04T00:00:00Z", "seed")
+            records = []
+            for i in range(1000):
+                records.append({"ts": "2026-10-04T00:%02d:%02dZ" % (i // 60, i % 60),
+                                "recordId": str(i)})
+            records[-4]["ts"] = records[-1]["ts"]
+            f.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
+            other = f.with_name("z-equal.json")
+            other.write_text(json.dumps({"ts": records[-1]["ts"], "recordId": "tie"}) + "\n", encoding="utf-8")
+            expected = [(r["ts"], f.relative_to(root).as_posix(), i + 1, r["recordId"])
+                        for i, r in enumerate(records)]
+            expected.append((records[-1]["ts"], other.relative_to(root).as_posix(), 1, "tie"))
+            stats = {}
+            rows = cli.collect_sessions(root, 100000, 5, stats=stats)
+            self.assertEqual([r[3] for r in sorted(expected)[-5:]], [r["recordId"] for r in rows])
+            self.assertLessEqual(stats["retained_peak"], 5)
+            self.assertEqual(1001, stats["rows_scanned"])
+            self.assertTrue(stats["complete"])
+            self.assertNotIn("_line", rows[0])
+
+    def test_sessions_sort_offsets_by_instant(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_trace(root, "2026-10-04T09:00:00+09:00", "aaaa")
+            write_trace(root, "2026-10-04T00:01:00Z", "bbbb")
+            rows = cli.collect_sessions(root, 100000, 1)
+            self.assertEqual(["hash:bbbb"], [r["sessionId"] for r in rows])
+
+    def test_sessions_coverage_propagates_partial(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            f = write_trace(root, datetime.now(timezone.utc).isoformat(), "aaaa")
+            with f.open("ab") as fh:
+                fh.write(b'{"ts":')
+            bundle = cli.build_bundle(root, 24, use_subprocess=False)
+            self.assertEqual(1, len(bundle["sessions"]))
+            self.assertEqual(1, bundle["sessionsCoverage"]["partial_tail"])
+            self.assertFalse(bundle["sessionsCoverage"]["complete"])
+
+    def test_missing_trace_dir_is_not_zero_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle = cli.build_bundle(Path(tmp), 24, use_subprocess=False)
+            self.assertEqual([], bundle["sessions"])
+            self.assertFalse(bundle["sessionsCoverage"]["complete"])
+            for key in ("files_scanned", "bytes_read", "rows_scanned", "rows_selected",
+                        "parse_error", "partial_tail", "non_standard_json", "retained_peak"):
+                self.assertIsNone(bundle["sessionsCoverage"][key], key)
+
     def test_sessions_sorted_and_slim(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_trace(root, "2026-09-26T10:00:00Z", "aaaa")
             write_trace(root, "2026-09-26T09:00:00Z", "bbbb")
-            rows = cli.collect_sessions(root, 24, 100)
+            # Freeze the event-time window; filesystem mtime is not event time.
+            with mock.patch.object(cli.trace_reader, "datetime", wraps=datetime) as clock:
+                clock.now.return_value = datetime(2026, 9, 26, 11, tzinfo=timezone.utc)
+                rows = cli.collect_sessions(root, 24, 100)
             self.assertEqual(2, len(rows))
             self.assertEqual("hash:bbbb", rows[0]["sessionId"])
             self.assertEqual("hash:aaaa", rows[1]["sessionId"])
@@ -239,5 +299,70 @@ class BundleWriteTest(unittest.TestCase):
             self.assertFalse(bundle["sources"]["chatSessionTraces"])
 
 
+def run_benchmark():
+    """Opt-in, synthetic-only before/after measurement; no timing assertions."""
+    import argparse
+    import hashlib
+    import importlib.util
+    import statistics
+    import time
+    import tracemalloc
+    from datetime import timedelta
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--benchmark-modules", required=True)
+    parser.add_argument("--benchmark-out", required=True)
+    args = parser.parse_args()
+    modules = Path(args.benchmark_modules).resolve()
+    sys.modules.pop("chat_session_debug_export", None)
+    spec = importlib.util.spec_from_file_location("bench_bundle", modules / "query_flow_notepad_bundle.py")
+    target = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(target)
+    result = {"schema": "awx.session-jsonl-benchmark.v1", "python": sys.version,
+              "warmups": 3, "repeats": 30, "limit": 500,
+              "code": {name: hashlib.sha256((modules / name).read_bytes()).hexdigest()
+                       for name in ("chat_session_debug_export.py", "query_flow_notepad_bundle.py")},
+              "caps": {key: getattr(target.trace_reader, key, None)
+                       for key in ("MAX_FILES", "MAX_TOTAL_BYTES", "MAX_LINE_BYTES", "MAX_ROWS")},
+              "samples": [], "summaries": []}
+    for size in (2000, 20000):
+        with tempfile.TemporaryDirectory(prefix="awx-jsonl-bench-") as tmp:
+            root = Path(tmp)
+            day = root / "var/debug/chat-session-traces/20261004"
+            day.mkdir(parents=True)
+            f = day / "s-synthetic.json"
+            now = datetime.now(timezone.utc)
+            with f.open("w", encoding="utf-8") as fh:
+                for i in range(size):
+                    fh.write(json.dumps({"ts": (now - timedelta(seconds=size-i)).isoformat(),
+                                         "recordId": str(i), "sessionId": "hash:synthetic",
+                                         "surface": "chat", "traceKeys": ["a", "b"]}) + "\n")
+            for _ in range(3):
+                target.collect_sessions(root, 24, 500)
+            for iteration in range(30):
+                tracemalloc.start()
+                started = time.perf_counter()
+                rows = target.collect_sessions(root, 24, 500)
+                elapsed = (time.perf_counter() - started) * 1000
+                _, peak = tracemalloc.get_traced_memory()
+                tracemalloc.stop()
+                if len(rows) != 500 or rows[-1]["recordId"] != str(size - 1):
+                    raise AssertionError("benchmark-result-mismatch")
+                result["samples"].append({"size": size, "iteration": iteration,
+                                          "elapsed_ms": elapsed, "peak_bytes": peak,
+                                          "files": 1, "bytes": f.stat().st_size,
+                                          "rows": size, "returned": len(rows)})
+            samples = [s for s in result["samples"] if s["size"] == size]
+            times = sorted(s["elapsed_ms"] for s in samples)
+            result["summaries"].append({"size": size, "p50_ms": statistics.median(times),
+                                        "p95_ms": times[28],
+                                        "peak_bytes": max(s["peak_bytes"] for s in samples)})
+    Path(args.benchmark_out).write_text(json.dumps(result, indent=2), encoding="utf-8")
+    print(json.dumps(result["summaries"]))
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if os.environ.get("AWX_BENCH") == "1":
+        run_benchmark()
+    else:
+        unittest.main()

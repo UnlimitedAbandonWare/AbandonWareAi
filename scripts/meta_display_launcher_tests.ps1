@@ -171,6 +171,40 @@ try {
     function Find-RagRuntimeManifest { param($ProcessId) if ($ProcessId -eq 91) { [pscustomobject]@{runtimeRole='wear'} } else { $null } }
     Assert-Display ((Get-RagProcessRole -ProcessId 91 -CommandLine 'java app') -eq 'wear') 'ownership manifest corroborates wear role'
     Assert-Display ((Get-RagProcessRole -ProcessId 92 -CommandLine 'java app') -eq 'dev') 'absent role evidence stays dev'
+    # A fixed port and a current PID identity do not prove launcher ownership.
+    $script:candidates = @()
+    $script:owners = @{18180=@{processId=424242;processName='python.exe'}}
+    $script:killed = @()
+    $script:leftoverManifest = $null
+    $script:ownedStops = @()
+    function Find-RagRuntimeManifest { param($ProcessId) $script:leftoverManifest }
+    function Test-AwxOwnedRuntimeIdentity { param($Manifest,$Root)
+        @{ok=($null -ne $Manifest -and $Manifest.identityMatches);reason='fixture-identity'}
+    }
+    function Stop-AwxOwnedRuntime { param($Manifest,$Root,$TimeoutSeconds)
+        $script:ownedStops += [int]$Manifest.listener.processId
+        @{ok=$true}
+    }
+    Stop-RagSpringForRestart -MetaDisplay
+    Assert-Display ($script:killed.Count -eq 0 -and $script:ownedStops.Count -eq 0) 'foreign fixed-port owner without manifest is never stopped'
+    $script:leftoverManifest = @{runtimeRole='dev';identityMatches=$false;listener=@{processId=424242}}
+    Stop-RagSpringForRestart -MetaDisplay
+    Assert-Display ($script:killed.Count -eq 0 -and $script:ownedStops.Count -eq 0) 'stale ownership identity cannot stop the current port owner'
+    $script:leftoverManifest.identityMatches = $true
+    Stop-RagSpringForRestart -MetaDisplay -Wear
+    Assert-Display ($script:ownedStops.Count -eq 0) 'wear restart protects an owned dev leftover'
+    $script:leftoverManifest.runtimeRole = 'wear'
+    Stop-RagSpringForRestart -MetaDisplay
+    Assert-Display ($script:ownedStops.Count -eq 0) 'dev restart protects an owned wear leftover'
+    $script:leftoverManifest.runtimeRole = 'dev'
+    Stop-RagSpringForRestart -MetaDisplay
+    Assert-Display (($script:ownedStops -join ',') -eq '424242' -and $script:killed.Count -eq 0) 'proven owned leftover uses the guarded runtime stop'
+    $script:candidates = @(@{processId=92;port=18176;metaDisplay=$false;role='dev'})
+    $script:owners = @{}
+    $script:leftoverManifest = $null
+    function Get-AwxProcessIdentity { param($ProcessId) $null }
+    Stop-RagSpringForRestart
+    Assert-Display ($script:killed.Count -eq 0) 'candidate without current identity is never stopped'
     $script:candidates = @(); $script:owners = @{}
     Expect-DisplayFailure { Start-RagSpring -Port 18180 -RunDirectory $fixture -TimeoutSeconds 1 -MetaDisplay -Wear } 'captured-launch-boundary'
     Assert-Display ($script:capturedArguments.Contains('-RuntimeRole wear')) 'wear launch forwards runtime role to listener'

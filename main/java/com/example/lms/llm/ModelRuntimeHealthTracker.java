@@ -50,14 +50,51 @@ public class ModelRuntimeHealthTracker {
         if(groqFreeTierGuard==null)throw groqAdmissionFailure("groq_free_guard_unavailable", bodyBytes, output);
         try {
             var body=REQUEST_ATTEMPT_MESSAGE_MAPPER.readTree(request.body());
+            if(body==null || !body.isObject())throw new java.io.IOException("groq_request_dimensions_invalid");
             String key=request.headers().entrySet().stream().filter(e->"authorization".equalsIgnoreCase(e.getKey()))
                     .flatMap(e->e.getValue().stream()).findFirst().orElse("");
             if(key.startsWith("Bearer "))key=key.substring(7);
             output=body.path("max_completion_tokens").asLong(body.path("max_tokens").asLong(0));
             if(output<=0)throw groqAdmissionFailure("groq_output_bound_required", bodyBytes, output);
             return groqFreeTierGuard.reserve(body.path("model").asText(),key,
-                    bodyBytes+output,0);
+                    Math.addExact(estimateGroqTextInput(body),output),0);
         }catch(java.io.IOException denied){throw groqAdmissionFailure(denied.getMessage(), bodyBytes, output);}
+        catch(ArithmeticException invalid){throw groqAdmissionFailure("groq_request_dimensions_invalid", bodyBytes, output);}
+        catch(IllegalArgumentException invalid){throw groqAdmissionFailure("groq_request_dimensions_invalid", bodyBytes, output);}
+    }
+
+    private static long estimateGroqTextInput(com.fasterxml.jackson.databind.JsonNode body) throws java.io.IOException {
+        var messages=body.path("messages");
+        if(!messages.isArray() || body.path("tools").size()>0 || body.path("functions").size()>0
+                || body.path("response_format").has("json_schema"))
+            throw new java.io.IOException("groq_request_dimensions_invalid");
+        List<ChatMessage> textMessages=new ArrayList<>();
+        for(var message:messages) {
+            if(!message.isObject() || message.hasNonNull("name") || message.hasNonNull("function_call")
+                    || message.path("tool_calls").size()>0)
+                throw new java.io.IOException("groq_request_dimensions_invalid");
+            var content=message.path("content");
+            String text;
+            if(content.isTextual())text=content.textValue();
+            else if(content.isArray()) {
+                StringBuilder parts=new StringBuilder();
+                for(var part:content) {
+                    if(!"text".equals(part.path("type").asText()) || !part.path("text").isTextual())
+                        throw new java.io.IOException("groq_request_dimensions_invalid");
+                    if(!parts.isEmpty())parts.append('\n');
+                    parts.append(part.path("text").textValue());
+                }
+                text=parts.toString();
+            }else throw new java.io.IOException("groq_request_dimensions_invalid");
+            switch(message.path("role").asText()) {
+                case "system", "developer" -> textMessages.add(SystemMessage.from(text));
+                case "user" -> textMessages.add(UserMessage.from(text));
+                case "assistant" -> textMessages.add(AiMessage.from(text));
+                default -> throw new java.io.IOException("groq_request_dimensions_invalid");
+            }
+        }
+        // Reuse the existing approximate text-token budget; bytes remain diagnostic only.
+        return com.example.lms.util.TokenCounter.estimateTextChatInput(textMessages);
     }
 
     private static com.example.lms.llm.gateway.LlmGatewayException groqAdmissionFailure(
@@ -244,8 +281,11 @@ public class ModelRuntimeHealthTracker {
     public ClientAttempt beginClientAttempt(String role) {
         Object rawId = com.example.lms.search.TraceStore.get(REQUEST_TIMELINE_TRACE_KEY);
         String timelineId = rawId == null ? "" : String.valueOf(rawId);
+        boolean embedding = "embedding".equals(role);
         RequestAttemptAppContext appReservation = requestAttemptAppContext.get();
-        if (appReservation == null || !timelineId.equals(appReservation.timelineId())
+        if (embedding) {
+            reserveRequestInferenceAttempt(timelineId, "embedding");
+        } else if (appReservation == null || !timelineId.equals(appReservation.timelineId())
                 || !appReservation.firstClientReservation().compareAndSet(true, false)) {
             if(appReservation!=null&&"context_prepare".equals(appReservation.role()))throw inferenceLimitFailure();
             reserveRequestInferenceAttempt(timelineId);
@@ -261,10 +301,11 @@ public class ModelRuntimeHealthTracker {
                 logical = app != null && timelineId.equals(app.timelineId())
                         ? app.logicalCallOrdinal() : timeline.beginLogicalCall();
                 sequence = ++timeline.clientAttemptTotal;
+                if (!embedding) timeline.inferenceClientAttemptTotal++;
             }
         }
         ClientAttempt attempt = new ClientAttempt(timelineId, run, logical, sequence,
-                REQUEST_ATTEMPT_ROLES.contains(role) ? role : "primary", currentClientAttempt.get());
+                embedding ? "embedding" : REQUEST_ATTEMPT_ROLES.contains(role) ? role : "primary", currentClientAttempt.get());
         currentClientAttempt.set(attempt);
         attempt.event("application_call_intent", "application", System.currentTimeMillis());
         return attempt;
@@ -978,7 +1019,7 @@ public class ModelRuntimeHealthTracker {
             int bounded = Math.max(1, Math.min(4, limit));
             if (timeline.inferenceAttemptLimit == 0) {
                 timeline.inferenceAttemptLimit = bounded;
-                timeline.inferenceAttemptTotal = Math.max(timeline.attemptTotal, timeline.clientAttemptTotal);
+                timeline.inferenceAttemptTotal = Math.max(timeline.attemptTotal, timeline.inferenceClientAttemptTotal);
             } else timeline.inferenceAttemptLimit = Math.min(timeline.inferenceAttemptLimit, bounded);
         }
     }
@@ -1008,6 +1049,8 @@ public class ModelRuntimeHealthTracker {
                 throw new com.example.lms.llm.gateway.LlmGatewayException(
                         "Inference deadline exhausted", LlmFailureClass.TIMEOUT_SOFT, "failover_exhausted");
             }
+            // Embeddings retain cancellation/deadline checks without spending a chat-generation slot.
+            if ("embedding".equals(role)) return false;
             if (timeline.inferenceAttemptTotal >= timeline.inferenceAttemptLimit) throw inferenceLimitFailure();
             if ("context_prepare".equals(role)) {
                 if(timeline.contextPreparationStarted
@@ -2421,6 +2464,7 @@ public class ModelRuntimeHealthTracker {
         private int attemptTotal;
         private int attemptDropped;
         private int clientAttemptTotal;
+        private int inferenceClientAttemptTotal;
         private int lifecycleTotal;
         private final java.util.concurrent.atomic.AtomicInteger lifecycleDropped = new java.util.concurrent.atomic.AtomicInteger();
         private long cancellationAtEpochMs;

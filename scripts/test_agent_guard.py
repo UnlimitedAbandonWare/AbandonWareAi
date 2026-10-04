@@ -227,6 +227,221 @@ class StatusDocTest(unittest.TestCase):
         lines = self.doc.read_text().splitlines()
         self.assertEqual("| task-ccc | new | row |", lines[-1])
 
+    def _child(self, code, *args, cwd=None):
+        prefix = ("import sys\nfrom pathlib import Path\n"
+                  "sys.stdout.reconfigure(encoding='utf-8')\n"
+                  "sys.path.insert(0, sys.argv[1])\nimport status_doc as sd\n")
+        child = subprocess.Popen(
+            [sys.executable, "-B", "-u", "-c", prefix + code,
+             str(SCRIPTS), *map(str, args)], cwd=cwd,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8")
+        self.addCleanup(self._stop_child, child)
+        return child
+
+    @staticmethod
+    def _stop_child(child):
+        if child.poll() is None:
+            child.kill()
+        child.communicate(timeout=10)
+
+    def _message(self, child):
+        import queue
+        import threading
+        messages = queue.Queue()
+        threading.Thread(target=lambda: messages.put(child.stdout.readline()),
+                         daemon=True).start()
+        try:
+            message = messages.get(timeout=10).strip()
+        except queue.Empty:
+            self.fail("child protocol timed out")
+        self.assertTrue(message, "child exited before protocol message")
+        return message
+
+    @staticmethod
+    def _release(child):
+        child.stdin.write("go\n")
+        child.stdin.flush()
+
+    def _result(self, child, expected_exit=0):
+        stdout, stderr = child.communicate(timeout=15)
+        self.assertEqual(expected_exit, child.returncode, stderr + stdout)
+        return json.loads(stdout)
+
+    def test_concurrent_same_sha_exactly_one_applied(self):
+        before = self.doc.read_bytes()
+        initial_sha = sha(before)
+        rows = ["| task-aaa | verified | winner-a |",
+                "| task-bbb | verified | winner-b |"]
+        code = '''
+from contextlib import contextmanager
+import json
+# Observe entry into the REAL lock if present; never replace it with a mock.
+if hasattr(sd, '_document_lock'):
+    original_lock = sd._document_lock
+    @contextmanager
+    def observed_lock(path):
+        print('lock-entering', flush=True)
+        with original_lock(path):
+            yield
+    sd._document_lock = observed_lock
+original_write = sd.write_atomic
+def paused_write(path, lines):
+    print('write-ready', flush=True)
+    assert sys.stdin.readline().strip() == 'go'
+    original_write(path, lines)
+sd.write_atomic = paused_write
+result = sd.update_row(sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5])
+print(json.dumps(result))
+'''
+        first = self._child(code, self.doc, "task-aaa", rows[0], initial_sha)
+        signal = self._message(first)
+        if signal == "lock-entering":
+            signal = self._message(first)
+        self.assertEqual("write-ready", signal)
+        second = self._child(code, self.doc, "task-bbb", rows[1], initial_sha)
+        # Old code reaches write-ready with the stale snapshot. New code
+        # announces lock entry OUTSIDE the critical section, so no deadlock.
+        signal = self._message(second)
+        self.assertIn(signal, ("lock-entering", "write-ready"))
+        self._release(second)
+        self._release(first)
+        results = [self._result(first), self._result(second)]
+        statuses = [result["status"] for result in results]
+        final = self.doc.read_bytes()
+        print("CAS observed: applied=%d conflict=%d changedRows=%d" % (
+            statuses.count("applied"), statuses.count("conflict"),
+            sum(row.encode("utf-8") in final for row in rows)))
+        self.assertEqual(1, statuses.count("applied"),
+                         "same SHA admitted two writers: " + repr(statuses))
+        self.assertEqual(1, statuses.count("conflict"))
+        winner = statuses.index("applied")
+        old = ("| task-aaa | in_progress | first |" if winner == 0
+               else "| task-bbb | verified | second |")
+        self.assertEqual(before.replace(old.encode(), rows[winner].encode()), final)
+        self.assertEqual(initial_sha, results[winner]["beforeSha256"])
+        self.assertEqual(sha(final), results[winner]["afterSha256"])
+        loser = results[1 - winner]
+        self.assertEqual("status-doc-changed-since-read", loser["reason"])
+        self.assertEqual(initial_sha, loser["expected"])
+        self.assertEqual(sha(final), loser["actual"])
+
+    def _wrapper_child(self, key, row, tries=3):
+        code = '''
+import agent_harmony_status_cas as wrapper
+original_read = sd.read_doc
+first = True
+def paused_read(path):
+    global first
+    snapshot = original_read(path)
+    if first:
+        first = False
+        print('snapshot-ready', flush=True)
+        assert sys.stdin.readline().strip() == 'go'
+    return snapshot
+sd.read_doc = paused_read
+sys.exit(wrapper.main(['update', '--file', sys.argv[2], '--key', sys.argv[3],
+                      '--line', sys.argv[4], '--tries', sys.argv[5]]))
+'''
+        return self._child(code, self.doc, key, row, tries)
+
+    def test_wrapper_concurrent_retry_preserves_both_rows(self):
+        before = self.doc.read_bytes()
+        rows = ["| task-aaa | verified | wrapper-a |",
+                "| task-bbb | verified | wrapper-b |"]
+        children = [self._wrapper_child(key, row) for key, row in
+                    zip(("task-aaa", "task-bbb"), rows)]
+        for child in children:
+            self.assertEqual("snapshot-ready", self._message(child))
+        for child in children:
+            self._release(child)
+        results = [self._result(child) for child in children]
+        self.assertEqual([1, 2], sorted(r["attempts"] for r in results))
+        self.assertEqual([0, 1], sorted(r["conflictCount"] for r in results))
+        for result in results:
+            self.assertEqual("applied", result["status"])
+            self.assertEqual("awx.agent-harmony.status-cas.v1", result["schemaVersion"])
+        expected = before.replace(b"| task-aaa | in_progress | first |", rows[0].encode())
+        expected = expected.replace(b"| task-bbb | verified | second |", rows[1].encode())
+        self.assertEqual(expected, self.doc.read_bytes())
+        print("Wrapper observed: attempts=[1, 2] conflictCount=[0, 1] bothRows=preserved")
+
+    def test_wrapper_exhaustion_preserves_conflict_contract(self):
+        child = self._wrapper_child("task-aaa", "| task-aaa | x | stale |", tries=1)
+        self.assertEqual("snapshot-ready", self._message(child))
+        SD.update_row(self.doc, "task-bbb", "| task-bbb | x | foreign |",
+                      sha(self.doc.read_bytes()))
+        current = self.doc.read_bytes()
+        self._release(child)
+        result = self._result(child, expected_exit=2)
+        self.assertEqual("conflict", result["status"])
+        self.assertEqual((1, 1), (result["attempts"], result["conflictCount"]))
+        self.assertEqual("status-doc-changed-since-read", result["last"]["reason"])
+        self.assertTrue(result["rebaseGuide"])
+        self.assertEqual(current, self.doc.read_bytes())
+
+    def test_file_scoped_lock_alias_timeout_and_retry(self):
+        before = self.doc.read_bytes()
+        other = self.doc.with_name("OTHER.md")
+        other.write_bytes(before)
+        alias = str(self.doc).upper() if os.name == "nt" else str(self.doc.parent / "." / self.doc.name)
+        code = '''
+sd._LOCK_TIMEOUT_SECONDS = 0.1
+sys.exit(sd.main(['update-row', '--file', sys.argv[2], '--key', 'task-aaa',
+                  '--line', '| task-aaa | x | lock-check |',
+                  '--expect-sha256', sys.argv[3]]))
+'''
+        with SD._document_lock(self.doc):
+            busy = self._result(self._child(code, alias, sha(before)), expected_exit=2)
+            self.assertEqual({"status": "error", "reason": "status-doc-lock-busy"}, busy)
+            independent = self._result(self._child(code, other, sha(before)))
+            self.assertEqual("applied", independent["status"])
+        self.assertEqual(before, self.doc.read_bytes())
+        retry = self._result(self._child(code, alias, sha(before)))
+        self.assertEqual("applied", retry["status"])
+        self.assertEqual(before.replace(b"| task-aaa | in_progress | first |",
+                                       b"| task-aaa | x | lock-check |"), self.doc.read_bytes())
+
+    def test_replace_exception_cleans_own_temp_and_releases_lock(self):
+        from unittest.mock import patch
+        before = self.doc.read_bytes()
+        foreign_temp = self.doc.with_name(self.doc.name + ".foreign.tmp")
+        foreign_temp.write_bytes(b"keep")
+        with patch.object(SD.os, "replace", side_effect=OSError("fixture-replace-failure")):
+            with self.assertRaisesRegex(OSError, "fixture-replace-failure"):
+                SD.update_row(self.doc, "task-aaa", "| task-aaa | x | failed |", sha(before))
+        self.assertEqual(before, self.doc.read_bytes())
+        self.assertEqual([foreign_temp], list(self.doc.parent.glob("*.tmp")))
+        code = '''
+sys.exit(sd.main(['update-row', '--file', sys.argv[2], '--key', 'task-aaa',
+                  '--line', '| task-aaa | x | recovered |',
+                  '--expect-sha256', sys.argv[3]]))
+'''
+        result = self._result(self._child(code, self.doc, sha(before)))
+        self.assertEqual("applied", result["status"])
+        self.assertEqual(before.replace(b"| task-aaa | in_progress | first |",
+                                       b"| task-aaa | x | recovered |"), self.doc.read_bytes())
+        self.assertEqual(b"keep", foreign_temp.read_bytes())
+
+    def test_utf8_crlf_line_file_spaces_and_other_cwd(self):
+        folder = self.doc.parent / "\uacf5\ubc31 \uacbd\ub85c"
+        folder.mkdir()
+        doc = folder / "\uc0c1\ud0dc \ubb38\uc11c.md"
+        before = self.doc.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        doc.write_bytes(before)
+        row = "| task-aaa | verified | \ud55c\uae00 \uac31\uc2e0 |"
+        line_file = folder / "\uc0c8 \ud589.txt"
+        line_file.write_bytes((row + "\r\n").encode("utf-8"))
+        result = subprocess.run(
+            [sys.executable, "-B", str(SCRIPTS / "status_doc.py"), "update-row",
+             "--file", str(doc), "--key", "task-aaa", "--line-file", str(line_file),
+             "--expect-sha256", sha(before)], cwd=folder,
+            capture_output=True, text=True, encoding="utf-8", timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        self.assertEqual("applied", json.loads(result.stdout)["status"])
+        self.assertEqual(before.replace(b"| task-aaa | in_progress | first |",
+                                       row.encode("utf-8")), doc.read_bytes())
+
 
 class QuarantineTest(unittest.TestCase):
     """Manifest-run lifecycle: unique manifests, hash-bound apply, idempotent

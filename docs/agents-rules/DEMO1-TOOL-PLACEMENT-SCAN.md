@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L289-L294 sha256=d5092810bb337f8e4b25957ebc8ea5ff66e14ee41aed5c2e08641bd15587f2ce movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L295-L300 sha256=d5092810bb337f8e4b25957ebc8ea5ff66e14ee41aed5c2e08641bd15587f2ce movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-TOOL-PLACEMENT-SCAN -->
 ## Tool placement scan (advisory, reuse-only)
 - Per-turn second opinion on **which existing tool to call first**: `python -B scripts/demo1_tool_placement_scan.py scan "<ask>"` reads the ask + journal/lease/dirty state and prints a ranked JSON list of already-existing script/bat/skill calls (`--list-triggers` audits the table; `--skip-state`/`--no-router`/`--no-git` for offline). It calls `demo1_vibe_skill_router.py resolve` as a subprocess — it never replaces the router and never executes what it ranks.

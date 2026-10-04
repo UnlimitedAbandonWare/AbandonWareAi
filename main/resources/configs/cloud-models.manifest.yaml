@@ -79,6 +79,44 @@ models:
     catalogCapturedAt: "2026-07-01"
     catalogTrust: "attachment_unverified"
 
+  - id: "gemini-3.8-flash"
+    provider: "gemini"
+    enabled: true
+    endpoint:
+      type: "openai_compat"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      key_env: "GEMINI_API_KEY"
+    credentialEnv: "GEMINI_API_KEY"
+    apiSurface: "gemini_api_openai_compatible"
+    ctx: 1048576
+    maxOutputTokens: 65536
+    capabilities: [chat, reasoning, code, tools, vision, multimodal]
+    costTier: "paid"
+    latencyTier: "variable"
+    routingDecision: "registered_route_metadata_only"
+    sourceDocUrl: "https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash"
+    catalogCapturedAt: "2026-10-03"
+    catalogTrust: "official_documentation"
+
+  - id: "gemini-3.5-flash-lite"
+    provider: "gemini"
+    enabled: true
+    endpoint:
+      type: "openai_compat"
+      base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+      key_env: "GEMINI_API_KEY"
+    credentialEnv: "GEMINI_API_KEY"
+    apiSurface: "gemini_api_openai_compatible"
+    ctx: 1048576
+    maxOutputTokens: 65536
+    capabilities: [chat, reasoning, code, tools, vision, multimodal]
+    costTier: "paid"
+    latencyTier: "low"
+    routingDecision: "registered_route_metadata_only"
+    sourceDocUrl: "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite"
+    catalogCapturedAt: "2026-10-03"
+    catalogTrust: "official_documentation"
+
   - id: "mistral-medium-3-5"
     provider: "mistral"
     enabled: false
@@ -153,3 +191,165 @@ models:
     routingDecision: "fallback_only_route_openai_economy"
     catalogCapturedAt: "2026-09-26"
     catalogTrust: "attachment_unverified"
+
+  - provider: vercel-gateway
+    id: "alibaba/qwen3.7-flash"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-qwen3.7-flash"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/alibaba/qwen3.7-flash/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported
+
+  - provider: vercel-gateway
+    id: "openai/gpt-oss-20b"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-gpt-oss-20b"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/openai/gpt-oss-20b/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported
+
+  - provider: vercel-gateway
+    id: "inference-net/schematron-v2-turbo"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-schematron-v2-turbo"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/inference-net/schematron-v2-turbo/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported
+
+  - provider: vercel-gateway
+    id: "amazon/nova-micro"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-nova-micro"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/amazon/nova-micro/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported
+
+  - provider: vercel-gateway
+    id: "zai/glm-4.7-flash"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-glm-4.7-flash"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/zai/glm-4.7-flash/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported
+
+  - provider: vercel-gateway
+    id: "zai/glm-5.3-flash"
+    enabled: false
+    credentialEnv: AI_GATEWAY_API_KEY
+    endpoint: {type: openai_compatible, base_url: "https://ai-gateway.vercel.sh/v1"}
+    endpointRoute: "vercel-glm-5.3-flash"
+    apiSurface: openai_chat_completions
+    hostingProvider: UNKNOWN
+    providerRestrictionSupported: false
+    supportedRoles: [PROMPT_POSE_DRAFT, SELFASK_BQ, SELFASK_ER, SELFASK_RC]
+    capabilities: [chat]
+    capabilityStatus: {tools: UNKNOWN, json: UNKNOWN, schema: UNKNOWN, reasoning: UNKNOWN, context: UNKNOWN, output: UNKNOWN}
+    costTier: paid
+    dataPolicy: {zeroDataRetention: UNKNOWN, confidentialDocuments: BLOCKED}
+    price:
+      currency: USD
+      unit: per_1M_tokens
+      input: UNKNOWN
+      output: UNKNOWN
+      cacheRead: UNKNOWN
+      toolExtra: UNKNOWN
+      sourceUrl: "https://ai-gateway.vercel.sh/v1/models/zai/glm-5.3-flash/endpoints"
+      checkedAt: "2026-10-04T00:03:00Z"
+      priceVersion: unavailable-20261004
+    catalogTrust: official_catalog_unavailable
+    routingDecision: hold_provider_restriction_unsupported

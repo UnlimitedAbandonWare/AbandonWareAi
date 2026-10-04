@@ -112,4 +112,84 @@ class GeminiClientCompatibilityTest {
         assertEquals(1, delta.triples().size());
         assertEquals("subject", delta.triples().get(0).s());
     }
+    @Test
+    void t7CurationMultipartMatchesNonEmptySinglePartKnowledgeDelta() throws JsonProcessingException {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("GEMINI_API_KEY", "gemini-facade-curation-value")
+                .withProperty("gemini.gateway.enabled", "true")
+                .withProperty("gemini.gateway.preflight.enabled", "false")
+                .withProperty("gemini.gateway.max-attempts", "1")
+                .withProperty("gemini.gateway.purpose.curation.enabled", "true");
+        String deltaJson = """
+                {"triples":[{"s":"subject","p":"predicate","o":"object","sourceUrl":"https://example.invalid/source"}],
+                 "rules":[],"aliases":[],"memories":[],"protectedTerms":[]}
+                """;
+        ObjectMapper mapper = new ObjectMapper();
+        int split = deltaJson.indexOf("predicate") + 4;
+        String singlePayload = "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":"
+                + mapper.writeValueAsString(deltaJson) + "}]}}]}";
+        String multipartPayload = "{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":["
+                + "{\"thought\":true,\"text\":\"SYNTHETIC_THOUGHT_MARKER\"},{\"text\":"
+                + mapper.writeValueAsString(deltaJson.substring(0, split)) + "},{\"thought\":false,\"text\":"
+                + mapper.writeValueAsString(deltaJson.substring(split))
+                + "}]}},{\"content\":{\"parts\":[{\"text\":\"SECOND_CANDIDATE_MARKER\"}]}}]}";
+        LearningEvent event = new LearningEvent("session", "question", "answer", List.of(), List.of(), 1.0, 0.0);
+        List<KnowledgeDelta> deltas = new ArrayList<>();
+        for (String payload : List.of(singlePayload, multipartPayload)) {
+            AtomicInteger exchanges = new AtomicInteger();
+            WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+                exchanges.incrementAndGet();
+                return Mono.just(ClientResponse.create(HttpStatus.OK)
+                        .header("Content-Type", "application/json").body(payload).build());
+            });
+            GeminiClient client = new GeminiClient(new GeminiGateway(builder,
+                    new ProviderCredentialResolver(environment), environment));
+            deltas.add(client.curate(event, "legacy-caller-model-must-not-own-policy", Duration.ofSeconds(1)));
+            assertEquals(1, exchanges.get());
+        }
+
+        KnowledgeDelta multipart = deltas.get(1);
+        assertEquals(deltas.get(0), multipart);
+        assertEquals(1, multipart.triples().size());
+        assertEquals("subject", multipart.triples().get(0).s());
+        assertEquals("predicate", multipart.triples().get(0).p());
+        assertEquals("object", multipart.triples().get(0).o());
+        assertEquals("https://example.invalid/source", multipart.triples().get(0).sourceUrl());
+        assertEquals(List.of(), multipart.rules());
+        assertEquals(List.of(), multipart.aliases());
+        assertEquals(List.of(), multipart.memories());
+        assertEquals(List.of(), multipart.protectedTerms());
+        String encodedDelta = mapper.writeValueAsString(multipart);
+        assertTrue(!encodedDelta.contains("SYNTHETIC_THOUGHT_MARKER"));
+        assertTrue(!encodedDelta.contains("SECOND_CANDIDATE_MARKER"));
+    }
+
+    @Test
+    void t8KeywordVariantsConsumesMultipartLinesAndKeepsTheCapWithOneCall() {
+        MockEnvironment environment = new MockEnvironment()
+                .withProperty("GEMINI_API_KEY", "gemini-facade-test-value")
+                .withProperty("gemini.gateway.enabled", "true")
+                .withProperty("gemini.gateway.preflight.enabled", "false")
+                .withProperty("gemini.gateway.max-attempts", "1")
+                .withProperty("gemini.gateway.purpose.keyword-training.enabled", "true");
+        AtomicInteger exchanges = new AtomicInteger();
+        WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+            exchanges.incrementAndGet();
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json")
+                    .body("""
+                            {"candidates":[{"finishReason":"STOP","content":{"parts":[
+                              {"text":"keyword one\\nkeyword t"},{"text":"wo\\nkeyword three"}]}}]}
+                            """).build());
+        });
+        GeminiClient client = new GeminiClient(new GeminiGateway(builder,
+                new ProviderCredentialResolver(environment), environment));
+
+        GeminiClient.KeywordVariantsResult result = client.keywordVariantsWithMeta(
+                "base", "anchor", 2, Duration.ofSeconds(1));
+
+        assertEquals(List.of("keyword one", "keyword two"), result.variants());
+        assertEquals(200, result.httpStatus());
+        assertEquals(1, exchanges.get());
+    }
 }

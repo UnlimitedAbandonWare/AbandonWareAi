@@ -1257,10 +1257,34 @@ class ChatApiControllerTraceMetaTest {
     void syncChatResponseReturnsTraceTurnIdInDto() throws IOException {
         String source = Files.readString(Path.of("main/java/com/example/lms/api/ChatApiController.java"));
 
-        assertTrue(Pattern.compile("new\\s+ChatResponseDto\\(\\s*visibleFinalContent,\\s*completedSession\\.getId\\(\\),\\s*modelUsedFinal,\\s*result\\.ragUsed\\(\\),\\s*answerModeFinal,\\s*traceTurnId,\\s*learningContextMeta,\\s*result\\.evidenceMetadata\\(\\),\\s*syncPipelineSnapshot,\\s*syncSelectionEntropy\\s*\\)")
+        assertTrue(Pattern.compile("new\\s+ChatResponseDto\\(\\s*visibleFinalContent,\\s*completedSession\\.getId\\(\\),\\s*modelUsedFinal,\\s*result\\.ragUsed\\(\\),\\s*answerModeFinal,\\s*traceTurnId,\\s*learningContextMeta,\\s*result\\.evidenceMetadata\\(\\),\\s*syncPipelineSnapshot,\\s*syncSelectionEntropy\\s*,\\s*extraMeta\\s*\\)")
                         .matcher(source)
                         .find(),
                 "sync /api/chat response must carry traceTurnId and pipelineSnapshot so frontend can open the current trace immediately");
+
+        ChatStreamEvent.PipelineSnapshot snapshot = new ChatStreamEvent.PipelineSnapshot(
+                "plan-sync", "api3", "GENERAL", 42L, 2, 0, 2, 1.0, 0.8, "NONE", "");
+        com.example.lms.infra.selection.SelectionEntropyProjection entropy =
+                new com.example.lms.infra.selection.SelectionEntropyProjection(
+                        "awx.selection-entropy.v1", "replay",
+                        com.example.lms.infra.selection.ReplaySelectionEntropy.ALGORITHM_VERSION,
+                        true, "matched", "012345abcdef", "a".repeat(64),
+                        4, 3, 1, 0, 1, 1, 1, false, "");
+        com.example.lms.dto.ChatResponseDto response = new com.example.lms.dto.ChatResponseDto(
+                "ok", 7L, "local", true, "GENERAL", 42L,
+                com.example.lms.dto.LearningContextMetadata.empty(), List.of(), snapshot, entropy,
+                Map.of("guard.citation.hint", Map.of("status", "근거 없음"),
+                        "private.fixture", "synthetic-private-value"));
+        assertEquals(42L, response.getTraceTurnId());
+        assertEquals(snapshot, response.getPipelineSnapshot());
+        assertEquals(entropy, response.getSelectionEntropy());
+        com.fasterxml.jackson.databind.JsonNode json = new ObjectMapper().readTree(
+                new ObjectMapper().writeValueAsString(response));
+        assertEquals(42L, json.path("traceTurnId").asLong());
+        assertEquals(42L, json.path("pipelineSnapshot").path("traceTurnId").asLong());
+        assertEquals("api3", json.path("pipelineSnapshot").path("route").asText());
+        assertEquals("근거 없음", json.path("evidenceHint").asText());
+        assertFalse(json.toString().contains("synthetic-private-value"));
     }
 
     @Test

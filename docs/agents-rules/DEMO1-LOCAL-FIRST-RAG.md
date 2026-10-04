@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L332-L337 sha256=1ea9b6dfc86921935fb86e4690f51fc2ba1914154952d5c6c14c98a378a39049 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L338-L343 sha256=1ea9b6dfc86921935fb86e4690f51fc2ba1914154952d5c6c14c98a378a39049 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-LOCAL-FIRST-RAG -->
 ## Local-First RAG Repair Overlay
 - Before source work, verify Java 17. Missing optional historical ZIPs, reports, or handoffs do not block live-checkout facts; named attachments, PatchDrop artifacts, AutoLearn intake files, and required acceptance evidence remain mandatory.

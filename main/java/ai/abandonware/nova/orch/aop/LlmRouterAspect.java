@@ -536,7 +536,9 @@ public class LlmRouterAspect {
                     sel.cfg()), sel.key());
         }
         if (!lazyFallbackPossible) {
-            return roleBound(primary,sel,ca,!sel.key().equals(original.key()));
+            return rememberRoutedIdentity(
+                    roleBound(primary,sel,ca,!sel.key().equals(original.key())),
+                    sel, primaryRoute.get(), providedProtocol);
         }
         if (primary instanceof ExpectedFailureChatModel) {
             return primary;
@@ -611,7 +613,35 @@ public class LlmRouterAspect {
                 apiFirstEnabled() ? 2 : gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled()
                         && isLocalEligibilityProvider(sel.cfg().getProvider()) ? 2 : 1)
                 .withMaskedFallbackReporter(this::reportMaskedFallback);
-        return apiFirstEnabled() ? fallbackAware.withApiFirstPolicy() : fallbackAware;
+        return rememberRoutedIdentity(
+                apiFirstEnabled() ? fallbackAware.withApiFirstPolicy() : fallbackAware,
+                sel, primaryRoute.get(), providedProtocol);
+    }
+
+    private ChatModel rememberRoutedIdentity(
+            ChatModel model,
+            LlmRouterBandit.Selected selected,
+            ModelRuntimeHealthTracker.RequestAttemptRoute capturedRoute,
+            String providedProtocol) {
+        if (model instanceof ExpectedFailureChatModel || capturedRoute == null) return model;
+        String modelName = trimToNull(selected.cfg().getName());
+        if (modelName == null) return model;
+        // A substituted construction must not be relabelled as the original configuration.
+        if (capturedRoute != null
+                && !SafeRedactor.hashValue(modelName).equals(capturedRoute.modelHash())) {
+            return model;
+        }
+        String protocol = capturedRoute == null
+                ? trimToNull(providedProtocol) : trimToNull(capturedRoute.protocol());
+        String baseUrl = normalizeBaseUrl(selected.cfg().getBaseUrl());
+        return com.example.lms.llm.DynamicChatModelFactory.rememberConfiguredModelIdentity(
+                model,
+                new com.example.lms.llm.DynamicChatModelFactory.ConfiguredModelIdentity(
+                        modelName,
+                        providerForAttempt(selected.cfg(), modelName, baseUrl, protocol),
+                        protocol,
+                        null,
+                        ModelRuntimeHealthTracker.endpointIdentityHash(baseUrl)));
     }
 
     private boolean preferCloudOnLocalFailure() {
@@ -647,7 +677,7 @@ public class LlmRouterAspect {
 
     private ChatModel roleBound(ChatModel model,LlmRouterBandit.Selected selected,CallArgs ca,boolean fallback) {
         return ca.routingInvocation==null?model:ca.routingInvocation.wrap(model,
-                ca.routingInvocation.candidate("llmrouter."+selected.key()).orElseThrow(),fallback);
+                ca.routingInvocation.candidate("llmrouter."+selected.key()).orElseThrow(),fallback,ca.maxTokens);
     }
 
     private boolean localAdmissionEnabled() {
@@ -1302,6 +1332,9 @@ public class LlmRouterAspect {
         if (!cfg.isEnabled()) {
             failRoute(key, cfg.getBaseUrl(), "route_disabled");
         }
+        if ("vercel-gateway".equalsIgnoreCase(cfg.getProvider())) {
+            failRoute(key,cfg.getBaseUrl(),"provider_restriction_unsupported");
+        }
 
         String modelName = trimToNull(cfg.getName());
         String rawBaseUrl = trimToNull(cfg.getBaseUrl());
@@ -1316,10 +1349,15 @@ public class LlmRouterAspect {
         }
 
         String baseUrl = normalizeBaseUrl(rawBaseUrl);
+        if (ca.routingInvocation != null && ca.routingInvocation.binding().role().auxiliary()
+                && ca.routingInvocation.candidate("llmrouter."+key).orElseThrow().paid()
+                && (ca.maxTokens == null || ca.maxTokens <= 0 || OpenAiTokenParamCompat.tokenParamKey(modelName,baseUrl)==null))
+            failRoute(key,baseUrl,"auxiliary_output_bound_unverified");
         long routeTimeoutMs = routeTimeoutMillis(ca.cueTimeoutMs > 0 ? ca.cueTimeoutMs : Math.max(1_000L, ca.timeoutMs), attemptRole);
         TimeBudget sharedBudget = TimeBudgetContext.get();
         if (remainingRoutes > 0 && sharedBudget != null)
             routeTimeoutMs = Math.max(1, Math.min(routeTimeoutMs, sharedBudget.remainingMillis() / (remainingRoutes + 1)));
+        if (ca.routingInvocation != null && ca.routingInvocation.binding().role().auxiliary()) ca = withoutLibraryRetries(ca);
         if (ambiguousRouteAttempts) {
             TimeBudget budget = TimeBudgetContext.get();
             if (budget != null) routeTimeoutMs = Math.max(1, Math.min(routeTimeoutMs, budget.remainingMillis()));
@@ -1352,6 +1390,8 @@ public class LlmRouterAspect {
                             cfg,
                             ca);
                 case SUBSTITUTE_CHAT:
+                    if(ca.routingInvocation!=null && ca.routingInvocation.binding().role().auxiliary())
+                        failRoute(key,baseUrl,"routing_candidate_identity_changed");
                     String sub = modelGuardProps.getSubstituteChatModel();
                     if (!StringUtils.hasText(sub)) {
                         sub = get("llm.chat-model");

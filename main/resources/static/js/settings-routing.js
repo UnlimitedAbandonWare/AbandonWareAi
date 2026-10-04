@@ -1,7 +1,7 @@
 (function(root,factory){const core=factory();if(typeof module==='object'&&module.exports)module.exports=core;else{root.AwxSettingsRouting=core;if(root.document)root.addEventListener('DOMContentLoaded',()=>core.mount(root.document,root.fetch.bind(root)));}})(typeof window==='object'?window:globalThis,function(){
 'use strict';
-const ROLES=Object.freeze(['MAIN_DEFAULT','MAIN_FAST','MAIN_HIGH','SELFASK_BQ','SELFASK_ER','SELFASK_RC']);
-const LABELS=['주 답변 · 기본','주 답변 · 빠른 처리','주 답변 · 높은 품질','Self-Ask · 기초 질문','Self-Ask · 개체 관계','Self-Ask · 반례'];
+const ROLES=Object.freeze(['MAIN_DEFAULT','MAIN_FAST','MAIN_HIGH','SELFASK_BQ','SELFASK_ER','SELFASK_RC','PROMPT_POSE_DRAFT']);
+const LABELS=['주 답변 · 기본','주 답변 · 빠른 처리','주 답변 · 높은 품질','Self-Ask · 기초 질문','Self-Ask · 개체 관계','Self-Ask · 반례','프롬프트 초안'];
 const id=v=>typeof v==='string'&&/^llmrouter\.[A-Za-z0-9_.:-]{1,240}$/.test(v);
 function fields(o,allowed){if(!o||typeof o!=='object'||Array.isArray(o)||Object.keys(o).some(k=>!allowed.includes(k)))throw Error('invalid_profile');}
 function profile(input){
@@ -9,9 +9,12 @@ function profile(input){
  if(input.schemaVersion!==1||typeof input.enabled!=='boolean'||input.additionalPaidAllowed!==false||input.additionalCostCapUsd!==0)throw Error('invalid_profile');
  fields(input.bindings,ROLES);const bindings={};
  for(const [role,b]of Object.entries(input.bindings)){
-  fields(b,['role','selection','target','orderedFallbacks','maxExtraFallbackCalls']);
+  fields(b,['role','selection','target','orderedFallbacks','maxExtraFallbackCalls','auxPaidAllowed','auxCostCapUsdPerRun']);
+  const paid=b.auxPaidAllowed??false,cap=b.auxCostCapUsdPerRun??0;
+  if(typeof paid!=='boolean'||typeof cap!=='number'||!Number.isFinite(cap)||cap<0||cap>0.05||paid!==(cap>0)||role.startsWith('MAIN_')&&paid)throw Error('invalid_binding');
   if(b.role!==role||b.selection!=='registered-route'||!id(b.target)||!Array.isArray(b.orderedFallbacks)||b.orderedFallbacks.length>3||b.orderedFallbacks.some(v=>!id(v)||v===b.target)||new Set(b.orderedFallbacks).size!==b.orderedFallbacks.length||!Number.isInteger(b.maxExtraFallbackCalls)||b.maxExtraFallbackCalls<0||b.maxExtraFallbackCalls>b.orderedFallbacks.length)throw Error('invalid_binding');
   bindings[role]={role,selection:b.selection,target:b.target,orderedFallbacks:[...b.orderedFallbacks],maxExtraFallbackCalls:b.maxExtraFallbackCalls};
+  if(b.auxPaidAllowed!==undefined||b.auxCostCapUsdPerRun!==undefined)Object.assign(bindings[role],{auxPaidAllowed:paid,auxCostCapUsdPerRun:cap});
  }
  return {schemaVersion:1,enabled:input.enabled,bindings,additionalPaidAllowed:false,additionalCostCapUsd:0};
 }
@@ -68,7 +71,12 @@ function mount(doc,fetcher){
  const useServer=button('서버 값 사용',()=>{if(pending)return;dirty=false;needsDecision=false;editVersion++;show(client.state(),true);});
  useDraft.hidden=useServer.hidden=true;
  form.addEventListener('change',()=>{dirty=true;editVersion++;comparison.hidden=true;useDraft.hidden=useServer.hidden=true;show({...client.state(),preview:null},false);});
- function draft(){const bindings={};for(const[role,c]of controls){if(c.select.value)bindings[role]={role,selection:'registered-route',target:c.select.value,orderedFallbacks:c.falls.map(s=>s.value).filter(Boolean),maxExtraFallbackCalls:Number(c.budget.value)};}return profile({schemaVersion:1,enabled:enabled.checked,bindings,additionalPaidAllowed:false,additionalCostCapUsd:0});}
+ function draft(){const bindings={};for(const[role,c]of controls){if(c.select.value){
+  bindings[role]={role,selection:'registered-route',target:c.select.value,orderedFallbacks:c.falls.map(s=>s.value).filter(Boolean),maxExtraFallbackCalls:Number(c.budget.value)};
+  const saved=data?.profile?.bindings?.[role];
+  if(!role.startsWith('MAIN_')&&saved?.target===c.select.value&&saved.auxPaidAllowed!==undefined)
+   Object.assign(bindings[role],{auxPaidAllowed:saved.auxPaidAllowed,auxCostCapUsdPerRun:saved.auxCostCapUsdPerRun});
+ }}return profile({schemaVersion:1,enabled:enabled.checked,bindings,additionalPaidAllowed:false,additionalCostCapUsd:0});}
  async function action(kind){
   if(pending)return;let selected;
   try{selected=draft();}catch(e){status.textContent='후보 중복이나 추가 호출 수를 확인하세요.';return;}

@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L454-L462 sha256=105f526f09b76533c46aa9cc42e17aa3a0bc662fd7cf058315ff666969f476a1 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L462-L470 sha256=105f526f09b76533c46aa9cc42e17aa3a0bc662fd7cf058315ff666969f476a1 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-P6-RESILIENCE-RULES -->
 ## P6 복원력·검증·데이터 정합성 5대 지침 (2026-10-01, SSOT)
 상세 규격: `.agents/rules/subagent-resilience-and-common-verifier.md`. 아래 5원칙은 요약 SSOT.

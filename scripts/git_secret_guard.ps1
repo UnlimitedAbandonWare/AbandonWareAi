@@ -177,7 +177,7 @@ function Get-GitPathList {
         $oldErrorActionPreference = $ErrorActionPreference
         $ErrorActionPreference = "SilentlyContinue"
         if ($ModeValue -eq "pre-commit" -and -not $All) {
-            $paths = @(& git diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $paths = @(& git --no-optional-locks diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
             $ErrorActionPreference = $oldErrorActionPreference
             return $paths
         }
@@ -186,7 +186,7 @@ function Get-GitPathList {
             $ErrorActionPreference = $oldErrorActionPreference
             return $paths
         }
-        $paths = @(& git diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $paths = @(& git --no-optional-locks diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         if ($All -or $paths.Count -eq 0) {
             $paths = @(& git ls-files --cached --others --exclude-standard 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         }

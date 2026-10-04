@@ -82,7 +82,7 @@ class LlmRouterRuntimeDeviceFailoverTest {
         }
     }
 
-    @Test void stalledFirstCloudLeavesTimeForSecondCloudInsideOriginalDeadline() throws Throwable {
+    @Test void stalledFirstCloudDoesNotReplayOntoSecondCloud() throws Throwable {
         try(OpenAiStub local=stub(500,"{\"error\":\"GPU is lost\"}");
             OpenAiStub a=delayedStub();OpenAiStub b=stub(200,"{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"B [source-7]\"}}]}")){
             var primary=localRoute("local",local.baseUrl(),"rtx3090");primary.setFallbackKey("cloud");
@@ -92,9 +92,10 @@ class LlmRouterRuntimeDeviceFailoverTest {
             com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(1800));
             long began=System.nanoTime();
             try{var model=assertInstanceOf(ChatModel.class,router.aroundLcWithTimeout(new FakePjp(null,"llmrouter.primary",null,null,null,null,32,5,0)));
-                assertEquals("B [source-7]",model.chat(List.of(UserMessage.from("synthetic source-7"))).aiMessage().text());
+                var failure = assertThrows(RuntimeException.class, () -> model.chat(List.of(UserMessage.from("synthetic source-7"))));
+                org.junit.jupiter.api.Assertions.assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
                 org.junit.jupiter.api.Assertions.assertTrue((System.nanoTime()-began)/1_000_000<1800);
-                assertEquals(1,local.calls());assertEquals(1,a.calls());assertEquals(1,b.calls());
+                assertEquals(1,local.calls());assertEquals(1,a.calls());assertEquals(0,b.calls());
             }finally{com.abandonware.ai.addons.budget.TimeBudgetContext.clear();}
         }
     }
@@ -106,7 +107,7 @@ class LlmRouterRuntimeDeviceFailoverTest {
         server.start();return new OpenAiStub(server,calls);
     }
 
-    @Test void allAutoLocalEndpointsOpenStillTriesTheSecondCloud() throws Throwable {
+    @Test void allAutoLocalEndpointsOpenDoesNotReplayUncertainFirstCloud() throws Throwable {
         verifyAllOpenCloudChain(false);
     }
 
@@ -130,14 +131,19 @@ class LlmRouterRuntimeDeviceFailoverTest {
             }).when(gateway).evaluate(anyString(),any(),anyString());
             var router=aspect(routes(Map.of("primary",primary,"cloud",first,"cloud-b",second)),gateway);
             var model=assertInstanceOf(ChatModel.class,router.aroundLcWithTimeout(new FakePjp(null,"llmrouter.auto",null,null,null,null,32,2,0)));
-            assertEquals("B [source-7]",model.chat(List.of(UserMessage.from("synthetic source-7"))).aiMessage().text());
-            assertEquals(0,local.calls());assertEquals(firstCloudIneligible ? 0 : 1,a.calls());assertEquals(1,b.calls());
+            if (firstCloudIneligible) {
+                assertEquals("B [source-7]",model.chat(List.of(UserMessage.from("synthetic source-7"))).aiMessage().text());
+            } else {
+                var failure = assertThrows(RuntimeException.class, () -> model.chat(List.of(UserMessage.from("synthetic source-7"))));
+                org.junit.jupiter.api.Assertions.assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
+            }
+            assertEquals(0,local.calls());assertEquals(firstCloudIneligible ? 0 : 1,a.calls());assertEquals(firstCloudIneligible ? 1 : 0,b.calls());
             assertEquals(1L,TraceStore.get("llm.gateway.preselectionFallbackCount"));
         }
     }
 
     @Test
-    void firstCloudFailureContinuesToTheNextRegisteredCloudExactlyOnce() throws Throwable {
+    void firstCloudUncertainFailureDoesNotReplayOntoNextCloud() throws Throwable {
         try (OpenAiStub primary = stub(500, "{\"error\":\"GPU is lost\"}");
              OpenAiStub cloudA = stub(503, "{\"error\":\"temporarily unavailable\"}");
              OpenAiStub cloudB = stub(200,
@@ -153,10 +159,11 @@ class LlmRouterRuntimeDeviceFailoverTest {
                     eligibleGateway(true));
             ChatModel routed = assertInstanceOf(ChatModel.class, router.aroundLcWithTimeout(
                     new FakePjp(null, "llmrouter.primary", null, null, null, null, 32, 2, 0)));
-            assertEquals("API_B [source-7]", routed.chat(List.of(UserMessage.from("synthetic source-7"))).aiMessage().text());
+            var failure = assertThrows(RuntimeException.class, () -> routed.chat(List.of(UserMessage.from("synthetic source-7"))));
+            org.junit.jupiter.api.Assertions.assertTrue(LlmGatewayFailureClassifier.hasNonReplayableReason(failure));
             assertEquals(1, primary.calls());
             assertEquals(1, cloudA.calls());
-            assertEquals(1, cloudB.calls());
+            assertEquals(0, cloudB.calls());
         }
     }
 
@@ -355,7 +362,7 @@ class LlmRouterRuntimeDeviceFailoverTest {
     }
 
     @Test
-    void nonGpuRuntimeFailureKeepsConfiguredCloudFallbackPrecedence() throws Throwable {
+    void genericRuntimeOverloadDoesNotReplayToDeviceOrCloud() throws Throwable {
         try (OpenAiStub primary = stub(503, "{\"error\":\"overloaded\"}");
              OpenAiStub deviceBackup = stub(200,
                      "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"DEVICE\"}}]}");
@@ -381,11 +388,12 @@ class LlmRouterRuntimeDeviceFailoverTest {
                     aspect.aroundLcWithTimeout(new FakePjp(
                             null, "llmrouter.primary", null, null, null, null, 32, 2, 0)));
 
-            assertEquals("CLOUD",
-                    routed.chat(List.of(UserMessage.from("bounded request"))).aiMessage().text());
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmGatewayException.class,
+                    () -> routed.chat(List.of(UserMessage.from("bounded request"))));
+            assertEquals("provider_execution_uncertain", failure.reasonCode());
             assertEquals(1, primary.calls());
             assertEquals(0, deviceBackup.calls());
-            assertEquals(1, cloudBackup.calls());
+            assertEquals(0, cloudBackup.calls());
         }
     }
 
@@ -508,7 +516,14 @@ class LlmRouterRuntimeDeviceFailoverTest {
                 .withProperty("llm.ollama-native.think-false.enabled",
                         Boolean.toString(nativeThinkFalseEnabled));
         ObjectProvider<KeyResolver> keyResolverProvider = mock(ObjectProvider.class);
-        when(keyResolverProvider.getIfAvailable()).thenReturn(null);
+        KeyResolver fixtureKeys = mock(KeyResolver.class);
+        when(fixtureKeys.resolveLocalLlmCredential()).thenReturn(
+                new com.example.lms.guard.ProviderCredentialResolver.Resolution(
+                        "local_llm", "ollama", true, true, "synthetic", 1, false, ""));
+        when(fixtureKeys.resolveOpenAiCredential()).thenReturn(
+                new com.example.lms.guard.ProviderCredentialResolver.Resolution(
+                        "openai", java.util.UUID.randomUUID().toString(), true, true, "synthetic", 1, false, ""));
+        when(keyResolverProvider.getIfAvailable()).thenReturn(fixtureKeys);
         NovaModelGuardProperties guard = new NovaModelGuardProperties();
         guard.setEnabled(false);
         return new LlmRouterAspect(

@@ -178,6 +178,13 @@ final class ChatTraceMetaMessageRestorer {
     }
 
     private static String encodeDiagnostic(String key, Object value) {
+        if (SafeRedactor.isLoadoutDiagnostic(key, value)) {
+            if (value instanceof java.util.List<?> list)
+                return "l:" + String.join(",", list.stream().map(String.class::cast).toList());
+            if (value instanceof Boolean) return "b:" + value;
+            if (value instanceof Number number) return "n:" + number.longValue();
+            if (value instanceof String) return "s:" + value;
+        }
         if ("observedModel".equals(key) && value instanceof String model
                 && model.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) return "s:" + model;
         if (DETAIL_FLAGS.contains(key) && value instanceof Boolean) return "b:" + value;
@@ -197,7 +204,9 @@ final class ChatTraceMetaMessageRestorer {
     }
 
     private static Object decodeDiagnostic(String key, String encoded) {
-        if (encoded == null || encoded.length() < 3 || encoded.length() > ("observedModel".equals(key) ? 202 : 82)) return null;
+        boolean loadoutList = "prompt.loadout.skills".equals(key) || "prompt.loadout.reasons".equals(key);
+        if (encoded == null || encoded.length() < (loadoutList ? 2 : 3)
+                || encoded.length() > (loadoutList ? 512 : "observedModel".equals(key) ? 202 : 82)) return null;
         try {
             String value = encoded.substring(2);
             Object decoded = switch (encoded.substring(0, 2)) {
@@ -205,6 +214,8 @@ final class ChatTraceMetaMessageRestorer {
                 case "n:" -> Long.valueOf(value);
                 case "f:" -> Double.valueOf(value);
                 case "s:" -> value;
+                case "l:" -> loadoutList ? value.isEmpty() ? java.util.List.of()
+                        : java.util.List.of(value.split(",", -1)) : null;
                 default -> null;
             };
             return decoded != null && encoded.equals(encodeDiagnostic(key, decoded)) ? decoded : null;

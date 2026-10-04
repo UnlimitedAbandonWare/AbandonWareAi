@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L170-L174 sha256=f40998c02ef072123fb16697f3474de0d70f5458223e39cbc28dfeb7992d5c63 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L176-L180 sha256=f40998c02ef072123fb16697f3474de0d70f5458223e39cbc28dfeb7992d5c63 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-SOURCE-DIRECTIVE-AUTO -->
 ## Desktop Source Directive Auto-Execution
 - An exact SourceDirective (pasted/pointed, or authorized opted-in automation) -> `$demo1-desktop-canonical-goal-intake` (`.agents/skills/demo1-desktop-canonical-goal-intake/SKILL.md`). Continue to the smallest verified patch under existing authorization; preserve explicit review-only/dry-run/do-not-apply.

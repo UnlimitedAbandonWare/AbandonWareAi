@@ -22,6 +22,24 @@ class ContextPreparationAttemptBudgetTest {
             wrapped(tracker,"primary",calls).chat(UserMessage.from("question"));assertEquals(2,calls.get());
         }finally{TraceStore.clear();}
     }
+    @Test void embeddingWithinHelperPreservesItsClientReservationAndFinalSlot(){
+        var tracker=new ModelRuntimeHealthTracker();String id=tracker.beginRequestTimeline("request","session");
+        TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY,id);tracker.limitRequestInferenceAttempts(id,2);
+        try{
+            var calls=new AtomicInteger();
+            ChatModel delegate=new ChatModel(){@Override public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request){
+                for(String role:List.of("embedding","primary")){
+                    try(var attempt=tracker.beginClientAttempt(role)){attempt.started("http_client_execute");attempt.finished(null);}
+                }
+                calls.incrementAndGet();return ChatResponse.builder().aiMessage(AiMessage.from("ok")).build();
+            }};
+            var helper=tracker.decorateRequestAttempt(delegate,"context_prepare",tracker.redactedRequestAttemptRoute("synthetic","synthetic","http://127.0.0.1:1","test"),Map.of());
+            assertEquals("ok",helper.chat(UserMessage.from("data")).aiMessage().text());
+            wrapped(tracker,"primary",calls).chat(UserMessage.from("question"));
+            assertEquals(2,calls.get());
+            assertThrows(RuntimeException.class,()->helper.chat(UserMessage.from("duplicate")));
+        }finally{TraceStore.clear();}
+    }
     @Test void earlierModelAttemptLeavesNoAuxiliarySlot(){
         var tracker=new ModelRuntimeHealthTracker();String id=tracker.beginRequestTimeline("request","session");
         TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY,id);tracker.limitRequestInferenceAttempts(id,2);
@@ -32,4 +50,3 @@ class ContextPreparationAttemptBudgetTest {
         }finally{TraceStore.clear();}
     }
 }
-

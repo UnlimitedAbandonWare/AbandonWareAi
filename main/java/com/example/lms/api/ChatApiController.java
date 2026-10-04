@@ -2457,6 +2457,8 @@ public class ChatApiController {
                 dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey));
                 bindGeneralGraphScope(dtoForCall, session, _username, preResolvedOwnerKey);
                 ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
+                boolean finalAnswerMemorySaveAllowed =
+                        !Boolean.FALSE.equals(TraceStore.get("finalAnswer.memorySaveAllowed"));
                 ChatRunExecutionContext generatedRun = runContextRef.get();
                 if (generatedRun != null) {
                     generatedRun.markGenerationSucceeded();
@@ -2721,7 +2723,7 @@ public class ChatApiController {
                     }
                     captureFinalizedGraph(dtoForCall, persistenceGraphScope, persistedUserMessageId,
                             assistantMessageId, streamRagControlProjection.held());
-                    if (!streamRagControlProjection.held()) {
+                    if (!streamRagControlProjection.held() && finalAnswerMemorySaveAllowed) {
                         updateRollingSummaryAndMaybePromote(
                                 persistenceSessionId, assistantMessageId, req);
                     }
@@ -4562,6 +4564,8 @@ public class ChatApiController {
         dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey));
         bindGeneralGraphScope(dtoForCall, session, username, preResolvedOwnerKey);
         ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
+        boolean finalAnswerMemorySaveAllowed =
+                !Boolean.FALSE.equals(TraceStore.get("finalAnswer.memorySaveAllowed"));
         String semanticFinalContent = result.content();
         semanticFinalContent = ChatHarmonyTracePostprocessor.shapeAnswerForUserInstruction(
                 TraceStore.getAll(), dtoForCall.getMessage(), semanticFinalContent);
@@ -4599,7 +4603,7 @@ public class ChatApiController {
 
         String modelUsedFinal = ChatModelMetaSupport.resolveModelUsed(result.modelUsed(), dto.getModel(), FALLBACK_MODEL);
         syncModelRef.set(modelUsedFinal);
-        if (!syncRagControlProjection.held()) {
+        if (!syncRagControlProjection.held() && finalAnswerMemorySaveAllowed) {
             updateRollingSummaryAndMaybePromote(completedSession.getId(), assistantMessageId, dtoForCall);
         }
 
@@ -4731,7 +4735,7 @@ public class ChatApiController {
 
         ChatResponseDto response = new ChatResponseDto(visibleFinalContent, completedSession.getId(), modelUsedFinal, result.ragUsed(),
                 answerModeFinal, traceTurnId, learningContextMeta, result.evidenceMetadata(),
-                syncPipelineSnapshot, syncSelectionEntropy);
+                syncPipelineSnapshot, syncSelectionEntropy, extraMeta);
         // A synchronous endpoint has no post-return client ACK. Its bounded
         // delivery-acceptance boundary is successful response construction at
         // the immediate Spring MVC handoff; the stream path never uses this rule.

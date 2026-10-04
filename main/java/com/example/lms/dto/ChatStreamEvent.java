@@ -35,8 +35,20 @@ public record ChatStreamEvent(
         SelectionEntropySignal selectionEntropySignal,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
         ChatResponseDto.GenerationTermination generationTermination,
-        @com.fasterxml.jackson.annotation.JsonUnwrapped GenerationObservation observation
+        @com.fasterxml.jackson.annotation.JsonUnwrapped GenerationObservation observation,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        String evidenceHint
 ) {
+        public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
+                Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
+                ScoreDeltaSignal scoreDelta, PipelineSnapshot pipelineSnapshot, DebugFxSignal debugFxSignal,
+                List<TransformerBlockSignal> transformerBlocks, SelectionEntropySignal selectionEntropySignal,
+                ChatResponseDto.GenerationTermination generationTermination, GenerationObservation observation) {
+                this(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId, learningContext,
+                        evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot, debugFxSignal,
+                        transformerBlocks, selectionEntropySignal, generationTermination, observation, null);
+        }
         public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
                 Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
                 List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
@@ -51,7 +63,7 @@ public record ChatStreamEvent(
                 return new ChatStreamEvent(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId,
                         learningContext, evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot,
                         debugFxSignal, transformerBlocks, selectionEntropySignal, generationTermination,
-                        GenerationObservation.from(trace));
+                        GenerationObservation.from(trace), ChatResponseDto.evidenceHintFrom(trace));
         }
         public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
                 Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
@@ -67,7 +79,8 @@ public record ChatStreamEvent(
                 return new ChatStreamEvent("final", response.getContent(), null, response.getModelUsed(),
                         response.isRagUsed(), response.getSessionId(), null, null,
                         response.getLearningContext(), response.getEvidence(), null, null, null, null,
-                        null, List.of(), null, response.getGenerationTermination(), response.getObservation());
+                        null, List.of(), null, response.getGenerationTermination(), response.getObservation(),
+                        response.getEvidenceHint());
         }
         public ChatStreamEvent(
                 String type,
@@ -92,6 +105,7 @@ public record ChatStreamEvent(
         }
 
         public ChatStreamEvent {
+                evidenceHint = "근거 없음".equals(evidenceHint) ? "근거 없음" : null;
                 learningContext = learningContext == null ? LearningContextMetadata.empty() : learningContext;
                 evidence = evidence == null ? List.of() : List.copyOf(evidence);
                 transformerBlocks = transformerBlocks == null ? List.of() : List.copyOf(transformerBlocks);

@@ -319,6 +319,16 @@ def main():
                 task_id = args.task + "-" + uuid.uuid4().hex[:8]
             ck.require(args.agent and args.purpose, "agent-and-purpose-required")
             result = open_journal(args.root, task_id, args.agent, args.purpose, args.scope)
+            try:
+                from task_context import locations
+                context_root, _, _, context_task = locations(args.root, task_id)
+                pointer = context_task / "context/current.json"
+                if pointer.is_file():
+                    relative = (pointer.relative_to(context_root).as_posix()
+                                if pointer.is_relative_to(context_root) else "journal/" + task_id + "/context/current.json")
+                    print("[task-context] 이전 문맥: " + relative + " (verify로 신선도 확인)", file=sys.stderr)
+            except Exception:
+                pass
         elif args.action == "note":
             ck.require(args.task and args.kind and args.text, "task-kind-text-required")
             result = add_note(args.root, args.task, args.kind, args.text, args.ref)

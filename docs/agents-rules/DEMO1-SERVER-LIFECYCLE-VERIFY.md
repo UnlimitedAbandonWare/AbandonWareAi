@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L187-L200 sha256=aa6f835989cf1f84baad0aaac418f62f15b48b38b0559490acdecd7c2120d435 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L193-L206 sha256=aa6f835989cf1f84baad0aaac418f62f15b48b38b0559490acdecd7c2120d435 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-SERVER-LIFECYCLE-VERIFY -->
 ## Server start/stop + post-edit live verification
 | BAT | invokes | controls |

@@ -65,9 +65,9 @@ public class LangChainConfig {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private ModelRuntimeHealthTracker apiFailureHealthTracker;
 
-    private dev.langchain4j.http.client.HttpClientBuilder apiObservedHttpClientBuilder() {
+    private dev.langchain4j.http.client.HttpClientBuilder apiObservedHttpClientBuilder(String role) {
         return apiFailureHealthTracker == null ? dev.langchain4j.http.client.HttpClientBuilderLoader.loadHttpClientBuilder()
-                : apiFailureHealthTracker.observedHttpClientBuilder("primary");
+                : apiFailureHealthTracker.observedHttpClientBuilder(role);
     }
     private static final Logger log = LoggerFactory.getLogger(LangChainConfig.class);
 
@@ -196,7 +196,7 @@ public class LangChainConfig {
                     modelRuntimeHealthTracker);
         }
         return OpenAiChatModel.builder()
-                .httpClientBuilder(apiObservedHttpClientBuilder())
+                .httpClientBuilder(apiObservedHttpClientBuilder("primary"))
                 .apiKey(key)
                 .modelName(moeModel)
                 .temperature(recTemp)
@@ -222,7 +222,7 @@ public class LangChainConfig {
                             "[AWX][embedding][openai] disabled reason=missing_openai_api_key");
                 }
                 delegate = OpenAiEmbeddingModel.builder()
-                        .httpClientBuilder(apiObservedHttpClientBuilder())
+                        .httpClientBuilder(apiObservedHttpClientBuilder("embedding"))
                         .apiKey(key)
                         .modelName(embeddingModelName)
                         .dimensions(embeddingDimensions)
@@ -876,7 +876,7 @@ public class LangChainConfig {
                     modelRuntimeHealthTracker);
         }
         return OpenAiChatModel.builder()
-                .httpClientBuilder(apiObservedHttpClientBuilder())
+                .httpClientBuilder(apiObservedHttpClientBuilder("primary"))
                 .apiKey(key)
                 .modelName(chatModelName)
                 .temperature(useRagDefault ? chatTemperature : 0.0)

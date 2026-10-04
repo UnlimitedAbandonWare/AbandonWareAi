@@ -22,6 +22,8 @@ public class ChatResponseDto {
     private final SelectionEntropyProjection selectionEntropy;
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private final GenerationTermination generationTermination;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private final String evidenceHint;
     @com.fasterxml.jackson.annotation.JsonUnwrapped
     private final GenerationObservation observation = GenerationObservation.from(com.example.lms.search.TraceStore.getAll());
 
@@ -117,13 +119,37 @@ public class ChatResponseDto {
                            ChatStreamEvent.PipelineSnapshot pipelineSnapshot,
                            SelectionEntropyProjection selectionEntropy) {
         this(content, sessionId, modelUsed, ragUsed, answerMode, traceTurnId, learningContext,
-                evidence, pipelineSnapshot, selectionEntropy, null);
+                evidence, pipelineSnapshot, selectionEntropy, (GenerationTermination) null);
+    }
+
+    public ChatResponseDto(String content, Long sessionId, String modelUsed, boolean ragUsed,
+                           String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                           List<RagEvidenceMetadata> evidence, ChatStreamEvent.PipelineSnapshot pipelineSnapshot,
+                           SelectionEntropyProjection selectionEntropy, java.util.Map<String, Object> capturedMeta) {
+        this(content, sessionId, modelUsed, ragUsed, answerMode, traceTurnId, learningContext,
+                evidence, pipelineSnapshot, selectionEntropy, null, evidenceHintFrom(capturedMeta));
+    }
+
+    /** Fixed public status only; never project arbitrary trace values into the response. */
+    public static String evidenceHintFrom(java.util.Map<String, Object> trace) {
+        Object value = trace == null ? null : trace.get("guard.citation.hint");
+        return value instanceof java.util.Map<?, ?> hint && "근거 없음".equals(hint.get("status"))
+                ? "근거 없음" : null;
     }
 
     private ChatResponseDto(String content, Long sessionId, String modelUsed, boolean ragUsed,
                            String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
                            List<RagEvidenceMetadata> evidence, ChatStreamEvent.PipelineSnapshot pipelineSnapshot,
                            SelectionEntropyProjection selectionEntropy, GenerationTermination generationTermination) {
+        this(content, sessionId, modelUsed, ragUsed, answerMode, traceTurnId, learningContext,
+                evidence, pipelineSnapshot, selectionEntropy, generationTermination, null);
+    }
+
+    private ChatResponseDto(String content, Long sessionId, String modelUsed, boolean ragUsed,
+                           String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                           List<RagEvidenceMetadata> evidence, ChatStreamEvent.PipelineSnapshot pipelineSnapshot,
+                           SelectionEntropyProjection selectionEntropy, GenerationTermination generationTermination,
+                           String evidenceHint) {
         this.content = content;
         this.sessionId = sessionId;
         this.modelUsed = modelUsed;
@@ -135,5 +161,6 @@ public class ChatResponseDto {
         this.pipelineSnapshot = pipelineSnapshot;
         this.selectionEntropy = selectionEntropy;
         this.generationTermination = generationTermination;
+        this.evidenceHint = evidenceHint;
     }
 }

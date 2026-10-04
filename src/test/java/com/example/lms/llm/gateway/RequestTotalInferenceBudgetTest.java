@@ -21,7 +21,7 @@ class RequestTotalInferenceBudgetTest {
     @BeforeEach void bind() { TraceStore.put(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, timeline); }
     @AfterEach void clear() { TraceStore.clear(); TimeBudgetContext.clear(); }
     private ChatResponse answer() { return ChatResponse.builder().aiMessage(AiMessage.from("grounded [doc-7]")).build(); }
-    private RuntimeException failure() { return new LlmGatewayException("synthetic timeout", LlmFailureClass.TIMEOUT_SOFT); }
+    private RuntimeException failure() { return new LlmGatewayException("synthetic device rejection", LlmFailureClass.GPU_DEVICE_LOST); }
     private ChatModel tracked(Function<List<ChatMessage>, ChatResponse> fn) {
         return tracker.decorateRequestAttempt(new ChatModel() {
             @Override public ChatResponse chat(List<ChatMessage> messages) { return fn.apply(messages); }
@@ -33,6 +33,59 @@ class RequestTotalInferenceBudgetTest {
                 used.contains("api-a") ? "api-b" : "api-a", null),
             null, null, "local", tracker, timeline, null, 2);
     }
+    @Test void retrievalEmbeddingHttpBeforeMainDoesNotExhaustChatGenerationBudget() {
+        for (int i = 0; i < 6; i++) {
+            try (var attempt = tracker.beginClientAttempt("embedding")) {
+                attempt.started("http_client_execute");
+                attempt.finished(null);
+            }
+        }
+        var calls = new AtomicInteger();
+        ChatModel main = tracked(messages -> { calls.incrementAndGet(); return answer(); });
+        var model = chain(main, main, main);
+        for (int i = 0; i < 4; i++)
+            assertEquals("grounded [doc-7]", model.chat(List.of(UserMessage.from("synthetic"))).aiMessage().text());
+        assertThrows(RuntimeException.class, () -> model.chat(List.of(UserMessage.from("synthetic"))));
+        assertEquals(4, calls.get());
+    }
+
+    @Test void nestedEmbeddingHttpDoesNotConsumeTheReservedGenerationClientAttempt() {
+        var calls = new AtomicInteger();
+        ChatModel main = tracked(messages -> {
+            for (int i = 0; i < 6; i++) {
+                try (var embedding = tracker.beginClientAttempt("embedding")) {
+                    embedding.started("http_client_execute");
+                    embedding.finished(null);
+                }
+            }
+            try (var generation = tracker.beginClientAttempt("primary")) {
+                generation.started("http_client_execute");
+                calls.incrementAndGet();
+                generation.finished(null);
+            }
+            return answer();
+        });
+        var model = chain(main, main, main);
+        for (int i = 0; i < 4; i++)
+            assertEquals("grounded [doc-7]", model.chat(List.of(UserMessage.from("synthetic"))).aiMessage().text());
+        assertThrows(RuntimeException.class, () -> model.chat(List.of(UserMessage.from("synthetic"))));
+        assertEquals(4, calls.get());
+    }
+
+    @Test void unknownHttpRoleBeforeMainStillConsumesTheGenerationCeiling() {
+        for (int i = 0; i < 4; i++) {
+            try (var attempt = tracker.beginClientAttempt("unrecognized")) {
+                attempt.started("http_client_execute");
+                attempt.finished(null);
+            }
+        }
+        var calls = new AtomicInteger();
+        ChatModel main = tracked(messages -> { calls.incrementAndGet(); return answer(); });
+        assertThrows(RuntimeException.class,
+                () -> chain(main, main, main).chat(List.of(UserMessage.from("synthetic"))));
+        assertEquals(0, calls.get());
+    }
+
     @Test void expansionCannotRestartTheFourAttemptBudgetOrDeadline() {
         var calls = new AtomicInteger();
         List<List<ChatMessage>> seen = new ArrayList<>();
@@ -40,7 +93,10 @@ class RequestTotalInferenceBudgetTest {
         when(budget.remainingMillis()).thenReturn(10_000L);
         TimeBudgetContext.set(budget);
         ChatModel failing = tracked(messages -> {
-            assertSame(budget, TimeBudgetContext.get()); seen.add(messages); calls.incrementAndGet(); throw failure();
+            TimeBudget active = TimeBudgetContext.get();
+            assertTrue(active.remainingMillis() > 0 && active.remainingMillis() <= budget.remainingMillis());
+            if (calls.get() == 0 || calls.get() == 3) assertNotSame(budget, active);
+            seen.add(messages); calls.incrementAndGet(); throw failure();
         });
         ChatModel good = tracked(messages -> {
             assertSame(budget, TimeBudgetContext.get()); seen.add(messages); calls.incrementAndGet(); return answer();
@@ -48,6 +104,7 @@ class RequestTotalInferenceBudgetTest {
         var model = chain(failing, failing, good);
         var input = List.<ChatMessage>of(SystemMessage.from("source [doc-7]"), UserMessage.from("synthetic follow-up"));
         assertEquals("grounded [doc-7]", model.chat(input).aiMessage().text());
+        assertSame(budget, TimeBudgetContext.get());
         assertEquals(3, calls.get());
         RuntimeException exhausted = assertThrows(RuntimeException.class, () -> model.chat(input));
         assertEquals(4, calls.get());

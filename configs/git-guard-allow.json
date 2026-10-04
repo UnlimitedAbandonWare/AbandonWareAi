@@ -1,0 +1,66 @@
+{
+  "schema": "awx.git-guard-allow.v1",
+  "note": "path+rule+oid must all match and reason must be non-empty. provider-key/github-token/slack-token/aws-access-key/private-key rules are honored only under scripts/test_*, */fixtures/*, src/test/**.",
+  "entries": [
+    {
+      "path": "scripts/fixtures/goal_block/rollout_secret.jsonl",
+      "rule": "provider-key",
+      "oid": "fdaa382ee280a6ac1b1b910f250f24e5e0af57eb",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_brief_lint.py",
+      "rule": "provider-key",
+      "oid": "85f16a7e02527630a7b21ac8d2ca2eafcebe3d0e",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_codex_assist.py",
+      "rule": "slack-token",
+      "oid": "1cce1375d117ab3533d272fb8f47ecb85c3eeeeb",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_codex_work_checkpoint_lease_identity.py",
+      "rule": "provider-key",
+      "oid": "bd651d9991e64a01c56b2435ffb8b0d017cc091b",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_f01b_admission_key_demo.py",
+      "rule": "provider-key",
+      "oid": "35929f18b69ed63656f386858d708243f871a397",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_goal_block_triage.py",
+      "rule": "provider-key",
+      "oid": "e8d34bd413311e2200508cf7e4c7bb9897ba9ca3",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_jev_payload_guard.py",
+      "rule": "provider-key",
+      "oid": "5380e8903d78af2cae77f6708be99382fb5d9618",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_log_redact.py",
+      "rule": "github-token",
+      "oid": "70b5a84eaaafe95e3584a28d1b662a4f1bbe4977",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "scripts/test_settings_routing_guard.py",
+      "rule": "provider-key",
+      "oid": "17a004688dcce9205430edbe5f6d322f4f14002e",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    },
+    {
+      "path": "src/test/java/com/example/lms/api/TraceSnapshotsDiagnosticsSecurityIntegrationTest.java",
+      "rule": "sensitive-assignment",
+      "oid": "0b847909002fd747033379456cb9b3009f13ae78",
+      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+    }
+  ]
+}

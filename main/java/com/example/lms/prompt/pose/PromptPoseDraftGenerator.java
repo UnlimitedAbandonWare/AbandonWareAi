@@ -57,7 +57,22 @@ public class PromptPoseDraftGenerator {
         if (props.getDraft() == null || !props.getDraft().isEnabled()) {
             return PromptPosePlan.noDraft(route, "draft_disabled");
         }
-        if (route.equalsIgnoreCase("llmrouter.external") && !props.getPolicy().isAllowExternalFree()) {
+        if (com.example.lms.llm.RequestedModelSelection.active()) {
+            return PromptPosePlan.noDraft(route, "exact_selection");
+        }
+        com.example.lms.routing.RoutingInvocation invocation;
+        try {
+            invocation = com.example.lms.routing.RoutingInvocation.current(
+                    com.example.lms.routing.RoutingProfile.Role.PROMPT_POSE_DRAFT).orElse(null);
+        } catch (com.example.lms.routing.RoutingProfileResolver.Unavailable unavailable) {
+            return PromptPosePlan.noDraft(route, "routing_policy_unavailable");
+        }
+        if (invocation != null) route = invocation.binding().primary().target();
+        boolean external = invocation == null ? route.equalsIgnoreCase("llmrouter.external")
+                : !java.util.Set.of("local","ollama","ollama_chat","ollama_native","local_openai_compatible","local_llm")
+                        .contains(invocation.binding().primary().provider().toLowerCase(Locale.ROOT));
+        if (external && !props.getPolicy().isAllowExternalFree()
+                && (invocation == null || !invocation.binding().auxPaidEnabled())) {
             return PromptPosePlan.noDraft(route, "external_free_not_allowed");
         }
         DynamicChatModelFactory factory = modelFactoryProvider == null ? null : modelFactoryProvider.getIfAvailable();
@@ -74,16 +89,37 @@ public class PromptPoseDraftGenerator {
             String promptPoseDraftPrompt = promptBuilder.build(ctx);
             int timeoutSeconds = Math.max(1, (int) Math.ceil(clamp(props.getDraft().getTimeoutMs(), 250, 20_000) / 1000.0d));
             int maxTokens = Math.max(64, Math.min(1024, clamp(props.getDraft().getMaxOutputChars(), 256, 4000) / 4));
-            ChatModel model = factory.lcWithTimeout(route, 0.0d, 0.8d, maxTokens, timeoutSeconds);
+            ChatModel model = invocation == null
+                    ? factory.lcWithTimeout(route, 0.0d, 0.8d, maxTokens, timeoutSeconds)
+                    : factory.lcWithTimeout(route, 0.0d, 0.8d, null, null, maxTokens, timeoutSeconds, 0, null, invocation);
             String raw = model.chat(List.of(
                     SystemMessage.from("Return JSON only. Do not include raw user text."),
                     UserMessage.from(promptPoseDraftPrompt))).aiMessage().text();
-            return parseDraftJson(limit(raw, props.getDraft().getMaxOutputChars()), route);
+            String bounded = limit(raw, props.getDraft().getMaxOutputChars());
+            return invocation == null ? parseDraftJson(bounded, route) : parseBoundDraft(bounded, route, external);
         } catch (Exception e) {
             String failureClass = classify(e);
             traceSkipped("draft_generate", failureClass, e);
             return PromptPosePlan.noDraft(route, failureClass);
         }
+    }
+
+    private PromptPosePlan parseBoundDraft(String raw, String route, boolean external) throws java.io.IOException {
+        JsonNode root = objectMapper.readTree(extractJson(raw));
+        var fields = java.util.Set.of("assistantDraftLines","queryBurstSeeds","queryBurstMin","queryBurstMax",
+                "selfAskCount","laneWeights","answerTemperature","selfAskTemperature","minCitations","confidence",
+                "reasonCode","routeModel");
+        if (!root.isObject()) return PromptPosePlan.noDraft(route,"invalid_draft");
+        var names = root.fieldNames();
+        while (names.hasNext()) if (!fields.contains(names.next())) return PromptPosePlan.noDraft(route,"invalid_draft");
+        if (root.has("routeModel") && !route.equals(root.path("routeModel").asText()))
+            return PromptPosePlan.noDraft(route,"invalid_draft");
+        var plan = new PromptPosePlanSanitizer(props).sanitize(parseDraftJson(raw,route));
+        return new PromptPosePlan(plan.enabled(),plan.arm()==PromptPoseArm.NO_DRAFT ? plan.arm()
+                : external ? PromptPoseArm.EXTERNAL_FREE : PromptPoseArm.LOCAL_LIGHT,
+                route,plan.assistantDraftLines(),plan.queryBurstSeeds(),plan.queryBurstMin(),plan.queryBurstMax(),
+                plan.selfAskCount(),plan.laneWeights(),plan.answerTemperature(),plan.selfAskTemperature(),
+                plan.minCitations(),plan.confidence(),"draft_ok");
     }
 
     public PromptPosePlan parseDraftJson(String raw, String fallbackRoute) throws java.io.IOException {

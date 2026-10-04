@@ -115,6 +115,7 @@ public class ChatRunRegistry {
         final Long sessionId;
         final String runId = UUID.randomUUID().toString();
         volatile long ownerLeaseDeadlineNanos = Long.MAX_VALUE;
+        volatile boolean ownerLeaseConfirmed = true;
         volatile boolean clusterFinalized;
         final Object gate = new Object();
         final ReentrantLock terminalWriteLock = new ReentrantLock();
@@ -219,7 +220,7 @@ public class ChatRunRegistry {
 
     /** Local monotonic deadline is conservative relative to the DB lease. */
     private boolean leaseValid(Run run) {
-        return cluster == null || System.nanoTime() < run.ownerLeaseDeadlineNanos;
+        return cluster == null || (run.ownerLeaseConfirmed && System.nanoTime() < run.ownerLeaseDeadlineNanos);
     }
 
     void renewOwnerLeases() {
@@ -231,12 +232,16 @@ public class ChatRunRegistry {
         try {
             renewed = cluster.directory().renew(active.stream().map(r -> r.runId).collect(java.util.stream.Collectors.toSet()));
         } catch (RuntimeException unavailable) {
+            active.forEach(run -> run.ownerLeaseConfirmed = false);
             log.warn("[AWX][chat-run] owner renewal unavailable; ownership=unknown action=retain_run_and_fence_authority");
             return;
         }
         for (Run run : active) {
-            if (renewed.contains(run.runId)) run.ownerLeaseDeadlineNanos = deadline;
-            else {
+            if (renewed.contains(run.runId)) {
+                run.ownerLeaseDeadlineNanos = deadline;
+                run.ownerLeaseConfirmed = true;
+            } else {
+                run.ownerLeaseConfirmed = false;
                 // Missing renewal or elapsed lease is not proof that the worker died.
                 // Retain the run; leaseValid still fences new calls and durable effects.
                 try {

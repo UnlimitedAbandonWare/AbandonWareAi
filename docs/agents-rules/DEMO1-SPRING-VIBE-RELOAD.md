@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L180-L186 sha256=8f05f64e12e782288193ed7910c181d58cf8e7c1396ae5a704145e76618856ea movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L186-L192 sha256=8f05f64e12e782288193ed7910c181d58cf8e7c1396ae5a704145e76618856ea movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-SPRING-VIBE-RELOAD -->
 ## Spring / Start-RAG vibe reload (Java changes must rebuild)
 - Runner: `Start-RAG.bat` -> `scripts/start_rag_stack.ps1 -MetaDisplay -ForceRestart -DevWatch -OpenBrowser`. Ports `18180`/`18181`/`18182`; profile `local,meta-display`. **Spring fact:** a running JVM keeps the old classpath — editing `.java` does not update what executes. This repo uses **DevWatch**, not `spring-boot-devtools`.

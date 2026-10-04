@@ -54,8 +54,7 @@
 
 - agy rule loading: walks cwd→repo root reading `GEMINI.md`/`AGENTS.md`/`.agents/rules/*.md`; 24,000B per-file cap, 20k-token rule budget (overage → path pointer) → `GEMINI.md` (project pointers block)
 - agy workspace skills auto-discovered at `.agents/skills/<name>/SKILL.md`; settings at `%USERPROFILE%\.gemini\antigravity-cli\settings.json` (`toolPermission`, `permissions{allow,deny,ask}`, `useG1Credits`) → `builtin:skills/agy-customizations`
-- Directive output dir = `%USERPROFILE%\Downloads\`; name `PASTE_<TARGET>_<TOPIC>_<YYYYMMDD>.txt`, never overwrite (append `_R2`, `_R3`) → `SKILL.md` §6 [superseded 2026-10-02 → grokbot-current/HANDOVER.md §3: 이제 Downloads + agent-prompts 이중 저장 + sha12 대조, 저장 도구는 `scripts/brief_save.py`]
-- Directive output = 이중 저장: `%USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt` + `agent-prompts\<agent>-<topic>-<yyyymmdd>\BRIEF.txt` 사본, 두 sha12 일치 확인, 같은 이름이면 `_R2`,`_R3` (덮어쓰기 금지) — 저장·lint·기록부는 `scripts/brief_save.py`; 단 'Downloads만' 단독 산출 요청에는 repo 사본·기록부를 강제하지 않는다 → `grokbot-current/HANDOVER.md` §3, `SKILL.md` §6
+- Directive output = Downloads 한 파일: `%USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt`, 덮어쓰기 금지(`_R2`,`_R3`), 크기·sha12 보고 — `agent-prompts\...\BRIEF.txt` 사본은 2026-10-03 폐기(R6); 저장·lint·기록부는 `scripts/brief_save.py` → `grokbot-current/HANDOVER.md` §3, `SKILL.md` §6
 - 지시서 기록부 = `data/agent-handoff/brief-registry/briefs.jsonl` (`brief_save.py list|latest|search`) → `grokbot-current/HANDOVER.md` §10
 
 ## Grok Bot 계보 (2026-10-02 인계 팩)
@@ -67,3 +66,4 @@
 - 보고서 판정·답장 초안·재개 문장(CONTINUE) 레시피 = `grokbot-current/demo1-agent-report-review.md`; 요청→레시피 라우팅은 `.agents/skills/demo1-agy-grokbot-mode/SKILL.md`
 - GrokBot recall (read-only, $0): `python -B scripts/grok_to_agy_memory_bridge.py list|show|search|prompts|sync` → `docs/GROKBOT_MEMORY_INDEX.md`, `data/agent-handoff/grokbot/sessions_index.json` (`recentPrompts` = prompt_history 발췌); 워크플로우 형태 SSOT = `references/grokbot-playbook.md` → `.agents/rules/agy-korean-grokbot-role.md`
 - 지시서 작성 상시 지침 7원칙 SSOT(입력 게이트·최신본만·기존 결정 보존·증거 등급 분리·기본값 불변·WP≤5·보고 순서) = `docs/GROKBOT_DIRECTIVE_PLAYBOOK.md` (bot.txt:13806-13820 정제); 웹 GrokBot 세션 프라이머 = `agent-prompts/grokbot-session-primer.md` → `docs/GROKBOT_DIRECTIVE_PLAYBOOK.md`
+- Grok Bot(데스크톱 앱) 규칙·스킬·에피소드 SSOT = `docs/GROKBOT_BOT_RULES.md` + `.agents/skills/`(export 6종 신규) + `data/agent-handoff/grokbot/bot_episodes.jsonl`; 포인터 규칙 = `.agents/rules/grokbot-bot-memory.md`; import = `python -B scripts/grokbot_bot_import.py --src var/grokbot-export-20261003 --apply` → `docs/GROKBOT_BOT_RULES.md`

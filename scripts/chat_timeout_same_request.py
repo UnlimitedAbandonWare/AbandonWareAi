@@ -286,45 +286,79 @@ def scan_ndjson(path: Path, since, until, requests: dict[str, RequestEvidence],
                f"{d.get('where','?')}|{(d.get('message') or '')[:80]}")
 
 
-def scan_traces(trace_dir: Path, since, until,
-                requests: dict[str, RequestEvidence], want_rid: str | None) -> None:
-    if not trace_dir.is_dir():
+def _trace_skip(stats: dict, reason: str) -> None:
+    stats["traceSkipped"] += 1
+    reasons = stats["traceSkippedByReason"]
+    reasons[reason] = reasons.get(reason, 0) + 1
+
+
+def _trace_records(path: Path, stats: dict):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        _trace_skip(stats, "unreadable_file")
         return
-    for path in sorted(trace_dir.rglob("*.json")):
+    if not text.strip():
+        _trace_skip(stats, "empty_file")
+        return
+    try:
+        yield json.loads(text)
+        return
+    except json.JSONDecodeError:
+        pass
+    # Some .json trace files contain JSONL. Keep valid rows and classify only
+    # rejected rows; never include their contents or exception text in counters.
+    for line in text.splitlines():
+        if not line.strip():
+            continue
         try:
-            d = json.loads(path.read_text(encoding="utf-8", errors="replace"))
-        except Exception:
-            continue
-        if not isinstance(d, dict) or "schema" not in d:
-            continue
-        ts = parse_ts(str(d.get("ts", "")))
-        if not in_window(ts, since, until):
-            continue
-        rid = _norm_rid(d.get("recordId") or d.get("runId") or d.get("sessionId"))
-        if not rid:
-            continue
-        # trace의 recordId는 runHash에 대응한다 → run_id로 기존 요청에 붙인다
-        target = None
-        for ev in requests.values():
-            if ev.run_id == rid:
-                target = ev
-                break
-        if target is None:
-            if want_rid and rid != want_rid:
+            yield json.loads(line)
+        except json.JSONDecodeError:
+            _trace_skip(stats, "malformed_json_line")
+
+
+def scan_traces(trace_dir: Path, since, until,
+                requests: dict[str, RequestEvidence], want_rid: str | None) -> dict:
+    stats = {"traceFiles": 0, "traceRecords": 0, "traceSkipped": 0,
+             "traceSkippedByReason": {}}
+    if not trace_dir.is_dir():
+        return stats
+    for path in sorted(trace_dir.rglob("*.json")):
+        stats["traceFiles"] += 1
+        for d in _trace_records(path, stats):
+            if not isinstance(d, dict) or "schema" not in d:
+                _trace_skip(stats, "non_trace_record")
                 continue
-            target = requests.setdefault(rid, RequestEvidence(rid))
-        if d.get("sessionId"):
-            target.session_id = d["sessionId"] if str(d["sessionId"]).startswith("hash:") else f"hash:{d['sessionId']}"
-        if d.get("effectiveModel"):
-            target.provider_model = d["effectiveModel"]
-        elif d.get("requestedModel") and target.provider_model == NOT_OBSERVED:
-            target.provider_model = f"requested:{d['requestedModel']}"
-        if d.get("fallbackCount") is not None:
-            target.fallback_attempted = "yes" if d["fallbackCount"] else "no"
-        if d.get("errorClass"):
-            target.add(ts, path.name, "trace",
-                       f"outcome={d.get('outcome')} errorClass={d.get('errorClass')} "
-                       f"fallbackCount={d.get('fallbackCount')} requestedModel={d.get('requestedModel')}")
+            stats["traceRecords"] += 1
+            ts = parse_ts(str(d.get("ts", "")))
+            if not in_window(ts, since, until):
+                continue
+            rid = _norm_rid(d.get("recordId") or d.get("runId") or d.get("sessionId"))
+            if not rid:
+                continue
+            # trace의 recordId는 runHash에 대응한다 → run_id로 기존 요청에 붙인다
+            target = None
+            for ev in requests.values():
+                if ev.run_id == rid:
+                    target = ev
+                    break
+            if target is None:
+                if want_rid and rid != want_rid:
+                    continue
+                target = requests.setdefault(rid, RequestEvidence(rid))
+            if d.get("sessionId"):
+                target.session_id = d["sessionId"] if str(d["sessionId"]).startswith("hash:") else f"hash:{d['sessionId']}"
+            if d.get("effectiveModel"):
+                target.provider_model = d["effectiveModel"]
+            elif d.get("requestedModel") and target.provider_model == NOT_OBSERVED:
+                target.provider_model = f"requested:{d['requestedModel']}"
+            if d.get("fallbackCount") is not None:
+                target.fallback_attempted = "yes" if d["fallbackCount"] else "no"
+            if d.get("errorClass"):
+                target.add(ts, path.name, "trace",
+                           f"outcome={d.get('outcome')} errorClass={d.get('errorClass')} "
+                           f"fallbackCount={d.get('fallbackCount')} requestedModel={d.get('requestedModel')}")
+    return stats
 
 
 def scan_ollama(path: Path, since, until, sink: list[dict]) -> None:
@@ -418,13 +452,15 @@ def main(argv: list[str] | None = None) -> int:
         else:
             scan_spring_log(p, since, until, requests, want)
             scan_ndjson(p, since, until, requests, want)
-    scan_traces(trace_dir, since, until, requests, want)
+    trace_stats = scan_traces(trace_dir, since, until, requests, want)
 
     doc = build_result(requests, ollama, since, until)
+    doc.update(trace_stats)
     text = json.dumps(doc, ensure_ascii=False, indent=1)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
-        print(f"out={args.out} requests={doc['requestCount']} ollamaEvents={len(ollama)}")
+        print(f"out={args.out} requests={doc['requestCount']} ollamaEvents={len(ollama)} "
+              f"traceSkipped={doc['traceSkipped']}")
     else:
         print(text)
     return 0

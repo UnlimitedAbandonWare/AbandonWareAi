@@ -30,11 +30,7 @@ families:
       - triangulat
       - minority signal
     skills:
-      - demo1-generating-falsifiable-hypotheses
-      - demo1-retrieving-counter-evidence
       - demo1-triangulating-counter-evidence
-      - demo1-verifying-evidence-coherence
-      - demo1-forecasting-minority-signals
   macsrc-patchdrop:
     veto: hard
     note: MacSrc/PatchDrop/SMB intake→guard→postprocess maze; only when user names it
@@ -47,15 +43,8 @@ families:
       - mac src
       - smb
     skills:
-      - demo1-macsrc-defect-intake
-      - demo1-macsrc-guarded-patch-session
-      - demo1-macsrc-patch-postprocessor
       - demo1-macsrc-smb-direct-patch
-      - demo1-patchdrop-manual-default
-      - macmini-safe-patch-assistant
       - patchdrop-safe-patch-orchestrator
-      - desktop-smb-ack
-      - notebook-smb-handoff
   triad:
     veto: soft
     note: positive/negative/neutral deliberation; only on explicit 심의/cross-check ask
@@ -85,16 +74,8 @@ direct_call_only:
   - start-rag-reload             # redirect alias -> demo1-dev-reload
   - force-restart-meta-display   # explicit user ask only
   - compile-verify-smoke         # explicit user ask only
-  - demo1-docker-autograder      # PROTO-LIGHT: default skip unless named
-  - demo1-macsrc-defect-intake   # PROTO-LIGHT + family member
-  - demo1-macsrc-guarded-patch-session  # PROTO-LIGHT + family member
-  - demo1-macsrc-patch-postprocessor    # PROTO-LIGHT + family member
   - demo1-macsrc-smb-direct-patch       # PROTO-LIGHT + family member
-  - demo1-patchdrop-manual-default      # PROTO-LIGHT + family member
-  - macmini-safe-patch-assistant        # PROTO-LIGHT + family member
   - patchdrop-safe-patch-orchestrator   # family member + explicit intent
-  - desktop-smb-ack              # PROTO-LIGHT + family member
-  - notebook-smb-handoff         # PROTO-LIGHT + family member
 
 intents:
   # --- explicit-ask intents first: `explicit: true` makes a scored one win over
@@ -155,7 +136,7 @@ intents:
       - triangulat
       - minority signal
     primary_skill: demo1-triangulating-counter-evidence
-    optional_skill: demo1-generating-falsifiable-hypotheses
+    optional_skill: null
     forbid_families: []
     notes: 명시적 반증 요청 전용; 바이브 지시의 기본 검증 경로가 아님
 
@@ -273,7 +254,7 @@ intents:
       - 장기 자율
       - 자율 바이브
     primary_skill: demo1-uaw-vibe-longrun
-    optional_skill: demo1-autonomous-patch-conductor
+    optional_skill: null
     forbid_families: []
     notes: 수 시간~장기 자동 바이브 + UAW/감사 첨부 혼합; 위임형 메타 루프 — 스킬 복제·@폭주 금지, phase당 delegate 1개
 
@@ -290,7 +271,7 @@ intents:
       - spine probe
       - uaw_spine_probe
     primary_skill: demo1-uaw-harmony-foundation
-    optional_skill: demo1-ablation-harmony-tracker
+    optional_skill: null
     forbid_families: []
     notes: UAW 큰 그림 조화 밑밥 — spine probe+매트릭스+셋업 순서 docs/diagnostics/uaw-harmony-foundation-0928; 제품 패치는 Codex 소유, 읽기 전용 관측만
 
@@ -431,7 +412,7 @@ intents:
       - 범위 리스
       - 포트 리스
     primary_skill: agent-scope-lease
-    optional_skill: demo1-agent-port-lease
+    optional_skill: null
     forbid_families: []
     notes: 소스/범위 리스·동적 포트 리스 진입(py가 SSOT, ps1은 thin proxy); 'release request'/change-plane 문맥은 change-plane intent 유지
 
@@ -853,25 +834,6 @@ intents:
     optional_skill: demo1-git-vibe-workflow
     forbid_families: []
     notes: vibe Git/lease 소프트 브랜치 auto-continue
-
-  - intent: git-doctor
-    match:
-      - index.lock
-      - git lock
-      - git 막혔
-      - git blocked
-      - 깃 잠김
-      - git doctor
-      - git remote
-      - remote access
-      - remote 접근 안
-      - 인덱스가 꼬
-      - 인덱스 꼬
-      - git 작업 불가
-    primary_skill: demo1-git-doctor
-    optional_skill: null
-    forbid_families: []
-    notes: index.lock/외부 스테이징/remote 오류 등 Git workflow 차단 진단(비파괴)
 
   - intent: git-secret-guard
     match:
@@ -1343,6 +1305,82 @@ intents:
     optional_skill: demo1-source-edit-three-way-preflight
     forbid_families: []
     notes: 클라우드가 demo1_*.zip만 보고 쓴 답변은 가설 — cloud_answer_intake.py로 분할·재앵커·범위검사 후에만 채택; 실행 주장은 CLOUD_CLAIM
+
+  # --- Grok Bot export additions (grokbot-export-20261003, 6 new skills) -----
+  - intent: agent-live-triage
+    match:
+      - 하다 만 거
+      - 뭐 선택해
+      - 이제 데빈 넣어도
+      - 선택 카드
+      - choice card
+      - 승인 카드
+      - approval card
+      - 세션이 멈췄
+      - 에이전트 멈췄
+    primary_skill: demo-1-agent-live-triage
+    optional_skill: demo1-agy-report-review
+    forbid_families: []
+    notes: 멈춤/선택카드 원인 분류(DONE·BUDGET·BOUNDARY·DUPLICATE·RUNNING)→한 옵션+말로; Grok Bot export 2026-10-03
+
+  - intent: agent-config-repair
+    match:
+      - 에이전트 설정
+      - 설정 고쳐
+      - approvals 안
+      - 승인 안 떠
+      - web search 안
+      - instructions 적용
+      - 인스트럭션 적용
+      - 플러그인 안 켜
+      - 도구 이상
+      - config repair
+    primary_skill: demo-1-agent-config-repair-brief
+    optional_skill: null
+    forbid_families: []
+    notes: 에이전트 도구/설정 이상 → 로그 진단 후 backup-first add-only 수리 브리프; Grok Bot export 2026-10-03
+
+  - intent: companion-assist-brief
+    match:
+      - 서브로 데빈
+      - 서브로 그록
+      - 조수 지시서
+      - 도와주게
+      - 보조 브리프
+      - companion brief
+      - 조수 브리프
+    primary_skill: demo-1-companion-assist-brief
+    optional_skill: null
+    forbid_families: []
+    notes: Codex 본작업 중 Devin/Grok/Clean 조수 지시서 — 도구 아키타입·파일 분리·타이밍 게이트; Grok Bot export 2026-10-03
+
+  - intent: external-plan-triage
+    match:
+      - GPT Pro 답
+      - gpt pro 답
+      - 첨부 다 읽고
+      - 첨부로 뭐 더 보낼
+      - 정제해줘
+      - 외부 설계 문서
+      - PLAN5
+      - 외부 계획
+    primary_skill: demo-1-external-plan-triage
+    optional_skill: demo1-cloud-zip-answer-intake
+    forbid_families: []
+    notes: GPT Pro/PLAN/UAW/설계 첨부를 라이브 트리에서 재검증해 LIVE/STALE 태그 후 지시서; Grok Bot export 2026-10-03
+
+  - intent: gptpro-zip-brief
+    match:
+      - gpt pro한테 zip
+      - zip 소스 줄 테니
+      - zip 주고 수정
+      - 올라운더 프롬프트
+      - zipwork
+      - zip 작업 지시서
+    primary_skill: demo-1-gpt-pro-directive-guide
+    optional_skill: null
+    forbid_families: []
+    notes: GPT Pro에 demo1_*.zip 작업 지시서 — v2 harmonized 템플릿 우선; Grok Bot export 2026-10-03
 
 fallback:
   primary_skill: demo1-vibe-max-agency

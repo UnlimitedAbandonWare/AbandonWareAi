@@ -53,6 +53,7 @@ if "%AWX_GROK_YOLO%"=="1" (
 )
 echo.
 
+if not "%AWX_CONTEXT_PREAMBLE%"=="0" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agent_context_preamble.ps1" -Agent grok
 "%GROK_EXE%" --cwd "%PROJECT_ROOT%" %GROK_FLAG% %*
 set "EXITCODE=%ERRORLEVEL%"
 

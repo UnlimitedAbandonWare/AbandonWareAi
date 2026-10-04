@@ -68,6 +68,12 @@ fingerprint for live owners. Live leases are never force-released.
 6. `blocked` targets wait for the owner's normal release; re-run `plan`
    later — the same fingerprint never re-prompts. `finishing` = owner
    journal closed or a release request already pending.
+   **live lease → 대기 후 이어서 (D32):** BLOCKED로 끝내지 말고
+   `python -B scripts/codex_auto_unblock.py lease-wait --paths <files>
+   [--max-min 20] [--interval 60] [--dry-run]`로 겹침이 풀릴 때까지
+   재확인만 한다(해제·reclaim 없음, JSON `free|live|stale`). 풀리면 같은
+   턴에 이어서 진행하고, 20분 후에도 live면 release 요청 1회 + partial
+   종료 + handoff에 "재개 조건: lease <id> 해제 후 S<n>부터" 한 줄.
 7. While holding a lease, renew at progress boundaries so your owner state
    stays alive and release requests reach the real owner:
    `python -B scripts/lease_conflict_autoflow.py heartbeat --task <myTaskId>`

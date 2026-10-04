@@ -140,14 +140,27 @@ public final class ChatRequestSettingsMerger {
 
         String effectiveModel = ModelCapabilities.canonicalModelName(model);
         // Preserve preferences until endpoint/final-effort policy runs, retaining omitted-value defaults.
-        boolean supportedPreferences = "gpt-5.1".equals(effectiveModel) || "gpt-5.2".equals(effectiveModel);
+        boolean supportedPreferences = com.example.lms.llm.OpenAiSamplingContract.defersMergerClamp(effectiveModel);
+        boolean deferTemperature = supportedPreferences && temperaturePreferencePresent
+                && (ui.getTemperature() != null || cfg.get(SettingsService.KEY_TEMPERATURE) != null
+                && SettingsService.numericValidationError(Map.of(SettingsService.KEY_TEMPERATURE,
+                        cfg.get(SettingsService.KEY_TEMPERATURE))) == null);
+        boolean deferTopP = supportedPreferences && topPPreferencePresent
+                && (ui.getTopP() != null || cfg.get(SettingsService.KEY_TOP_P) != null
+                && SettingsService.numericValidationError(Map.of(SettingsService.KEY_TOP_P,
+                        cfg.get(SettingsService.KEY_TOP_P))) == null);
         double sanitizedTemperature = ModelCapabilities.sanitizeTemperature(
-                supportedPreferences && temperaturePreferencePresent ? null : effectiveModel, temperature);
+                deferTemperature ? null : effectiveModel, temperature);
         double sanitizedTopP = ModelCapabilities.sanitizeTopP(
-                supportedPreferences && topPPreferencePresent ? null : effectiveModel, topP);
+                deferTopP ? null : effectiveModel, topP);
         double sanitizedFrequencyPenalty = ModelCapabilities.sanitizeFrequencyPenalty(effectiveModel, frequencyPenalty);
         double sanitizedPresencePenalty = ModelCapabilities.sanitizePresencePenalty(effectiveModel, presencePenalty);
 
+        if (deferTemperature || deferTopP) {
+            log.debug("Sampling deferred to OpenAiSamplingContract for modelHash={} modelLength={}",
+                    SafeRedactor.hashValue(effectiveModel),
+                    effectiveModel == null ? 0 : effectiveModel.length());
+        }
         if (Double.compare(temperature, sanitizedTemperature) != 0) {
             log.debug("Adjusted temperature {} -> {} for modelHash={} modelLength={}",
                     temperature,

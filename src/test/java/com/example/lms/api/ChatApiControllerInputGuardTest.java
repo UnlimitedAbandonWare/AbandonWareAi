@@ -92,9 +92,15 @@ class ChatApiControllerInputGuardTest {
         int snapshot = source.indexOf("const exactFinalRun = effectiveType === \"final\"", parser);
         int render = source.indexOf("renderChatEvent(eventPayload, assistant, effectiveType)", snapshot);
         int finalAck = source.indexOf("exactFinalRun.sessionId, exactFinalRun.runToken, \"final\"", render);
-        int awaitAck = source.indexOf("if (finalAckPromise) await finalAckPromise", finalAck);
+        int awaitAck = source.indexOf("if (finalAckPromise) {", finalAck);
         assertTrue(parser >= 0 && snapshot > parser && render > snapshot && finalAck > render && awaitAck > finalAck,
                 "final ACK must use the exact pre-render capability after the final is rendered");
+        int terminalCheck = source.indexOf("if (!terminalEventSeen)", awaitAck);
+        assertTrue(terminalCheck > awaitAck);
+        String awaitAckBody = source.substring(awaitAck, terminalCheck);
+        assertTrue(awaitAckBody.contains("if (clientDeadlinePromise == null) await finalAckPromise;"));
+        assertTrue(awaitAckBody.contains("else await Promise.race([finalAckPromise, clientDeadlinePromise]);"),
+                "final ACK must preserve the existing bounded transport wait");
 
         int finalBranch = source.indexOf("} else if (type === \"final\")");
         int nextBranch = source.indexOf("} else if (type ===", finalBranch + 1);
@@ -197,7 +203,7 @@ class ChatApiControllerInputGuardTest {
     }
 
     @Test
-    void syncMetadataExtractionCarriesBoundOwnerAndNeverUsesOwnerlessOverload() {
+    void syncAttachmentBindingCarriesBoundOwnerAndNeverUsesOwnerlessOverload() {
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ChatService chatService = mock(ChatService.class);
         SettingsService settingsService = mock(SettingsService.class);
@@ -217,8 +223,6 @@ class ChatApiControllerInputGuardTest {
                 .thenReturn(2121L);
         when(chatService.continueChat(any(ChatRequestDto.class), any()))
                 .thenReturn(ChatResult.of("Attachment-safe answer.", "mock-model", false));
-        when(attachmentService.asDocumentsForSession(List.of("att-1"), "212", owner))
-                .thenReturn(List.of());
 
         ResponseEntity<ChatResponseDto> response = controller.chat(
                         ChatRequestDto.builder()
@@ -236,12 +240,13 @@ class ChatApiControllerInputGuardTest {
         ArgumentCaptor<ChatRequestDto> requestCaptor = ArgumentCaptor.forClass(ChatRequestDto.class);
         verify(chatService).continueChat(requestCaptor.capture(), any());
         assertEquals(owner, requestCaptor.getValue().getAttachmentOwnerIdentity());
-        verify(attachmentService).asDocumentsForSession(List.of("att-1"), "212", owner);
+        verify(attachmentService).attachToSession("212", List.of("att-1"), owner);
+        verify(attachmentService, never()).attachToSession("212", List.of("att-1"));
         verify(attachmentService, never()).asDocumentsForSession(List.of("att-1"), "212");
     }
 
     @Test
-    void publicChatCarriesSameAbsoluteTimeBudgetIntoBoundedElasticWorker() {
+    void publicChatSeparatesIngressBudgetFromAcceptedBoundedElasticRun() {
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ChatService chatService = mock(ChatService.class);
         SettingsService settingsService = mock(SettingsService.class);
@@ -251,16 +256,24 @@ class ChatApiControllerInputGuardTest {
         session.setId(211L);
         java.util.concurrent.atomic.AtomicReference<com.abandonware.ai.addons.budget.TimeBudget> observedBudget =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<com.abandonware.ai.addons.budget.TimeBudget> ingressBudget =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        java.util.concurrent.atomic.AtomicReference<ChatRunExecutionContext> observedRun =
+                new java.util.concurrent.atomic.AtomicReference<>();
 
         when(settingsService.getAllSettings()).thenReturn(Map.of());
         when(ownerKeyResolver.ownerKey()).thenReturn("owner-a");
         when(historyService.startNewSession(any(), any(), any(), any(), any()))
-                .thenReturn(Optional.of(session));
+                .thenAnswer(invocation -> {
+                    ingressBudget.set(com.abandonware.ai.addons.budget.TimeBudgetContext.get());
+                    return Optional.of(session);
+                });
         when(historyService.appendMessageReturningId(211L, "assistant", "Budget-aware answer."))
                 .thenReturn(2111L);
         when(chatService.continueChat(any(ChatRequestDto.class), any()))
                 .thenAnswer(invocation -> {
                     observedBudget.set(com.abandonware.ai.addons.budget.TimeBudgetContext.get());
+                    observedRun.set(ChatRunExecutionContext.current());
                     return ChatResult.of("Budget-aware answer.", "mock-model", false);
                 });
 
@@ -285,8 +298,9 @@ class ChatApiControllerInputGuardTest {
 
         assertNotNull(response);
         assertEquals(HttpStatus.OK, response.getStatusCode());
-        assertSame(requestBudget, observedBudget.get(),
-                "the async worker must consume the request's original absolute deadline");
+        assertSame(requestBudget, ingressBudget.get(), "the worker must receive the original ingress budget");
+        assertNotNull(observedRun.get(), "generation must execute inside an accepted exact run");
+        assertNull(observedBudget.get(), "an accepted logical run must hide the ingress deadline");
         assertNull(com.abandonware.ai.addons.budget.TimeBudgetContext.get(),
                 "request budget must remain cleared on the caller after subscription");
     }

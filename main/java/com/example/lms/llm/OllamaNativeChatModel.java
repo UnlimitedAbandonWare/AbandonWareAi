@@ -34,6 +34,7 @@ import dev.langchain4j.model.chat.request.json.JsonSchema;
 import dev.langchain4j.model.chat.request.json.JsonSchemaElement;
 import dev.langchain4j.model.chat.request.json.JsonStringSchema;
 import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.ChatResponseMetadata;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -579,7 +580,8 @@ public final class OllamaNativeChatModel implements NamedChatModel {
             observedResponseBody = body;
             observedResponseHeaders = response == null ? null : response.getHeaders();
             clientHttpResponseObserved = response != null;
-            AiMessage aiMessage = extractAiMessage(body);
+            ChatResponse nativeResponse = extractResponse(body);
+            AiMessage aiMessage = nativeResponse.aiMessage();
             String text = aiMessage == null ? null : aiMessage.text();
             boolean usable = (text != null && !text.isBlank())
                     || (aiMessage != null && aiMessage.hasToolExecutionRequests());
@@ -608,9 +610,7 @@ public final class OllamaNativeChatModel implements NamedChatModel {
                         "blank_response");
             }
             recordNativeSuccess();
-            return ChatResponse.builder()
-                    .aiMessage(aiMessage)
-                    .build();
+            return nativeResponse;
         } catch (WebClientResponseException ex) {
             if (clientAttempt != null) clientAttempt.finished(ex);
             String body = ex.getResponseBodyAsString();
@@ -838,7 +838,7 @@ public final class OllamaNativeChatModel implements NamedChatModel {
         return value == null ? 0 : value.getBytes(StandardCharsets.UTF_8).length;
     }
 
-    private AiMessage extractAiMessage(String body) {
+    private ChatResponse extractResponse(String body) {
         if (body == null || body.isBlank()) {
             TraceStore.put("llm.ollamaNative.emptyBody", true);
             throw new LlmGatewayException(
@@ -892,7 +892,14 @@ public final class OllamaNativeChatModel implements NamedChatModel {
             if (!toolCalls.isEmpty()) {
                 aiMessage.toolExecutionRequests(toolCalls);
             }
-            return aiMessage.build();
+            JsonNode wireModel = root.path("model");
+            String observedModel = wireModel.isTextual() ? wireModel.textValue() : null;
+            if (observedModel != null && !observedModel.matches("[A-Za-z0-9][A-Za-z0-9._:/+@-]{0,199}")) {
+                observedModel = null;
+            }
+            return ChatResponse.builder().aiMessage(aiMessage.build())
+                    .metadata(ChatResponseMetadata.builder().modelName(observedModel).build())
+                    .build();
         } catch (LlmGatewayException classifiedFailure) {
             throw classifiedFailure;
         } catch (Exception ex) {

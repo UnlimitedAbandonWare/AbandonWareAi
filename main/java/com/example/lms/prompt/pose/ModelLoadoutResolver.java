@@ -33,7 +33,7 @@ public class ModelLoadoutResolver {
             if (tokenBudget <= 0 || priority < 0 || !MODULES.containsKey(id) || !"1".equals(version)
                     || !digest(MODULES.get(id)).equals(hash)) throw new IllegalArgumentException("INVALID_SKILL_REFERENCE");
         }
-        String ref() { return id + "@" + version + "#" + hash; }
+        public String ref() { return id + "@" + version + "#" + hash; }
     }
     public record Request(Role role, Set<String> features, Set<String> requiredCapabilities,
                           boolean toolApproved, boolean corpusAllowed, int inputTokens,

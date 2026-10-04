@@ -334,9 +334,45 @@ class ChatApiControllerSyncLifecycleTest {
             assertEquals("generated answer", response.getBody().getContent());
             verify(f.history, atLeastOnce()).getSessionForRequest(42L);
             verify(f.history, never()).getSessionWithMessages(42L);
+            verify(f.history).updateRollingSummary(eq(42L), nullable(Long.class));
         }
     }
 
+
+    @ParameterizedTest
+    @ValueSource(strings = {"stream", "sync"})
+    void degradedGeneratedAnswerIsPersistedAndDeliveredAsFinal(String route) {
+        try (Fixture f = new Fixture()) {
+            String answer = "[품질 저하] 답변 후처리를 완료하지 못했습니다.\n\nComplete synthetic answer.";
+            when(f.chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+                com.example.lms.search.TraceStore.put("finalAnswer.postprocess.reason", "postprocess_failed");
+                com.example.lms.search.TraceStore.put("finalAnswer.memorySaveAllowed", false);
+                return ChatResult.of(answer, "fixture-model", false, java.util.Set.of());
+            });
+            when(f.history.appendMessageReturningId(42L, "assistant", answer)).thenReturn(421L);
+            if ("sync".equals(route)) {
+                var response = f.request("sync");
+                assertEquals(HttpStatus.OK, response.getStatusCode());
+                assertEquals(answer, response.getBody().getContent());
+                verify(f.history, times(1)).appendMessageReturningId(42L, "assistant", answer);
+                verify(f.history, never()).updateRollingSummary(anyLong(), nullable(Long.class));
+                assertFalse(f.registry.isRunning(42L));
+                return;
+            }
+            var req = ChatRequestDto.builder().message("ordinary question").sessionId(42L)
+                    .useRag(false).useWebSearch(false).build();
+            var events = f.controller.chatStream(req, false, false, null, new MockHttpServletRequest())
+                    .collectList().block(Duration.ofSeconds(5));
+            var finalEvent = events.stream().map(org.springframework.http.codec.ServerSentEvent::data)
+                    .filter(e -> e != null && "final".equals(e.type())).findFirst().orElseThrow();
+            assertEquals(answer, finalEvent.data());
+            assertFalse(events.stream().map(org.springframework.http.codec.ServerSentEvent::data)
+                    .anyMatch(e -> e != null && "error".equals(e.type())));
+            verify(f.history, times(1)).appendMessageReturningId(42L, "assistant", answer);
+            verify(f.history, never()).updateRollingSummary(anyLong(), nullable(Long.class));
+            assertFalse(f.registry.isRunning(42L));
+        }
+    }
 
     private static final class Fixture implements AutoCloseable {
         final ChatHistoryService history = mock(ChatHistoryService.class);

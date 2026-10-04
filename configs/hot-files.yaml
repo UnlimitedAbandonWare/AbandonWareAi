@@ -1,0 +1,37 @@
+# Hot files registry (session-harmony / DEMO1-SESSION-HARMONY).
+# Rule: a file listed here may be edited by at most ONE live-lease session at
+# a time. Other sessions prepare the patch and stay HOLD on that file.
+# Judgement reads agent_scope_lease.py `who` + source_edit_session.ps1 status
+# -Json output — this file declares WHICH paths are hot; it is not a lock.
+#
+# Evidence column sources (2026-10-03):
+#   - lease:  __patch_drop__/source-edit-locks/<topic>.lock/lease.json today
+#   - journal: data/agent-handoff/codex-autonomy/<taskId>/journal.json
+#     plannedScope overlap across in-progress journals
+version: "2026-10-03"
+
+hotFiles:
+  # --- directive-mandated (observed multi-lease contention today) ---
+  - path: "main/java/com/example/lms/service/ChatWorkflow.java"
+    reason: "14,165-line god file; lease model-loadout-wp3 active today; +302/-41 uncommitted churn"
+    evidence: ["lease:model-loadout-wp3", "git-diff:+302/-41"]
+  - path: "main/java/com/example/lms/api/ChatApiController.java"
+    reason: "5,440-line controller; 2 in-progress journals share scope; active lease api3-stream-failed"
+    evidence: ["lease:api3-stream-failed", "journals:codex-api3-stream-failed-3a621fe8+codex-api3-stream-failed-5850b5bb"]
+  - path: "main/java/com/example/lms/service/DynamicChatModelFactory.java"
+    reason: "1,269-line factory; lease model-loadout-runtime-identity active today"
+    evidence: ["lease:model-loadout-runtime-identity"]
+  - path: "main/resources/application-llm.yaml"
+    reason: "LLM routing SSOT; named in directive hot set"
+    evidence: ["directive:session-harmony"]
+
+  # --- observed additional contention (max +3 per directive) ---
+  - path: "main/java/com/example/lms/api/ChatRequestSettingsMerger.java"
+    reason: "live lease sampling-resume-merger-2195e876 + in-progress journal codex-sampling-merger-resume-2195e876"
+    evidence: ["lease:sampling-resume-merger-2195e876", "journal:codex-sampling-merger-resume-2195e876"]
+  - path: "main/java/com/example/lms/service/routing/plan/RouterDecisionCache.java"
+    reason: "live lease api3-stream-failed-cache (same task family holds ChatApiController lease)"
+    evidence: ["lease:api3-stream-failed-cache"]
+  - path: "main/java/com/example/lms/llm/ModelSelectionException.java"
+    reason: "in-progress journal scope codex-api3-stream-failed-5850b5bb; same ChatApiController incident family"
+    evidence: ["journal:codex-api3-stream-failed-5850b5bb"]

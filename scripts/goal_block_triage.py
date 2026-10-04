@@ -16,7 +16,8 @@ Usage:
 
 Classification labels (multi):
     LEASE_HELD, UNMEASURABLE_EVIDENCE, CONTRADICTORY_ACCEPTANCE,
-    TOOL_LIMIT, PERMISSION, BUDGET, UNKNOWN
+    TOOL_LIMIT, PERMISSION, BUDGET, SUPERSEDED, USER_EVIDENCE_WAIT,
+    ENV_TRANSIENT, UNKNOWN
 
 Never prints secret values: message text is truncated and run through
 redact() before output. .env/.secrets are never opened.
@@ -244,6 +245,30 @@ RULES = {
     "BUDGET": [
         re.compile(r"재기동.{0,6}상한 소진|호출 상한 소진|한도.{0,4}소진|예산.{0,4}소진|budget.{0,10}exhaust|rate.?limit.{0,10}exceed", re.I),
     ],
+    # D33 대응: 같은 목표를 더 새 세션이 이미 끝낸 재개 대기.
+    "SUPERSEDED": [
+        re.compile(r"superseded|다른 세션이.{0,16}(이미|먼저).{0,12}(완료|해결|끝|닫)|"
+                   r"(같은|동일).{0,8}(목표|goal).{0,16}(다른|새).{0,8}세션.{0,12}(완료|해결|끝)|"
+                   r"newer.{0,12}(session|ledger).{0,16}(pass|verified|complete|solved|closed)|"
+                   r"already.{0,16}(solved|completed).{0,12}(goal|session)|이미 해결된 목표", re.I),
+    ],
+    # D31 대응: 사용자가 보낸 시각·화면 표시 증거를 기다리며 멈춤.
+    "USER_EVIDENCE_WAIT": [
+        re.compile(r"사용자.{0,12}(직접|보낸|전송).{0,16}(시각|확인|증거|기다|대기)|"
+                   r"화면.{0,8}(표시|보이).{0,12}(증거|확인|여부).{0,8}(대기|없|기다|부재)|"
+                   r"(화면|표시).{0,8}증거.{0,8}(없|대기|기다)|"
+                   r"사용자.{0,8}(확인|증거).{0,8}대기|"
+                   r"wait.{0,20}user.{0,16}(evidence|confirm|send|reply)", re.I),
+    ],
+    # D34 대응: 브라우저 정책 거부·launcher 중복·재빌드 중 클래스 누락 등
+    # 환경 일시 실패를 라이브 실패로 오집계해 멈춤.
+    "ENV_TRANSIENT": [
+        re.compile(r"url\s+protocol\s+is\s+not\s+allowed|protocol.{0,16}not allowed|"
+                   r"launcher.{0,20}already running|already running.{0,16}launcher|"
+                   r"클래스.{0,4}(로딩|누락).{0,6}(실패|오류)|NoClassDefFound|ClassNotFound|"
+                   r"DevWatch.{0,8}재빌드|재빌드.{0,4}중.{0,12}(실패|오류)|"
+                   r"환경 일시|transient", re.I),
+    ],
 }
 ALL_PASS_RE = re.compile(r"전부\s*PASS|모두\s*PASS|all\s+(acceptance\s+)?items?.{0,12}PASS|all.{0,4}PASS", re.I)
 PARTIAL_REPORT_RE = RULES["CONTRADICTORY_ACCEPTANCE"][0]
@@ -391,6 +416,22 @@ def suggest_message(labels, verdict, items):
     if "CONTRADICTORY_ACCEPTANCE" in labels:
         return ("「%s은 지시서대로 PARTIAL이 정답이니 완료 조건에서 빼고 "
                 "완료로 보고해줘.」" % itxt)
+    if "SUPERSEDED" in labels:
+        return ("「더 새 세션이 같은 목표를 이미 끝냈어 — "
+                "codex_auto_unblock.py superseded로 확인하고 "
+                "SUPERSEDED로 닫아줘.」")
+    if "BUDGET" in labels:
+        return ("「codex_auto_unblock.py budget으로 D30 조건을 판정해 "
+                "충족이면 자동 증액, 아니면 남은 항목 NOT_RUN으로 partial "
+                "종료해줘.」")
+    if "USER_EVIDENCE_WAIT" in labels:
+        return ("「사용자 증거를 기다리지 말고 codex_auto_unblock.py "
+                "log-evidence로 phase/terminal/final-response를 판정해줘 — "
+                "로그도 없을 때만 그 항목 NOT_RUN.」")
+    if "ENV_TRANSIENT" in labels:
+        return ("「환경 일시 실패는 라이브 카운트 0 — 기존 런타임 부착 "
+                "또는 HTTP 관찰로 대체하고, 재빌드 ready 확인 뒤 "
+                "1회만 재시도해줘.」")
     if verdict == "RESUMABLE_NOW":
         causes = "+".join(sorted(labels - {"UNKNOWN"})) or "원인"
         return ("「막힘 원인 %s이 풀렸어. 같은 감사 반복하지 말고 "
@@ -436,6 +477,8 @@ def triage_session(info, audits, leases, coop_fixed, attachments_root, root):
         verdict = status
     elif "CONTRADICTORY_ACCEPTANCE" in labels:
         verdict = "NEEDS_DIRECTIVE_FIX"
+    elif "SUPERSEDED" in labels:
+        verdict = "SUPERSEDED"
     elif held:
         verdict = "STILL_HELD"
     elif "TOOL_LIMIT" in labels and coop_fixed is not True:

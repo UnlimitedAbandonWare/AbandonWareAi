@@ -1,7 +1,21 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');const core=require('../../../main/resources/static/js/settings-routing.js');
 const reply=(status,body)=>({status,ok:status>=200&&status<300,redirected:false,json:async()=>body});
 const empty=()=>({schemaVersion:1,enabled:false,bindings:{},additionalPaidAllowed:false,additionalCostCapUsd:0});
-test('role contract is exactly six and malformed explanatory payload is rejected',()=>{assert.equal(core.ROLES.length,6);assert.throws(()=>core.profile({...empty(),observedValue:'PRIVATE'}));assert.deepEqual(core.profile(empty()),empty());});
+const aux=()=>({...empty(),enabled:true,bindings:{SELFASK_BQ:{role:'SELFASK_BQ',selection:'registered-route',target:'llmrouter.fixture',orderedFallbacks:[],maxExtraFallbackCalls:0,auxPaidAllowed:true,auxCostCapUsdPerRun:0.01}}});
+test('saved auxiliary opt-in survives preview and save serialization',async()=>{
+ const requests=[];const c=core.createClient(async(url,opt)=>{requests.push(JSON.parse(opt.body));return reply(200,{profileRevision:2})},()=>({}));
+ await c.preview(aux());await c.save(aux(),{profileRevision:1,profileHash:null});
+ for(const r of requests)assert.deepEqual(r.profile.bindings.SELFASK_BQ,aux().bindings.SELFASK_BQ);
+});
+test('MAIN binding cannot acquire auxiliary paid permission',()=>{
+ const p=aux();p.bindings.MAIN_DEFAULT={...p.bindings.SELFASK_BQ,role:'MAIN_DEFAULT'};delete p.bindings.SELFASK_BQ;assert.throws(()=>core.profile(p));
+});
+test('client prices and unbounded auxiliary caps are rejected',()=>{
+ for(const changed of [{price:{input:0}},{capabilityStatus:{schema:'YES'}},{auxCostCapUsdPerRun:0.051},{auxCostCapUsdPerRun:0}]){
+  const p=aux();Object.assign(p.bindings.SELFASK_BQ,changed);assert.throws(()=>core.profile(p));
+ }
+});
+test('role contract has seven named roles and malformed explanatory payload is rejected',()=>{assert.deepEqual(core.ROLES,['MAIN_DEFAULT','MAIN_FAST','MAIN_HIGH','SELFASK_BQ','SELFASK_ER','SELFASK_RC','PROMPT_POSE_DRAFT']);assert.throws(()=>core.profile({...empty(),observedValue:'PRIVATE'}));assert.deepEqual(core.profile(empty()),empty());});
 test('401/403 produce locked state and never retry writes',async()=>{let calls=0;const c=core.createClient(async()=>{calls++;return reply(403,{private:'PRIVATE'})},()=>({}));assert.equal((await c.read()).kind,'locked');assert.equal(calls,1);assert.equal(c.state().data,null);});
 test('409 preserves draft and requires explicit reload',async()=>{let calls=0;const c=core.createClient(async()=>{calls++;return reply(409,{reasonCode:'revision_conflict'})},()=>({}));let p=empty();p.enabled=true;let r=await c.save(p,{profileRevision:3,profileHash:'a'.repeat(64)});assert.equal(r.kind,'conflict');assert.equal(calls,1);assert.equal(c.state().draft.enabled,true);});
 test('late response cannot replace newer read',async()=>{let release;let n=0;const c=core.createClient(()=>++n===1?new Promise(r=>release=r):Promise.resolve(reply(200,{profileRevision:2})),()=>({}));let a=c.read();await c.read();release(reply(200,{profileRevision:1}));assert.equal((await a).kind,'stale');assert.equal(c.state().data.profileRevision,2);});

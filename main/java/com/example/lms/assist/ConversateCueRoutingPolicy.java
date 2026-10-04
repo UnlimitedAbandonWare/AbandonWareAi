@@ -130,7 +130,11 @@ final class ConversateCueRoutingPolicy {
         // Primary-provider preference applies to final answers; quality remains an admission constraint.
         // Real-time lane: weight observed latency into the efficiency key, so a slow or
         // flaky route cannot stay first only because its token price is marginally lower.
-        choices.sort(Comparator.<Choice>comparingInt(c -> demand.gate() || primary(routes.getModels().get(c.key())) ? 0 : 1)
+        // Operator override: conversate.cue.preferred-provider lifts that provider's already
+        // admitted candidates to the front; it never bypasses the admission filters above.
+        String preferred = preferredProvider();
+        choices.sort(Comparator.<Choice>comparingInt(c -> preferred(routes.getModels().get(c.key()), preferred) ? 0 : 1)
+                .thenComparingInt(c -> demand.gate() || primary(routes.getModels().get(c.key())) ? 0 : 1)
                 .thenComparingDouble(c -> c.estimatedCost()*c.expectedLatencyMs()/Math.max(.1, c.successRate()))
                 .thenComparingLong(Choice::expectedLatencyMs).thenComparing(Choice::key));
         var identities = new HashSet<String>();
@@ -275,6 +279,8 @@ final class ConversateCueRoutingPolicy {
     // Provider-level quota settings must share counters even when keys have different environment aliases.
     private static String accountKey(LlmRouterProperties.ModelConfig cfg) { return cfg.getProvider().toLowerCase(Locale.ROOT); }
     private static String identity(LlmRouterProperties.ModelConfig cfg) { return accountKey(cfg)+":"+cfg.getBaseUrl()+":"+cfg.getName(); }
+    private String preferredProvider() { return Objects.toString(env.getProperty("conversate.cue.preferred-provider"), "").trim(); }
+    private static boolean preferred(LlmRouterProperties.ModelConfig cfg, String provider) { return cfg != null && !provider.isEmpty() && provider.equalsIgnoreCase(cfg.getProvider()); }
     private static boolean primary(LlmRouterProperties.ModelConfig cfg) { return Set.of("openai","gemini").contains(cfg.getProvider().toLowerCase(Locale.ROOT)); }
     private static boolean local(LlmRouterProperties.ModelConfig cfg) { return Set.of("local","ollama","local-openai").contains(cfg.getProvider().toLowerCase(Locale.ROOT)); }
 }

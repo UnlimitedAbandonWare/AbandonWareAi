@@ -87,14 +87,15 @@ class DisplayConversateHttpTest {
         body.put("requestId",UUID.randomUUID().toString());assertEquals(409,client.post("input",body).statusCode());
         assertEquals(before,calls.get());
     }
-    @Test void displayModeBlocksLegacyChatAndSocketBeforeTheirHandlers() throws Exception {
+    @Test void displayModePreservesChatAdmissionAndWsAuth() throws Exception {
         var client=new Client();int before=LegacyProbe.calls.get();
-        for(String path:List.of("/api/chat/sync","/api/chat/history","/ws/chat")){
-            var request=HttpRequest.newBuilder(URI.create(base+path)).header("Content-Type","application/json");
-            if(path.endsWith("sync"))request.POST(HttpRequest.BodyPublishers.ofString("{}"));else request.GET();
-            assertEquals(403,client.http.send(request.build(),HttpResponse.BodyHandlers.discarding()).statusCode());
-        }
-        assertEquals(before,LegacyProbe.calls.get());assertTrue(client.bootstrap().path("ready").asBoolean());
+        var sync=HttpRequest.newBuilder(URI.create(base+"/api/chat/sync")).header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build();
+        var history=HttpRequest.newBuilder(URI.create(base+"/api/chat/history")).GET().build();
+        var socket=HttpRequest.newBuilder(URI.create(base+"/ws/chat")).GET().build();
+        assertEquals(200,client.http.send(sync,HttpResponse.BodyHandlers.discarding()).statusCode());
+        assertEquals(200,client.http.send(history,HttpResponse.BodyHandlers.discarding()).statusCode());
+        assertEquals(401,client.http.send(socket,HttpResponse.BodyHandlers.discarding()).statusCode());
+        assertEquals(before+2,LegacyProbe.calls.get());assertTrue(client.bootstrap().path("ready").asBoolean());
     }
     @Test void rateWindowBoundsEvenDuplicateInputsAndOtherOwnersRemainIndependent() throws Exception {
         var client=new Client();var s=client.bootstrap();var body=client.connection(s.path("assistId").asText(),s.path("epoch").asLong());body.put("requestId",UUID.randomUUID().toString());body.put("text","요약해 줘");body.put("eventOrder",List.of("change"));
@@ -287,8 +288,10 @@ class DisplayConversateHttpTest {
         }
     }
     @Test void standaloneBackgroundIsBoundedAndNeverInvokesGeneration() throws Exception {
-        var controller=context.getBean(DisplayConversateController.class);var phone=new Client();
+        var controller=context.getBean(DisplayConversateController.class);var phone=new Client("test-5a9de10000000000");
         org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
+        var globalWindow=org.springframework.test.util.ReflectionTestUtils.getField(controller,"global");
+        org.springframework.test.util.ReflectionTestUtils.setField(globalWindow,"started",System.currentTimeMillis()-120_000L);
         try {
             var view=JSON.readTree(phone.post("phone-test",phone.connection(null,0)).body());
             var body=phone.connection(view.path("assistId").asText(),view.path("epoch").asLong());body.put("text","합성 배경");
@@ -440,7 +443,7 @@ class DisplayConversateHttpTest {
         var before=JSON.readTree(phone.post("poll",connection).body());
         var emptyResponse=lens.post("lens/text",read);assertEquals(200,emptyResponse.statusCode());
         assertTrue(emptyResponse.headers().firstValue("Cache-Control").orElse("").contains("no-store"));
-        var empty=JSON.readTree(emptyResponse.body());assertEquals(Set.of("conversation","hint","hintId","hintExpiresAt","conversationExpiresAt","display"),JSON.convertValue(empty,Map.class).keySet());
+        var empty=JSON.readTree(emptyResponse.body());assertEquals(Set.of("conversation","hint","hintId","hintExpiresAt","conversationExpiresAt","display","focus"),JSON.convertValue(empty,Map.class).keySet());
         assertEquals("",empty.path("conversation").asText());assertTrue(empty.path("hintId").isNull());assertEquals(0,empty.path("conversationExpiresAt").asLong());
         var after=JSON.readTree(phone.post("poll",connection).body());assertEquals(before.path("version"),after.path("version"));
         assertEquals(200,phone.post("audio/start",connection).statusCode());

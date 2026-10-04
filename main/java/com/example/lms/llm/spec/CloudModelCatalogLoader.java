@@ -107,6 +107,10 @@ public class CloudModelCatalogLoader {
         copy(metadata, model, "nominalTier");
         copy(metadata, model, "catalogCheckedAt");
         copy(metadata, model, "supportedRoles");
+        for (String key : List.of("hostingProvider", "endpointRoute", "capabilityStatus", "price",
+                "providerRestrictionSupported", "dataPolicy")) {
+            copy(metadata, model, key);
+        }
         if (endpoint != null) {
             copy(metadata, endpoint, "type", "endpointType");
         }

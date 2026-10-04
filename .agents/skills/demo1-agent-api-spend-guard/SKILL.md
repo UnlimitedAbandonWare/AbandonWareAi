@@ -76,3 +76,15 @@ ext=user-self-verify|await-restart-approval.
        local_ollama), used when the purpose does not need a paid lane.
    The withdrawn R2 `STRICT_ZERO` (additional spend = $0) posture stays
    retired — do not reintroduce it as a default.
+
+## Grok Bot sync 2026-10-03
+
+- (R13) 401/403/429는 재시도 없음 — 근본 원인을 보고 맨 위 `외부 API:` 줄에 둔다.
+  위의 "at most one classified retry"는 그 외 실패 클래스(timeout/empty/network)
+  에만 적용한다.
+- (R13) 크레딧 구매·요금제·모델 설정 변경은 사용자 결정 — 에이전트가 스스로
+  실행하거나 묻지 않고 진행하지 않는다.
+- (R13·검증 레인) 에이전트 테스트/검증 모델: 2026-12-30 23:59 KST까지 API
+  레인만 사용(`python -B scripts/test_model_policy.py resolve --purpose <p>`,
+  skill `demo1-test-model-policy`). 로컬로 조용히 폴백되면 그 검증은 PASS가
+  아니다. 2026-12-31부터 로컬 레인 재허용.

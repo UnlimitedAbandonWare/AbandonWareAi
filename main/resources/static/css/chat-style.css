@@ -2177,6 +2177,7 @@ body.chat-app {
 .chat-app .composer #stopBtn { flex: 0 0 auto; min-height: 36px; padding: 8px; background: #f1ecfc; color: var(--accent); font-size: 12px; }
 .chat-app .composer .composer-input { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .chat-app .composer .composer-input textarea { width: 100%; }
+.chat-app .composer [hidden] { display: none !important; }
 .chat-app .composer .icon { flex: 0 0 36px; height: 36px; min-height: 36px; padding: 0; border: 0; border-radius: 11px; background: #f1ecfc; color: var(--accent); font-size: 15px; line-height: 1; cursor: pointer; }
 .chat-app .composer .icon:hover { background: #e6ddfb; }
 .chat-app .composer .icon.recording { background: #d92d20; color: #fff; }

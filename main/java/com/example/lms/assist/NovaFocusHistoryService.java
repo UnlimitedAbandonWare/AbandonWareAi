@@ -34,6 +34,9 @@ public class NovaFocusHistoryService {
     @PersistenceContext private EntityManager em;
     private final ObjectMapper mapper;
     private final TransactionTemplate tx;
+    /** Server-side default for owners without stored settings; explicit toggles still win. */
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.default-enabled:false}")
+    private boolean defaultEnabled;
 
     public NovaFocusHistoryService(PlatformTransactionManager manager,ObjectMapper mapper,ChatHistoryService history) {
         this.mapper=mapper;this.tx=new TransactionTemplate(manager);
@@ -79,14 +82,20 @@ public class NovaFocusHistoryService {
         try{transaction(()->{var p=new NovaFocusProfile();p.setId(id);p.setOwnerKey(owner);p.setChannel(channel);em.persist(p);em.flush();return null;});}
         catch(RuntimeException race){if(!transaction(()->em.find(NovaFocusProfile.class,id)!=null))throw race;}
     }
+    private NovaFocusSettings serverDefaults(){
+        var d=NovaFocusSettings.defaults();
+        return defaultEnabled?new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),
+            d.wakeListenTimeoutMs(),d.presentation(),d.recallEnabled(),d.rememberFactsEnabled(),
+            d.snapshot(),d.answerSelection(),d.recentContext(),d.memory()):d;
+    }
     private NovaFocusSettings decode(String json) {
-        if(json==null)return NovaFocusSettings.defaults();
+        if(json==null)return serverDefaults();
         try{return mapper.readValue(json,NovaFocusSettings.class);}
         catch(Exception e){throw new IllegalStateException("focus_settings_unreadable");}
     }
     public Settings settings(String owner,String channel) {
         return transaction(()->{var p=em.find(NovaFocusProfile.class,scope(owner,channel));
-            return p==null?new Settings(0,NovaFocusSettings.defaults()):new Settings(p.getSettingsVersion(),decode(p.getSettingsJson()));});
+            return p==null?new Settings(0,serverDefaults()):new Settings(p.getSettingsVersion(),decode(p.getSettingsJson()));});
     }
     public Settings settings(String owner,String channel,long expected,NovaFocusSettings value) {
         Objects.requireNonNull(value);ensure(owner,channel);

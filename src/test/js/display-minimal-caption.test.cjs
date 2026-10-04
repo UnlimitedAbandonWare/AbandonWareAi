@@ -62,7 +62,7 @@ function phone(){
  return{c,elements,timers,get attempts(){return attempts;},setFail(v){fail=v;},emit(connection,assistId='session-one'){Object.assign(c.state,{connection,ready:connection==='READY',assistId,epoch:1});change(c.state);}};
 }
 test('Fold retries a transient saved-link failure after READY recovery without a per-render loop',async()=>{
- const p=phone();p.emit('READY');await flush();assert.equal(p.attempts,1);
+ const p=phone();p.emit('READY');await flush();assert.equal(p.attempts,0);await p.elements.get('connect-lens').onclick();assert.equal(p.attempts,1);
  for(let i=0;i<8;i++)p.emit('READY');await flush();assert.equal(p.attempts,1);assert.equal(p.timers.size,1);
  p.emit('RECONNECTING');p.setFail(false);p.emit('READY');await flush();assert.equal(p.attempts,2);
  assert.match(p.elements.get('lens-address').value,/#view=[a-f0-9]{64}$/);assert.equal(p.timers.size,0);

@@ -10,9 +10,15 @@ import java.util.*;
 /** The bounded policy stored in one existing ConfigurationSetting. Explanation fields are never policy. */
 public record RoutingProfile(int schemaVersion, long revision, boolean enabled, Map<Role,Binding> bindings,
                              boolean additionalPaidAllowed, BigDecimal additionalCostCapUsd) {
-    public enum Role { MAIN_DEFAULT, MAIN_FAST, MAIN_HIGH, SELFASK_BQ, SELFASK_ER, SELFASK_RC }
-    public record Binding(Role role, String selection, String target, List<String> orderedFallbacks, int maxExtraFallbackCalls) {
+    public enum Role { MAIN_DEFAULT, MAIN_FAST, MAIN_HIGH, SELFASK_BQ, SELFASK_ER, SELFASK_RC, PROMPT_POSE_DRAFT;
+        public boolean auxiliary(){return !name().startsWith("MAIN_");}
+    }
+    public record Binding(Role role, String selection, String target, List<String> orderedFallbacks,
+                          int maxExtraFallbackCalls, boolean auxPaidAllowed, BigDecimal auxCostCapUsdPerRun) {
         public Binding { orderedFallbacks=List.copyOf(orderedFallbacks); }
+        public Binding(Role role,String selection,String target,List<String> fallbacks,int extra) {
+            this(role,selection,target,fallbacks,extra,false,BigDecimal.ZERO);
+        }
     }
     private static final ObjectMapper JSON=new ObjectMapper().enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION);
     public RoutingProfile { bindings=Collections.unmodifiableMap(new TreeMap<>(bindings)); }
@@ -46,7 +52,14 @@ public record RoutingProfile(int schemaVersion, long revision, boolean enabled, 
         Map<Role,Binding> bindings=new EnumMap<>(Role.class);
         root.get("bindings").fields().forEachRemaining(entry->{
             Role role=Role.valueOf(entry.getKey());JsonNode b=entry.getValue();
-            fields(b,Set.of("role","selection","target","orderedFallbacks","maxExtraFallbackCalls"));
+            fields(b,Set.of("role","selection","target","orderedFallbacks","maxExtraFallbackCalls",
+                    "auxPaidAllowed","auxCostCapUsdPerRun"));
+            if(b.has("auxPaidAllowed") && !b.get("auxPaidAllowed").isBoolean())throw invalid();
+            boolean paid=b.path("auxPaidAllowed").asBoolean(false);
+            if(b.has("auxCostCapUsdPerRun") && !b.get("auxCostCapUsdPerRun").isNumber())throw invalid();
+            BigDecimal cap=b.has("auxCostCapUsdPerRun")?b.get("auxCostCapUsdPerRun").decimalValue():BigDecimal.ZERO;
+            if(cap.signum()<0 || cap.compareTo(new BigDecimal("0.05"))>0 || cap.scale()>8 || cap.precision()>8
+                    || paid!= (cap.signum()>0) || !role.auxiliary() && paid)throw invalid();
             if(!role.name().equals(b.path("role").asText()) || !"registered-route".equals(b.path("selection").asText())
                     || !b.path("target").isTextual() || !identifier(b.path("target").textValue())
                     || !b.path("orderedFallbacks").isArray() || b.path("orderedFallbacks").size()>3)throw invalid();
@@ -57,7 +70,7 @@ public record RoutingProfile(int schemaVersion, long revision, boolean enabled, 
                 fallbacks.add(f.textValue());
             }
             int extra=(int)integer(b.get("maxExtraFallbackCalls"),fallbacks.size());
-            bindings.put(role,new Binding(role,"registered-route",b.path("target").textValue(),fallbacks,extra));
+            bindings.put(role,new Binding(role,"registered-route",b.path("target").textValue(),fallbacks,extra,paid,cap));
         });
         long revision=root.has("revision")?integer(root.get("revision"),Long.MAX_VALUE-1):0;
         return new RoutingProfile(1,revision,root.path("enabled").booleanValue(),bindings,false,BigDecimal.ZERO);

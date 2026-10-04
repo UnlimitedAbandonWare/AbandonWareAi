@@ -9,6 +9,18 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import static org.junit.jupiter.api.Assertions.*;
 class ChatDefaultsPrecedenceTest {
+    @Test void strictRegisteredRoutePreservesConcretePickerId() {
+        for (String model : java.util.List.of("llmrouter.gemini-pro", "llmrouter.api3")) {
+            var r = resolve(ChatRequestDto.builder().model(model).strictModelSelection(true)
+                    .useRag(false).useWebSearch(false)
+                    .searchMode(com.example.lms.gptsearch.dto.SearchMode.OFF).maxTokens(64).build(),
+                    Map.of(), Map.of());
+            assertEquals(model, r.request().getModel());
+            assertTrue(r.request().isStrictModelSelection());
+            assertEquals("strict", r.request().getModelSelectionMode());
+        }
+    }
+
     ChatDefaultsProperties factory() {
         var p = new ChatDefaultsProperties(); p.setModel("fixture-model"); p.setModelSelectionMode("preferred");
         p.setTemperature(0.2); p.setTopP(1.0); p.setFrequencyPenalty(0.0); p.setPresencePenalty(0.0); p.setMaxTokens(2048);

@@ -19,11 +19,14 @@ verbatim inside the new line for update-row, so a row can only be rewritten by a
 line that still names the same identifier (no row takeover, no section rewrite).
 """
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
 import sys
+import tempfile
+import time
 import uuid
 
 
@@ -81,17 +84,69 @@ def write_atomic(path, lines):
             temp.unlink()
 
 
+_LOCK_TIMEOUT_SECONDS = 8
+
+
+@contextmanager
+def _document_lock(path):
+    resolved = Path(path).resolve()
+    if str(resolved).startswith("\\\\"):
+        raise ValueError("local-path-required")
+    key = sha(os.path.normcase(str(resolved)).encode("utf-8"))[:24]
+    directory = Path(tempfile.gettempdir()) / "awx-status-doc-locks"
+    directory.mkdir(parents=True, exist_ok=True)
+    # Keep the lock inode separate from the document replaced by write_atomic.
+    # Never unlink it: another cooperating writer may already have it open.
+    stream = (directory / (key + ".lock")).open("a+b")
+    locked = False
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"\0")
+            stream.flush()
+        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+        if os.name == "nt":
+            import msvcrt
+        else:
+            import fcntl
+        while True:
+            try:
+                stream.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise OSError("status-doc-lock-busy") from None
+                time.sleep(0.02)
+        yield
+    finally:
+        try:
+            if locked:
+                stream.seek(0)
+                if os.name == "nt":
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+
+
 def mutate(path, expect_sha256, change):
-    path, data, lines = read_doc(path)
-    actual = sha(data)
-    if actual != expect_sha256:
-        return {"status": "conflict", "reason": "status-doc-changed-since-read",
-                "expected": expect_sha256, "actual": actual, "file": str(path)}
-    result = change(lines)
-    write_atomic(path, lines)
-    after = sha(path.read_bytes())
-    return {"status": "applied", "file": str(path), "beforeSha256": actual,
-            "afterSha256": after, **result}
+    with _document_lock(path):
+        path, data, lines = read_doc(path)
+        actual = sha(data)
+        if actual != expect_sha256:
+            return {"status": "conflict", "reason": "status-doc-changed-since-read",
+                    "expected": expect_sha256, "actual": actual, "file": str(path)}
+        result = change(lines)
+        write_atomic(path, lines)
+        after = sha(path.read_bytes())
+        return {"status": "applied", "file": str(path), "beforeSha256": actual,
+                "afterSha256": after, **result}
 
 
 def update_row(path, key, line, expect_sha256):

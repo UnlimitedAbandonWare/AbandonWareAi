@@ -122,7 +122,7 @@ public class ChatPreferenceService {
             clean.put(key, value);
         }
         if ("strict".equals(clean.get("modelSelectionMode")) && clean.get("model") instanceof String model
-                && ("auto".equals(model) || model.startsWith("llmrouter.")))
+                && ("auto".equals(model) || "llmrouter.auto".equals(model)))
             throw new IllegalArgumentException("strict_requires_concrete_model");
         return Collections.unmodifiableMap(clean);
     }

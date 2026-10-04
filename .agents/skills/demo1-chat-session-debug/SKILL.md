@@ -38,8 +38,8 @@ python -B scripts/chat_session_debug_export.py show <sessionId|runId>
 3. Hand off a shared bundle:
 ```powershell
 python -B scripts/chat_session_debug_export.py export <id>
-# -> var/debug/chat-session-traces/export/<id>/  (records.json + manifest.json)
-#    + refreshes export/latest.json (same convention as meta_display_db_export)
+# -> var/debug/chat-session-traces/export/export-<16hex>/ (records.json + manifest.json)
+#    + refreshes export/latest.json; v2 metadata uses queryHash/queryForm, never raw query
 ```
 4. Share **only the export path** in the handoff. `manifest.json.related`
    points at the existing Meta Display DB lane

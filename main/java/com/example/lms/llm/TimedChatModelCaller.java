@@ -162,7 +162,19 @@ public final class TimedChatModelCaller {
                     return model.chat(messages);
                 } finally {
                     Thread.interrupted();
-                    taskExited.countDown();
+                    try {
+                        var run = com.example.lms.service.chat.ChatRunExecutionContext.current();
+                        if (run != null) {
+                            org.slf4j.LoggerFactory.getLogger("com.example.lms.llm.ModelRuntimeHealthTracker.requestProof")
+                                    .info("[LLM_WORKER_EXIT] phase=worker_exited scope=model_call runHash={} stage={} modelHash={} cancellationRequested={}",
+                                            run.redactedRunIdentity(), SafeRedactor.traceLabelOrFallback(stage, "unknown"),
+                                            SafeRedactor.hashValue(modelId), run.isCancellationRequested());
+                        }
+                    } catch (RuntimeException ignored) {
+                        // Diagnostics must not change the provider outcome or the exit fence.
+                    } finally {
+                        taskExited.countDown();
+                    }
                 }
             }));
         } catch (RejectedExecutionException rejected) {

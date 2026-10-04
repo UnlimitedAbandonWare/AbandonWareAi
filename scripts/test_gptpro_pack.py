@@ -466,5 +466,129 @@ class GptproPackTests(unittest.TestCase):
         self.assertIn("truncated", skel2)
 
 
+class EvidenceBoundaryTests(unittest.TestCase):
+    """Additive contracts for evidence review findings; original 22 stay unchanged."""
+
+    def test_evidence_plain_text_process_exit(self):
+        import gptpro_pack_evidence as ge
+        self.assertEqual(ge.output_failure({"output": "Process exited with code 1\npermission denied"})[0], 1)
+
+    def test_evidence_patch_tool_failure_with_command_events(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory(prefix="gptpro-tool-failure-") as directory:
+            root = Path(directory)
+            sessions = root / "sessions"
+            folder = sessions / now.strftime("%Y/%m/%d")
+            folder.mkdir(parents=True)
+            rows = [
+                {"type": "session_meta", "timestamp": now.isoformat(), "payload": {"cwd": str(root)}},
+                {"type": "event_msg", "timestamp": now.isoformat(), "payload": {
+                    "type": "item_completed", "item": {"id": "command", "type": "CommandExecution",
+                                                       "command": ["verify"], "exit_code": 0}}},
+                {"type": "event_msg", "timestamp": now.isoformat(), "payload": {
+                    "type": "item_completed", "item": {"id": "patch", "type": "McpToolCall",
+                        "server": "fixture", "tool": "apply_patch", "status": "failed",
+                        "result": {"isError": True, "content": [{"text": "invalid patch fixture"}]}}}},
+            ]
+            (folder / "rollout-fixture.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows + [rows[-1]]) + "\n", encoding="utf-8")
+            e = ge.build(root, {}, git=lambda *a: None, scan=gp.scan_text, included=[], changed=[],
+                         now=now, sessions_dir=sessions, probe_environment=False)
+            self.assertEqual(e.meta["codexFailures"], 0)
+            self.assertEqual(e.meta["codexToolFailures"], 1)
+            self.assertIn("invalid patch fixture", e.files[ge.PREFIX + "agent/codex-project-failures.md"])
+
+    def test_evidence_native_patch_failures_with_command_events(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory(prefix="gptpro-native-patch-") as directory:
+            root = Path(directory)
+            sessions = root / "sessions"
+            folder = sessions / now.strftime("%Y/%m/%d")
+            folder.mkdir(parents=True)
+            rows = [
+                {"type": "session_meta", "timestamp": now.isoformat(), "payload": {"cwd": str(root)}},
+                {"type": "event_msg", "timestamp": now.isoformat(), "payload": {
+                    "type": "item_completed", "item": {"id": "command", "type": "CommandExecution",
+                                                       "command": ["verify"], "exit_code": 0}}},
+                {"type": "response_item", "timestamp": now.isoformat(), "payload": {
+                    "type": "custom_tool_call", "call_id": "native-output", "name": "apply_patch",
+                    "input": "PRIVATE-PATCH-INPUT-FIXTURE"}},
+                {"type": "response_item", "timestamp": now.isoformat(), "payload": {
+                    "type": "custom_tool_call_output", "call_id": "native-output",
+                    "output": "invalid patch: NATIVE-PATCH-FAILURE-FIXTURE"}},
+                {"type": "event_msg", "timestamp": now.isoformat(), "payload": {
+                    "type": "item_completed", "item": {"id": "native-change", "type": "FileChange",
+                        "status": "failed", "changes": {"fixture": "PRIVATE-PATCH-HUNK-FIXTURE"}}}},
+            ]
+            (folder / "rollout-fixture.jsonl").write_text(
+                "\n".join(json.dumps(row) for row in rows + [rows[-2], rows[-1]]) + "\n", encoding="utf-8")
+            e = ge.build(root, {}, git=lambda *a: None, scan=gp.scan_text, included=[], changed=[],
+                         now=now, sessions_dir=sessions, probe_environment=False)
+            self.assertEqual(e.meta["codexFailures"], 0)
+            self.assertEqual(e.meta["codexToolFailures"], 2)
+            failure = e.files[ge.PREFIX + "agent/codex-project-failures.md"]
+            self.assertIn("NATIVE-PATCH-FAILURE-FIXTURE", failure)
+            self.assertIn("FileChange status=failed", failure)
+            self.assertNotIn("PRIVATE-PATCH", "\n".join(e.files.values()))
+
+    def test_evidence_stream_read_budget(self):
+        import io
+        import gptpro_pack_evidence as ge
+        from unittest import mock
+        stream = io.BytesIO(b"x" * 1000 + b"\n")
+        with mock.patch.object(Path, "open", return_value=stream):
+            rows = list(ge.lines(Path("fixture"), max_line=16, max_bytes=10))
+            self.assertEqual(stream.tell() if not stream.closed else len(rows[0][0]), 10)
+        self.assertEqual(len(rows[0][0]), 10)
+
+    def test_evidence_conversation_omission(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        from datetime import datetime, timezone
+        e = ge.Evidence(Path("."), {}, gp.scan_text, datetime.now(timezone.utc), {})
+        e.add(ge.PREFIX + "debug/fixture.txt", "ERROR user prompt: PRIVATE-CONVERSATION-FIXTURE")
+        self.assertNotIn("PRIVATE-CONVERSATION-FIXTURE", "\n".join(e.files.values()))
+
+    def test_evidence_success_signals_cannot_starve_late_error(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        from datetime import datetime, timezone
+        with tempfile.TemporaryDirectory(prefix="gptpro-error-priority-") as directory:
+            root = Path(directory)
+            path = root / "fixture.log"
+            path.write_text("".join(f"INFO provider warmup success {i}\n" for i in range(20))
+                            + "ERROR LATE-FAILURE-FIXTURE\n", encoding="utf-8")
+            e = ge.Evidence(root, {"maxFileKb": 0.5}, gp.scan_text, datetime.now(timezone.utc), {})
+            e.copy_excerpt(path, ge.PREFIX + "debug/fixture.txt")
+            self.assertIn("LATE-FAILURE-FIXTURE", e.files[ge.PREFIX + "debug/fixture.txt"])
+
+    def test_evidence_warning_caps(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        from datetime import datetime, timezone
+        e = ge.Evidence(Path("."), {"maxFileKb": 0.5, "maxEvidenceMb": 0.008},
+                        gp.scan_text, datetime.now(timezone.utc), {})
+        e.warn("fixture", "x" * 1500)
+        ge.finalize(e, [])
+        self.assertLessEqual(len(e.files["PACK_WARNINGS.txt"].encode("utf-8")), 512)
+        self.assertLessEqual(sum(len(t.encode("utf-8")) for t in e.files.values()), int(0.008 * 1048576))
+
+    def test_evidence_protected_context_predicate(self):
+        import gptpro_pack as gp
+        import gptpro_pack_evidence as ge
+        self.assertFalse(ge.safe_file(Path("main/resources/application-secrets.properties"), allow_templates=True))
+        self.assertFalse(ge.safe_file(Path("configs/service-account.json"), allow_templates=True))
+        self.assertTrue(ge.safe_file(Path(".env.example"), allow_templates=True))
+        self.assertTrue(ge.safe_file(Path("main/java/ProviderCredentialAdapter.java"), allow_templates=True))
+        self.assertTrue(ge.safe_file(Path("main/java/ApiKeyHeaderValidationHook.java"), allow_templates=True))
+        self.assertIsNotNone(gp.name_block_reason("main/resources/application-secrets.properties"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L31-L40 sha256=09ea1d1efb5a435ea87cf04be3b6ca969a920931ae435d514f37b1c38584c358 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L32-L41 sha256=09ea1d1efb5a435ea87cf04be3b6ca969a920931ae435d514f37b1c38584c358 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-GPU-LANE-EVIDENCE -->
 ## GPU lane evidence (DESKTOP-M5NOV6K, RTX 3060 + 3090)
 - Dual-GPU Ollama/routing work → `$demo1-gpu-lane-evidence` (`.agents/skills/demo1-gpu-lane-evidence/SKILL.md`). **Entry preflight (before any code):** run `scripts/ollama-status-snapshot.ps1` once and journal its serve-instance/port, `/api/ps`, and GPU-UUID observations — coding before the snapshot is a contract violation.

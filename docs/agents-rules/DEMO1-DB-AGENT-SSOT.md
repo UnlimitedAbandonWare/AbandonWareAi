@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L66-L71 sha256=2dadacd648d4feaf7a575f0366d8c7db565798adbfe6879ed313d51525c73662 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L67-L72 sha256=2dadacd648d4feaf7a575f0366d8c7db565798adbfe6879ed313d51525c73662 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-DB-AGENT-SSOT -->
 ## Local DB agent entry (lmsdb file H2)
 - SSOT `scripts/db_agent.py` (run from root): `status|tables|schema|get-user|verify-admin|query|apply|upsert-admin`; `scripts/db-agent.ps1` is a thin wrapper with the same exits 0/2/3/4/5. Skill `$demo1-db-agent-cli`; cheatsheet `docs/DB_AGENT_CHEATSHEET.md`; py/ps1 entry table `docs/diagnostics/db-vibe-auto-dx-20260928/README.md`.

@@ -1,4 +1,4 @@
-# probe_display_input.ps1 — bounded display-input round-trip probe.
+﻿# probe_display_input.ps1 — bounded display-input round-trip probe.
 #
 # Real contract (DisplayConversateController):
 #   bootstrap : Connection{assistId:null, epoch:0, clientId:[a-f0-9]{32}}

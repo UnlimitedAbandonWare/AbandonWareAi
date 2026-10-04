@@ -75,6 +75,20 @@ def sha_matches(head: str, expect: str) -> bool:
     return bool(expect) and head.startswith(normalize_sha(expect))
 
 
+def _load_branch_context(root: Path) -> dict:
+    """configs/git-branch-context.json — branch-role SSOT
+    (docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md). Absent/bad -> {}."""
+    try:
+        cfg = root / "configs" / "git-branch-context.json"
+        if cfg.is_file():
+            data = json.loads(cfg.read_text(encoding="utf-8-sig"))
+            if isinstance(data, dict):
+                return data
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
 def collect_git_facts(root: Path, runner=run_git) -> dict:
     facts: dict = {"gitAvailable": True}
     code, out, err = runner(root, ["rev-parse", "--show-toplevel"])
@@ -120,6 +134,20 @@ def collect_git_facts(root: Path, runner=run_git) -> dict:
                 remotes[parts[0]] = parts[1]
     facts["originRefs"] = remotes
     facts["originMainSha"] = remotes.get("origin/main")
+    # Branch topology (DEMO1-GIT-BRANCH-TOPOLOGY): the work branch tracks
+    # origin/<workBranch>; origin/main is an unrelated public snapshot and is
+    # never a diff/ahead-behind base. mainRelation only reports whether a
+    # merge-base exists: ancestor | unrelated | unknown.
+    ctx = _load_branch_context(root)
+    work_ref = (f"{ctx.get('remote', 'origin')}/{ctx['workBranch']}"
+                if ctx.get("workBranch") else None)
+    facts["originWorkBranchSha"] = remotes.get(work_ref) if work_ref else None
+    if not facts["originMainSha"]:
+        facts["mainRelation"] = "unknown"
+    else:
+        code, out, _ = runner(root, ["merge-base", "HEAD", "origin/main"])
+        facts["mainRelation"] = ("ancestor" if code == 0 and out.strip()
+                                 else "unrelated" if code == 1 else "unknown")
     return facts
 
 

@@ -830,6 +830,7 @@ public class TraceHtmlBuilder {
         }
         appendPromptEvents(sb, extraMeta, shown);
 
+        appendKvPrefixGroup(sb, extraMeta, shown, "Loadout", "prompt.loadout.", 16);
         appendKvPrefixGroup(sb, extraMeta, shown, "Prompt", "prompt.", 24);
         appendKvGroup(sb, extraMeta, shown, "Memory",
                 java.util.List.of("memory.session.tokenEstimate"));
@@ -1129,7 +1130,7 @@ public class TraceHtmlBuilder {
         Object v = meta.get(key);
         if (v == null)
             return;
-        sb.append("<tr><th>").append(escape(key)).append("</th><td><code>").append(escape(safeValue(key.toLowerCase(java.util.Locale.ROOT).contains("reason") ? SafeRedactor.traceLabelOrFallback(v, "reason") : v)))
+        sb.append("<tr><th>").append(escape(key)).append("</th><td><code>").append(escape(safeValue(key.toLowerCase(java.util.Locale.ROOT).contains("reason") && !SafeRedactor.isLoadoutDiagnostic(key, v) ? SafeRedactor.traceLabelOrFallback(v, "reason") : v)))
                 .append("</code></td></tr>");
         shown.add(key);
     }

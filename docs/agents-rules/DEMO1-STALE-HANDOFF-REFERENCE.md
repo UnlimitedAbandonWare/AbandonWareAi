@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L82-L87 sha256=50395739b037012df0aae8f0eb522dbfeede10e5af3375e7fd9ca79422c4660a movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L84-L89 sha256=50395739b037012df0aae8f0eb522dbfeede10e5af3375e7fd9ca79422c4660a movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-STALE-HANDOFF-REFERENCE -->
 ## Stale Handoffs And Finished Goals
 - Latest user text wins over older Markdown handoffs, TLS essays, HELLO/DISPLAY TEST baselines, Autolearn cycles, and unselected notebook directives — **reference-only**; on conflict follow the live ask.

@@ -43,7 +43,7 @@ STATUS_RE = re.compile(r"^(USED|NOT_USED|NOT_RUN|UNAVAILABLE)\b")
 
 # Secret-shaped strings. Values are never echoed back — only pattern names.
 SECRET_RES = (
-    ("openai-key", re.compile(r"sk-[A-Za-z0-9_\-]{16,}")),
+    ("openai-key", re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_\-]{16,}")),
     ("github-pat", re.compile(r"(?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,}")),
     ("slack-token", re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}")),
     ("aws-akid", re.compile(r"AKIA[0-9A-Z]{16}")),

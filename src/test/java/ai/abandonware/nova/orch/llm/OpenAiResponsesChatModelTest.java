@@ -45,6 +45,35 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OpenAiResponsesChatModelTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", ": heartbeat\n\n", ": heartbeat\r\n\r\n"})
+    void sniffedSseConsumesTheOriginalBodyExactlyOnce(String prefix) {
+        var subscriptions = new java.util.concurrent.atomic.AtomicInteger();
+        var originalBody = reactor.core.publisher.Flux.defer(() -> {
+            if (subscriptions.incrementAndGet() != 1)
+                return reactor.core.publisher.Flux.<org.springframework.core.io.buffer.DataBuffer>error(
+                        new IllegalStateException("Rejecting additional inbound receiver"));
+            return reactor.core.publisher.Flux.<org.springframework.core.io.buffer.DataBuffer>just(
+                    org.springframework.core.io.buffer.DefaultDataBufferFactory.sharedInstance.wrap(
+                            (prefix + oauthCompletedSse()).getBytes(StandardCharsets.UTF_8)));
+        });
+        var response = org.springframework.web.reactive.function.client.ClientResponse
+                .create(org.springframework.http.HttpStatus.OK).body(originalBody).build();
+        var model = new OpenAiResponsesChatModel("http://127.0.0.1:1/v1",
+                "gpt-5.6-luna", 5_000L, () -> "synthetic-oauth-bearer");
+        reactor.core.publisher.Flux<org.springframework.http.codec.ServerSentEvent<String>> decoded =
+                org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                        model, "oauthSniffedBody", response, null, null);
+        var events = decoded.collectList().block(java.time.Duration.ofSeconds(2));
+        assertEquals(1, subscriptions.get(), "sniffing must not drain an already subscribed inbound body");
+        assertNotNull(events);
+        var data = events.stream().map(org.springframework.http.codec.ServerSentEvent::data)
+                .filter(java.util.Objects::nonNull).toList();
+        assertEquals(List.of(
+                "{\"type\":\"response.output_text.delta\",\"delta\":\"oauth answer\"}",
+                "{\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}"), data);
+    }
+
     @Test
     void oauthContentTypeSseWithCharsetPreservesStreamingCompletion() throws Exception {
         assertOAuthContentTypeAnswer("text/event-stream; charset=utf-8", oauthCompletedSse(), "oauth answer");
@@ -63,6 +92,13 @@ class OpenAiResponsesChatModelTest {
     @org.junit.jupiter.params.provider.ValueSource(strings = {"text/plain", "", "application/octet-stream"})
     void oauthContentTypeUnlabelledSseIsSniffed(String contentType) throws Exception {
         assertOAuthContentTypeAnswer(contentType, oauthCompletedSse(), "oauth answer");
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"text/plain", "", "application/octet-stream"})
+    void oauthUnlabelledHeartbeatBeforeDataIsAccepted(String contentType) throws Exception {
+        // A comment heartbeat can precede the first data or event field.
+        assertOAuthContentTypeAnswer(contentType, ": heartbeat\n\n" + oauthCompletedSse(), "oauth answer");
     }
 
     @org.junit.jupiter.params.ParameterizedTest

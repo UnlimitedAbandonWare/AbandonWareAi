@@ -13,6 +13,8 @@ public class RoutingProfileResolver {
     private final RoutingSettingsService service;
     private final ChatModelCatalogService catalog;
     private final boolean enabled;
+    @Value("${chat.settings.routing.aux-paid.enabled:false}")
+    private boolean auxPaidEnabled;
     public RoutingProfileResolver(RoutingSettingsService service,ChatModelCatalogService catalog,
             @Value("${chat.settings.routing.enabled:false}") boolean enabled){
         this.service=service;this.catalog=catalog;this.enabled=enabled;
@@ -36,7 +38,19 @@ public class RoutingProfileResolver {
         Map<RoutingProfile.Role,RunRoutingSnapshot.ResolvedBinding> bindings=new EnumMap<>(RoutingProfile.Role.class);
         profile.bindings().forEach((role,b)->{
             var primary=candidate(choices,b.target());var fallbacks=b.orderedFallbacks().stream().map(id->candidate(choices,id)).toList();
-            bindings.put(role,new RunRoutingSnapshot.ResolvedBinding(role,primary,fallbacks,b.maxExtraFallbackCalls()));
+            for(var candidate:java.util.stream.Stream.concat(java.util.stream.Stream.of(primary),fallbacks.stream()).toList()){
+                if(!candidate.supports(role))throw new IllegalArgumentException("route_capability_unverified");
+                if(role.auxiliary() && candidate.paid()){
+                    var price=candidate.price();
+                    if(!b.auxPaidAllowed() || price==null || !price.fresh())
+                        throw new IllegalArgumentException("auxiliary_price_or_opt_in_unverified");
+                    var first=primary.price();
+                    if(first==null || price.input().compareTo(first.input())>0 || price.output().compareTo(first.output())>0)
+                        throw new IllegalArgumentException("auxiliary_cost_escalation_forbidden");
+                }
+            }
+            bindings.put(role,new RunRoutingSnapshot.ResolvedBinding(role,primary,fallbacks,b.maxExtraFallbackCalls(),
+                    auxPaidEnabled && b.auxPaidAllowed(),b.auxCostCapUsdPerRun()));
         });
         return Map.copyOf(bindings);
     }
@@ -46,7 +60,7 @@ public class RoutingProfileResolver {
         if(cfg==null || !cfg.isEnabled() || !c.modelId().equals(cfg.getName()))throw new IllegalArgumentException("route_not_observed_or_unavailable");
         String endpointHash=com.example.lms.llm.ModelRuntimeHealthTracker.endpointIdentityHash(cfg.getBaseUrl());
         if("unknown".equals(endpointHash))throw new IllegalArgumentException("route_endpoint_unavailable");
-        return new RunRoutingSnapshot.Candidate(c.id(),c.modelId(),c.provider(),c.endpointId(),endpointHash);
+        return new RunRoutingSnapshot.Candidate(c.id(),c.modelId(),c.provider(),c.endpointId(),endpointHash,c.metadata());
     }
     public RunRoutingSnapshot capture(){
         if(!enabled)return RunRoutingSnapshot.disabled();

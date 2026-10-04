@@ -142,7 +142,7 @@ def sha256_file(path: Path) -> str | None:
 def default_git(root: Path):
     def git_fn(args, binary=False):
         proc = subprocess.run(
-            ["git"] + args, cwd=str(root), capture_output=True, check=False)
+            ["git", "--no-optional-locks"] + args, cwd=str(root), capture_output=True, check=False)
         if binary:
             return proc.stdout
         return proc.stdout.decode("utf-8", errors="replace")

@@ -44,6 +44,7 @@ SCHEMA = "awx.codex-context-status.v1"
 ROOT = Path(__file__).resolve().parents[1]
 CHARS_PER_TOKEN = 4
 DEFAULT_BUDGET = 180_000
+WARN_PCT = 80
 ACTION_OK, ACTION_COMPRESS, ACTION_STOP = "ok", "compress", "stop"
 
 
@@ -108,9 +109,18 @@ def budget_view(measured: dict, budget: int) -> dict:
         action = ACTION_COMPRESS
     else:
         action = ACTION_OK
-    return {"budgetTokens": budget, "budgetUsedPct": pct,
+    view = {"budgetTokens": budget, "budgetUsedPct": pct,
+            "warnThresholdPct": WARN_PCT,
+            "warnAtTokens": int(budget * WARN_PCT / 100) if budget else None,
             "overBudget": bool(pct is not None and pct >= 100),
             "recommendedAction": action}
+    if action == ACTION_COMPRESS:
+        view["earlyWarning"] = True
+        view["recommendSkill"] = "demo1-session-state-checkpoint"
+        view["warnMessage"] = ("early warning: persist a state.md via "
+                               "demo1-session-state-checkpoint before the "
+                               "180k budget is hit")
+    return view
 
 
 def cmd_status(args) -> tuple[dict, int]:

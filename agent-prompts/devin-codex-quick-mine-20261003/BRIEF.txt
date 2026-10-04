@@ -1,0 +1,86 @@
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 목표부터 8번 최종 보고까지 순서대로 끝까지 진행합니다.
+@demo1-codex-scriptize
+
+[DEVIN 지시서] Codex 세션 2주일치 단타 분석 및 빠른 스크립트화 도구 연동 — 2026-10-03 20:25 KST
+파일 ID: PASTE_DEVIN_CODEX_QUICK_MINE_20261003
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+~/.codex/sessions의 최근 2주(14일)치 세션을 단타로 빠릿빠릿하게 분석해 반복 명령 후보를 즉시 출력하는 빠른 스크립트 도구(Mine-Codex-Fast.bat, scripts/codex_quick_mine.ps1)와 요약 CLI를 기존 codex_scriptize_mine.py에 조화롭게 연동 제작한다.
+
+### 1. 사실 (읽기 전용 확인, 2026-10-03 20:15 KST)
+- ~/.codex/sessions에 2,834개의 rollout-*.jsonl 세션 파일이 보관되어 있음.
+- 기존 scripts/codex_scriptize_mine.py (sha12: B0CF18932835)가 2~6-gram 명령 묶음 마이닝 및 점수 계산을 스트리밍으로 지원하나, 대용량 json/md 파일 출력 중심임.
+- Grok 메모리는 scripts/grok_to_agy_memory_bridge.py (sha12: A05CB77FEADE)를 통해 docs/GROKBOT_MEMORY_INDEX.md 및 data/agent-handoff/grokbot/에 인덱싱되어 있음.
+- 사용자는 2주일치(--days 14) 세션을 단타로 빠르게 뽑아내어 자동화에 쉽게 활용할 수 있는 가벼운 bat/ps1/python 연동 스크립트를 요청함.
+
+### 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 작업 시작: Set-Location C:\AbandonWare\demo-1\demo-1\src
+- lease 확인: python -B scripts/agent_scope_lease.py check --path <대상>
+- 제품 소스(main/java, frontend) 수정 대상 아님(0건). 스크립트·도구·테스트만 작업.
+- 미실행 항목은 NOT_RUN 표기하며 사유를 남긴다.
+
+### DV1. [Devin] codex_scriptize_mine.py에 터미널 단타 요약(--summary, --top) 및 14일 최적화 연동
+- 증거: scripts/codex_scriptize_mine.py:654-755
+- RED: python -B scripts/codex_scriptize_mine.py --summary --help 실행 시 unrecognized argument --summary (exit 2)
+- 최소 수정:
+  - scripts/codex_scriptize_mine.py 인자에 --summary 추가
+  - 터미널 출력용 경량 테이블 렌더러 render_terminal_summary() 추가 (순위, 세션수, 발생수, 점수, 판정, 마스킹된 명령 미리보기)
+  - data/agent-handoff/codex-scriptize/quick_summary.json에 경량 요약본 자동 저장 기능 추가 (Grok/agy/자동화 파이프라인 연동용)
+- GREEN: python -B scripts/test_codex_scriptize_mine.py -v; "exit=$LASTEXITCODE" (exit 0)
+- 완료 조건: 기존 단위 테스트 깨짐 없이 --summary 플래그 실행 시 상위 후보가 콘솔에 즉시 표시됨.
+
+### DV2. [Devin] 단타 실행용 PowerShell 및 BAT 래퍼 제작 (scripts/codex_quick_mine.ps1, Mine-Codex-Fast.bat)
+- 증거: docs/agents-rules/demo1-codex-scriptize.md:8-15
+- RED: Test-Path scripts/codex_quick_mine.ps1 (False)
+- 최소 수정:
+  - scripts/codex_quick_mine.ps1 작성:
+    - 파라미터: [int]$Days = 14, [int]$Top = 10, [int]$MaxFiles = 300, [switch]$SummaryOnly
+    - UTF-8 인코딩 설정 후 python -B scripts/codex_scriptize_mine.py --days $Days --top $Top --max-files $MaxFiles --summary 호출
+    - 실행 경과시간(초) 및 생성된 요약 경로 출력
+  - Mine-Codex-Fast.bat 작성:
+    - 루트에서 원클릭/단타로 powershell -NoProfile -ExecutionPolicy Bypass -File scripts\codex_quick_mine.ps1 %* 호출
+- GREEN: powershell -NoProfile -File scripts/codex_quick_mine.ps1 -Days 14 -Top 5; "exit=$LASTEXITCODE" (exit 0)
+- 완료 조건: 45초 이내에 14일치 상위 5개 후보가 터미널에 요약 출력되고 정상 종료(exit 0).
+
+### DV3. [Devin] 단타 마이닝 회귀 및 안전성 테스트 작성 (scripts/test_codex_quick_mine.py)
+- 증거: scripts/test_codex_scriptize_mine.py:1-60
+- RED: python -B scripts/test_codex_quick_mine.py (파일 부재 exit 1/2)
+- 최소 수정:
+  - scripts/test_codex_quick_mine.py 작성:
+    - --summary 출력 형식 및 상위 N개 슬라이스 검증
+    - 가짜 키/비밀값 패턴 주입 시 터미널 요약 및 JSON 출력에 비밀값이 노출되지 않는지 검증 (git_staged_guard PATTERNS 대조)
+    - days=14 윈도우 필터링 정상 동작 검증
+- GREEN: python -B scripts/test_codex_quick_mine.py -v; "exit=$LASTEXITCODE" (exit 0)
+- 완료 조건: 단위 테스트 전체 통과 (OK), 비밀값 누출 0건.
+
+### 4. HOLD
+- ~/.codex/sessions 디렉터리가 없거나 접근 불가능한 경우.
+- scripts/codex_scriptize_mine.py에 타 에이전트의 active lease가 걸려 있는 경우.
+- 세션 스캔 중 비정상 메모리 급증 또는 120초 타임아웃 발생 시.
+
+### 5. ASK_ONCE (기본값 포함)
+- U-1: 14일 기준 기본 스캔 파일 상한선: (a) 권장: 300개 (빠릿빠릿한 40초 이내 단타) (b) 500개 (정밀 스캔, ~1분) (c) 150개 (초고속 스캔, ~15초). 무응답 시 권장값 (a) 300개로 자동 진행.
+
+### 6. 절대 금지
+- 제품 Java/Web 소스(main/java/**, frontend/**) 수정 금지.
+- git push, git pull, git add -A, commit -a, remote 추가 등 버전 관리 변경 금지.
+- 환경변수 실제 비밀값, API 키 평문 출력 및 저장 금지.
+- PROTO_OPEN 보안 규칙 완화나 임의 인증 수정 금지.
+- 외부 pip/npm 신규 패키지 설치 금지.
+
+### 7. Acceptance (완료 기준)
+- [DV1] scripts/codex_scriptize_mine.py에 --summary 플래그가 구현되고 python -B scripts/test_codex_scriptize_mine.py 통과.
+- [DV2] scripts/codex_quick_mine.ps1 및 Mine-Codex-Fast.bat이 생성되고 단타 실행 시 14일치 요약이 정상 출력 (exit 0).
+- [DV3] scripts/test_codex_quick_mine.py 신규 테스트가 모두 통과(exit 0)하고 비밀값 마스킹 검증 완료.
+- [NOT_RUN] 환경 또는 권한 문제로 실행하지 못한 항목은 NOT_RUN과 구체적 사유를 기록하며 허위 PASS 보고 금지.
+
+### 8. 보고 형식
+외부 API: 없음 (로컬 $0)
+| 항목 | 결과 | 실행 시간 | 증거 경로 |
+| DV1 | PASS/FAIL/NOT_RUN | N.Ns | scripts/codex_scriptize_mine.py |
+| DV2 | PASS/FAIL/NOT_RUN | N.Ns | scripts/codex_quick_mine.ps1 |
+| DV3 | PASS/FAIL/NOT_RUN | N.Ns | scripts/test_codex_quick_mine.py |
+
+[ANTI-STOP] 끝까지 완료하기 전까지 임의로 멈추지 마세요. DV1~DV3 작업을 완료하고 최종 보고합니다.

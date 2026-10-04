@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L57-L65 sha256=61fe60ffc21c4f97abbd03a4375481e381d6c43aaad9caf04c6b0abb6f14b84f movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L58-L66 sha256=61fe60ffc21c4f97abbd03a4375481e381d6c43aaad9caf04c6b0abb6f14b84f movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-AGENT-GUARD-COMMON -->
 ## Common Guard Entry Points (Codex / Grok / Devin / Cline)
 - Task entry: `python -B scripts/agent_preflight.py --root .` (MCP `guard_status`). Skill routing: `demo1_vibe_skill_router.py resolve "<ask>"` -> `.agents/skills-intent-index.yaml` (DEMO1-VIBE-SKILL-ROUTER). Path/retry brake: `agent_work_guard.py check|status`.

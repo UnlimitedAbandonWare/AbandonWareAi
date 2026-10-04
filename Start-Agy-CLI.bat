@@ -72,6 +72,7 @@ set "PASSED_ARGS=%*"
 if not "%PASSED_ARGS%"=="%PASSED_ARGS:--effort=%" set "EFFORT_FLAG="
 if defined EFFORT_FLAG echo [Start-Agy-CLI] AWX_AGY_EFFORT=%AWX_AGY_EFFORT%: reasoning effort flag attached
 
+if not "%AWX_CONTEXT_PREAMBLE%"=="0" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agent_context_preamble.ps1" -Agent agy
 "%AGY%" %YOLO_FLAG% %EFFORT_FLAG% %*
 set "EXITCODE=%ERRORLEVEL%"
 

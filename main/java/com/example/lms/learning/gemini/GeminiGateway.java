@@ -146,6 +146,15 @@ public class GeminiGateway {
     }
 
     public Mono<GenerationResult> generate(String prompt, Purpose purpose) {
+        return generate(prompt, purpose, false);
+    }
+
+    /**
+     * webGrounding is an explicit per-call opt-in for Google Search Grounding
+     * ({@code tools: [{"google_search": {}}]}) on the native generateContent body.
+     * The OpenAI-compatible router surface has no such parameter and is unchanged.
+     */
+    public Mono<GenerationResult> generate(String prompt, Purpose purpose, boolean webGrounding) {
         Purpose effectivePurpose = purpose == null ? Purpose.UNDERSTANDING : purpose;
         ProviderCredentialResolver.Resolution credential = credentialResolver
                 .resolve(ProviderCredentialResolver.Provider.GEMINI);
@@ -161,12 +170,13 @@ public class GeminiGateway {
             return Mono.just(disabled(effectivePurpose, model, credential, credential.disabledReason()));
         }
 
+        boolean grounded = webGrounding && groundingEnabled();
         Mono<ModelPreflight> preflight = preflightEnabled()
                 ? modelPreflights.computeIfAbsent(model,
                         ignored -> preflightModel(model, credential.valueOrNull()).cache())
                 : Mono.just(ModelPreflight.skipped());
         return preflight.flatMap(result -> result.available()
-                ? executeGeneration(prompt, effectivePurpose, model, credential.valueOrNull())
+                ? executeGeneration(prompt, effectivePurpose, model, credential.valueOrNull(), grounded)
                 : Mono.just(new GenerationResult("", status(
                         effectivePurpose,
                         model,
@@ -179,6 +189,21 @@ public class GeminiGateway {
                         result.quotaDecision(),
                         result.reason(),
                         result.errorClass()))));
+    }
+
+    private boolean groundingEnabled() {
+        return environment.getProperty("gemini.gateway.grounding.enabled", Boolean.class, true);
+    }
+
+    /** Native generateContent body; google_search grounding is an explicit per-call opt-in. */
+    static Map<String, Object> generationBody(String prompt, boolean webGrounding) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("contents", List.of(Map.of(
+                "parts", List.of(Map.of("text", prompt == null ? "" : prompt)))));
+        if (webGrounding) {
+            body.put("tools", List.of(Map.of("google_search", Map.of())));
+        }
+        return body;
     }
 
     /** Performs the one permitted Gemini rewrite for a locally normalized empty-result query. */
@@ -223,24 +248,40 @@ public class GeminiGateway {
         return buildOpenAiCompatibleChatModel(spec, cueJson, null);
     }
 
+    /** Configuration readiness only: no HTTP, client construction, status publication or preflight. */
+    public RouterReadiness routerReadiness() {
+        return routerReadiness(credentialResolver.resolve(ProviderCredentialResolver.Provider.GEMINI));
+    }
+
+    private RouterReadiness routerReadiness(ProviderCredentialResolver.Resolution credential) {
+        List<String> reasons = new java.util.ArrayList<>();
+        if (!enabled()) reasons.add("gemini_gateway_disabled");
+        if (!purposeEnabled(Purpose.ROUTER)) reasons.add("gemini_router_purpose_disabled");
+        if ("conflicting-credential-aliases".equals(credential.disabledReason()))
+            reasons.add("credential_alias_conflict");
+        else if (!credential.enabled() || credential.valueOrNull() == null)
+            reasons.add("auth_missing");
+        return new RouterReadiness(reasons.isEmpty(), reasons);
+    }
+
+    public record RouterReadiness(boolean ready, List<String> reasons) {
+        public RouterReadiness { reasons = List.copyOf(reasons); }
+    }
+
     public ChatModel buildOpenAiCompatibleChatModel(RouterSpec spec, boolean cueJson,
             dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema) {
         RouterSpec effective = spec == null ? RouterSpec.defaults(environment) : spec.normalized(environment);
         ProviderCredentialResolver.Resolution credential = credentialResolver
                 .resolve(ProviderCredentialResolver.Provider.GEMINI);
-        if (!enabled()) {
+        RouterReadiness readiness = routerReadiness(credential);
+        if (!readiness.ready()) {
+            String reason = switch (readiness.reasons().get(0)) {
+                case "gemini_gateway_disabled" -> "gateway-disabled";
+                case "gemini_router_purpose_disabled" -> "purpose-disabled";
+                default -> credential.disabledReason();
+            };
             ProviderStatus disabled = disabledStatus(Purpose.ROUTER, effective.model(), credential,
-                    "gateway-disabled");
-            return new DisabledRouterChatModel(disabled.fallbackReason());
-        }
-        if (!purposeEnabled(Purpose.ROUTER)) {
-            ProviderStatus disabled = disabledStatus(Purpose.ROUTER, effective.model(), credential,
-                    "purpose-disabled");
-            return new DisabledRouterChatModel(disabled.fallbackReason());
-        }
-        if (!credential.enabled() || credential.valueOrNull() == null) {
-            ProviderStatus disabled = disabledStatus(Purpose.ROUTER, effective.model(), credential,
-                    credential.disabledReason());
+                    reason);
             return new DisabledRouterChatModel(disabled.fallbackReason());
         }
 
@@ -298,13 +339,12 @@ public class GeminiGateway {
             String prompt,
             Purpose purpose,
             String model,
-            String apiKey) {
+            String apiKey,
+            boolean webGrounding) {
         long startedNanos = System.nanoTime();
         AtomicInteger attempts = new AtomicInteger();
         AtomicReference<String> quotaDecision = new AtomicReference<>("allowed");
-        Map<String, Object> body = Map.of(
-                "contents", List.of(Map.of(
-                        "parts", List.of(Map.of("text", prompt == null ? "" : prompt)))));
+        Map<String, Object> body = generationBody(prompt, webGrounding);
         WebClient client = client();
 
         Mono<GenerationResult> attempt = Mono.defer(() -> {
@@ -702,7 +742,7 @@ public class GeminiGateway {
         }
     }
 
-    private record Part(String text) {
+    private record Part(String text, Boolean thought) {
     }
 
     private record Content(List<Part> parts) {
@@ -721,12 +761,16 @@ public class GeminiGateway {
                 return "";
             }
             Candidate candidate = candidates.get(0);
-            if (candidate == null || candidate.content() == null || candidate.content().parts() == null
-                    || candidate.content().parts().isEmpty() || candidate.content().parts().get(0) == null) {
+            if (candidate == null || candidate.content() == null || candidate.content().parts() == null) {
                 return "";
             }
-            String text = candidate.content().parts().get(0).text();
-            return text == null ? "" : text;
+            StringBuilder text = new StringBuilder();
+            for (Part part : candidate.content().parts()) {
+                if (part != null && part.text() != null && !Boolean.TRUE.equals(part.thought())) {
+                    text.append(part.text());
+                }
+            }
+            return text.toString();
         }
     }
 

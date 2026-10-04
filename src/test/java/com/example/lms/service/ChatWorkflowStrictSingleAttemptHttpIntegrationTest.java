@@ -164,7 +164,8 @@ class ChatWorkflowStrictSingleAttemptHttpIntegrationTest {
                         .detect("Explain photosynthesis in one sentence.").targetTokenBudgetOut()
                 : 512;
         if (requested == -2) {
-            assertEquals(2048, request.getMaxTokens());
+            assertNull(request.getMaxTokens(),
+                    "an omitted request limit remains unset before routing admission");
             assertEquals(160, routedLimit);
         }
         com.example.lms.llm.RequestedModelSelection.begin(route);
@@ -240,12 +241,12 @@ class ChatWorkflowStrictSingleAttemptHttpIntegrationTest {
             "chat,gateway_overloaded,false", "responses,gateway_overloaded,false",
             "chat,unavailable_route,true", "responses,unavailable_route,true",
             "chat,gateway_overloaded,true", "responses,gateway_overloaded,true"})
-    void transient429RetainsBoundedHttpRetryAndFallback(String transport, String code, boolean fallback) throws Exception {
+    void transient429RetainsBoundedPrimaryRetryWithoutUnprovenFallback(String transport, String code, boolean fallback) throws Exception {
         HttpReplayProbe probe = runHttpReplayProbe(transport, code, "synthetic transient limit", fallback);
         assertNull(probe.failure());
-        assertEquals(fallback ? 1 : 2, probe.primaryCalls());
-        assertEquals(fallback ? 1 : 0, probe.fallbackCalls());
-        assertEquals(fallback ? "fallback complete" : "transient retry complete", probe.result());
+        assertEquals(2, probe.primaryCalls(), "transient rejection retains the bounded primary retry");
+        assertEquals(0, probe.fallbackCalls(), "a configured fallback does not prove safe provider replay");
+        assertEquals("transient retry complete", probe.result());
     }
 
     private record HttpReplayProbe(int primaryCalls, int fallbackCalls, String result, RuntimeException failure) { }
@@ -529,8 +530,8 @@ class ChatWorkflowStrictSingleAttemptHttpIntegrationTest {
             Map<String, Object> owned = new java.util.LinkedHashMap<>();
             owned.put("temperature", 0.2d);
             owned.put("topP", 0.8d);
-            owned.put("frequencyPenalty", 0.0d);
-            owned.put("presencePenalty", 0.0d);
+            owned.put("frequencyPenalty", null);
+            owned.put("presencePenalty", null);
             owned.put("maxTokens", 64);
             owned.put("timeoutMs", 2_000L);
             owned.put("maxRetries", 0);

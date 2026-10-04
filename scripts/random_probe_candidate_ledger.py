@@ -432,7 +432,7 @@ def publish_artifacts(
 
 def _git_status(root: Path) -> str:
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=all"],
         cwd=root,
         check=False,
         capture_output=True,

@@ -31,6 +31,23 @@ SKILLS_REL = os.path.join(".agents", "skills")
 DEFAULT_INDEX = ".agents/skills-intent-index.yaml"
 DEFAULT_MD_OUT = "docs/agent-tooling/skill-quality-report.md"
 
+# Core @skills pinned by the Grok Bot handover template
+# (demo1-agy-directive-writer/references/grokbot-current/HANDOVER.md).
+# They ship in every directive's first line, so a zero-use window verdict
+# must never list them as archive candidates again (cf. 2026-10-04
+# devin-skill-slim restore).
+CORE_KEEP_SKILLS = frozenset({
+    "demo1-project-root",
+    "agent-scope-lease",
+    "demo1-lease-conflict-autoflow",
+    "regression-check",
+    "positive-negative-neutral-judge",
+    "demo1-vibe-selfask-judge-auto",
+    "demo1-work-ledger",
+    "demo1-superpowers-repo-evidence-guard",
+    "demo1-agent-code-evidence-gate",
+})
+
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|secret|token|passwd|password|authorization|"
                r"bearer|credential|private[_-]?key)\s*[:=]\s*['\"]?[^\s'\",}]+"),
@@ -344,6 +361,9 @@ def render_markdown(report):
         f"- index coverage: {s['indexed']}/{s['repo_skills']} "
         f"({s['unindexed']} unindexed)",
         f"- zero-use (window): {s['zero_use']}",
+        f"- zero-use archive candidates (core-keep 제외): "
+        f"{s['zero_use_archive_candidates']} "
+        f"(core keep {s['core_keep_protected']}개 보호)",
         "",
         "## Weakest high-traffic skills",
         "",
@@ -385,6 +405,7 @@ def build_report(src_root, index_rel, since_days, do_usage, user_home=None):
         s["use_total"] = u["codex"] + u["grok"] + u["devin"]
         s["indexed"] = coverage["indexed_names"].__contains__(n) \
             if "indexed_names" in coverage else None
+        s["core_keep"] = n in CORE_KEEP_SKILLS
         rows.append(s)
     rows.sort(key=lambda r: (-r["use_total"], r["score"]))
     roots_count = defaultdict(int)
@@ -404,6 +425,11 @@ def build_report(src_root, index_rel, since_days, do_usage, user_home=None):
             "unindexed": len(coverage["unindexed"]),
             "zero_use": sum(1 for r in rows
                             if r["root"] == "repo" and r["use_total"] == 0),
+            "zero_use_archive_candidates": sum(
+                1 for r in rows
+                if r["root"] == "repo" and r["use_total"] == 0
+                and not r["core_keep"]),
+            "core_keep_protected": sum(1 for r in rows if r["core_keep"]),
             "avg_score": round(sum(r["score"] for r in rows)
                                / max(1, len(rows)), 1),
             "usage_scanned": bool(do_usage),

@@ -462,7 +462,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         assertEarlyReturnBeforeRelease(source, promotion, release,
                 "boolean agentDebugAnswerRequested",
                 "return finishEarlyResult(ChatResult.of(agentDebugDirectAnswer",
-                "ChatModel model = modelRouter.route(");
+                "String draft;");
         assertEarlyReturnBeforeRelease(source, promotion, release,
                 "shouldUseChatDraftConfigBreakerFallback",
                 "return sanitizeFallbackResult(",
@@ -625,6 +625,45 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"Blue.", "안녕하세요."})
+    void shortNonblankAnswerSurvivesEmptyRagWithoutDurableMemory(String answer) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService",
+                mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class));
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        var rag = mock(com.example.lms.service.rag.LangChainRAGService.class);
+        var retriever = mock(dev.langchain4j.rag.content.retriever.ContentRetriever.class);
+        when(rag.asContentRetriever(nullable(String.class))).thenReturn(retriever);
+        when(retriever.retrieve(any())).thenReturn(List.of());
+        ReflectionTestUtils.setField(fixture.workflow(), "ragSvc", rag);
+        when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from(answer)).build());
+        when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        clearWorkflowState();
+        try {
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message(answer.equals("Blue.") ? "Name a primary color."
+                            : "[codex-test] 안녕? 한국어로 한 문장 인사해 줘.")
+                    .model("release-gate-recording-fake").maxTokens(256)
+                    .mode("FACT").memoryMode("FULL").searchMode(SearchMode.AUTO)
+                    .useWebSearch(false).useRag(true).useVerification(false)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false, true))
+                    .build();
+            ChatResult result = fixture.workflow().continueChat(request, ignored -> List.of());
+            assertEquals(answer, result.content());
+            verify(retriever).retrieve(any());
+            assertEquals("evidence_unverified_release", TraceStore.get("finalAnswer.releaseReason"));
+            assertEquals(true, TraceStore.get("finalAnswer.releaseAllowed"));
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
     @Test
     void evidenceZeroWithoutDirectivePublishesDraftButSkipsDurableMemory() {
         MemoryHoldFixture fixture = memoryHoldFixture();
@@ -753,6 +792,9 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
             ModelRouter router = (ModelRouter) ReflectionTestUtils.getField(fixture.workflow(), "modelRouter");
             when(router.route(anyString(), nullable(String.class), anyString(), anyInt(), anyString()))
                     .thenReturn(model);
+            when(router.routeMain(anyString(), nullable(String.class), nullable(String.class), anyInt(),
+                    nullable(String.class), anyString(), anyBoolean()))
+                    .thenReturn(model);
             when(router.resolveModelName(model)).thenReturn("release-gate-recording-fake");
 
             org.springframework.core.io.ResourceLoader loader = mock(org.springframework.core.io.ResourceLoader.class);
@@ -878,8 +920,9 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
             fixture.workflow().continueChat(request, ignored -> List.of());
 
             ArgumentCaptor<String> routeCaptor = ArgumentCaptor.forClass(String.class);
-            verify(fixture.modelRouter()).route(
-                    anyString(), nullable(String.class), anyString(), anyInt(), routeCaptor.capture());
+            verify(fixture.modelRouter()).routeMain(
+                    anyString(), nullable(String.class), anyString(), anyInt(), routeCaptor.capture(),
+                    anyString(), anyBoolean());
             assertEquals(enforced ? "vision-recording-fake" : "release-gate-recording-fake",
                     routeCaptor.getValue());
             ArgumentCaptor<List<ChatMessage>> messagesCaptor = ArgumentCaptor.forClass(List.class);
@@ -1088,6 +1131,162 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         }
     }
 
+    @Test
+    void completedAnswerSurvivesFinalPostprocessFailureWithoutKnowledgeWrites() {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        clearWorkflowState();
+        try {
+            String answer = "Position and momentum cannot both have arbitrarily small uncertainty.";
+            when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                    .aiMessage(AiMessage.from(answer)).build());
+            FinalAnswerPostProcessor processor = mock(FinalAnswerPostProcessor.class);
+            when(processor.process(any())).thenAnswer(invocation -> {
+                FinalAnswerPostProcessor.Request input = invocation.getArgument(0);
+                assertTrue(input.candidate().contains(answer));
+                verify(fixture.model(), org.mockito.Mockito.atLeastOnce()).chat(anyList());
+                throw new java.util.concurrent.CompletionException(
+                        new IllegalStateException("synthetic-private-postprocess-message"));
+            });
+            ReflectionTestUtils.setField(fixture.workflow(), "finalAnswerPostProcessor", processor);
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("Explain the uncertainty principle in one sentence.")
+                    .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                    .memoryMode("FULL").searchMode(SearchMode.OFF)
+                    .useWebSearch(false).useRag(false).useVerification(false).build();
+
+            ChatResult result = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                    () -> fixture.workflow().continueChat(request, ignored -> List.of()));
+
+            assertTrue(result.content().startsWith("[품질 저하]"));
+            assertTrue(result.content().endsWith(answer));
+            assertFalse(result.content().contains("synthetic-private-postprocess-message"));
+            assertEquals("postprocess_failed", TraceStore.get("finalAnswer.postprocess.reason"));
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+            assertEquals("postprocess_failed", TraceStore.get("finalAnswer.memoryDenyReason"));
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+            verify(fixture.model(), org.mockito.Mockito.atLeastOnce()).chat(anyList());
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
+    @Test
+    void postprocessFailurePreservesEvidenceHoldInsteadOfPublishingDraft() {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        clearWorkflowState();
+        try {
+            FinalAnswerPostProcessor processor = mock(FinalAnswerPostProcessor.class);
+            when(processor.process(any())).thenThrow(new IllegalStateException("synthetic failure"));
+            ReflectionTestUtils.setField(fixture.workflow(), "finalAnswerPostProcessor", processor);
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("If no reliable evidence is available, reply with evidence_needed.")
+                    .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                    .memoryMode("FULL").searchMode(SearchMode.AUTO)
+                    .useWebSearch(false).useRag(false).useVerification(true)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(null, null))
+                    .attachmentIds(List.of("release-gate-local")).build();
+            request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+            ChatResult result = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                    () -> fixture.workflow().continueChat(request, ignored -> List.of()));
+            assertTrue(result.content().contains("evidence_needed"));
+            assertFalse(result.content().contains("verified draft"));
+            assertEquals(false, TraceStore.get("finalAnswer.releaseAllowed"));
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
+    @Test
+    void finalPostprocessSalvageNeverConsumesWrappedControlExceptions() {
+        var terminal = new com.example.lms.llm.gateway.LlmResponseTerminalException(
+                "content_filter", com.example.lms.llm.gateway.LlmFailureClass.NONE,
+                null, null, "incomplete", "content_filter", null);
+        for (RuntimeException control : List.of(new java.util.concurrent.CancellationException(),
+                new ChatHistoryService.SessionQuotaExceededException(), terminal)) {
+            MemoryHoldFixture fixture = memoryHoldFixture();
+            clearWorkflowState();
+            try {
+                var wrapped = new java.util.concurrent.CompletionException(control);
+                FinalAnswerPostProcessor processor = mock(FinalAnswerPostProcessor.class);
+                when(processor.process(any())).thenThrow(wrapped);
+                ReflectionTestUtils.setField(fixture.workflow(), "finalAnswerPostProcessor", processor);
+                ChatRequestDto request = ChatRequestDto.builder().message("Explain photosynthesis.")
+                        .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                        .memoryMode("FULL").searchMode(SearchMode.OFF)
+                        .useWebSearch(false).useRag(false).useVerification(false).build();
+                RuntimeException failure = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
+                        () -> fixture.workflow().continueChat(request, ignored -> List.of()));
+                org.junit.jupiter.api.Assertions.assertSame(wrapped, failure);
+                verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+            } finally {
+                clearWorkflowState();
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unknown", "rejected"})
+    void finalVerificationDenialSurvivesPostprocessFailure(String status) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        clearWorkflowState();
+        try {
+            String draft = "Synthetic model draft that final verification must not release.";
+            String expected = "unknown".equals(status)
+                    ? "evidence_needed: final verification outcome unknown / retry with verifiable evidence"
+                    : "Information unavailable: final verification rejected the draft.";
+            when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                    .aiMessage(AiMessage.from(draft)).build());
+            when(fixture.verifier().verifyDetailed(anyString(), nullable(String.class),
+                    nullable(String.class), anyString(), anyString(), anyBoolean()))
+                    .thenReturn(new FactVerifierService.DetailedVerificationResult(
+                            draft, status, !"unknown".equals(status), false));
+            when(fixture.attribution().promoteForPromptDetailed(anyString(), nullable(List.class),
+                    nullable(List.class), anyList(), any(), anyBoolean()))
+                    .thenReturn(promoted(List.of(evidence("L1", "LOCAL_DOC", "release-gate-local",
+                            "docs/fixture.txt")), 0, 0, 0, 0, 1, 1));
+            when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList()))
+                    .thenAnswer(invocation -> invocation.getArgument(0));
+            FinalAnswerPostProcessor processor = mock(FinalAnswerPostProcessor.class);
+            when(processor.process(any())).thenAnswer(invocation -> {
+                FinalAnswerPostProcessor.Request input = invocation.getArgument(0);
+                assertEquals(expected, input.candidate());
+                verify(fixture.model(), org.mockito.Mockito.atLeastOnce()).chat(anyList());
+                throw new java.util.concurrent.CompletionException(
+                        new IllegalStateException("synthetic-private-postprocess-message"));
+            });
+            ReflectionTestUtils.setField(fixture.workflow(), "finalAnswerPostProcessor", processor);
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("Explain the synthetic fixture.")
+                    .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                    .memoryMode("FULL").searchMode(SearchMode.OFF)
+                    .useWebSearch(false).useRag(false).useVerification(true)
+                    .attachmentIds(List.of("release-gate-local"))
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false, false)).build();
+            request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+
+            ChatResult result = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                    () -> fixture.workflow().continueChat(request, ignored -> List.of()));
+
+            assertEquals(expected, result.content());
+            assertFalse(result.content().contains(draft));
+            assertFalse(result.content().contains("synthetic-private-postprocess-message"));
+            assertEquals("unknown".equals(status) ? "HOLD" : "REJECT",
+                    TraceStore.get("finalAnswer.releaseStatus"));
+            assertEquals("unknown".equals(status) ? "verification_outcome_unknown" : "verification_rejected",
+                    TraceStore.get("finalAnswer.releaseReason"));
+            assertEquals(false, TraceStore.get("finalAnswer.releaseAllowed"));
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+            assertEquals("postprocess_failed", TraceStore.get("finalAnswer.memoryDenyReason"));
+            verify(fixture.verifier()).verifyDetailed(anyString(), nullable(String.class),
+                    nullable(String.class), anyString(), anyString(), anyBoolean());
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor(),
+                    ReflectionTestUtils.getField(fixture.workflow(), "understandAndMemorizeInterceptor"));
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
     private static MemoryHoldFixture memoryHoldFixture() {
         ChatModel model = mock(ChatModel.class);
         when(model.chat(anyList())).thenReturn(ChatResponse.builder()
@@ -1097,6 +1296,10 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         ModelRouter modelRouter = mock(ModelRouter.class);
         when(modelRouter.route(
                 anyString(), nullable(String.class), anyString(), anyInt(), anyString()))
+                .thenReturn(model);
+        when(modelRouter.routeMain(
+                anyString(), nullable(String.class), nullable(String.class), anyInt(),
+                nullable(String.class), anyString(), anyBoolean()))
                 .thenReturn(model);
         when(modelRouter.resolveModelName(model)).thenReturn("release-gate-recording-fake");
 

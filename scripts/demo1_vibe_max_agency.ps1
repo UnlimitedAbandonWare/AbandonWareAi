@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
   demo-1 Vibe-Max-Agency — Devin/Grok/Codex/Cline이 같은 루트·같은 증거로

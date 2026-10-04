@@ -53,3 +53,15 @@ Any task that calls or configures Brave/Tavily/SerpAPI/Naver, Soniox/Deepgram, O
 - Never select `gemma3:*`, `qwen3:30b`, `qwen3-coder:*`, `qwen2.5:7b-instruct` as live defaults.
 - Role map: chat=`gemma4:26b`, judge/coder=`smtek/Qwen3.8-27B:Q3_K_XL`, vision=`qwen3-vl:8b`, embed=`qwen3-embedding:4b`.
 - See root `AGENTS.md` section **Ollama Model Lock** and `scripts/check-model-lock.ps1`.
+
+## Grok Bot sync 2026-10-03
+
+- (R13) 에이전트 작업 비용 순서(2026-10-03 확정, 화력 위주): Codex 크레딧 →
+  외부 유료 API → 무료 티어 → 로컬 Ollama 맨 마지막 예외. "무료·로컬 우선"은
+  폐기된 규칙이다. 에이전트 세션 상세는 `demo1-agent-api-spend-guard`.
+- (R13) 제품 런타임 라우팅(`configs/api-routing.yaml` `policy.order`,
+  `application-llm.yaml`)은 2026-10-02 기준 아직 옛 local-first 순서를
+  담고 있다. 그것을 바꾸는 것은 Codex 제품 소스 작업(Plan9) — 룰·도구
+  세션에서 패치하지 말고 `FOR_CODEX`로 남긴다.
+- (R13) 무료 티어라 부르기 전에 분당·일일 한도, 재시도 이중 과금, 소진 시
+  유료/기본 키로의 자동 폴백 여부를 확인한다.

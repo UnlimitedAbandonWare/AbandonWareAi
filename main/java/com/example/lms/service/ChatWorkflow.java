@@ -3657,9 +3657,8 @@ public class ChatWorkflow {
         // 紐⑤뜽紐낆쓣 癒쇱? ?댁꽍?섏뿬 諛깆뿏?쒕퀎 釉뚮젅?댁빱 ???앹꽦
         // 해석이 붕괴(unknown/익명 클래스명)하면 요청 모델 ID로만 복구한다 —
         // 서로 다른 모델이 chat:draft:unknown 하나를 공유하는 결함 방지.
-        final String breakerModelTag = com.example.lms.llm.NamedChatModel.breakerTag(
-                model, resolvedModelName, effectiveRequestedModel);
-        final String breakerKey = NightmareKeys.chatDraftKey(breakerModelTag);
+        final String breakerKey = com.example.lms.llm.NamedChatModel.breakerKey(
+                model, resolvedModelName, effectiveRequestedModel, "draft");
 
         // ??chat:draft ?쒗궥???ㅽ뵂?섏뼱 ?덉쑝硫?LLM ?몄텧 ?놁씠 利앷굅 湲곕컲?쇰줈 ?고쉶
         if (nightmareBreaker != null) {
@@ -4206,10 +4205,10 @@ public class ChatWorkflow {
         // evidence list instead of leaking
         try {
             if (com.example.lms.service.guard.EvidenceAwareGuard.looksWeak(out) && (useWeb || useRag)) {
-                finalAnswerFallbackApplied = true;
                 boolean hasWebEvidence = topDocs != null && !topDocs.isEmpty();
                 boolean hasVectorEvidence = vectorDocs != null && !vectorDocs.isEmpty();
                 if (hasWebEvidence || hasVectorEvidence) {
+                    finalAnswerFallbackApplied = true;
                     java.util.List<com.example.lms.service.guard.EvidenceAwareGuard.EvidenceDoc> _ev = new java.util.ArrayList<>();
                     int _i = 1;
                     if (hasWebEvidence) {
@@ -4241,8 +4240,11 @@ public class ChatWorkflow {
                                 String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(composerError)), String.valueOf(composerError).length()));
                         out = evidenceAwareGuard.degradeToEvidenceList(_ev);
                     }
-                } else {
+                } else if (!StringUtils.hasText(out)) {
+                    finalAnswerFallbackApplied = true;
                     out = "충분한 증거를 찾지 못했습니다. 더 구체적인 키워드나 맥락을 알려주시면 정확도가 올라갑니다.";
+                } else {
+                    TraceStore.put("answer.guardRecovery.skipped", "evidence_zero_preserve_draft");
                 }
             } else if (com.example.lms.service.guard.EvidenceAwareGuard.looksWeak(out)) {
                 TraceStore.put("answer.guardRecovery.skipped", "retrieval_off_direct");
@@ -4468,18 +4470,48 @@ public class ChatWorkflow {
         }
 
         throwIfCancelled(sessionIdLong);
-        FinalAnswerPostProcessor.Result finalized = finalAnswerPostProcessor.process(
-                new FinalAnswerPostProcessor.Request(
-                        out,
-                        finalAnswerForMemoryCandidate,
-                        finalVerificationOutcomeKnown,
-                        finalVerificationAcceptedForMemory,
-                        memoryMode != null && memoryMode.isWriteEnabled(),
-                        finalAnswerMemoryDeniedByPolicy || visionMode == VisionMode.FREE,
-                        finalAnswerCreativeApplied,
-                        finalAnswerFallbackApplied,
-                        finalAnswerWeakResult,
-                        protectedBaseContent ? null : userQuery));
+        FinalAnswerPostProcessor.Result finalized;
+        try {
+            finalized = finalAnswerPostProcessor.process(
+                    new FinalAnswerPostProcessor.Request(
+                            out,
+                            finalAnswerForMemoryCandidate,
+                            finalVerificationOutcomeKnown,
+                            finalVerificationAcceptedForMemory,
+                            memoryMode != null && memoryMode.isWriteEnabled(),
+                            finalAnswerMemoryDeniedByPolicy || visionMode == VisionMode.FREE,
+                            finalAnswerCreativeApplied,
+                            finalAnswerFallbackApplied,
+                            finalAnswerWeakResult,
+                            protectedBaseContent ? null : userQuery));
+        } catch (RuntimeException failure) {
+            throwIfCancelled(sessionIdLong);
+            Throwable cause = failure;
+            for (int depth = 0; cause != null && depth < 16; depth++) {
+                if (cause instanceof CancellationException
+                        || cause instanceof ChatHistoryService.SessionQuotaExceededException
+                        || cause instanceof com.example.lms.llm.gateway.LlmResponseTerminalException) {
+                    throw failure;
+                }
+                Throwable next = cause.getCause();
+                if (next == cause) break;
+                cause = next;
+            }
+            var sanitized = new com.example.lms.service.postprocess.OutputSanitizer().sanitize(out);
+            if ("blank_content".equals(sanitized.reasonCode())
+                    || "diagnostics_removed_empty".equals(sanitized.reasonCode())) {
+                throw failure;
+            }
+            String salvaged = releaseDecision.releaseAllowed()
+                    ? "[품질 저하] 답변 후처리를 완료하지 못해 생성된 답변을 표시합니다. 근거와 인용은 추가 확인이 필요합니다.\n\n"
+                            + sanitized.content()
+                    : sanitized.content();
+            finalized = new FinalAnswerPostProcessor.Result(
+                    salvaged, true, "postprocess_failed", null, sanitized.removedChars(),
+                    sanitized.removedHash(), false, null, "postprocess_failed");
+            log.warn("[FinalAnswer] postprocess-failed causeClass={} action=preserve_released_answer memorySaveAllowed=false",
+                    failure.getClass().getName());
+        }
         out = finalized.content();
         throwIfCancelled(sessionIdLong);
         try {
@@ -5313,15 +5345,6 @@ public class ChatWorkflow {
                 .build();
 
         NightmareBreaker.CallPermit detourPermit = null;
-        if (nightmareBreaker != null) {
-            try {
-                detourPermit = nightmareBreaker.acquire(breakerKey, "guard-detour-regen");
-            } catch (NightmareBreaker.OpenCircuitException e) {
-                TraceStore.put("guard.detour.cheapRetry.regen.skip", "nightmare_open");
-                return null;
-            }
-        }
-
         try {
             TraceStore.inc("guard.detour.cheapRetry.regen.calls");
             long st = System.currentTimeMillis();
@@ -5332,6 +5355,16 @@ public class ChatWorkflow {
                         this.detourCheapRetryRegenLlmTemperature,
                         null,
                         this.detourCheapRetryRegenLlmMaxTokens);
+            }
+            if (nightmareBreaker != null) {
+                String finalKey = com.example.lms.llm.NamedChatModel.breakerKey(
+                        regenModel, com.example.lms.llm.NamedChatModel.resolve(regenModel), regenReq.getModel(), "final");
+                try {
+                    detourPermit = nightmareBreaker.acquire(finalKey, "guard-detour-regen");
+                } catch (NightmareBreaker.OpenCircuitException e) {
+                    TraceStore.put("guard.detour.cheapRetry.regen.skip", "nightmare_open");
+                    return null;
+                }
             }
             int regenTimeoutSeconds = RequestedModelTimeoutPolicy.timeoutSeconds(
                     regenReq.getModel(),
@@ -6960,6 +6993,27 @@ public class ChatWorkflow {
         }
     }
 
+    private static void recordModelRebuildFallback(ChatModel retained, String requested, IllegalStateException failure) {
+        String actual = com.example.lms.llm.NamedChatModel.resolve(retained);
+        String reason = failure instanceof com.example.lms.llm.gateway.LlmGatewayException gateway
+                ? gateway.reasonCode() : "model_rebuild_failed";
+        TraceStore.put("llm.call.model.rebuildFallback", java.util.Map.of(
+                "requestedModelName", requested == null || requested.isBlank() ? "unknown" : requested,
+                "actualModelName", actual == null || actual.isBlank() ? "unknown" : actual,
+                "reason", reason));
+    }
+
+    private static com.example.lms.dto.GenerationObservation withModelRebuildFallback(
+            com.example.lms.dto.GenerationObservation observed) {
+        Object receipt = TraceStore.get("llm.call.model.rebuildFallback");
+        if (observed == null || !(receipt instanceof java.util.Map<?, ?> map)
+                || !(map.get("reason") instanceof String reason)) return observed;
+        return new com.example.lms.dto.GenerationObservation(
+                observed.observedProvider(), observed.observedModel(), observed.routeId(),
+                Math.max(0, observed.fallbackCount() == null ? 0 : observed.fallbackCount()) + 1,
+                reason, observed.observedReason());
+    }
+
     private ChatUsageLedger.ModelAttempt beginChatUsageAttempt(
             ChatUsageLedger.ModelPurpose purpose,
             ChatModel model,
@@ -7142,6 +7196,7 @@ public class ChatWorkflow {
         } catch (Exception ignore) { ChatWorkflowTraceSuppressions.traceSuppressed("llm.callModelTrace", ignore); }
 
         ChatModel modelForCall = model;
+        TraceStore.put("llm.call.model.rebuildFallback", null);
         final String contextModel = resolved;
         com.example.lms.llm.spec.ModelSpecSnapshot observedContext = focusModelSpecs == null ? null
                 : focusModelSpecs.snapshots().stream()
@@ -7184,6 +7239,7 @@ public class ChatWorkflow {
                 }
                 markCreativeSamplingUnproven("model-rebuild-fallback");
                 modelForCall = model;
+                recordModelRebuildFallback(modelForCall, requestedModel == null ? resolved : requestedModel, guard);
             } finally {
                 TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY, null);
                 clearPendingCreativeSamplingIfUnclaimed("sampling-option-unproven");
@@ -7301,7 +7357,8 @@ public class ChatWorkflow {
                 Object responseModel = TraceStore.get("llm.call.responseModel");
                 successSink.accept(new LlmCallSuccess(responseModel instanceof String name && !name.isBlank() ? name : resolved,
                         oauthRequested ? OpenAiEndpointCompatibility.Endpoint.RESPONSES
-                                : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS));
+                                : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS,
+                        withModelRebuildFallback(com.example.lms.dto.GenerationObservation.current())));
                 return out;
             } catch (CancellationException cancelled) {
                 throw cancelled;
@@ -13561,6 +13618,7 @@ public class ChatWorkflow {
         try {
             if (nightmareBreaker != null) {
                 String key = (breakerKey == null || breakerKey.isBlank()) ? NightmareKeys.CHAT_DRAFT : breakerKey;
+                if (key.startsWith("chat:draft")) key = "chat:final" + key.substring("chat:draft".length());
                 String context = "component=ChatWorkflow;stage=finalRescue;evidenceCount=" + count
                         + ";queryLen=" + queryLen;
                 nightmareBreaker.signalSilentFailure(key, context, safeReason);

@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
   Shared diagnostics for the BAT-managed RAG/Meta Display runtimes.

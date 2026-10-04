@@ -49,13 +49,19 @@ final class DisplayRelay {
     }
     synchronized Event poll(String key,String subscriber){return poll(key,subscriber,null);}
     synchronized Event poll(String key,String subscriber,LensDisplayPrefs display){
+        return poll(key,subscriber,display,false);
+    }
+    synchronized Event poll(String key,String subscriber,LensDisplayPrefs display,boolean preview){
         Channel c=channel(key);long now=clock.millis();
-        var sub=c.subscribers.get(subscriber);
-        if(sub==null){if(c.subscribers.size()>=4)throw error(TOO_MANY_REQUESTS,"display_subscriber_capacity");sub=new Subscriber();c.subscribers.put(subscriber,sub);}
-        sub.seen=now;
+        Subscriber sub=null;
+        if(!preview){
+            sub=c.subscribers.get(subscriber);
+            if(sub==null){if(c.subscribers.size()>=4)throw error(TOO_MANY_REQUESTS,"display_subscriber_capacity");sub=new Subscriber();c.subscribers.put(subscriber,sub);}
+            sub.seen=now;
+        }
         if(c.caption!=null&&c.caption.expiresAt()<=now){c.caption=null;c.eventId++;}
         if(c.hint!=null&&c.hint.expiresAt()<=now){c.hint=null;c.eventId++;}
-        if(sub.sent!=c.eventId){sub.sent=c.eventId;c.lastSentAt=now;}
+        if(sub!=null&&sub.sent!=c.eventId){sub.sent=c.eventId;c.lastSentAt=now;}
         boolean connected=c.producer!=null&&now-c.lastProducerSeen<=10000;
         return new Event(serverId,c.eventId,c.generation,now,c.enabled,connected,c.enabled?c.caption:null,c.enabled?c.hint:null,display,c.enabled&&connected?c.focus:null);
     }

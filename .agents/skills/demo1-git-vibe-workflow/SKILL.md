@@ -49,6 +49,7 @@ maps to `commit --preserve-foreign-staged` (`--strict-staging` = exact-match).
   patch seams — separate change-sets, separate checkpoints.
 - No push/pull/fetch/merge/rebase/reset/clean/stash/remote or history rewrite;
   a publish/remote ask needs its own explicit user authorization.
+- 작업 브랜치 = codex/owned-runtime-browser-restart(기준 @{u}), main = 역사가 끊긴 공개 스냅샷이라 비교·병합·기본 브랜치 변경 금지 → docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md
 - Sole valid main remote is `AbandonWareAi`
   (`https://github.com/UnlimitedAbandonWare/AbandonWareAi`) — the only valid
   remote is `origin` at that URL; report a leftover `origin` pointing

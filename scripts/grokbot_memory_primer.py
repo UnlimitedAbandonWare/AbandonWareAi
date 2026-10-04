@@ -133,7 +133,7 @@ def git_dirty_count(root=ROOT):
     try:
         env = dict(os.environ, PYTHONIOENCODING="utf-8")
         out = subprocess.run(
-            ["git", "-C", root, "status", "--porcelain"],
+            ["git", "--no-optional-locks", "-C", root, "status", "--porcelain"],
             capture_output=True, text=True, timeout=15, env=env)
         if out.returncode != 0:
             return None

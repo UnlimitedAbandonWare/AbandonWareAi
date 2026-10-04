@@ -101,11 +101,11 @@ routes:
     contractRefs:
       - 'AGENTS.md#Meta Ray-Ban Display Tasks'
       - 'AGENTS.md#Evidence And Verification'
-      - '.agents/skills/demo1-meta-display-browser-repair/references/evidence.md'
+      - 'data/agent-archive/skills/demo1-meta-display-browser-repair/references/evidence.md'
     loadPolicy: 'on-demand'
-    status: 'active'
-    source: '.agents/skills/demo1-meta-display-browser-repair/SKILL.md'
-    pairedArtifact: '.agents/skills/demo1-meta-display-browser-repair/agents/openai.yaml'
+    status: 'archived'
+    source: 'data/agent-archive/skills/demo1-meta-display-browser-repair/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-meta-display-browser-repair/agents/openai.yaml'
     trigger: >-
       Use when Meta Display needs real-browser functional QA or repair for
       input, submission, missing answers, stuck loading, layout, refresh,
@@ -155,7 +155,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/codex_9h_smb_decommission_usage_optimization_goal.md'
-    pairedArtifact: '.agents/skills/demo1-codex-usage-triage/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-codex-usage-triage/SKILL.md'
     trigger: >-
       Use for an explicit Desktop-only SMB decommission and Codex-usage
       optimization pass; never copy its task-specific /goal into global
@@ -172,7 +172,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/agents/demo1_p0_safe_patch_orchestrator/system.md'
-    pairedArtifact: '.agents/skills/demo1-autonomous-patch-conductor/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-autonomous-patch-conductor/SKILL.md'
     trigger: >-
       Use for general adaptive Self-Ask Safe Patch work. When the user invokes
       @superpowers, keep that process subordinate to repo evidence, secret
@@ -271,7 +271,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/agents/demo1_mcp_control_tower/system.md'
-    pairedArtifact: '.agents/skills/demo1-mcp-control-tower/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-mcp-control-tower/SKILL.md'
     trigger: >-
       Use when agents need the MCP-style source_scan, patch_plan, patch_render,
       archive_search, archive_restore, boot_verify, build_error_mine, and
@@ -489,8 +489,8 @@ routes:
       - 'AGENTS.md#PatchDrop Bundle Rules'
       - 'AGENTS.md#Redaction'
     loadPolicy: 'on-demand'
-    status: 'preserved'
-    source: '.agents/skills/demo1-mcp-control-tower/SKILL.md'
+    status: 'archived'
+    source: 'data/agent-archive/skills/demo1-mcp-control-tower/SKILL.md'
     pairedArtifact: 'agent-prompts/agents/demo1_mcp_control_tower/system.md'
     trigger: >-
       Use when coordinating Desktop, Mac mini, and Notebook agents through the
@@ -507,7 +507,7 @@ routes:
       - 'AGENTS.md#Redaction'
     loadPolicy: 'on-demand'
     status: 'preserved'
-    source: '.agents/skills/archive-search/SKILL.md'
+    source: 'data/agent-archive/skills/archive-search/SKILL.md'
     pairedArtifact: 'scripts/awx_mcp_toolbox.ps1'
     trigger: >-
       Use for a single-tool control-tower archive search through the toolbox;
@@ -523,7 +523,7 @@ routes:
       - 'AGENTS.md#Evidence And Verification'
     loadPolicy: 'on-demand'
     status: 'preserved'
-    source: '.agents/skills/archive-restore/SKILL.md'
+    source: 'data/agent-archive/skills/archive-restore/SKILL.md'
     pairedArtifact: 'scripts/awx_mcp_toolbox.ps1'
     trigger: >-
       Use for a reviewed single-tool archive restore through the toolbox with
@@ -570,7 +570,7 @@ routes:
       - 'AGENTS.md#Evidence And Verification'
     loadPolicy: 'on-demand'
     status: 'preserved'
-    source: '.agents/skills/run-pipeline/SKILL.md'
+    source: 'data/agent-archive/skills/run-pipeline/SKILL.md'
     pairedArtifact: 'scripts/awx_mcp_toolbox.ps1'
     trigger: >-
       Use for a single-tool run_pipeline probe and related verify_boot or
@@ -705,8 +705,8 @@ routes:
       - 'AGENTS.md#PatchDrop Bundle Rules'
       - 'AGENTS.md#Redaction'
     loadPolicy: 'on-demand'
-    status: 'preserved'
-    source: '.agents/skills/macmini-safe-patch-assistant/SKILL.md'
+    status: 'archived'
+    source: 'data/agent-archive/skills/macmini-safe-patch-assistant/SKILL.md'
     pairedArtifact: '__patch_drop__/producer_bundle.py'
     trigger: >-
       Use when Mac mini must produce exactly one cumulative PatchDrop v3
@@ -784,8 +784,8 @@ routes:
     contractRefs:
       - 'AGENTS.md#Evidence And Verification'
     loadPolicy: 'on-demand'
-    status: 'preserved'
-    source: '.agents/skills/quantitative-metric-normalizer/SKILL.md'
+    status: 'archived'
+    source: 'data/agent-archive/skills/quantitative-metric-normalizer/SKILL.md'
     pairedArtifact: 'agent-prompts/agents/demo1_quant_metric_normalization_antigravity/system_ko.md'
     trigger: >-
       Use when an attached Dynamic RAG design needs source-backed score
@@ -803,7 +803,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/agents/demo1_quant_metric_normalization_antigravity/system_ko.md'
-    pairedArtifact: '.agents/skills/quantitative-metric-normalizer/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/quantitative-metric-normalizer/SKILL.md'
     trigger: >-
       Use with quantitative-metric-normalizer when an attached Dynamic RAG
       design requires an Antigravity-ready, source-backed, read-only
@@ -815,11 +815,11 @@ routes:
     canonicalId: 'demo1-ablation-harmony-tracker'
     contractClass: 'decision-changing'
     contractRefs:
-      - '.agents/skills/demo1-ablation-harmony-tracker/SKILL.md#Patch Gate'
+      - 'data/agent-archive/skills/demo1-ablation-harmony-tracker/SKILL.md#Patch Gate'
       - 'AGENTS.md#Evidence And Verification'
     loadPolicy: 'on-demand'
-    status: 'preserved'
-    source: '.agents/skills/demo1-ablation-harmony-tracker/SKILL.md'
+    status: 'archived'
+    source: 'data/agent-archive/skills/demo1-ablation-harmony-tracker/SKILL.md'
     pairedArtifact: 'agent-prompts/agents/demo1_ablation_harmony_patch_directive/system_ko.md'
     trigger: >-
       Use immediately after quantitative normalization to classify harmony-break
@@ -843,7 +843,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/agents/demo1_ablation_harmony_patch_directive/system_ko.md'
-    pairedArtifact: '.agents/skills/demo1-ablation-harmony-tracker/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-ablation-harmony-tracker/SKILL.md'
     trigger: >-
       Use when the ablation-harmony result must become an executable nine-hour
       Desktop Safe Patch prompt retaining the required TraceStore verification
@@ -855,11 +855,11 @@ routes:
     canonicalId: 'demo1-harmony-contamination-scanner'
     contractClass: 'decision-changing'
     contractRefs:
-      - '.agents/skills/demo1-harmony-contamination-scanner/SKILL.md#Verification'
+      - 'data/agent-archive/skills/demo1-harmony-contamination-scanner/SKILL.md#Verification'
       - 'AGENTS.md#Redaction'
     loadPolicy: 'on-demand'
-    status: 'preserved'
-    source: '.agents/skills/demo1-harmony-contamination-scanner/SKILL.md'
+    status: 'archived'
+    source: 'data/agent-archive/skills/demo1-harmony-contamination-scanner/SKILL.md'
     pairedArtifact: 'agent-prompts/demo1_harmony_9h_autonomous_patch.md'
     trigger: >-
       Use to recompute source-backed HB-01 through HB-12 harmony scores, silent
@@ -877,7 +877,7 @@ routes:
     loadPolicy: 'mandatory-before-mutation'
     status: 'preserved'
     source: '.agents/skills/demo1-cross-subsystem-guard/SKILL.md'
-    pairedArtifact: '.agents/skills/demo1-ablation-harmony-tracker/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-ablation-harmony-tracker/SKILL.md'
     trigger: >-
       Use before completion claims when a patch touches two or more S01-S08
       subsystems, shared booster arbitration, CFVM, MoE, HYPERNOVA, or ZCA seams,
@@ -894,7 +894,7 @@ routes:
     loadPolicy: 'on-demand'
     status: 'preserved'
     source: 'agent-prompts/demo1_harmony_9h_autonomous_patch.md'
-    pairedArtifact: '.agents/skills/demo1-harmony-contamination-scanner/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-harmony-contamination-scanner/SKILL.md'
     trigger: >-
       Use this exact unregistered standalone prompt for a long-running Desktop
       Safe Patch loop across HB-01 through HB-12 while preserving active
@@ -1118,11 +1118,11 @@ routes:
     contractClass: 'decision-changing'
     contractRefs:
       - 'AGENTS.md#Agent dynamic port lease'
-      - '.agents/skills/demo1-agent-port-lease/SKILL.md'
+      - 'data/agent-archive/skills/demo1-agent-port-lease/SKILL.md'
     loadPolicy: 'on-demand'
-    status: 'active'
-    source: '.agents/skills/demo1-agent-port-lease/SKILL.md'
-    pairedArtifact: '.agents/skills/demo1-agent-port-lease/agents/openai.yaml'
+    status: 'archived'
+    source: 'data/agent-archive/skills/demo1-agent-port-lease/SKILL.md'
+    pairedArtifact: 'data/agent-archive/skills/demo1-agent-port-lease/agents/openai.yaml'
     trigger: >-
       Use when a parallel agent must lease a free loopback port, start only
       its own server, record port/pid/traceId, and release that lease.

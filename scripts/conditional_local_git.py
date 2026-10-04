@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from awx_paths import resolve as _awx_resolve
@@ -84,7 +85,7 @@ def git_exe() -> str:
 def git(repo: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
-            [git_exe(), "-C", str(repo), *args],
+            [git_exe(), "--no-optional-locks", "-C", str(repo), *args],
             capture_output=True,
             check=False,
         )
@@ -94,6 +95,23 @@ def git(repo: Path, args: list[str]) -> subprocess.CompletedProcess[bytes]:
 
 def text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace").strip()
+
+
+def user_commit_window_open(repo: Path) -> dict | None:
+    """var/git-commit-window.flag doc while the user commit window is open."""
+    try:
+        doc = json.loads((repo / "var" / "git-commit-window.flag")
+                         .read_text(encoding="utf-8"))
+        opened = datetime.fromisoformat(
+            str(doc.get("openedAt", "")).replace("Z", "+00:00"))
+        ttl = float(doc.get("ttlMinutes", 10))
+    except (OSError, ValueError, TypeError):
+        return None
+    if opened.tzinfo is None:
+        opened = opened.replace(tzinfo=timezone.utc)
+    if datetime.now(timezone.utc) > opened + timedelta(minutes=ttl):
+        return None
+    return doc
 
 
 def policy_path() -> Path:
@@ -876,6 +894,10 @@ def main(argv: list[str] | None = None) -> int:
         return emit(visible, result["exit"])
     if args.preserve_foreign_staged and args.strict_staging:
         return emit({"ok": False, "reason": "conflicting-staging-flags"}, 2)
+    flag = user_commit_window_open(repo)
+    if flag is not None:
+        return emit({"status": "blocked", "reason": "user-commit-window-open",
+                     "flag": {k: flag.get(k) for k in ("openedAt", "ttlMinutes", "by")}}, 4)
     result = (commit_selected(repo, Path(args.message_file), args.path) if args.preserve_foreign_staged
               else do_commit(repo, Path(args.message_file), args.path))
     visible = {key: value for key, value in result.items() if key != "exit"}

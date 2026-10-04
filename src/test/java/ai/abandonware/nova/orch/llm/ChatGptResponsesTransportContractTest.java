@@ -136,10 +136,17 @@ class ChatGptResponsesTransportContractTest {
         }
     }
 
-    @Test void jsonHttp200IsNotAnOauthSseCompletion() throws Exception {
-        try (var f = new Fixture("{\"status\":\"completed\",\"output_text\":\"bad\"}", 200, "application/json")) {
+    @Test void jsonHttp200RequiresAnExplicitCompletedResponse() throws Exception {
+        try (var f = new Fixture("{}", 200, "application/json")) {
             var model = f.model(() -> "synthetic-oauth-a", 3000);
             assertThrows(LlmResponseTerminalException.class, () -> model.chat(List.of(UserMessage.from("fixture"))));
+            assertEquals(1, f.calls.get());
+        }
+        try (var f = new Fixture("{\"status\":\"completed\",\"output_text\":\"completed answer\"}", 200, "application/json")) {
+            var model = f.model(() -> "synthetic-oauth-a", 3000);
+            var response = model.chat(List.of(UserMessage.from("fixture")));
+            assertEquals("completed answer", response.aiMessage().text());
+            assertEquals(1, f.calls.get());
         }
     }
 

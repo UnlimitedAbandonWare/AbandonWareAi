@@ -17,8 +17,29 @@ import java.util.*;
 public class ChatModelCatalogService {
     public record Choice(String id, String provider, String endpointId, String modelId,
             String status, boolean selectable, String reason, String release,
-            String evidence, boolean defaultChoice, List<String> capabilities) {
-        public Choice { capabilities = capabilities == null ? List.of() : List.copyOf(capabilities); }
+            String evidence, boolean defaultChoice, List<String> capabilities, List<String> reasons,
+            boolean configured, boolean runtimeVerified, Map<String,Object> metadata) {
+        public Choice {
+            metadata = metadata == null ? Map.of() : Map.copyOf(metadata);
+            capabilities = capabilities == null ? List.of() : List.copyOf(capabilities);
+            reason = reason == null ? "" : reason;
+            var codes = new LinkedHashSet<String>();
+            if (!reason.isBlank()) codes.add(reason);
+            if (reasons != null) reasons.stream().filter(Objects::nonNull).filter(s -> !s.isBlank()).forEach(codes::add);
+            reasons = List.copyOf(codes);
+        }
+        public Choice(String id, String provider, String endpointId, String modelId,
+                String status, boolean selectable, String reason, String release, String evidence,
+                boolean defaultChoice, List<String> capabilities, List<String> reasons) {
+            this(id,provider,endpointId,modelId,status,selectable,reason,release,evidence,defaultChoice,
+                    capabilities,reasons,"configured".equals(status),false,Map.of());
+        }
+        public Choice(String id, String provider, String endpointId, String modelId,
+                String status, boolean selectable, String reason, String release, String evidence,
+                boolean defaultChoice, List<String> capabilities) {
+            this(id, provider, endpointId, modelId, status, selectable, reason, release, evidence,
+                    defaultChoice, capabilities, List.of());
+        }
         public Choice(String id, String provider, String endpointId, String modelId,
                 String status, boolean selectable, String reason, String release, String evidence) {
             this(id, provider, endpointId, modelId, status, selectable, reason, release, evidence, false, List.of());
@@ -159,14 +180,31 @@ public class ChatModelCatalogService {
                         && (Arrays.stream(remoteSelectionRoutes.split(","))
                                 .map(String::trim).anyMatch(route::equals)
                                 || runtimeApprovedRoutes.contains(route)));
-                String reason = !permitted ? "remote_selection_disabled"
-                        : row.disabledReason() == null ? "route_not_configured" : row.disabledReason();
+                var reasons = new LinkedHashSet<String>();
+                if (!permitted) reasons.add("remote_selection_disabled");
+                if (!row.eligible()) {
+                    String routeReason = row.disabledReason();
+                    if (routeReason != null && !routeReason.isBlank())
+                        reasons.add(routeReason.matches("[a-z][a-z0-9_]*") ? routeReason : "model_unavailable");
+                    Object additional = row.metadata().get("disabledReasons");
+                    if (additional instanceof Collection<?> codes)
+                        codes.stream().filter(String.class::isInstance).map(String.class::cast)
+                                .filter(s -> s.matches("[a-z][a-z0-9_]*")).forEach(reasons::add);
+                    if (reasons.isEmpty() || reasons.equals(Set.of("remote_selection_disabled")))
+                        reasons.add("model_unavailable");
+                }
+                if (route == null || route.isBlank()) reasons.add("metadata_unverified");
+                boolean gateway = "vercel-gateway".equals(row.provider());
+                if (gateway) reasons.add("provider_restriction_unsupported");
                 // Availability is separate from generation success; no paid route is enabled here.
-                boolean ready = permitted && row.eligible() && route != null && !route.isBlank();
+                boolean ready = permitted && row.eligible() && route != null && !route.isBlank() && !gateway;
                 rows.add(new Choice(id, row.provider(), route == null ? "unconfigured" : route,
                         row.modelId(), ready ? "configured" : "unavailable", ready,
-                        ready ? "" : reason, release(row.modelId(), row.metadata()),
-                        "server_catalog", false, row.capabilities()));
+                        ready ? "" : reasons.iterator().next(), release(row.modelId(), row.metadata()),
+                        "server_catalog", false, row.capabilities(), ready ? List.of() : List.copyOf(reasons),
+                        row.eligible(), health != null && health.snapshot(row.provider(),row.modelId())
+                                .filter(s -> s.lastSuccess() && s.successCount() > 0).isPresent(),
+                        auxiliaryMetadata(row.metadata())));
             }
         }
         List<Choice> snapshot = rows.stream().distinct().sorted(Comparator.comparing(Choice::provider)
@@ -181,7 +219,8 @@ public class ChatModelCatalogService {
                     })).map(Choice::id).orElse("");
             snapshot = snapshot.stream().map(c -> new Choice(c.id(), c.provider(), c.endpointId(), c.modelId(),
                     c.status(), c.selectable(), c.reason(), c.release(), c.evidence(),
-                    c.id().equals(defaultId), c.capabilities())).toList();
+                    c.id().equals(defaultId), c.capabilities(), c.reasons(),
+                    c.configured(), c.runtimeVerified(), c.metadata())).toList();
         }
         synchronized (stateLock) {
             if (flight == generation) {
@@ -199,6 +238,15 @@ public class ChatModelCatalogService {
     }
 
     /** Settings policy reads reuse this snapshot; they never initiate catalog discovery. */
+    private static Map<String,Object> auxiliaryMetadata(Map<String,Object> source) {
+        var result = new LinkedHashMap<String,Object>();
+        for (String key : List.of("enabled","supportedRoles","hostingProvider","endpointRoute",
+                "apiSurface","capabilityStatus","price","costTier","providerRestrictionSupported","dataPolicy")) {
+            if (source.containsKey(key)) result.put(key,source.get(key));
+        }
+        return Map.copyOf(result);
+    }
+
     public List<Choice> observedServerChoices() { return List.copyOf(cached); }
 
     public Optional<Choice> resolve(String id) {

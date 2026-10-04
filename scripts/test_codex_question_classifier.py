@@ -282,6 +282,127 @@ class CodexQuestionClassifierTest(unittest.TestCase):
                           "--options", "push|보류"])
         self.assertEqual(3, code2)
 
+    # --- add-only: D29 지시서 허용 목록 밖 원인 체인 범위 확장 (2026-10-03) ---
+
+    def test_f2_english_outside_allowlist_is_auto_d29(self):
+        self.assertVerdict(
+            "The live root cause requires LlmRouterAspect.java, outside the "
+            "user attachment explicit allowed edit paths. A concrete "
+            "unapplied 70-line patch is saved. Should this additional "
+            "source file be authorized under a fresh target lease, or kept "
+            "unapplied pending user approval?",
+            "AUTO", "D29")
+
+    def test_korean_scope_expand_is_auto(self):
+        result = self.assertVerdict(
+            "원인 파일이 지시서 수정 허용 목록 밖입니다. 되돌릴 수 있고 "
+            "다른 세션 lease도 없는데 범위 확장 승인할까요?",
+            "AUTO")
+        self.assertIn(result["rule"], ("D29", "D1"))
+
+    def test_scope_expand_with_schema_stays_ask_once(self):
+        self.assertVerdict(
+            "The fix file is outside the allowlist, and it also needs a "
+            "DB schema change — proceed?",
+            "ASK_ONCE", "ask-schema-change")
+
+    def test_scope_expand_chatjs_is_hold(self):
+        result = self.assertVerdict(
+            "chat.js is outside the allowed edit list but the root cause "
+            "needs it — apply the saved patch?",
+            "HOLD")
+        self.assertEqual("D29-forbidden", result["rule"])
+
+    def test_scope_expand_with_push_stays_ask_once(self):
+        self.assertVerdict(
+            "Root cause file is outside the allowed edit paths; to share "
+            "the fix I must push to origin — proceed?",
+            "ASK_ONCE", "ask-git-remote")
+
+    # --- add-only: D30~D34 실측 멈춤 사례 U1~U5 (2026-10-03) ---
+
+    def test_u1_live_budget_extend_is_auto_d30(self):
+        self.assertVerdict(
+            "라이브 생성 최대 10회 중 10/10에 도달했습니다. 남은 검증 항목 "
+            "2개를 위해 추가 4회 승인할까요?",
+            "AUTO", "D30")
+
+    def test_u1_live_budget_english_is_auto_d30(self):
+        self.assertVerdict(
+            "Live generation cap 10/10 reached — may I extend by 4 more "
+            "calls for the remaining verification items?",
+            "AUTO", "D30")
+
+    def test_hardcap_means_partial_not_extend(self):
+        result = self.assertVerdict(
+            "지시서에 HARD_CAP 추가 생성 절대 금지라고 있는데 라이브 상한 "
+            "10/10에 도달했습니다. 어떻게 할까요?",
+            "AUTO", "D30-cap")
+        self.assertIn("partial", result["default_answer"].lower())
+
+    def test_paid_limit_stays_ask_once_not_d30(self):
+        self.assertVerdict("유료 API 호출 상한 초과인데 증액할까요?",
+                           "ASK_ONCE", "ask-paid-limit")
+
+    def test_u2_user_evidence_wait_is_auto_d31(self):
+        self.assertVerdict(
+            "사용자가 직접 보낸 KST 시각과 답이 화면에 표시됐는지 "
+            "알려 주세요.",
+            "AUTO", "D31")
+
+    def test_u2_did_answer_appear_is_auto_d31(self):
+        self.assertVerdict(
+            "Tell me the exact time you sent it and whether the answer "
+            "appeared on screen.",
+            "AUTO", "D31")
+
+    def test_u3_live_lease_blocked_is_auto_d32(self):
+        self.assertVerdict(
+            "대상 파일이 다른 세션의 live lease와 겹칩니다. BLOCKED로 "
+            "종료할까요?",
+            "AUTO", "D32")
+
+    def test_u3_lease_wait_english_is_auto_d32(self):
+        self.assertVerdict(
+            "A live lease held by another session overlaps the target — "
+            "should I end the task BLOCKED or wait for release?",
+            "AUTO", "D32")
+
+    def test_stale_lease_reclaim_is_not_d32(self):
+        result = classify("만료된 stale lease를 reclaim하고 진행할까요?")
+        self.assertNotEqual("D32", result["rule"])
+
+    def test_u5_superseded_session_is_auto_d33(self):
+        self.assertVerdict(
+            "같은 목표를 다루던 다른 세션이 이미 verified로 완료했습니다. "
+            "이 세션을 재개할까요?",
+            "AUTO", "D33")
+
+    def test_u5_newer_session_solved_is_auto_d33(self):
+        self.assertVerdict(
+            "A newer session already solved this goal — resume anyway?",
+            "AUTO", "D33")
+
+    def test_foreign_active_session_is_not_d33(self):
+        result = classify(
+            "다른 세션이 아직 같은 파일을 수정 중인데 계속할까요?")
+        self.assertNotEqual("D33", result["rule"])
+
+    def test_u1_u2_env_transient_is_auto_d34(self):
+        self.assertVerdict(
+            "브라우저 도구가 'URL protocol is not allowed'로 거부됐습니다. "
+            "라이브 카운트에 넣을까요?",
+            "AUTO", "D34")
+
+    def test_launcher_already_running_is_auto_d34(self):
+        self.assertVerdict(
+            "launcher already running — 새 런타임을 띄울까요, 기존 것에 "
+            "붙을까요?",
+            "AUTO", "D34")
+
+    def test_server_restart_stays_d9_not_d34(self):
+        self.assertVerdict("검증용 서버를 재기동할까요?", "AUTO", "D9")
+
 
 if __name__ == "__main__":
     unittest.main()

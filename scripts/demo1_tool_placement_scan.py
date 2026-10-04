@@ -363,7 +363,7 @@ def collect_leases(root: Path):
 
 
 def collect_dirty(root: Path):
-    cmd = ["git", "status", "--porcelain=v1", "--untracked-files=normal"]
+    cmd = ["git", "--no-optional-locks", "status", "--porcelain=v1", "--untracked-files=normal"]
     try:
         proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=20)
@@ -469,6 +469,40 @@ def rank(ask: str, state: dict, router: dict):
     return placements, matched_ids, misroutes
 
 
+def save_diag(root: Path, out: dict) -> str:
+    diag = root / "var" / "diagnostics"
+    diag.mkdir(parents=True, exist_ok=True)
+    name = "tool-placement-scan-%s.json" % datetime.now(
+        timezone.utc).strftime("%Y%m%d-%H%M%S")
+    path = diag / name
+    path.write_text(json.dumps(out, ensure_ascii=False, indent=1),
+                    encoding="utf-8")
+    return str(path)
+
+
+def print_brief(out: dict, detail_path: str) -> None:
+    ask = out.get("ask") or "(no ask)"
+    if len(ask) > 60:
+        ask = ask[:57] + "..."
+    print('scan ask : "%s"' % ask)
+    print("next     : %s" % (out.get("nextSingleCall") or "none"))
+    tops = ", ".join(p["id"] for p in (out.get("placements") or [])[:3])
+    print("plcmts   : %d (top: %s)" % (len(out.get("placements") or []),
+                                       tops or "none"))
+    mis = out.get("misroutes") or []
+    print("misroute : %d%s" % (len(mis), (" " + "; ".join(
+        "%s->%s" % (m.get("rule"), m.get("routerPrimary"))
+        for m in mis[:2])) if mis else ""))
+    state = out.get("state") or {}
+    j = state.get("journals") or {}
+    le = state.get("leases") or {}
+    d = state.get("dirty") or {}
+    print("state    : journals stale=%s leases expired=%s dirty=%s" % (
+        j.get("staleCount", "n/a"), le.get("expiredCount", "n/a"),
+        d.get("count", "n/a")))
+    print("detail   : %s" % detail_path)
+
+
 def cmd_scan(root: Path, args) -> int:
     ask = str(args.ask or "")
     state = {"enabled": not args.skip_state}
@@ -490,7 +524,10 @@ def cmd_scan(root: Path, args) -> int:
         "advisoryOnly": True,
         "note": "기존 도구 호출 순위화만 — 새 라우터/실행자가 아니다",
     }
-    print(json.dumps(out, ensure_ascii=True))
+    if args.json:
+        print(json.dumps(out, ensure_ascii=True))
+    else:
+        print_brief(out, save_diag(root, out))
     return 0
 
 
@@ -521,6 +558,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="router resolve subprocess 생략")
     parser.add_argument("--no-git", action="store_true",
                         help="git status --porcelain 수집 생략")
+    parser.add_argument("--json", action="store_true",
+                        help="전체 JSON을 stdout으로 (기본: brief+var/diagnostics 파일)")
     return parser
 
 

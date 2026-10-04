@@ -1,0 +1,105 @@
+[ANTI-STOP] 읽고 멈추지 마세요. WP1부터 WP4까지 순서대로 실행하고 자율 완료 보고를 제출합니다.
+[DEVIN 지시서] 코덱스-데빈-그록 3대 에이전트 상호 신호 교환 브리지 (Agent-Signal 퀵 핑퐁 킷) — 2026-10-04 15:10 KST
+@demo1-orchestra-synergy
+파일 ID: PASTE_DEVIN_codex-devin-grok-signal-bridge_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+사용자가 자주 교차 사용하는 코덱스(Codex)·데빈(Devin)·그록(GrokBot) 간에 원스톱으로 작업 결과·검증 요청·아이디어 신호를 주고받을 수 있도록, 기존 orchestra-signal 엔진을 감싸는 초경량 퀵 CLI(`scripts/agent_quick_signal.py`), 윈도우 배치(`scripts/Agent-Signal.bat`), 상호작용 규칙 문서 및 단위 테스트를 구축한다.
+
+# 1. 사실 (2026-10-04 15:03~15:08 KST 읽기 전용 확인)
+- awx.orchestra-signal.v1 신호 계층이 이미 구현됨: `scripts/orchestra_signal.py`(A81D85CE0049), `scripts/orchestra_route.py`(881409841705), `scripts/orchestra_paste.py`(E9BE484DFC29), `scripts/orchestra_board.py`(2250C0A9FCCF) 존재 및 4개 단위 테스트 전원 PASS(0 failures).
+- 활성 신호 저장소(`data/agent-handoff/orchestra/`) 정상 작동 중이며, `Orchestra-Board.bat`로 현황 확인 가능.
+- 현 구조는 개별 단계(신호 생성 -> 라우트 -> 붙여넣기 렌더링)를 분리 실행해야 하여 사용자가 코덱스/데빈/그록 간 작업을 빠르게 넘길 때 번거로움.
+- 활성 lease 확인 결과 `scripts/orchestra_*.py` 및 신규 대상 경로에 걸려 있는 충돌 lease 없음 (진입 안전).
+
+# 2. 공통 규칙
+- COMMON_RULES: git push/pull/add -A/commit 금지, remote 추가 금지, PROTO_OPEN 유지, 비밀값 노출 금지, 외부 유료 API 호출 0회.
+- 제품 소스(Java/JVM main/java/**) 수정 절대 0 (오직 scripts, tests, bats, docs만 대상).
+- lease 준수: 소스/스크립트 생성 시 `python -B scripts/agent_scope_lease.py check/claim` 사용.
+- 패키지 설치 금지: pip/npm 추가 없이 기존 Python 3 stdlib 및 Windows 기본 유틸(`clip.exe`/PowerShell)만 사용.
+
+# 3. 항목 (WP1~WP4)
+### WP1 [Devin] 초경량 원스톱 CLI `scripts/agent_quick_signal.py` 구현
+- 증거: `scripts/orchestra_signal.py`:1 및 `scripts/orchestra_paste.py`:1
+- RED:
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  python -B scripts/agent_quick_signal.py --help; "exit=$LASTEXITCODE" (미생성 exit!=0)
+- 최소 구현:
+  1) `emit`: `--from <agent> --to <target> --summary "<한줄>" [--files <f1,f2>] [--kind <kind>] [--clip]`
+     -> `orchestra_signal.py new` + `orchestra_route.py --apply` + `orchestra_paste.py`를 단일 프로세스/호출로 처리해 var/orchestra/outbox/PASTE_*.txt 생성 및 터미널에 `말로:` 줄과 파일 경로 출력. `--clip` 지정 시 Windows `clip.exe` 또는 `powershell Set-Clipboard`로 붙여넣기 텍스트 복사.
+  2) `inbox`: `--agent <agent>` -> 해당 에이전트의 inbox 대기 목록 요약 출력.
+  3) `copy`: `--agent <agent>` 또는 `--id <id>` -> 대상 최신 PASTE 파일 본문을 클립보드에 복사.
+  4) `done`: `--id <id>` -> 해당 신호를 archive로 이동하고 status=done 갱신.
+- GREEN: python -B scripts/agent_quick_signal.py --help; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 4개 서브커맨드 정상 동작 및 도움말 출력.
+
+### WP2 [Devin] 원클릭 실행 윈도우 배치 `scripts/Agent-Signal.bat` 작성
+- 증거: `scripts/Orchestra-Board.bat`:1
+- RED: cmd /c scripts\Agent-Signal.bat --help; "exit=$LASTEXITCODE" (미생성 exit!=0)
+- 최소 구현:
+  - 인자 없을 때: 상단에 `[Codex: N] [Devin: N] [Grok: N]` 대기 현황 출력 후 간단한 번호 선택 메뉴(1. 신호 생성, 2. 최신 PASTE 복사, 3. 현황판 보기, 4. 종료) 제공.
+  - 인자 있을 때: `scripts/Agent-Signal.bat emit ...` 처럼 `agent_quick_signal.py`로 인자 바이패스.
+- GREEN: cmd /c scripts\Agent-Signal.bat --help; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 메뉴 렌더링 및 인자 위임 정상 동작.
+
+### WP3 [Devin] 3대 에이전트 핑퐁 규칙 및 꼬리표 표준 문서화
+- 증거: `docs/agent-tooling/orchestra-synergy-ko.md`:1 및 `.agents/skills/demo1-orchestra-synergy/SKILL.md`:1
+- RED: Select-String -Path docs/agent-tooling/orchestra-synergy-ko.md -Pattern "agent_quick_signal" -SimpleMatch; "exit=$LASTEXITCODE" (미존재 exit!=0)
+- 최소 구현:
+  - `docs/agent-tooling/orchestra-synergy-ko.md` 및 `.agents/skills/demo1-orchestra-synergy/SKILL.md`에 "3대 에이전트 핑퐁 규칙 (Codex ↔ Devin ↔ Grok)" 섹션 추가.
+  - 각 에이전트 작업 완료 시 출력할 1줄 신호 권고 포맷 기재:
+    `Agent-Signal.bat emit --from <me> --to <target> --summary "..." --files <목록>`
+- GREEN: Select-String -Path docs/agent-tooling/orchestra-synergy-ko.md -Pattern "agent_quick_signal" -SimpleMatch; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 두 문서에 퀵 핑퐁 패턴 명시.
+
+### WP4 [Devin] 단위 테스트 `scripts/test_agent_quick_signal.py` 작성 및 전체 회귀 검증
+- 증거: `scripts/test_orchestra_signal.py`:1
+- RED: python -B scripts/test_agent_quick_signal.py; "exit=$LASTEXITCODE" (미생성 exit!=0)
+- 최소 구현:
+  1) `emit` -> 신호 생성, 자동 라우팅, PASTE 파일 생성 검증 (임시 디렉토리).
+  2) `inbox` -> 필터링 정상 여부 검증.
+  3) `done` -> archive 이동 검증.
+  4) 비밀값 패턴 거부 검증.
+- GREEN:
+  python -B scripts/test_agent_quick_signal.py; python -B scripts/test_orchestra_signal.py; python -B scripts/test_orchestra_route.py; python -B scripts/test_orchestra_board.py; python -B scripts/test_orchestra_paste.py; "exit=$LASTEXITCODE" (exit=0, ALL PASS)
+- 완료 조건: 5개 오케스트라 테스트 0 failures 통과.
+
+# 4. HOLD 조건
+- `data/agent-handoff/orchestra/` 디렉토리가 잠겨 있거나 쓰기 권한이 없을 때.
+- 기존 오케스트라 스크립트(`orchestra_signal.py` 등)의 기존 단위 테스트가 실패할 때.
+
+# 5. ASK_ONCE
+- Q-1: 클립보드 복사 시 기본 방식: (a) 권장: Windows `clip.exe` 및 PowerShell `Set-Clipboard` 자동 시도 (b) 클립보드 제외 콘솔 출력만 유지.
+- Q-2: 배치 실행 방식: (a) 권장: 인자 없으면 대화형 메뉴 + 인자 있으면 직접 실행 (b) 오직 직접 인자 전달만 지원.
+
+# 6. 절대 금지
+- 제품 Java/JVM 소스(`main/java/**`) 및 프론트엔드(`static/**`) 직접 변경 절대 금지.
+- git commit, push, pull, add -A, reset, checkout, clean 및 remote 추가 절대 금지.
+- PROTO_OPEN 보안 규칙 훼손 금지.
+- 비밀값/토큰 출력 및 파일 저장 금지.
+- 유료 외부 API 호출 금지 ($0 로컬 실행).
+
+# 7. Acceptance (완료 기준)
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- WP1: `python -B scripts/agent_quick_signal.py --help` exit 0 및 emit/inbox/copy/done 동작 검증 PASS.
+- WP2: `cmd /c scripts\Agent-Signal.bat --help` exit 0 및 인자 바이패스 PASS.
+- WP3: `docs/agent-tooling/orchestra-synergy-ko.md` 내 `agent_quick_signal` 내용 포함 PASS.
+- WP4: `scripts/test_agent_quick_signal.py` 포함 오케스트라 5개 테스트 전원 0 failures PASS.
+
+# 8. 보고 형식
+외부 API: 0
+종료 상태: DONE_OFFLINE
+WP 결과:
+- WP1: PASS (scripts/agent_quick_signal.py)
+- WP2: PASS (scripts/Agent-Signal.bat)
+- WP3: PASS (docs/agent-tooling/orchestra-synergy-ko.md, SKILL.md)
+- WP4: PASS (scripts/test_agent_quick_signal.py + 회귀 테스트 4종)
+검증 명령 결과:
+- python -B scripts/test_agent_quick_signal.py; "exit=0"
+산출물:
+- scripts/agent_quick_signal.py
+- scripts/Agent-Signal.bat
+- scripts/test_agent_quick_signal.py
+
+[ANTI-STOP] 지시서의 모든 WP를 순서대로 완료한 후 보고 형식에 맞춰 종료 보고를 제출하세요.

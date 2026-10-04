@@ -59,7 +59,7 @@
       state.connection='CONNECTED';state.errorCode='';clearTimer(expiry);
       if(state.caption&&!v.caption.rolling)expiry=setTimer(()=>{state.caption='';notify();},Math.min(state.display.transcriptTtlMs,v.caption.expiresAt-v.sentAt));notify();
     }
-    async function poll(){if(inflight||disposed)return;inflight=true;try{const v=await post('poll',{});if(disposed)return;diagnostic('response_received',{sequence:v?.eventId});apply(v);retry=1000;}catch(error){if(disposed)return;state.connection='RECONNECTING';state.errorCode=/^http_[1-5][0-9][0-9]$/.test(error?.message)?error.message:error?.message==='display_contract'||error?.message==='contract'?'contract':error?.message==='unsupported'?'unsupported':error?.name==='AbortError'||error?.message==='timeout'?'timeout':'network';state.reconnects++;notify();diagnostic('transport_error',{code:state.errorCode});retry=Math.min(30000,retry*2);}finally{inflight=false;if(active)timer=setTimer(poll,retry);}}
+    async function poll(){if(inflight||disposed)return;inflight=true;try{const v=await post('poll',options.preview===true?{preview:true}:{});if(disposed)return;diagnostic('response_received',{sequence:v?.eventId});apply(v);retry=1000;}catch(error){if(disposed)return;state.connection='RECONNECTING';state.errorCode=/^http_[1-5][0-9][0-9]$/.test(error?.message)?error.message:error?.message==='display_contract'||error?.message==='contract'?'contract':error?.message==='unsupported'?'unsupported':error?.name==='AbortError'||error?.message==='timeout'?'timeout':'network';state.reconnects++;notify();diagnostic('transport_error',{code:state.errorCode});retry=Math.min(30000,retry*2);}finally{inflight=false;if(active)timer=setTimer(poll,retry);}}
     async function acknowledge(eventId){if(eventId!==state.eventId||eventId<1)return;try{await post('ack',{eventId});}catch{}}
     function start(){if(active||disposed)return;active=true;void poll();}
     function pause(){active=false;clearTimer(timer);}
@@ -79,7 +79,7 @@
     const notify=()=>options.onChange?.(state);
     const diagnostic=(event,data)=>{try{options.diagnostic?.(event,data);}catch{}};
     async function read(){
-      const url='/api/assist/display/lens/text',body=JSON.stringify({token:options.token});
+      const url='/api/assist/display/lens/text',body=JSON.stringify(options.preview===true?{token:options.token,preview:true}:{token:options.token});
       const headers={'Content-Type':'application/json','X-Display-Client':'1'};
       let controller,xhr,timeout,rejectCancelled;
       const cancelled=new Promise((_,reject)=>{rejectCancelled=reject;});
@@ -219,7 +219,7 @@
     }catch{}
     return Math.max(1,Math.round(el.scrollHeight/lh));
   }
-  function mountLens(token){
+  function mountLens(token,options={}){
     function formatCue(text){
       const raw=String(text||'').replace(/\s+/g,' ').trim();
       if(!raw)return '';
@@ -240,8 +240,8 @@
     const hint=document.getElementById('hint');
     const transcript=document.getElementById('transcript');
     const status=document.getElementById('status');
-    const diagnostic=(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
-    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:window.NovaFocus.receiptSender(window),diagnostic}):null;
+    const diagnostic=options.preview===true?()=>{}:(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
+    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:options.preview===true?()=>{}:window.NovaFocus.receiptSender(window),diagnostic}):null;
     let hintRenderKey='',lastCueText='',hintPages=[],hintPage=0,hintPageTimer=null,lastState=null;
     const cfg=()=>lastState?.display||DISPLAY_DEFAULTS;
     function paint(){
@@ -277,7 +277,7 @@
       }
     }
     function moveHint(delta){if(!hintPages.length)return;hintPage=(hintPage+delta+hintPages.length)%hintPages.length;paint();schedulePages();}
-    const receiver=createLensReceiver({token,diagnostic,onChange(state){
+    const receiver=createLensReceiver({token,preview:options.preview===true,diagnostic,onChange(state){
       lastState=state;
       const cue=formatCue(state.hint);
       const key=cue?(state.hintId?'id:'+state.hintId:'text:'+cue):'';
@@ -383,22 +383,23 @@
   function mount(){
     const query=new URLSearchParams(location.search);if(query.get('static')==='1')return;
     const hash=new URLSearchParams(location.hash.slice(1));
-    if(hash.has('view')||query.get('clientRole')!=='test')return mountLens(hash.get('view')||'');
-    const diagnostic=(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
+    const preview=hash.get('preview')==='1'||query.get('preview')==='1';
+    if(hash.has('view')||query.get('clientRole')!=='test')return mountLens(hash.get('view')||'',{preview});
+    const diagnostic=preview?()=>{}:(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
     const channel=query.get('clientRole')==='test'?(query.get('channel')||'test-'+createClientId(window)):null;
     const card=createPresentation({onChange(view){
       document.getElementById('transcript').textContent=receiver?.state.caption||receiver?.state.hint?view.text:'';
       const hint=document.getElementById('hint');hint.textContent='';hint.hidden=true;
     }});
-    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:window.NovaFocus.receiptSender(window),diagnostic}):null;
+    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:preview?()=>{}:window.NovaFocus.receiptSender(window),diagnostic}):null;
     let acked='',receiver;
-    receiver=createReceiver({channel,diagnostic,onChange(s){
+    receiver=createReceiver({channel,preview,diagnostic,onChange(s){
       const active=focus?.update(s.focus,s.connection==='CONNECTED'&&s.enabled&&s.producerConnected);
       document.getElementById('transcript').hidden=!!active;
       if(!active)card.update(s);
       // This ACK reports a DOM update, not optical visibility on physical glasses.
       const key=s.serverId+':'+s.eventId;
-      if(s.connection==='CONNECTED'&&key!==acked&&!document.hidden)(typeof requestAnimationFrame==='function'?requestAnimationFrame:fn=>setTimeout(fn,16))(()=>{
+      if(!preview&&s.connection==='CONNECTED'&&key!==acked&&!document.hidden)(typeof requestAnimationFrame==='function'?requestAnimationFrame:fn=>setTimeout(fn,16))(()=>{
         if(!document.hidden&&key===receiver.state.serverId+':'+receiver.state.eventId){acked=key;void receiver.acknowledge(s.eventId);}
       });
     }});

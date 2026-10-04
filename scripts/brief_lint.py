@@ -51,6 +51,12 @@ SKILL_LINE_RE = re.compile(r"^\s*@[\w-]+(\s+@[\w-]+)*\s*$")
 SKILL_PATH_RE = re.compile(r"\.agents[\\/]skills[\\/]([\w-]+)[\\/]SKILL\.md")
 DEVIN_BRIEF_RE = re.compile(r"devin", re.IGNORECASE)
 
+# source_edit_session.ps1 -Action 검사: 허용값은 ps1의 ValidateSet에서 읽는다(하드코딩 금지).
+LEASE_PS1 = Path(__file__).resolve().parents[1] / "__patch_drop__" / "source_edit_session.ps1"
+LEASE_ACTION_LINE_RE = re.compile(r"source_edit_session[^\n]*-Action\s+['\"]?(?P<action>[A-Za-z][A-Za-z-]*)", re.IGNORECASE)
+VALIDATESET_RE = re.compile(
+    r"ValidateSet\((?P<set>[^)]*)\)\][^\n]*\r?\n\s*\[string\]\$Action", re.IGNORECASE)
+
 SECRET_PATTERNS = tuple(
     (f"secret-value-{idx}", pattern) for idx, pattern in enumerate(_SECRET_VALUE_RES, 1)
 )
@@ -219,6 +225,38 @@ def lint_text(text: str, *, name: str = "<stdin>") -> dict:
             [ln for ln, _ in secret_hits],
         ))
 
+    # 10. source_edit_session.ps1 -Action 값이 ValidateSet 밖이면 FAIL
+    action_lines = [
+        (idx, m.group("action"))
+        for idx, line in enumerate(lines, 1)
+        for m in [LEASE_ACTION_LINE_RE.search(line)]
+        if m
+    ]
+    if action_lines:
+        allowed: set[str] | None = None
+        try:
+            ps1 = LEASE_PS1.read_text(encoding="utf-8-sig", errors="replace")
+            vm = VALIDATESET_RE.search(ps1)
+            if vm:
+                allowed = set(re.findall(r"'([^']+)'", vm.group("set")))
+        except OSError:
+            allowed = None
+        if allowed is None:
+            findings.append(_finding(
+                "lease-actionset-unreadable", "WARN",
+                "source_edit_session.ps1의 -Action ValidateSet을 읽지 못해 값 검사를 건너뛰었다.",
+                [ln for ln, _ in action_lines],
+            ))
+        else:
+            bad = [(ln, a) for ln, a in action_lines if a.lower() not in allowed]
+            if bad:
+                findings.append(_finding(
+                    "lease-action-invalid", "FAIL",
+                    "source_edit_session.ps1 -Action 허용값 밖: "
+                    f"{', '.join(sorted({a for _, a in bad}))}. 허용: {', '.join(sorted(allowed))}",
+                    [ln for ln, _ in bad],
+                ))
+
     severity_rank = {"PASS": 0, "WARN": 1, "FAIL": 2}
     worst = max((severity_rank[f["severity"]] for f in findings), default=0)
     verdict = {0: "PASS", 1: "WARN", 2: "FAIL"}[worst]
@@ -230,7 +268,7 @@ def lint_text(text: str, *, name: str = "<stdin>") -> dict:
         "summary": {
             "fail": sum(1 for f in findings if f["severity"] == "FAIL"),
             "warn": sum(1 for f in findings if f["severity"] == "WARN"),
-            "checks": 9,
+            "checks": 10,
         },
         "packages": sorted(packages),
         "findings": findings,

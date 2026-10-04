@@ -1,0 +1,72 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "ef9bcb16063adbc53a2bd9c7ea7141e0a5a2eacf1e437db0548059642ac57151",
+                        "path":  "scripts/agent_signal_digest.py"
+                    },
+                    {
+                        "sha256":  "246573f8af5b0d5d91573e7232c0802586a9713bef956780c66f996676b88b0f",
+                        "path":  ".agents/skills-intent-index.yaml"
+                    },
+                    {
+                        "sha256":  "f3de73c62ea31a30bae903cbea991d80bb8bd0d61979d97577bac1dee1584523",
+                        "path":  "scripts/fixtures/skill_routing_cases.json"
+                    },
+                    {
+                        "sha256":  "639e3d81cb82f82a2d2b42aa7e6dde5f2de0cb4b53931122e1c068e490cb06f7",
+                        "path":  "AGENTS.md"
+                    },
+                    {
+                        "sha256":  "cfc033bd14d4f63b50031d95aab413b2e0de25bd98998cbb50c1b1fcf386f498",
+                        "path":  "agent-prompts/codex_global_windows_personal_instructions.md"
+                    },
+                    {
+                        "sha256":  "1370ab8f8c7b27197ac8412ea68a8fb57487eb9792f1104455ff8dcc34c60e7b",
+                        "path":  ".windsurf/rules/demo1-hard-constraints.md"
+                    },
+                    {
+                        "sha256":  "6b9c08de1350958ea5787a9d86e66c800fb431ab48a0afd4114289441ead2a1e",
+                        "path":  ".windsurf/rules/demo1-default-target-main-chat.md"
+                    },
+                    {
+                        "sha256":  "1f06d951d53e61f5d9eb4233efc41c142b63665eeeea7f570f01bcce1f3cdb3f",
+                        "path":  ".windsurf/rules/demo1-cwd-powershell51.md"
+                    },
+                    {
+                        "sha256":  "c30104d58e57e9dfaac0748d85406d8b75f9d569de3c85928d9315ee9318b39b",
+                        "path":  ".windsurf/rules/demo1-conditional-local-git.md"
+                    },
+                    {
+                        "sha256":  "31684bd013cb8bfb46c414dac0ef7fa56139ec12cbac173ae1c6060c456c29b8",
+                        "path":  ".windsurf/rules/demo1-session-ownership.md"
+                    },
+                    {
+                        "sha256":  "5883545502bbb927238bbb0e548264d7606e8b330c8694072d8a8484a1176ec7",
+                        "path":  ".windsurf/rules/demo1-settings-routing-guard.md"
+                    },
+                    {
+                        "sha256":  "e78128d64e41cca13e9cb95c746c45e93b8bfb5fd0dcfd116ece4938a937ebcf",
+                        "path":  ".windsurf/rules/demo1-settings-routing-scaffold.md"
+                    },
+                    {
+                        "sha256":  "72c1e55a0ff64099ad83bfb81cc947a9677355173fa4b84aa820da51c952c5ee",
+                        "path":  ".windsurf/rules/demo1-gpu-power-fallback.md"
+                    },
+                    {
+                        "sha256":  "c086f8c9755b92a7c69eb57bdd1272b40d0bfb7c7deb7111846334bcd1a22cd1",
+                        "path":  ".windsurf/rules/demo1-cloud-zip-answers.md"
+                    },
+                    {
+                        "sha256":  "dc57d0962dbc9341ace88958497d4b5f38ba288c3fced8fe0963145dabc24dfe",
+                        "path":  ".windsurf/rules/meta-rayban-display-runtime.md"
+                    },
+                    {
+                        "sha256":  "5c7ac61d6b84a4f2c954f64162b8aaf685fe5f9bb56fc0c600e6b22445994488",
+                        "path":  "docs/agents-rules/DEMO1-CODEX-SELFASK-TRIAD.md"
+                    },
+                    {
+                        "sha256":  "1dc99ad859fc0bc6ae59d3780d5712bf9b6daad0fe72ace3ca98bacf55cbfe1b",
+                        "path":  "docs/agents-rules/DEMO1-TRIAD-DELIBERATION.md"
+                    }
+                ]
+}

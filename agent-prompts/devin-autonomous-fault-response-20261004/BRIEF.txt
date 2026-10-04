@@ -1,0 +1,116 @@
+[ANTI-STOP] 읽고 멈추지 마세요. WP1부터 WP4까지 순서대로 실행하고 자율 완료 보고를 제출합니다.
+[DEVIN 지시서] Meta Display·RAG·세팅창 런타임 결함 신호 자율 반응 및 복구 파이프라인 — 2026-10-04 13:50 KST
+.agents/skills/demo1-rag-resilience-observability/SKILL.md
+파일 ID: PASTE_DEVIN_AUTONOMOUS_FAULT_RESPONSE_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+Meta Ray-Ban Display, RAG/LLM /chat, 세팅창의 런타임 오류·신호(로그, 트레이스, 락, 타임아웃)를 능동 수집·분류하고 자율 복구 및 에이전트 인시던트 신호(devin-signal)로 승격하는 감시·치유 파이프라인을 구축한다.
+
+# 1. 사실 (2026-10-04 13:46~13:50 KST 읽기 전용 확인)
+- Display 런타임: scripts/meta_display_db_export.py(298FCC6D2BB5)가 있으나, H2 DB lock(exit 3) 및 cueHint 지연 시 에이전트 자동 반응 없음.
+- RAG/Chat 런타임: var/debug/chat-session-traces/*.json, scripts/chat_session_debug_export.py(2A1B26433755)가 있으나, zeroHit, 429, SSE 단절 시 자동 복구/신호 연결 부재.
+- 세팅 런타임: configs/api-routing.yaml(4546F0F5F615) 설정 오류 시 에이전트용 자율 설정 진단 리포트 미생성.
+- 신호 인프라: scripts/orchestra_signal.py(A81D85CE0049), data/agent-handoff/orchestra/(awx.orchestra-signal.v1)가 있으나 런타임 결함 시그널 자동 발행 하베스터 부재.
+- lease: codex-fold-lens-preview-c88cf8cb가 UI 소스 점유 중이므로 제품 Java/HTML 수정 없이 런타임 진단·신호·복구 스크립트로 완결.
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용 (git push/pull/add -A/commit 금지, remote 추가 금지, PROTO_OPEN 유지, 비밀값 노출 금지, 유료 호출 0회, Java Gradle 빌드는 NOT_RUN).
+- lease 준수: 소스/스크립트 생성 시 python -B scripts/agent_scope_lease.py check/claim 사용.
+- 패키지 설치 금지: pip/npm 추가 없이 기존 Python 3 stdlib 및 repo 도구만 사용.
+
+# 3. 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| scripts/orchestra_signal.py | A81D85CE0049 | - | 읽기 전용 (참조) |
+| scripts/agent_signal_digest.py | EF9BCB16063A | - | 읽기 전용 (참조) |
+| scripts/chat_session_debug_export.py | 2A1B26433755 | - | 읽기 전용 (참조) |
+| scripts/meta_display_db_export.py | 298FCC6D2BB5 | - | 읽기 전용 (참조) |
+| configs/api-routing.yaml | 4546F0F5F615 | - | 읽기 전용 (참조) |
+| docs/PRIMARY_SURFACE.md | F693B5E87AC3 | - | 읽기 전용 (참조) |
+| scripts/runtime_fault_harvester.py | 신규생성예정 | - | 생성 및 실행 |
+| scripts/agent_auto_remediation.py | 신규생성예정 | - | 생성 및 실행 |
+| scripts/test_runtime_fault_recovery.py | 신규생성예정 | - | 생성 및 실행 |
+
+# 4. 작업 항목
+### WP1 [Devin] 3대 영역 런타임 결함 신호 수집기 (scripts/runtime_fault_harvester.py) 구현
+- 증거: scripts/orchestra_signal.py:34 KINDS devin-signal 및 var/debug/chat-session-traces/
+- RED:
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  python -B scripts/runtime_fault_harvester.py --scan; "exit=$LASTEXITCODE" (미생성 exit!=0)
+- 최소 구현:
+  1) Display: logs/meta-display.log 또는 lmsdb lock(exit 3), cueHint 지연 탐지.
+  2) Chat: var/debug/chat-session-traces/*.json에서 error, zeroHit=true, 429, timeout 감지.
+  3) Settings: configs/api-routing.yaml 구조 정합성 검사.
+  4) CLI: --scan, --domain {all,display,chat,settings}, --json, --emit-signal.
+- GREEN: python -B scripts/runtime_fault_harvester.py --scan --json; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 결함 로그 스캔 및 구조화된 JSON 진단 객체 생성.
+
+### WP2 [Devin] 자율 복구 및 진단 카드 발급기 (scripts/agent_auto_remediation.py) 구현
+- 증거: docs/PRIMARY_SURFACE.md 및 scripts/meta_display_db_export.py:1
+- RED: python -B scripts/agent_auto_remediation.py --dry-run; "exit=$LASTEXITCODE" (미생성 exit!=0)
+- 최소 구현:
+  1) H2 lock: meta_display_db_export.py 읽기 모드 대체 권고.
+  2) Chat 429/timeout: api-routing.yaml 내 백업 모델 스위칭 제안 카드 발급.
+  3) Display 침묵: sync-client 세션 재연결 안내.
+  4) 에이전트 인계: 자동 복구 불가 시 Codex/Devin 인시던트 카드(var/diagnostics/runtime-faults/remediation-card.md) 자동 생성.
+- GREEN: python -B scripts/agent_auto_remediation.py --dry-run; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: Mock 인시던트에 대해 가역 복구 조치 및 remediation card 생성.
+
+### WP3 [Devin] 오케스트레이션 및 에이전트 시그널 버스 자동 연동
+- 증거: scripts/orchestra_signal.py:7 STORE_PARTS data/agent-handoff/orchestra
+- RED: 시그널 등록 전 inbox 확인.
+- 최소 구현: harvester 결함 감지 시 data/agent-handoff/orchestra/inbox/devin/에 awx.orchestra-signal.v1 JSON 적재.
+- GREEN:
+  python -B scripts/runtime_fault_harvester.py --scan --emit-signal; "exit=$LASTEXITCODE"
+  python -B scripts/orchestra_signal.py list --agent devin; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 결함 이벤트가 오케스트라 버스에 devin-signal로 자동 발행.
+
+### WP4 [Devin] 결함 주입 및 자율 반응 E2E 단위 검증 (scripts/test_runtime_fault_recovery.py)
+- 증거: scripts/test_orchestra_signal.py:1
+- RED: python -B scripts/test_runtime_fault_recovery.py; "exit=$LASTEXITCODE" (미존재 exit!=0)
+- 최소 구현:
+  1) Mock 결함 주입: 가짜 chat trace(429/zeroHit), 가짜 display 로그 주입.
+  2) harvester 100% 탐지 및 심각도 분류 assert.
+  3) auto_remediation 대응 카드 및 orchestra signal 생성 검증.
+- GREEN: python -B scripts/test_runtime_fault_recovery.py; "exit=$LASTEXITCODE" (exit=0, ALL PASS)
+- 완료 조건: 3개 도메인 모의 결함 탐지 및 복구 신호 단위 테스트 전원 통과.
+
+# 5. HOLD 조건
+- data/agent-handoff/orchestra/ 쓰기 불가 또는 잠김.
+- 기존 scripts/orchestra_signal.py 검증 실패 시.
+
+# 6. ASK_ONCE
+- Q-1: 결함 감지 시 자동 복구 명령을 즉시 실행할지, 안전 카드 발행 후 승인 모드로 할지?
+  - (a) 권장: 기본은 안전 카드 발행 및 신호 적재(dry-run), --apply 옵션 시에만 가역 조치 실행.
+  - (b) 비권장: 무조건 즉시 자동 실행.
+
+# 7. 절대 금지
+- 제품 Java 소스(main/java/**) 및 UI(static/**) 직접 변경 금지.
+- git commit, push, pull, add -A, reset, checkout, clean 및 remote 추가 절대 금지.
+- PROTO_OPEN 보안 규칙 훼손 금지.
+- 실제 유료 외부 LLM/검색 API 호출 금지 ($0 dry-run).
+- 비밀값/토큰 출력 및 파일 저장 금지.
+
+# 8. Acceptance (완료 기준)
+- WP1: python -B scripts/runtime_fault_harvester.py --scan --json 실행 시 exit 0 및 JSON 진단 보고.
+- WP2: python -B scripts/agent_auto_remediation.py --dry-run 실행 시 exit 0 및 복구 가이드 정상 출력.
+- WP3: python -B scripts/runtime_fault_harvester.py --scan --emit-signal 후 data/agent-handoff/orchestra/inbox/devin/에 유효 시그널 적재.
+- WP4: python -B scripts/test_runtime_fault_recovery.py 실행 시 exit 0 (ALL PASS).
+
+# 9. 보고 형식
+외부 API: 호출 0회 ($0)
+종료 상태: DONE_OFFLINE
+WP 결과:
+- WP1: PASS (scripts/runtime_fault_harvester.py 신규)
+- WP2: PASS (scripts/agent_auto_remediation.py 신규)
+- WP3: PASS (data/agent-handoff/orchestra 연동 검증)
+- WP4: PASS (scripts/test_runtime_fault_recovery.py PASS)
+검증 명령 결과:
+- python -B scripts/test_runtime_fault_recovery.py; "exit=0"
+산출물:
+- scripts/runtime_fault_harvester.py
+- scripts/agent_auto_remediation.py
+- scripts/test_runtime_fault_recovery.py
+
+[ANTI-STOP] 지시서의 모든 WP를 순서대로 완료한 후 보고 형식에 맞춰 종료 보고를 제출하세요.

@@ -216,11 +216,18 @@ class ScopedBlockerTests(unittest.TestCase):
             row = self.contract(f'Test-AwxGitWriterApplies -CommandLine {ps_quote(disabled_command)} -ProjectRoot {ps_quote(self.root)} | ConvertTo-Json')
             self.assertFalse(row, disabled)
 
-    def test_ambiguous_git_writer_holds_actual_session_entrypoint(self):
-        result = self.ps(f"function Get-CimInstance {{ [pscustomobject]@{{CommandLine='git.exe checkout topic'}} }}; & {ps_quote(SESSION)} -Root {ps_quote(self.root)} -Action begin -Topic fixture -OwnerId fixture-owner -TargetManifest {ps_quote(self.manifest)}; exit $LASTEXITCODE")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('git-operation-active', result.stdout)
-        self.assertFalse((self.root / '__patch_drop__/source-edit-locks/fixture.lock').exists())
+    def test_unlocated_git_writer_allows_scoped_source_entrypoint(self):
+        prefix = "function Get-CimInstance { [pscustomobject]@{CommandLine='git.exe checkout topic'} }; "
+        result = self.ps(prefix + f"& {ps_quote(SESSION)} -Root {ps_quote(self.root)} -Action begin -Topic fixture -OwnerId fixture-owner -TargetManifest {ps_quote(self.manifest)}; exit $LASTEXITCODE")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        lease = self.root / '__patch_drop__/source-edit-locks/fixture.lock/lease.json'
+        fingerprint = hashlib.sha256(lease.read_bytes()).hexdigest()
+        result = self.ps(prefix + f"& {ps_quote(SESSION)} -Root {ps_quote(self.root)} -Action verify -Topic fixture -OwnerId fixture-owner -TargetManifest {ps_quote(self.manifest)} -LeaseFingerprint {fingerprint}; exit $LASTEXITCODE")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / 'target.txt').read_text(), 'user preimage\n')
+        result = self.ps(prefix + f"& {ps_quote(SESSION)} -Root {ps_quote(self.root)} -Action end -Topic fixture -OwnerId fixture-owner; exit $LASTEXITCODE")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(lease.exists())
 
     def test_exited_git_process_with_empty_metadata_is_rechecked(self):
         code = f"function Get-CimInstance {{ param($ClassName,$Filter); if ($Filter -notmatch 'ProcessId=') {{ [pscustomobject]@{{ProcessId=1234;CommandLine=$null}} }} }}; Get-AwxGitOperationEvidence -ProjectRoot {ps_quote(self.root)} | ConvertTo-Json"
@@ -228,11 +235,14 @@ class ScopedBlockerTests(unittest.TestCase):
         self.assertTrue(row['writerCheckAvailable'])
         self.assertEqual(row['writerCount'], 0)
 
-    def test_live_git_process_with_unknown_metadata_remains_a_writer(self):
-        code = f"function Get-CimInstance {{ param($ClassName,$Filter); [pscustomobject]@{{ProcessId=1234;CommandLine=$null}} }}; Get-AwxGitOperationEvidence -ProjectRoot {ps_quote(self.root)} | ConvertTo-Json"
+    def test_unknown_process_metadata_holds_index_but_not_scoped_source(self):
+        code = f"function Get-CimInstance {{ param($ClassName,$Filter); [pscustomobject]@{{ProcessId=1234;CommandLine=$null}} }}; $e=Get-AwxGitOperationEvidence -ProjectRoot {ps_quote(self.root)}; @{{evidence=$e;edit=(Get-AwxScopedOperationDecision -Operation worktree-edit -GitEvidence $e -TargetsVerified $true -SourceLeaseChecked $true);index=(Get-AwxScopedOperationDecision -Operation index-write -GitEvidence $e)}} | ConvertTo-Json -Depth 7"
         row = self.contract(code)
-        self.assertTrue(row['writerCheckAvailable'])
-        self.assertEqual(row['writerCount'], 1)
+        self.assertFalse(row['evidence']['writerCheckAvailable'])
+        self.assertEqual(row['evidence']['writerCount'], 0)
+        self.assertEqual(row['evidence']['unknownWriterCount'], 1)
+        self.assertTrue(row['edit']['allowed'])
+        self.assertFalse(row['index']['allowed'])
 
     def test_changed_preimage_holds_scoped_lease(self):
         (self.root / "target.txt").write_text("concurrent writer\n")
@@ -321,7 +331,8 @@ class ScopedBlockerTests(unittest.TestCase):
         verify = f"& {ps_quote(SESSION)} -Root {ps_quote(self.root)} -Action verify -Topic fixture -OwnerId fixture-owner -TargetManifest {ps_quote(self.manifest)} -LeaseFingerprint {fingerprint}; exit $LASTEXITCODE"
         result = self.ps("function Get-CimInstance { [pscustomobject]@{CommandLine='git.exe status --short'} }; " + verify)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        result = self.ps("function Get-CimInstance { [pscustomobject]@{CommandLine='git.exe status --short'}; [pscustomobject]@{CommandLine='git.exe checkout topic'} }; " + verify)
+        local_writer = ps_quote(f'git.exe -C "{self.root}" checkout topic')
+        result = self.ps(f"function Get-CimInstance {{ [pscustomobject]@{{CommandLine='git.exe status --short'}}; [pscustomobject]@{{CommandLine={local_writer}}} }}; " + verify)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('git-operation-active', result.stdout)
         self.assertEqual((self.root / '.git/index.lock').read_bytes(), b'')
@@ -349,7 +360,8 @@ class ScopedBlockerTests(unittest.TestCase):
         self.assertEqual(row['evidence']['worktreeReadOnlyCount'], 1)
         self.assertTrue(row['edit']['allowed'])
         self.assertFalse(row['index']['allowed'], 'status may still refresh the index')
-        mixed = "function Get-CimInstance { [pscustomobject]@{CommandLine='git.exe status --short'}; [pscustomobject]@{CommandLine='git.exe checkout topic'} }; "
+        local_writer = ps_quote(f'git.exe -C "{self.root}" checkout topic')
+        mixed = f"function Get-CimInstance {{ [pscustomobject]@{{CommandLine='git.exe status --short'}}; [pscustomobject]@{{CommandLine={local_writer}}} }}; "
         row = self.contract(mixed + code)
         self.assertEqual(row['evidence']['writerCount'], 1)
         self.assertFalse(row['edit']['allowed'])

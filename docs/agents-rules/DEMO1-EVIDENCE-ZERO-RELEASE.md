@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L154-L159 sha256=30c8ce1b6cef2850be16ac761a273fbc6aad7b13290fd76992d41dc89fdcff5a movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L160-L165 sha256=30c8ce1b6cef2850be16ac761a273fbc6aad7b13290fd76992d41dc89fdcff5a movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-EVIDENCE-ZERO-RELEASE -->
 ## Answer release: zero citable evidence = publish, not HOLD
 - RAG ON이어도 **인용 가능 근거가 0개**이면 모델 최종 답변을 **보류하지 말고 공개**한다 — `evidenceReleaseRequired=false` 또는 일반/개념/대화 모드에서 근거 0은 정상 경로다 (`ChatWorkflow.applyEvidenceReleasePolicy`, `METADATA_INCOMPLETE`/`CONFIRMED_EMPTY`).

@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L237-L244 sha256=8572dbd51b97582f5473221b7ece991bf8e750f062d605d581368018baae4f48 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L243-L250 sha256=8572dbd51b97582f5473221b7ece991bf8e750f062d605d581368018baae4f48 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-LEASE-LIFECYCLE -->
 ## Source-edit lease lifecycle (begin → work → end, no leftovers)
 - One lease = one cycle: `begin`/scope `claim` → edit with `verify` + `heartbeat` at progress boundaries → `end`/scope `done`. Release is mandatory on **every** exit path — goal complete/STOP (`$demo1-goal-complete-stop`), deferred/BLOCKED abandon (`abort`), idle/timeout, or session cancel — independent of commit success. "Later" is not allowed; wire release into the caller's finally/session-end path.

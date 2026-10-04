@@ -161,5 +161,103 @@ class NdjsonTest(unittest.TestCase):
             self.assertTrue(any("promptBuild" in e["detail"] for e in requests["hash:req1"].events))
 
 
+import contextlib
+import io
+from unittest.mock import patch
+
+tool = MOD
+
+
+class TraceScanTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+
+    def record(self, rid, **fields):
+        return {"schema": "awx.chat-session-trace.v1", "recordId": rid, **fields}
+
+    def write(self, text):
+        path = self.root / "trace.json"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def scan(self, requests=None, want=None, since=None):
+        requests = {} if requests is None else requests
+        stats = tool.scan_traces(self.root, since, None, requests, want)
+        return requests, stats
+
+    def test_jsonl_records_are_not_silently_discarded(self):
+        self.write("\n".join(json.dumps(self.record(r)) for r in ("run-a", "run-b")))
+        requests, _ = self.scan()
+        self.assertEqual(2, len(requests), "Both schema-bearing JSONL records must be collected")
+
+    def test_pretty_single_json_keeps_existing_projection(self):
+        self.write(json.dumps(self.record("one", effectiveModel="fixture-model", fallbackCount=0), indent=2))
+        requests, _ = self.scan()
+        self.assertEqual(1, len(requests))
+        evidence = next(iter(requests.values()))
+        self.assertEqual("fixture-model", evidence.provider_model)
+        self.assertEqual("no", evidence.fallback_attempted)
+
+    def test_malformed_lines_and_non_trace_values_are_counted_without_raw_text(self):
+        canary = "synthetic-private-query-canary"
+        self.write("\n".join((json.dumps(self.record("good")), canary, "[]", "{}", "")))
+        requests, stats = self.scan()
+        self.assertEqual(1, len(requests))
+        self.assertEqual(3, stats["traceSkipped"])
+        self.assertEqual({"malformed_json_line": 1, "non_trace_record": 2},
+                         stats["traceSkippedByReason"])
+        self.assertNotIn(canary, json.dumps(stats))
+
+    def test_unreadable_file_is_classified(self):
+        self.write("{}")
+        with patch.object(Path, "read_text", side_effect=OSError("synthetic-secret-path")):
+            requests, stats = self.scan()
+        self.assertEqual({}, requests)
+        self.assertEqual(1, stats["traceSkipped"])
+        self.assertEqual({"unreadable_file": 1}, stats["traceSkippedByReason"])
+
+    def test_jsonl_correlates_run_to_filtered_request(self):
+        self.write("\n".join(json.dumps(self.record(r)) for r in ("matching-run", "other-run")))
+        request_id = tool._norm_rid("matching-request")
+        evidence = tool.RequestEvidence(request_id)
+        evidence.run_id = tool._norm_rid("matching-run")
+        requests, _ = self.scan({request_id: evidence}, request_id)
+        self.assertEqual([request_id], list(requests))
+        self.assertIs(evidence, requests[request_id])
+
+    def test_time_filter_excludes_valid_records_without_counting_them_as_broken(self):
+        self.write("\n".join(json.dumps(self.record(r, ts=t)) for r, t in (
+            ("old", "2026-10-03T00:00:00Z"), ("new", "2026-10-04T00:00:00Z"))))
+        requests, stats = self.scan(since=tool.parse_ts("2026-10-04T00:00:00Z"))
+        self.assertEqual(1, len(requests))
+        self.assertEqual(0, stats["traceSkipped"])
+
+    def test_cli_exports_skip_counts_and_classifications(self):
+        self.write(json.dumps(self.record("good")) + "\nbroken-line")
+        out = self.root / "result.txt"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, tool.main(["--trace-dir", str(self.root), "--out", str(out)]))
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual(1, doc["requestCount"])
+        self.assertEqual(1, doc["traceSkipped"])
+        self.assertIn("traceSkipped=1", stdout.getvalue())
+
+    def test_empty_file_is_classified_once(self):
+        self.write("  \n\n")
+        requests, stats = self.scan()
+        self.assertEqual({}, requests)
+        self.assertEqual(1, stats["traceSkipped"])
+        self.assertEqual({"empty_file": 1}, stats["traceSkippedByReason"])
+
+    def test_missing_directory_has_zero_skip_counts(self):
+        requests = {}
+        stats = tool.scan_traces(self.root / "missing", None, None, requests, None)
+        self.assertEqual({}, requests)
+        self.assertEqual(0, stats["traceSkipped"])
+
+
 if __name__ == "__main__":
     unittest.main()

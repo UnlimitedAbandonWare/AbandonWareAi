@@ -76,6 +76,7 @@ echo [Start-Codex-CLI] cwd=%CD%
 echo [Start-Codex-CLI] exe=%CODEX%
 echo.
 
+if not "%AWX_CONTEXT_PREAMBLE%"=="0" powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\agent_context_preamble.ps1" -Agent codex
 call "%CODEX%" %CODEX_FLAGS% %*
 set "EXITCODE=%ERRORLEVEL%"
 

@@ -57,4 +57,20 @@ class CitationGateTest {
         assertEquals("DEGRADE", TraceStore.get("web.citation.gateStatus"));
         assertFalse(String.valueOf(TraceStore.getAll()).contains("private source"));
     }
+
+    @Test
+    void zeroSourcesWarnWithMissingEvidenceHintEvenWithoutLogOnly() {
+        CitationGate gate = new CitationGate(false);
+        assertEquals(CitationGate.GateDecision.WARN, gate.decide(List.of(), 1, 1.0d));
+        assertTrue(gate.ok(List.of(), 1, 1.0d));
+        assertEquals(0, TraceStore.get("guard.citation.sourceCount"));
+        var hint = java.util.Map.of("status", "근거 없음");
+        assertEquals(hint, TraceStore.get("guard.citation.hint"));
+        assertEquals(hint, com.example.lms.trace.SafeRedactor.diagnosticValue(
+                "guard.citation.hint", TraceStore.get("guard.citation.hint")));
+        String html = new com.example.lms.service.trace.TraceHtmlBuilder(null).buildSnapshotHtml(
+                "test-snapshot", null, null, null, null, "codex-test", "POST", "/api/chat/sync", 200, null,
+                java.util.Map.of("guard.citation.hint", hint), java.util.Map.of());
+        assertTrue(html.contains("근거 없음"));
+    }
 }

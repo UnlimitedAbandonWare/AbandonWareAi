@@ -42,7 +42,7 @@ def line_hash(text: str) -> str:
 
 def run_git(root: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [git_bin(), "-C", str(root), *args],
+        [git_bin(), "--no-optional-locks", "-C", str(root), *args],
         capture_output=True, text=True, encoding="utf-8", errors="replace")
 
 

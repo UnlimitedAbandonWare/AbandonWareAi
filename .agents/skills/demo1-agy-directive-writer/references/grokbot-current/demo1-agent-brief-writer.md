@@ -54,7 +54,7 @@ push · add -A · reset --hard/force-push · secrets 출력 · remote 추가·�
 
 ## Report
 <NAME>: DONE|PARTIAL|HOLD · FILES_TOUCHED · EVIDENCE_COMMANDS · NOT_RUN · HARD_STOP_CHECK
-SSOT: agent-prompts/<agent>-<topic>-<yyyymmdd>/PASTE_<AGENT>.txt
+SSOT: %USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt
 ```
 
 ## 3. Template B (long, WP)
@@ -67,11 +67,13 @@ Sections: `0) EXTEND/SUPERSEDE` (relation to earlier packets, handoff folder) �
 - Spend (agent work): codex_credits → external_paid_api → free_tier → local Ollama per `$demo1-agent-api-spend-guard` SSOT (`configs/agent-api-spend-guard.yaml`). Keep live API calls ≈≤25 per brief, with no retries on 401/403/429.
 - External API errors: root-cause them and put an "외부 API" line at the top of the report. A mock pass counts as NOT_RUN for live.
 - Vibe autonomy: reversible local steps go through Self-Ask (긍정/부정/반례 → 중립 심판) and run AUTO. Irreversible steps get ASK_ONCE with one question.
+- (R7b) Lease verbs: `__patch_drop__\source_edit_session.ps1 -Action` accepts only begin·end·status·verify·bind-scope·heartbeat·recover — no other verb exists. Overlap check `scripts/agent_scope_lease.py`, records `scripts/work_journal.py`.
+- (R20) The allowed-edit list is a budget: a small (≤3 files · ≤300 lines) reversible file needed by the cause chain may be AUTO-added when it is not forbidden and not under a foreign lease — journal `SCOPE_EXPAND: <file> <reason>`.
 - For Codex: never let the goal title be "목표 파일 읽기". Add `[ANTI-STOP] 읽기=intake, Done은 구현+검증 증거`. If the user wants full push-through, add an OVERRIDE table (what is released vs what stays OUT) and keep the hard stops.
 - For Devin skill lines: one deduplicated `@skill` line, only skills that exist under `.agents/skills`.
 
 ## 5. Deliver
-1. Save the brief as UTF-8 under `agent-prompts/<agent>-<topic>-<yyyymmdd>/`. If the user wants it, also save a copy as `%USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<date>.txt`. Writing to the user's PC needs local-tool approval.
+1. Save the brief as UTF-8 to `%USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt` — that one file is the deliverable; no `agent-prompts/<agent>-<topic>-<yyyymmdd>/BRIEF.txt` copy (retired 2026-10-03, R6). Writing to the user's PC needs local-tool approval.
 2. **Verify each file exists and report its size.** Never report a path you have not checked.
 3. Reply in chat:
    - `받는 이 | 파일 | 패킷 이름` table (when there is more than one recipient)

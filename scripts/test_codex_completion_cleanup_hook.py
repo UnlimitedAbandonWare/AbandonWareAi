@@ -1,9 +1,10 @@
-"""Real local completion dispatch; fixtures do not touch project artifacts."""
+"""Completion dispatch contract with a mocked native cleanup boundary."""
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 from test_codex_work_checkpoint import CP, decision
 
@@ -19,6 +20,32 @@ class CompletionCleanupHookTest(unittest.TestCase):
         CP.begin(self.root, self.run, ["docs/final.md"], decision())
         self.write("docs/final.md", b"verified final report")
         CP.seal(self.root, self.run)
+        self.deleted = set()
+        self.cleanup_hold = False
+        original_exists = Path.exists
+        self.addCleanup(patch.stopall)
+        patch.object(Path, "exists", autospec=True,
+                     side_effect=lambda path: path not in self.deleted and original_exists(path)).start()
+        self.native = patch.object(CP.subprocess, "run", side_effect=self.fake_cleanup).start()
+
+    def fake_cleanup(self, command, **_kwargs):
+        # Fixture receipts model the subprocess boundary. No helper, deletion,
+        # provider or process is executed, and no production contract is changed.
+        self.assertEqual(command[command.index("-Root") + 1], str(self.root))
+        self.assertIn("-Apply", command)
+        request = json.loads((self.root / self.run / "task-cleanup-request.json").read_bytes())
+        digest = command[command.index("-ExpectedRequestSha256") + 1]
+        receipt_path = self.run + "/cleanup/fixture-status.json"
+        self.write(receipt_path, json.dumps(dict(taskId=request["taskId"], taskStatus="completed",
+                                               request=dict(sha256=digest))).encode())
+        targets = [self.root / row["path"] for row in request["disposableArtifacts"]]
+        if not self.cleanup_hold:
+            self.deleted.update(targets)  # Virtual fixture state, no filesystem deletion.
+        output = dict(schemaVersion="awx.completed-task-cleanup.result.v1", requestSha256=digest,
+                      status="hold" if self.cleanup_hold else "complete", taskStatus="completed", stopWork=True,
+                      deletedCount=0 if self.cleanup_hold else len(targets), heldCount=len(targets) if self.cleanup_hold else 0,
+                      completionStatusRelativePath=receipt_path)
+        return SimpleNamespace(returncode=3 if self.cleanup_hold else 0, stdout=json.dumps(output).encode())
 
     def write(self, name, data):
         path = self.root / name
@@ -111,6 +138,7 @@ class CompletionCleanupHookTest(unittest.TestCase):
     def test_delete_lock_stops_task_but_retains_cleanup_work(self):
         self.request()
         target = self.root / self.run / "work/draft.tmp"
+        self.cleanup_hold = True
         with target.open("rb"):
             state = CP.finish(self.root, self.run, 0, "report-review")
         self.assertEqual("verified", state["status"])
@@ -127,6 +155,14 @@ class CompletionCleanupHookTest(unittest.TestCase):
         self.assertEqual("reconcile-cleanup-receipt-and-required-proof", state["nextAction"])
         self.assertNotEqual("completed", state.get("taskStatus"))
         self.assertTrue((self.root / self.run / "work/draft.tmp").exists())
+
+    def test_success_dispatch_uses_fixture_subprocess_without_real_delete(self):
+        self.request()
+        target = self.root / self.run / "work/draft.tmp"
+        state = CP.finish(self.root, self.run, 0, "fixture-only")
+        self.assertEqual("completed", state.get("taskStatus"))
+        self.native.assert_called_once()
+        self.assertEqual(b"draft", target.read_bytes())
 
 
 if __name__ == "__main__":

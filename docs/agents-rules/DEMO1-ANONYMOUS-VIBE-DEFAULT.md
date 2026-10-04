@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L20-L25 sha256=b9b5bffafc4b62a098f85877c09abc3da91600a25a4bedad349ca98adef4d020 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L21-L26 sha256=b9b5bffafc4b62a098f85877c09abc3da91600a25a4bedad349ca98adef4d020 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-ANONYMOUS-VIBE-DEFAULT -->
 ## Anonymous-first vibe coding
 - Default scope: immediate use/test of core features without login, signup, account provisioning, or role setup — no auth screens/middleware/user tables/role management/auth deps/forced sign-in redirects unless the user explicitly requests an identity-dependent feature; a starter, skill, checklist, or boilerplate is not that request.

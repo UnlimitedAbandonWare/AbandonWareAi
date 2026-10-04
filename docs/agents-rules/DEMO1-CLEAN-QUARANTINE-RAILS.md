@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L443-L448 sha256=5baa3adde049fccbd4bc874e11e23945b3dfcb1d4b448fda52ace42b8b5b5b9b movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L451-L456 sha256=5baa3adde049fccbd4bc874e11e23945b3dfcb1d4b448fda52ace42b8b5b5b9b movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-CLEAN-QUARANTINE-RAILS -->
 ## Clean-quarantine mining & vibe AUTO rails (2026-09-29)
 - Done/ASK 주장 전 필수 레일(위 Self-Ask 스킬의 CLI 미러): `scripts/agent_done_evidence_guard.py`(exit 2 = 근거 없음·인용 증거 경로 부재), `scripts/agent_vibe_auto_decision.py --action "..." --paths "a,b"`(exit 0=AUTO / 3=ASK_ONCE / 4=HOLD, foreign live lease 자동 감지).

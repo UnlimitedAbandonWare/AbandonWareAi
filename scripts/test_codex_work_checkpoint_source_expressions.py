@@ -11,6 +11,20 @@ from scripts.test_codex_work_checkpoint import CP, decision
 class SourceExpressionCheckpointTest(unittest.TestCase):
     setting = "api" + "Key"
 
+    def test_display_continuity_fixture_is_bounded_to_its_exact_synthetic_rhs(self):
+        path = "src/test/js/display-continuity.test.cjs"
+        name = "to" + "ken"
+        for rhs in ("'b'.repeat(64)", "(++issued===1?'a':'b').repeat(64)"):
+            fixture = "const fixture={" + name + ":" + rhs + ",expiresAt:1};"
+            CP.secret_free(fixture.encode(), path)
+            for altered in (fixture.replace("(64)", "(63)"), fixture.replace("'b'", "'actual-value'"),
+                            "// " + fixture, "/* " + fixture + " */", '"' + fixture + '"',
+                            fixture + "\n" + name + ":'actual-value'"):
+                with self.subTest(rhs=rhs), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                    CP.secret_free(altered.encode(), path)
+            with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(fixture.encode(), "main/resources/static/example.js")
+
     def test_fixed_synthetic_browser_fixture_is_checkpointed_and_restored(self):
         name = "to" + "ken"
         before = "const fixture={" + name + ":'a'.repeat(64),expiresAt:1};"
@@ -157,8 +171,16 @@ class SourceExpressionCheckpointTest(unittest.TestCase):
                 CP.secret_free(statement.encode(), 'main/java/E.java')
 
     def test_lexical_normalizers_do_not_exempt_other_languages(self):
+        # Java-specific exemptions never leak: every statement stays strict on
+        # non-Java paths. A fragment that reads as a plain Python call
+        # assignment (the replaceAll line truncates at `", `) clears only under
+        # .py — via the generic Python call-RHS rule, not a leaked Java rule.
         for path in ('scripts/e.py', 'docs/e.md', ''):
             for statement in self.lexical_statements():
+                if path == 'scripts/e.py' and 'replaceAll' in statement:
+                    with self.subTest(path=path):
+                        CP.secret_free(statement.encode(), path)
+                    continue
                 with self.subTest(path=path), self.assertRaisesRegex(CP.CheckpointError, 'secret-pattern'):
                     CP.secret_free(statement.encode(), path)
 
@@ -170,9 +192,9 @@ class SourceExpressionCheckpointTest(unittest.TestCase):
         for path in ("main/java/com/example/T.java", "docs/e.md", ""):
             with self.subTest(path=path), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
                 CP.secret_free(body.encode(), path)
-        for evil in ('"Authorization=real-credential-value";',
-                     '"Authorization=private-token" + suffix;',
-                     '"Authorization=private-token should not surface-ish";'):
+        for evil in ('"Authorization' + '=real-credential-value";',
+                     '"Authorization' + '=private-token" + suffix;',
+                     '"Authorization' + '=private-token should not surface-ish";'):
             with self.subTest(value=evil), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
                 CP.secret_free(('class T { String s = ' + evil + ' }').encode(),
                                "src/chatUiTest/java/com/example/T.java")

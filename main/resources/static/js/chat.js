@@ -6833,6 +6833,9 @@ async function streamChat(payload, loaderId, options = {}) {
   const previousStartedAt = Number(assistant?.dataset?.streamStartedAt);
   const streamStartedAt = payload?.attach === true && Number.isFinite(previousStartedAt)
     ? previousStartedAt : nowMs();
+  let lastTransportProgressAt = nowMs();
+  let transportHeadersSeen = false;
+  const transportIdleMs = () => Math.max(0, Math.round(nowMs() - lastTransportProgressAt));
   let firstAnswerSeen = payload?.attach === true && assistant?.dataset?.streamAnswerSeen === "true";
   let streamSseStarted = payload?.attach === true && assistant?.dataset?.streamSseStartMs != null;
   if (assistant?.dataset) {
@@ -6861,13 +6864,13 @@ async function streamChat(payload, loaderId, options = {}) {
     if (clientDeadlineTriggered) return;
     clientDeadlineTriggered = true;
     const safeElapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
-    void cancelActiveStream({
-      railReason: "client-deadline",
-      streamContext: `client-deadline client-wait:${safeElapsedMs}ms`,
-      coreReason: "client deadline"
+    updateOrchestrationSignalBar({
+      streamStatus: "attaching",
+      streamContext: `transport_detach client-wait:${safeElapsedMs}ms`
     });
+    setCoreStatus("streaming", "reconnecting exact run");
     clientDeadlineReject?.(streamClientDeadlineError(safeElapsedMs));
-    // Exact server cancellation can wait for identity; the local transport cannot.
+    // Preserve the run identity for the existing transport-loss recovery handler.
     currentStreamController.abort();
   }
   let streamHeartbeatTimer = null;
@@ -6892,10 +6895,10 @@ async function streamChat(payload, loaderId, options = {}) {
       markAssistantClientWait(assistant, elapsedMs);
       setCoreStatus("streaming", streamHeartbeatDetail);
     }
-    // Fail fast without a validated SSE start; live streams keep the original total deadline.
-    const effectiveDeadlineMs = firstAnswerSeen || streamSseStarted
+    // Each transport keeps a positive header wait and a byte-idle limit.
+    const effectiveDeadlineMs = transportHeadersSeen
       ? clientDeadlineMs : Math.min(5000, clientDeadlineMs);
-    if (clientDeadlineMs != null && elapsedMs >= effectiveDeadlineMs) {
+    if (clientDeadlineMs != null && transportIdleMs() >= effectiveDeadlineMs) {
       triggerStreamClientDeadline(elapsedMs);
     }
   }, 250);
@@ -6940,11 +6943,13 @@ async function streamChat(payload, loaderId, options = {}) {
     }
     applyChatResponseHeaders(response, { allowSessionIdentity: false });
     if (streamAbortRequested()) throw streamAbortError();
-    if (!streamSseStarted && !firstAnswerSeen && clientDeadlineMs != null
-      && streamWaitMs() >= Math.min(5000, clientDeadlineMs)) {
+    if (!transportHeadersSeen && clientDeadlineMs != null
+      && transportIdleMs() >= Math.min(5000, clientDeadlineMs)) {
       triggerStreamClientDeadline(streamWaitMs());
       throw streamClientDeadlineError(streamWaitMs());
     }
+    transportHeadersSeen = true;
+    lastTransportProgressAt = nowMs();
     streamSseStarted = true;
     if (assistant?.dataset) {
       if (assistant.dataset.streamSseStartMs == null) assistant.dataset.streamSseStartMs = String(streamWaitMs());
@@ -7026,6 +7031,7 @@ async function streamChat(payload, loaderId, options = {}) {
         : await Promise.race([reader.read(), clientDeadlinePromise]);
       if (streamAbortRequested()) throw streamAbortError();
       if (next.done) break;
+      if (next.value?.byteLength > 0) lastTransportProgressAt = nowMs();
       parser.push(next.value);
       if (terminalFailureMeta) throw chatFailureError(terminalFailureMeta);
       if (terminalEventSeen) break;

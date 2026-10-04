@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L246-L253 sha256=b69c67a11b0333bc6d68cfc3869859c05c4276105f14485a1e37008430b6c306 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L252-L259 sha256=b69c67a11b0333bc6d68cfc3869859c05c4276105f14485a1e37008430b6c306 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-DEVIN-MULTI-SESSION -->
 ## Multiple Concurrent Devin Sessions
 The user routinely runs **several Devin sessions in parallel against this checkout**. Session isolation rules govern only isolation, collision handling, and close-out hygiene; they never widen default scopes or relax ownership, preimage, lease, or verification gates.

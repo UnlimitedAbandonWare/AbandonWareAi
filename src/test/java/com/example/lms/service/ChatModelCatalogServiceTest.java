@@ -14,6 +14,14 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
 class ChatModelCatalogServiceTest {
+    @Test void preservesPolicyAndRouteReasonsInJsonWithLegacyPrimaryReason() {
+        var row = remoteCatalog("", false, "route_disabled").resolve("llmrouter.api3").orElseThrow();
+        var json = new ObjectMapper().valueToTree(row);
+        assertThat(row.reason()).isEqualTo("remote_selection_disabled");
+        assertThat(json.path("reasons").toString())
+                .isEqualTo("[\"remote_selection_disabled\",\"route_disabled\"]");
+    }
+
     @Test void apiFirstCatalogueDesignatesEligibleCloudDefaultWithoutOpeningRejectedRoutes() {
         var catalog=remoteCatalog("",true,"");
         org.springframework.test.util.ReflectionTestUtils.setField(catalog,"apiFirstEnabled",true);

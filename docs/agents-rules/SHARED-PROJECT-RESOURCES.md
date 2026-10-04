@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L41-L46 sha256=43f6722c454033f7b3c045ac4039dfbf1c7b25fd75a537a3748fb2b3a620517b movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L42-L47 sha256=43f6722c454033f7b3c045ac4039dfbf1c7b25fd75a537a3748fb2b3a620517b movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN SHARED-PROJECT-RESOURCES -->
 ## Project resources at task entry
 - At task entry run `python -B scripts/awx_device_bus.py start` from this device's verified root; inspect the registry reference and `inbox`. Runtime children load shared values through `awx_host_runtime.py`; existing processes require an owned restart.

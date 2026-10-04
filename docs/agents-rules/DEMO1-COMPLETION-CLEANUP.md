@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L315-L319 sha256=313fb5dabee80a1cadf9933d80f19ee952a26997d929094e18d7702adff3e636 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L321-L325 sha256=313fb5dabee80a1cadf9933d80f19ee952a26997d929094e18d7702adff3e636 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-COMPLETION-CLEANUP -->
 ### Automatic completion and cleanup
 - At the final verified boundary of a patch or report-only task, automatically use `.agents/skills/demo1-completed-directive-cleanup/SKILL.md`. The 2026-09-15 authorization covers stopping completed work and deleting its proven surplus artifacts; do not ask for another routine cleanup confirmation.

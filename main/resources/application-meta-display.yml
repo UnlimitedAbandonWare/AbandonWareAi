@@ -47,6 +47,8 @@ conversate:
     max-output-tokens: ${CONVERSATE_CUE_MAX_OUTPUT_TOKENS:1536}
     max-request-usd: ${CONVERSATE_MAX_REQUEST_USD:0.50}
     local-support-enabled: true
+    # Operator preference tier: eligible candidates from this provider sort first.
+    preferred-provider: ${CONVERSATE_CUE_PREFERRED_PROVIDER:gemini}
     # Process-local spending ceilings. A fresh, externally verified snapshot may
     # supply verified-balance-usd / verified-requests-remaining; absence is unknown.
     accounts:
@@ -129,6 +131,24 @@ conversate:
     phone-test-enabled: ${CONVERSATE_DISPLAY_PHONE_TEST_ENABLED:true}
     audio:
       enabled: ${CONVERSATE_DISPLAY_AUDIO_ENABLED:true}
+  focus:
+    # Nova Focus (노바 wake-word). Owners without stored settings start armed on
+    # this profile; an explicit per-owner toggle still wins over this default.
+    default-enabled: ${CONVERSATE_FOCUS_DEFAULT_ENABLED:true}
+    # Evidence-sensitive web policy: aggressive AUTO infers search for
+    # knowledge/recency questions; arithmetic/session-context/casual stay local.
+    web-aggressive-enabled: ${CONVERSATE_FOCUS_WEB_AGGRESSIVE:true}
+    unknown-web-enabled: true
+    unknown-web-scoped-enabled: ${CONVERSATE_FOCUS_UNKNOWN_WEB_SCOPED:true}
+    # Lens-facing web answers are compacted to this code-point budget.
+    lens-answer-chars: ${CONVERSATE_FOCUS_LENS_ANSWER_CHARS:280}
+    lens-source-suffix: ${CONVERSATE_FOCUS_LENS_SOURCE_SUFFIX:true}
+    # Soft model preference for web-grounded focus answers. Must be an existing
+    # selectable llmrouter route; the request stays AUTO when it is not.
+    web-model: ${CONVERSATE_FOCUS_WEB_MODEL:llmrouter.gemini-pro}
+    # Soft default for AUTO-routing focus answers: must resolve to an existing
+    # selectable catalog route, otherwise the local default keeps its place.
+    default-model: ${CONVERSATE_FOCUS_DEFAULT_MODEL:llmrouter.gemini-pro}
 demo:
   interview:
     # Conversate uses the existing authenticated owner and generation boundary.
@@ -168,6 +188,12 @@ demo:
 jev:
   gateway:
     zero-data-retention: ${DEMO_JEV_ZDR:false}
+
+# Focus web answers may select Gemini Flash through the existing route
+# allowlist; the global allow-remote-model-selection flag stays false.
+app:
+  ai:
+    remote-model-selection-routes: ${CHAT_REMOTE_MODEL_SELECTION_ROUTES:api3,gemini-pro}
 
 # Existing routes remain fallback-only for unrelated llmrouter.auto consumers.
 # Conversate explicitly selects these API roles after credential/health checks.
@@ -217,6 +243,10 @@ gemini:
   gateway:
     speech:
       enabled: ${GEMINI_GATEWAY_SPEECH_ENABLED:true}
+    # Google Search Grounding stays a per-call opt-in on the native surface;
+    # this flag is only the gateway-side kill switch.
+    grounding:
+      enabled: ${GEMINI_GATEWAY_GROUNDING_ENABLED:true}
     purpose:
       router:
         enabled: ${GEMINI_GATEWAY_ROUTER_ENABLED:true}

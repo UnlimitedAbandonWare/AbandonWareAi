@@ -148,7 +148,7 @@ def collect_git(root: Path) -> dict:
         return out
     try:
         status = subprocess.run(
-            [git, "-C", str(root), "status", "--short"],
+            [git, "--no-optional-locks", "-C", str(root), "status", "--short"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=10)
         if status.returncode != 0:
@@ -242,29 +242,30 @@ def render_markdown(d: dict) -> str:
             f"{l.get('topic')}({l.get('role')})" for l in live[:2])
     L.append(lease_line)
     if d["journals"]:
-        for j in d["journals"]:
+        for j in d["journals"][:2]:
             L.append(f"- journal : `{j['taskId']}` [{j.get('agent')}] "
-                     f"{kst(j.get('updatedAtUtc'))} {trunc(j.get('purpose'), 70)}")
+                     f"{kst(j.get('updatedAtUtc'))} {trunc(j.get('purpose'), 45)}")
     else:
         L.append("- journal : none in_progress")
     rec = (d["handoffs"].get("recent") or [])
     if rec:
-        for h in rec:
-            L.append(f"- handoff : {h['dir']} {kst(h.get('modifiedUtc'))} "
-                     f"[{', '.join(h.get('files') or []) or 'no files'}]")
+        for h in rec[:2]:
+            files = ", ".join((h.get("files") or [])[:2])
+            L.append(f"- handoff : {trunc(h['dir'], 40)} {kst(h.get('modifiedUtc'))} "
+                     f"[{files or 'no files'}]")
     else:
         L.append("- handoff : none in window")
     g = d["git"]
     if g.get("ok"):
         kinds = " ".join(f"{k}={v}" for k, v in sorted(g["byKind"].items()))
         L.append(f"- git     : {g['dirtyCount']} dirty ({kinds or 'clean'}) head={g.get('head')}")
-        for log in g.get("log") or []:
+        for log in (g.get("log") or [])[:1]:
             L.append(f"- log     : {log}")
     else:
         L.append(f"- git     : unavailable ({trunc(g.get('error'), 70)})")
     if d["grok"]["prompts"]:
-        for p in d["grok"]["prompts"]:
-            L.append(f"- grok    : [{kst(p.get('timestamp'))}] {trunc(p.get('prompt'), 70)}")
+        for p in d["grok"]["prompts"][:2]:
+            L.append(f"- grok    : [{kst(p.get('timestamp'))}] {trunc(p.get('prompt'), 45)}")
     else:
         L.append("- grok    : no recent asks" + (f" ({trunc(d['grok'].get('error'), 50)})"
                                                   if d["grok"].get("error") else ""))
@@ -276,7 +277,7 @@ def render_markdown(d: dict) -> str:
         L.append("- events  : none" + (f" ({trunc(e.get('error'), 50)})"
                                        if e.get("error") else ""))
     L.append(f"- errors  : {('; '.join(d['errors'])) if d['errors'] else 'none'}")
-    return "\n".join(L[:20])
+    return "\n".join(L[:13])
 
 
 def main() -> int:
@@ -287,6 +288,8 @@ def main() -> int:
             pass
     ap = argparse.ArgumentParser(description="Agent signal digest ($0, read-only)")
     ap.add_argument("--json", action="store_true", help="emit structured JSON")
+    ap.add_argument("--save", action="store_true",
+                    help="write JSON to var/diagnostics/ and print only the path")
     ap.add_argument("--root", default=str(ROOT), help="project root (default: repo)")
     ap.add_argument("--hours", type=int, default=24, help="handoff/event window")
     args = ap.parse_args()
@@ -321,7 +324,15 @@ def main() -> int:
         "events": events,
         "errors": errors,
     }
-    if args.json:
+    if args.save:
+        diag = root / "var" / "diagnostics"
+        diag.mkdir(parents=True, exist_ok=True)
+        path = diag / ("agent-signal-digest-%s.json"
+                       % now.strftime("%Y%m%d-%H%M%S"))
+        path.write_text(json.dumps(digest, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        print(f"saved: {path}")
+    elif args.json:
         print(json.dumps(digest, ensure_ascii=False, indent=2))
     else:
         print(render_markdown(digest))

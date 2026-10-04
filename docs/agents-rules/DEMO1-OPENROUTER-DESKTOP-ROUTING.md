@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L143-L148 sha256=b6785dbda307430bffce059ae426102e5244d0f9b0b3074c7ab2f80501efcf46 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L149-L154 sha256=b6785dbda307430bffce059ae426102e5244d0f9b0b3074c7ab2f80501efcf46 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-OPENROUTER-DESKTOP-ROUTING -->
 ## OpenRouter Desktop routing
 - Routing SSOT: `docs/provider-limits/openrouter-desktop-routing.md`. OpenRouter is used via the **Desktop app** (Settings → Providers → OpenRouter → API key); `stealth/space-bunny-alpha` is a **secondary pre-screen investigator** only ($0 preview, ~1M ctx, multimodal).

@@ -13,7 +13,7 @@ Usage:
   chat_session_debug_export.py show <sessionId|runId> [--root DIR]
   chat_session_debug_export.py export <id> [--root DIR]
 
-``export`` writes ``var/debug/chat-session-traces/export/<id>/`` with
+``export`` writes ``var/debug/chat-session-traces/export/export-<16hex>/`` with
 ``records.json`` + ``manifest.json`` and refreshes ``export/latest.json``.
 Display DB context stays a related link to the existing
 meta_display_db_export lane (no live JDBC to H2).
@@ -23,7 +23,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -31,8 +33,33 @@ from pathlib import Path
 SCHEMA = "awx.chat-session-trace.v1"
 DEFAULT_SINCE_HOURS = 24
 HASH12_RE = re.compile(r"^[0-9a-f]{12}$")
-# Windows 디렉터리 이름에는 ':'가 불가 — hash:<h12> 는 hash- 접두로 재작성한다.
-SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+EXPORT_NAME_RE = re.compile(r"^export-[0-9a-f]{16}$")
+MAX_FILES = 5000
+MAX_TOTAL_BYTES = 256 * 1024 * 1024
+MAX_LINE_BYTES = 1024 * 1024
+MAX_ROWS = 200000
+MAX_PATHS = MAX_FILES * 2
+
+
+class NonStandardJson(ValueError):
+    """JSON extensions and duplicate object keys have separate coverage."""
+
+
+def _reject_constant(_value):
+    raise NonStandardJson("non-standard-json-constant")
+
+
+def _unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise NonStandardJson("duplicate-json-key")
+        result[key] = value
+    return result
+
+
+STRICT_JSON = json.JSONDecoder(parse_constant=_reject_constant,
+                               object_pairs_hook=_unique_object)
 
 
 def repo_root(arg: str | None) -> Path:
@@ -50,42 +77,187 @@ def hash12(value: str) -> str:
     return hashlib.sha256(value.strip().encode("utf-8")).hexdigest()[:12]
 
 
-def iter_records(root: Path, since_hours: float | None):
-    """Yield (file_path, record_dict) for each JSONL row under the trace dir."""
-    base = trace_dir(root)
-    if not base.is_dir():
-        return
-    cutoff = None
-    if since_hours is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
-    for day_dir in sorted(base.iterdir()):
-        if not day_dir.is_dir() or not day_dir.name.isdigit() or len(day_dir.name) != 8:
-            continue
-        for file in sorted(day_dir.glob("*.json")):
+def event_time(value) -> datetime | None:
+    """Unknown or timezone-less timestamps are not assigned an invented zone."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.utcoffset() is not None else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def _trace_files(base: Path, stats: dict, max_paths: int):
+    # Stream directory entries too; no unbounded sorted(glob(...)) inventory.
+    def bounded(entries):
+        while stats["paths_visited"] < max_paths:
             try:
-                if cutoff is not None and datetime.fromtimestamp(
-                        file.stat().st_mtime, timezone.utc) < cutoff:
+                entry = next(entries)
+            except StopIteration:
+                return
+            stats["paths_visited"] += 1
+            yield entry
+        stats["scan_limit_hit"] = True
+    try:
+        reject_reparse(base)
+        with os.scandir(base) as days:
+            for day in bounded(days):
+                if not re.fullmatch(r"[0-9]{8}", day.name):
                     continue
-                with file.open("r", encoding="utf-8", errors="replace") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            rec = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        if isinstance(rec, dict):
-                            rec["_file"] = str(file.relative_to(root))
+                try:
+                    reject_reparse(Path(day.path))
+                    if not day.is_dir(follow_symlinks=False):
+                        continue
+                    with os.scandir(day.path) as files:
+                        for file in bounded(files):
+                            if file.name.endswith(".json"):
+                                yield Path(file.path)
+                except OSError:
+                    stats["unreadable_files"] += 1
+    except FileNotFoundError:
+        stats["complete"] = False
+    except OSError:
+        stats["unreadable_files"] += 1
+
+
+def _file_signature(info):
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None):
+    """Yield bounded JSONL rows; coverage is final when the iterator is exhausted."""
+    limits = dict(max_files=MAX_FILES, max_total_bytes=MAX_TOTAL_BYTES,
+                  max_line_bytes=MAX_LINE_BYTES, max_rows=MAX_ROWS, max_paths=MAX_PATHS)
+    if caps is not None:
+        for key, value in caps.items():
+            if key not in limits or type(value) is not int or value <= 0:
+                raise ValueError("invalid-scan-cap")
+            limits[key] = value
+    stats = stats if stats is not None else {}
+    stats.clear()
+    stats.update({k: 0 for k in ("files_scanned", "bytes_read", "rows_scanned",
+                                "rows_selected", "parse_error", "partial_tail",
+                                "oversized_line", "unknown_timestamp", "unreadable_files",
+                                "changed_files")})
+    stats["non_standard_json"] = 0
+    stats["paths_visited"] = 0
+    stats["source_cutoffs"] = {}
+    stats.update(scan_limit_hit=False, complete=False)
+    base = trace_dir(root)
+    trace_available = base.is_dir()
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=since_hours)
+              if since_hours is not None else None)
+    exhausted = False
+    try:
+        for file in _trace_files(base, stats, limits["max_paths"]):
+            if (stats["files_scanned"] >= limits["max_files"]
+                    or stats["bytes_read"] >= limits["max_total_bytes"]
+                    or stats["rows_scanned"] >= limits["max_rows"]):
+                stats["scan_limit_hit"] = True
+                break
+            stats["files_scanned"] += 1
+            try:
+                reject_reparse(file)
+                with file.open("rb") as fh:
+                    before = os.fstat(fh.fileno())
+                    if not stat.S_ISREG(before.st_mode):
+                        raise OSError("not-regular-file")
+                    relative_file = file.relative_to(root).as_posix()
+                    stats["source_cutoffs"][relative_file] = str(before.st_size)
+                    position, line_number = 0, 0
+                    def read_chunk():
+                        nonlocal position
+                        amount = min(limits["max_line_bytes"] + 1, before.st_size - position,
+                                     limits["max_total_bytes"] - stats["bytes_read"])
+                        if amount <= 0:
+                            return b""
+                        chunk = fh.readline(amount)
+                        position += len(chunk)
+                        stats["bytes_read"] += len(chunk)
+                        return chunk
+                    try:
+                        while position < before.st_size:
+                            if (stats["rows_scanned"] >= limits["max_rows"]
+                                    or stats["bytes_read"] >= limits["max_total_bytes"]):
+                                stats["scan_limit_hit"] = True
+                                break
+                            line_offset = position
+                            line = read_chunk()
+                            if not line:
+                                break
+                            line_number += 1
+                            stats["rows_scanned"] += 1
+                            if len(line) > limits["max_line_bytes"]:
+                                stats["oversized_line"] += 1
+                                stats["scan_limit_hit"] = True
+                                # Drain a single oversized line in bounded pieces.
+                                while not line.endswith(b"\n") and position < before.st_size:
+                                    line = read_chunk()
+                                    if not line:
+                                        break
+                                continue
+                            if not line.endswith(b"\n") and position < before.st_size:
+                                stats["scan_limit_hit"] = True
+                                break
+                            if not line.strip():
+                                continue
+                            try:
+                                rec = STRICT_JSON.decode(line.decode("utf-8", errors="strict"))
+                            except NonStandardJson:
+                                stats["non_standard_json"] += 1
+                                continue
+                            except UnicodeDecodeError:
+                                stats["parse_error"] += 1
+                                continue
+                            except (ValueError, RecursionError):
+                                stats["parse_error" if line.endswith(b"\n") else "partial_tail"] += 1
+                                continue
+                            if not isinstance(rec, dict):
+                                stats["parse_error"] += 1
+                                continue
+                            timestamp = event_time(rec.get("ts"))
+                            if timestamp is None:
+                                stats["unknown_timestamp"] += 1
+                                continue
+                            if cutoff is not None and timestamp < cutoff:
+                                continue
+                            rec["_file"] = relative_file
+                            rec["_line"] = line_number
+                            rec["_offset"] = str(line_offset)
+                            rec["_sha12"] = hashlib.sha256(line).hexdigest()[:12]
+                            stats["rows_selected"] += 1
                             yield file, rec
-            except OSError:
-                continue
+                    finally:
+                        handle_after, path_after = os.fstat(fh.fileno()), file.stat()
+                        if (_file_signature(before) != _file_signature(handle_after)
+                                or _file_signature(before) != _file_signature(path_after)
+                                or (position != before.st_size and not stats["scan_limit_hit"])):
+                            stats["changed_files"] += 1
+            except (OSError, RuntimeError):
+                stats["unreadable_files"] += 1
+        else:
+            exhausted = True
+    finally:
+        trace_exists = base.is_dir()
+        stats["complete"] = exhausted and trace_available and trace_exists and not (
+            stats["scan_limit_hit"] or any(stats[k] for k in (
+                "parse_error", "partial_tail", "oversized_line", "unknown_timestamp",
+                "unreadable_files", "changed_files", "non_standard_json")))
+        if not trace_available and not any(stats[k] for k in (
+                "files_scanned", "paths_visited", "unreadable_files")):
+            for key, value in stats.items():
+                if type(value) is int:
+                    stats[key] = None
+            stats["source_cutoffs"] = None
 
 
 def id_candidates(query: str) -> set[str]:
     """All forms a query id may take: raw, hash12, hash:<h12>."""
     q = query.strip()
     out = {q}
+    canonical, _form = query_identity(q)
+    out.update((canonical, "hash:" + canonical))
     if q.startswith("hash:"):
         out.add(q[5:])
     if HASH12_RE.match(q.lower()):
@@ -112,9 +284,9 @@ def record_matches(rec: dict, candidates: set[str]) -> bool:
     return False
 
 
-def find_records(root: Path, query: str, since_hours: float | None = None):
+def find_records(root: Path, query: str, since_hours: float | None = None, *, caps=None, stats=None):
     candidates = id_candidates(query)
-    return [(f, r) for f, r in iter_records(root, since_hours)
+    return [(f, r) for f, r in iter_records(root, since_hours, caps=caps, stats=stats)
             if record_matches(r, candidates)]
 
 
@@ -124,28 +296,47 @@ def export_root(root: Path) -> Path:
 
 def read_latest_pointer(root: Path):
     latest_file = export_root(root) / "latest.json"
-    if not latest_file.is_file():
-        return None
     try:
-        return json.loads(latest_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        reject_reparse(latest_file)
+        if not latest_file.is_file():
+            return None
+        with latest_file.open("rb") as fh:
+            data = fh.read(4097)
+        if len(data) > 4096:
+            raise ValueError("oversized-pointer")
+        latest = STRICT_JSON.decode(data.decode("utf-8", errors="strict"))
+        if not isinstance(latest, dict) or latest.get("schema") != "awx.chat-session-trace-latest.v2":
+            return {"status": "legacy-pointer-not-disclosed"}
+        query_hash, form = latest.get("queryHash"), latest.get("queryForm")
+        stamp, count = event_time(latest.get("exportedAtUtc")), latest.get("recordCount")
+        if (not isinstance(query_hash, str) or not HASH12_RE.fullmatch(query_hash)
+                or form not in ("raw", "hash", "bare-hash", "stem")
+                or stamp is None or type(count) is not int or count < 0):
+            raise ValueError("invalid-pointer")
+        # Reconstruct the path from the digest; never echo arbitrary pointer text.
+        return {"schema": latest["schema"], "queryHash": query_hash, "queryForm": form,
+                "exportDir": str((export_root(root) / safe_export_name(query_hash)).relative_to(root)),
+                "exportedAtUtc": stamp.isoformat(), "recordCount": count}
+    except (OSError, ValueError, RuntimeError):
         return {"error": "unreadable-latest-json"}
 
 
 def cmd_status(root: Path) -> int:
     base = trace_dir(root)
-    records = list(iter_records(root, None)) if base.is_dir() else []
+    coverage = {}
+    records = list(iter_records(root, None, stats=coverage))
     days = sorted({f.parent.name for f, _r in records})
     latest_ts = max((str(r.get("ts") or "") for _f, r in records), default=None)
     exports_root = export_root(root)
     exports = sorted(p.name for p in exports_root.iterdir()
-                     if p.is_dir()) if exports_root.is_dir() else []
+                     if p.is_dir() and EXPORT_NAME_RE.fullmatch(p.name)) if exports_root.is_dir() else []
     payload = {
         "schema": "awx.chat-session-trace-status.v1",
         "root": str(root),
         "traceDir": str(base),
         "traceDirExists": base.is_dir(),
-        "recordCount": len(records),
+        "recordCount": len(records) if coverage["rows_selected"] is not None else None,
+        "coverage": coverage,
         "days": days,
         "latestRecordTs": latest_ts,
         "exportRoot": str(exports_root),
@@ -158,8 +349,14 @@ def cmd_status(root: Path) -> int:
     return 0 if base.is_dir() else 2
 
 
-def cmd_list(root: Path, since_hours: float) -> int:
-    rows = list(iter_records(root, since_hours))
+def cmd_list(root: Path, since_hours: float, *, as_json: bool = False) -> int:
+    coverage = {}
+    rows = list(iter_records(root, since_hours, stats=coverage))
+    if as_json:
+        print(json.dumps({"records": [r for _, r in rows], "coverage": coverage},
+                         indent=2, ensure_ascii=False))
+        return 0
+    print("# coverage=" + json.dumps(coverage, sort_keys=True))
     print(f"# {len(rows)} session trace record(s) under {trace_dir(root)} "
           f"(since {since_hours}h)")
     for _file, rec in rows:
@@ -179,46 +376,83 @@ def cmd_list(root: Path, since_hours: float) -> int:
 def cmd_show(root: Path, query: str) -> int:
     matches = find_records(root, query)
     if not matches:
-        print(f"no session trace found for id '{query}'", file=sys.stderr)
+        print(f"no session trace found (queryHash={query_identity(query)[0]})", file=sys.stderr)
         return 4
     for _file, rec in matches:
         print(json.dumps(rec, indent=2, ensure_ascii=False, sort_keys=False))
     return 0
 
 
-def safe_export_name(query: str, matches) -> str:
+def query_identity(query: str) -> tuple[str, str]:
     q = query.strip()
     if q.startswith("hash:") and HASH12_RE.match(q[5:].lower()):
-        return "hash-" + q[5:].lower()
-    if SAFE_ID_RE.match(q):
-        return q
+        return q[5:].lower(), "hash"
     if HASH12_RE.match(q.lower()):
-        return q.lower()
-    # Raw id -> stable hashed directory name.
-    return "id-" + hash12(q)
+        return q.lower(), "bare-hash"
+    if q[:2] in ("s-", "r-") and HASH12_RE.fullmatch(q[2:].lower()):
+        return q[2:].lower(), "stem"
+    return hash12(q), "raw"
+
+
+def safe_export_name(query: str, matches=None) -> str:
+    canonical, _form = query_identity(query)
+    return "export-" + hashlib.sha256(canonical.encode("ascii")).hexdigest()[:16]
+
+
+def reject_reparse(path: Path) -> None:
+    """Check lexical ancestors too: resolve alone would hide junction traversal."""
+    for part in (path, *path.parents):
+        try:
+            info = part.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or (
+                getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT):
+            raise OSError("reparse-path-rejected")
+
+
+def validate_export_paths(base: Path, dest: Path) -> None:
+    reject_reparse(dest)
+    if dest == base or not dest.resolve().is_relative_to(base.resolve()):
+        raise OSError("export-boundary-rejected")
+    # Existing output files can themselves be links, including latest.json.
+    for path in (dest / "records.json", dest / "manifest.json", base / "latest.json"):
+        reject_reparse(path)
+
+
+def write_export_json(path: Path, payload, base: Path, dest: Path) -> None:
+    validate_export_paths(base, dest)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def cmd_export(root: Path, query: str) -> int:
-    matches = find_records(root, query)
+    coverage = {}
+    matches = find_records(root, query, stats=coverage)
     if not matches:
-        print(f"no session trace found for id '{query}'", file=sys.stderr)
+        print(f"no session trace found (queryHash={query_identity(query)[0]})", file=sys.stderr)
         return 4
     name = safe_export_name(query, matches)
     out_dir = export_root(root) / name
-    out_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        validate_export_paths(export_root(root), out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        validate_export_paths(export_root(root), out_dir)
+    except (OSError, ValueError, RuntimeError):
+        print("export refused: unsafe or unavailable output path", file=sys.stderr)
+        return 3
     records = []
     for _file, rec in matches:
-        clean = {k: v for k, v in rec.items() if k != "_file"}
+        clean = {k: v for k, v in rec.items() if k not in ("_file", "_line")}
         clean["sourceFile"] = rec.get("_file")
         records.append(clean)
-    (out_dir / "records.json").write_text(
-        json.dumps(records, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     manifest = {
-        "schema": "awx.chat-session-trace-export.v1",
+        "schema": "awx.chat-session-trace-export.v2",
         "exportedAtUtc": datetime.now(timezone.utc).isoformat(),
-        "query": query,
+        "queryHash": query_identity(query)[0],
+        "queryForm": query_identity(query)[1],
         "exportDir": str(out_dir.relative_to(root)),
         "recordCount": len(records),
+        "coverage": coverage,
         "sourceFiles": sorted({str(r.get("sourceFile")) for r in records}),
         "sanitization": [
             "sessionId/runId stored as hash:<sha256-12> only",
@@ -232,18 +466,23 @@ def cmd_export(root: Path, query: str) -> int:
                     "never open the live H2 file while the JVM holds it.",
         },
     }
-    (out_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     # 최신 export 포인터 — meta_display_db_export.py 의 latest.json 관례와 동일.
     latest = {
-        "schema": "awx.chat-session-trace-latest.v1",
-        "query": query,
+        "schema": "awx.chat-session-trace-latest.v2",
+        "queryHash": manifest["queryHash"],
+        "queryForm": manifest["queryForm"],
         "exportDir": str(out_dir.relative_to(root)),
         "exportedAtUtc": manifest["exportedAtUtc"],
         "recordCount": len(records),
     }
-    (export_root(root) / "latest.json").write_text(
-        json.dumps(latest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    try:
+        for path, data in ((out_dir / "records.json", records),
+                           (out_dir / "manifest.json", manifest),
+                           (export_root(root) / "latest.json", latest)):
+            write_export_json(path, data, export_root(root), out_dir)
+    except (OSError, ValueError, RuntimeError):
+        print("export refused: unsafe or unavailable output path", file=sys.stderr)
+        return 3
     print(str(out_dir.relative_to(root)))
     return 0
 
@@ -258,6 +497,7 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="JSON status of trace dir + exports (no mutate)")
     p_list = sub.add_parser("list", help="list recent session traces")
     p_list.add_argument("--since-hours", type=float, default=DEFAULT_SINCE_HOURS)
+    p_list.add_argument("--json", action="store_true", help="JSON records with scan coverage")
     p_show = sub.add_parser("show", help="show records for a sessionId or runId")
     p_show.add_argument("id")
     p_export = sub.add_parser("export", help="export a shared evidence bundle")
@@ -268,7 +508,7 @@ def main(argv=None) -> int:
     if args.cmd == "status":
         return cmd_status(root)
     if args.cmd == "list":
-        return cmd_list(root, args.since_hours)
+        return cmd_list(root, args.since_hours, as_json=args.json)
     if args.cmd == "show":
         return cmd_show(root, args.id)
     if args.cmd == "export":

@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L207-L214 sha256=10acb0bca5ad8c305051e89ab0d4e3fdcc68b12f955c4cc0e1b8d397797f3070 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L213-L220 sha256=10acb0bca5ad8c305051e89ab0d4e3fdcc68b12f955c4cc0e1b8d397797f3070 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-RAG-DEBUG-TRAIL -->
 ## RAG/LLM debug trail (skill-free first read)
 - RAG/LLM 기동·디버깅 조사 시 스킬 없이 먼저: `Read-RAG-Debug.bat` 또는 `powershell -File scripts/read_rag_debug_trail.ps1` → `var/rag-launcher/LATEST.json` 이 SSOT. 스킬 조회 불필요.

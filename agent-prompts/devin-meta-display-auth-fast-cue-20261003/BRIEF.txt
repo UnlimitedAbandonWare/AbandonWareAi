@@ -1,0 +1,85 @@
+[ANTI-STOP] 읽고 멈추지 마세요. WP1~WP3을 순서대로 끝까지 수행하고 보고합니다. 되돌릴 수 있는 단계는 Self-Ask AUTO로 진행하고, 막히는 경우에만 HOLD합니다.
+
+# [DEVIN 지시서] 메타 레이벤 디스플레이 62,500 크레딧 Auth API 패스트 모델(gpt-5.6-luna) 연동 — 2026-10-03 21:50 KST
+파일 ID: PASTE_DEVIN_META_DISPLAY_AUTH_FAST_CUE_20261003
+@demo1-meta-display-simple-caption
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+메타 레이벤 디스플레이(Conversate 큐 힌트)에서 이미 승인된 ChatGPT OAuth(Codex 62,500 크레딧) Auth API를 적극적으로 활용하도록 활성화하고, 최저 지연시간 경량 패스트 모델(gpt-5.6-luna)로 신속히 응답하도록 구성·검증한다.
+
+## 1. 사실 (2026-10-03 21:50 KST 확인)
+- ChatGPT OAuth 계정에는 62,500 크레딧(`reported-grant-credits: 62500`)이 배정되어 있으며, API 키 결제 없이 크레딧 기반으로 안전하게 사용 가능함 (`application-meta-display.yml:280`).
+- 카탈로그 7종(`data/agent-handoff/chatgpt-oauth/CODEX_MODEL_MATRIX.md`) 중 `gpt-5.6-luna`는 실측 지연시간 2,563ms(gpt-5.5 4,297ms, gpt-6-astra 3,344ms 대비 최저)와 PASS 200 검증을 거친 전용 렌즈 큐 힌트 모델임.
+- `ConversateCueRoutingPolicy.java`(433FF8BFDE02 L144-167) `selectOauth`는 `mini`/`nano`/`fast`만 필터링하여 `gpt-5.6-luna`를 자동 매핑하지 못하고 무거운 첫 번째 모델(`gpt-6-astra`)로 떨어질 위험이 있음.
+- `ConversateApiCueService.java`(75031FDC2EA9 L80-82)는 `cost.oauthRequired = false;`로 대기 중이며 주석에 지시서 발급 시 활성화하도록 명시되어 있음.
+- `ConversateCueRoutingPolicy.java`에 데스크톱 세션(`meta-display-gemini-default-wp2`) 리스가 걸려 있으므로 리스 점검(`agent_scope_lease.py who`) 후 충돌 없이 반영해야 함.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 시작: `Set-Location C:\AbandonWare\demo-1\demo-1\src` 실행.
+- 수정 전 타깃 파일 리스 확인 및 preimage 기록 필수.
+- 보고는 반드시 `외부 API:` 줄로 시작.
+- 미실행은 NOT_RUN + 구체적 이유 명시.
+
+## WP1 [Devin] application-meta-display.yml 큐 Auth 프로퍼티 활성화 및 패스트 모델 지정
+- 증거: `main/resources/application-meta-display.yml:15-49`, `266-283`
+- 수정:
+  1) `conversate.cue.oauth-enabled: ${CONVERSATE_CUE_OAUTH_ENABLED:true}` 추가
+  2) `chatgpt.oauth.cue-model: ${CHATGPT_OAUTH_CUE_MODEL:gpt-5.6-luna}` 명시
+  3) `chatgpt.oauth.cue-expected-latency-ms: ${CHATGPT_OAUTH_CUE_EXPECTED_LATENCY_MS:1500}` 반영
+  4) `conversate.cue.preferred-provider: ${CONVERSATE_CUE_PREFERRED_PROVIDER:chatgpt-oauth}` 반영
+- 완료 조건: 메타 디스플레이 런타임에서 `chatgpt-oauth`와 `gpt-5.6-luna`가 기본 활성 큐 후보로 매핑됨.
+
+## WP2 [Devin] ConversateApiCueService 및 Policy 연동 (Luna 매핑 & 런타임 활성화)
+- 증거: `main/java/com/example/lms/assist/ConversateApiCueService.java:80-82`, `ConversateCueRoutingPolicy.java:144-167`
+- 수정:
+  1) `ConversateApiCueService.java`:
+     - `cost.oauthRequired = env.getProperty("conversate.cue.oauth-enabled", Boolean.class, true) && chatGptOAuth != null && chatGptOAuth.isConfigured();` 로 활성화.
+     - 토큰 미구성 또는 에러 시 `cost.oauthRequired=false`로 일반 경로 fail-soft 폴백 유지.
+  2) `ConversateCueRoutingPolicy.java`:
+     - `selectOauth`에서 `chatgpt.oauth.cue-model` 우선 적용 및 fallback 필터에 `luna` 추가 (`m.contains("luna") || m.contains("mini") || ...`).
+     - 지연시간 최소 하한을 1000ms로 완화하여 `gpt-5.6-luna`의 빠른 응답이 버짓 초과로 오인 탈락하지 않도록 보장.
+- 완료 조건: 디스플레이 큐 요청 시 `billingSource`가 `chatgpt_oauth`로 잡히고 `gpt-5.6-luna`가 1순위로 선별됨.
+
+## WP3 [Devin] 포커스 단위 테스트 및 계약 검증
+- 검증: `src/test/java/com/example/lms/assist/ChatGptCueRoutingContractTest.java`
+- 명령: `.\gradlew.bat :test --tests com.example.lms.assist.ChatGptCueRoutingContractTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- 보강 내용:
+  - `conversate.cue.oauth-enabled=true` 환경에서 `ConversateApiCueService` 호출 시 `chatgpt-oauth:gpt-5.6-luna`가 선택되고 카드가 생성되는지 확인하는 케이스 추가.
+  - OAuth 미구성 시 일반 디스플레이 경로로 안전하게 폴백되는 회귀 케이스 검증.
+- 읽기 전용 검증: `python -B scripts/check_codex_credit_models.py --models gpt-5.6-luna`
+- 완료 조건: 포커스 테스트 exit=0 통과 및 기존 계약 준수.
+
+## 3. HOLD (중단 조건)
+- `.secrets/chatgpt_oauth_credentials.json`이 완전히 부재하여 모의 검증조차 불가능한 경우.
+- `ConversateCueRoutingPolicy.java`의 타 세션 리스 충돌이 장시간 지속되어 자율 회수 절차로도 해제되지 않는 경우.
+- 유료 크레딧 추가 구매나 새로운 결제 카드 등록이 요구되는 경우.
+
+## 4. ASK_ONCE
+- A-1: Nova Focus("노바야" 음성 호출)의 대화 모델도 동일하게 `chatgpt-oauth:gpt-5.6-luna`를 기본으로 사용할지, 아니면 실시간 큐 힌트에만 Luna를 적용하고 노바 대화는 Gemini 3.8 Flash 웹서치를 유지할지 선택.
+  - 기본 권장값: 실시간 큐 힌트에 `chatgpt-oauth:gpt-5.6-luna`를 적용하고, 노바 대화는 Gemini 웹서치로 분담 유지.
+
+## 5. 절대 금지
+- git push, git pull, git commit, git add -A, git reset, git clean 절대 금지.
+- remote 추가 및 원격 저장소 변경 금지.
+- PROTO_OPEN 상태 변경 및 인증/로그인 레이어 강제 추가 금지.
+- 비밀 값(API 키, 토큰) 노출 및 하드코딩 금지.
+- 전체 `:test` 스위트 실행 금지 (지정된 포커스 테스트만 실행).
+
+## 6. Acceptance (수용 기준)
+- [ ] `application-meta-display.yml`에 `conversate.cue.oauth-enabled=true` 및 `chatgpt.oauth.cue-model=gpt-5.6-luna`가 구성되어 있다.
+- [ ] `ConversateCueRoutingPolicy`에서 `gpt-5.6-luna`가 지연시간 예산 내 최우선 1순위로 선별된다.
+- [ ] `ConversateApiCueService`에서 OAuth 구성 시 `cost.oauthRequired=true`로 동작하고, 미구성 시 fail-soft로 일반 경로 폴백된다.
+- [ ] `ChatGptCueRoutingContractTest` 포커스 단위 테스트가 exit=0으로 통과한다.
+- [ ] 실행하지 못한 항목은 반드시 NOT_RUN과 구체적 사유가 명시되어 있다.
+
+## 7. 보고 형식
+외부 API: ChatGPT OAuth (62,500 크레딧 레인, gpt-5.6-luna 패스트 모델, no USD charge)
+| 항목 | 결과 | 증거 경로 / 테스트 결과 |
+|---|---|---|
+| WP1 yml 큐 Auth 설정 | DONE | `main/resources/application-meta-display.yml` |
+| WP2 CueService 및 Policy 연동 | DONE | `main/java/com/example/lms/assist/ConversateApiCueService.java` |
+| WP3 포커스 계약 테스트 | PASS | `ChatGptCueRoutingContractTest` exit=0 |
+
+[ANTI-STOP] 지시서 수행 중 임의 중단하지 말고 모든 단계를 검증한 후 위 보고 형식에 맞춰 최종 보고를 작성하세요.

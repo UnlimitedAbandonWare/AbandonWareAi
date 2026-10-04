@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import glob
 import hashlib
+import heapq
 import json
 import os
 import re
@@ -121,11 +122,16 @@ def read_json(path: Path):
 
 # --- collectors ------------------------------------------------------------
 
-def collect_sessions(root: Path, since_hours: float, limit: int) -> list[dict]:
-    rows = []
-    for file, rec in trace_reader.iter_records(root, since_hours):
+def collect_sessions(root: Path, since_hours: float, limit: int, *, stats=None) -> list[dict]:
+    if type(limit) is not int or limit <= 0:
+        raise ValueError("max-sessions-must-be-positive")
+    rows, retained_peak = [], 0
+    for file, rec in trace_reader.iter_records(root, since_hours, stats=stats):
+        key = (trace_reader.event_time(rec["ts"]), rec["_file"], rec["_line"])
+        if len(rows) == limit and key <= rows[0][:3]:
+            continue
         keys = rec.get("traceKeys")
-        rows.append({
+        row = {
             "ts": str(rec.get("ts") or ""),
             "sessionId": rec.get("sessionId"),
             "runId": rec.get("runId"),
@@ -143,9 +149,16 @@ def collect_sessions(root: Path, since_hours: float, limit: int) -> list[dict]:
             "fallbackCount": rec.get("fallbackCount"),
             "traceKeyCount": len(keys) if isinstance(keys, list) else None,
             "file": rec.get("_file") or rel(root, file),
-        })
-    rows.sort(key=lambda r: r["ts"])
-    return rows[-limit:] if len(rows) > limit else rows
+        }
+        item = (*key, row)
+        if len(rows) < limit:
+            heapq.heappush(rows, item)
+        else:
+            heapq.heapreplace(rows, item)
+        retained_peak = max(retained_peak, len(rows))
+    if stats is not None:
+        stats["retained_peak"] = retained_peak if stats["rows_scanned"] is not None else None
+    return [item[3] for item in sorted(rows)]
 
 
 def collect_rag_trail(root: Path, use_subprocess: bool) -> dict:
@@ -399,6 +412,8 @@ def build_bundle(root: Path, since_hours: float = DEFAULT_SINCE_HOURS, *,
         "traceNdjson": bool(glob.glob(str(root / "logs" / "trace*.ndjson"))),
         "journals": (root / "data" / "agent-handoff" / "codex-autonomy").is_dir(),
     }
+    sessions_coverage = {}
+    sessions = collect_sessions(root, since_hours, max_sessions, stats=sessions_coverage)
     bundle = {
         "schema": SCHEMA,
         "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
@@ -410,7 +425,8 @@ def build_bundle(root: Path, since_hours: float = DEFAULT_SINCE_HOURS, *,
             "live admin DebugEventStore is not queried; bundles are offline",
             "meta-db rows come from export.sqlite at its export time, not live",
         ],
-        "sessions": collect_sessions(root, since_hours, max_sessions),
+        "sessions": sessions,
+        "sessionsCoverage": sessions_coverage,
         "ragTrail": collect_rag_trail(root, use_subprocess),
         "dbExport": collect_db_export(root, db_tail_rows, db_max_tables),
         "events": collect_events(root, tail_lines),

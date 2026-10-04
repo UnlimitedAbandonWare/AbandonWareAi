@@ -36,8 +36,14 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     @org.springframework.beans.factory.annotation.Autowired(required=false) private LlmRouterProperties routerConfig;
     @org.springframework.beans.factory.annotation.Autowired(required=false) private ModelRuntimeHealthTracker modelHealth;
     @org.springframework.beans.factory.annotation.Value("${llm.chat-model:}") private String defaultModel="";
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.default-model:}") private String focusDefaultModel="";
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.unknown-web-enabled:true}") private boolean unknownWebEnabled=true;
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.unknown-web-scoped-enabled:false}") private boolean scopedWebEnabled=false;
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.web-aggressive-enabled:false}") private boolean webAggressiveEnabled=false;
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.web-model:}") private String webModel="";
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-answer-chars:280}") private int lensAnswerChars=280;
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-answer-lines:6}") private int lensAnswerLines=6;
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-source-suffix:true}") private boolean lensSourceSuffix=true;
     public NovaFocusAnswerService(ChatService chat,PublicRequestBudgetGuard budgets,ChatRunRegistry runs){this(chat,budgets,runs,null);}
     @org.springframework.beans.factory.annotation.Autowired
     public NovaFocusAnswerService(ChatService chat,PublicRequestBudgetGuard budgets,ChatRunRegistry runs,FocusMemoryService memories){this.chat=chat;this.budgets=budgets;this.runs=runs;this.memories=memories;}
@@ -53,7 +59,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     @Override public String answer(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context memory,FocusMemoryScope scope,java.util.function.BooleanSupplier current){
         TraceStore.clear();
         boolean imagePresent=StringUtils.hasText(imageBase64);
-        boolean web=!imagePresent&&(decisions.decide(question,SearchMode.AUTO,null,3,false).shouldSearch()
+        boolean web=!imagePresent&&(decisions.decide(question,SearchMode.AUTO,null,3,
+                    webAggressiveEnabled&&!casualOnly(question)).shouldSearch()
                 ||ConversateAnswerPipeline.focusEvidenceRequested(question));
         // Advice may run only after admission and binding to the current request budget.
         var jev=JevDecisionAdvisor.Advice.off();
@@ -89,6 +96,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
                 }catch(RuntimeException unavailable){timeline=null;TraceStore.clear();}
             }
             requireCurrent(current);
+            if(previousBudget!=null&&previousBudget.expired())throw new java.util.concurrent.CancellationException("focus_budget_exhausted");
             if(!imagePresent&&jevAdvisor!=null)jev=jevAdvisor.advise("focus",question,web?"WEB":"RECENT_ONLY");
             requireCurrent(current);
             if(jev.usable()){
@@ -101,6 +109,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
                 request=request.toBuilder().searchMode(web?SearchMode.AUTO:SearchMode.OFF).useWebSearch(web)
                     .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(web,false)).build();
             }
+            if(web&&selection.mode()==NovaFocusSettings.AnswerSelection.Mode.AUTO&&selection.routing()==null)
+                request=withWebModel(request);
             var mode=UnknownAnswerPolicy.mode(jev);
             boolean memoryEnabled=scope!=null&&scope.recallEnabled()
                 &&mode!=UnknownAnswerPolicy.Mode.RECENT_ONLY&&mode!=UnknownAnswerPolicy.Mode.WEB;
@@ -135,17 +145,18 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             com.example.lms.search.TraceStore.put("focus.unknown.reason",unknown.reason());
             if(unknown.webAllowed()){
                 requireCurrent(current);
-                var webRequest=request.toBuilder().searchMode(SearchMode.AUTO).useWebSearch(true)
-                        .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true,false)).webTopK(3).build();
+                var webRequest=withWebModel(request.toBuilder().searchMode(SearchMode.AUTO).useWebSearch(true)
+                        .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true,false)).webTopK(3).build());
                 var projectedWeb=webRequest.toBuilder().message(question+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
                 budgets.validateChatProjected(projectedWeb,PlanHints.empty("nova-focus"),true,memoryEnabled);
                 var retried=executeModels(webRequest,context,selection,current,memoryEnabled);
                 ChatRunExecutionContext.throwIfCancelled();
                 ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
-                if(StringUtils.hasText(retried.text()))completed=retried;
+                if(StringUtils.hasText(retried.text())){completed=retried;web=true;}
                 com.example.lms.search.TraceStore.put("focus.unknown.outcome",completed==retried?"replaced":"kept_first");
             }
             var result=completed.result();String answer=completed.text();
+            if(web)answer=lensCompact(answer,result);
             // ChatWorkflow clears TraceStore at every attempt; publish only final immutable request metadata here.
             com.example.lms.search.TraceStore.put("focus.context.snapshotId",NovaFocusHistoryService.digest(String.join("\n",transcriptIds)));
             com.example.lms.search.TraceStore.put("focus.context.sourceIds",memory.transcript().stream().map(ChatConversationContext.Transcript::sourceId).toList());
@@ -232,6 +243,78 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         return Map.copyOf(safe);
     }
     private static ChatConversationContext.Turn pair(NovaFocusHistoryService.Pair value){return new ChatConversationContext.Turn(value.question(),value.answer());}
+    /** Aggressive AUTO never fires on pure greetings; intent cues still govern the decide() call. */
+    private static final java.util.regex.Pattern CASUAL_ONLY=java.util.regex.Pattern.compile(
+        "(?i)^\\s*(?:안녕(?:하세요)?|하이|헬로|헤이|고마워|감사(?:합니다)?|수고(?:했어)?|잘가|바이|반가워|ㅇㅇ|ㅋㅋ+|ㅎㅎ+|hello|hi|hey|thanks|thank you|bye|good morning|good night|ok(?:ay)?|yes|no|yeah|nope)[\\s!?.~,]*$");
+    private static boolean casualOnly(String question){
+        return question!=null&&CASUAL_ONLY.matcher(question.strip()).matches();
+    }
+    /** Soft model preference for web-grounded answers; the route must already be selectable. */
+    private String resolveWebModel(){
+        if(modelCatalog==null||!StringUtils.hasText(webModel))return null;
+        var choice=modelCatalog.resolve(webModel).orElse(null);
+        return choice!=null&&choice.selectable()?webModel:null;
+    }
+    private ChatRequestDto withWebModel(ChatRequestDto base){
+        String preferred=resolveWebModel();
+        return preferred!=null&&!StringUtils.hasText(base.getModel())?base.toBuilder().model(preferred).build():base;
+    }
+    /** Lens-facing web answers: markdown stripped, sentence-bounded to the configured budget. */
+    private String lensCompact(String text,ChatResult result){
+        if(!StringUtils.hasText(text))return text;
+        int budget=Math.max(80,Math.min(lensAnswerChars,800));
+        String suffix=lensSourceSuffix?sourceSuffix(result):null;
+        int textBudget=budget-(suffix==null?0:suffix.codePointCount(0,suffix.length()));
+        String cleaned=cleanLensText(text);
+        var segs=cleaned.split("\n",-1);
+        int lineCap=Math.max(1,lensAnswerLines);
+        if(segs.length>lineCap)cleaned=String.join("\n",java.util.Arrays.copyOf(segs,lineCap));
+        String out=cleaned.codePointCount(0,cleaned.length())<=textBudget?cleaned:cutAtBoundary(cleaned,textBudget);
+        return suffix==null?out:out+suffix;
+    }
+    private static String cleanLensText(String text){
+        return text
+            .replaceAll("(?m)^\\s{0,3}#{1,6}\\s*","")
+            .replaceAll("!\\[[^\\]]*\\]\\([^)]*\\)","")
+            .replaceAll("\\[([^\\]]+)\\]\\([^)]*\\)","$1")
+            .replaceAll("\\*\\*([^*]*)\\*\\*","$1")
+            .replaceAll("(?m)^\\s{0,3}>\\s?","")
+            .replaceAll("(?m)^\\s{0,3}[-*+]\\s+","")
+            .replaceAll("[ \\t\\x0B\\f\\r]+"," ")
+            .replaceAll("\\n{2,}","\\n")
+            .strip();
+    }
+    private static String cutAtBoundary(String text,int budget){
+        int limit=text.offsetByCodePoints(0,Math.min(budget,text.codePointCount(0,text.length())));
+        int floor=Math.max(40,limit/2);
+        for(int i=limit;i>floor;i--){
+            char c=text.charAt(i-1);
+            if(c=='.'||c=='!'||c=='?')return text.substring(0,i).strip();
+        }
+        int hard=text.offsetByCodePoints(0,Math.max(1,Math.min(budget-1,text.codePointCount(0,text.length()))));
+        return text.substring(0,hard).strip()+"…";
+    }
+    private static String sourceSuffix(ChatResult result){
+        var meta=result==null?null:result.evidenceMetadata();
+        if(meta==null||meta.isEmpty())return null;
+        var hosts=new LinkedHashSet<String>();
+        for(var m:meta){
+            String host=m==null?null:hostOf(m.source());
+            if(host!=null)hosts.add(host);
+            if(hosts.size()>=2)break;
+        }
+        return hosts.isEmpty()?null:" [출처: "+String.join("/",hosts)+"]";
+    }
+    private static String hostOf(String source){
+        if(!StringUtils.hasText(source))return null;
+        try{
+            String host=java.net.URI.create(source.trim()).getHost();
+            if(host==null)return null;
+            host=host.toLowerCase(Locale.ROOT);
+            for(String prefix:List.of("www.","m.","amp."))if(host.startsWith(prefix))return host.substring(prefix.length());
+            return host;
+        }catch(Exception ignored){return null;}
+    }
     private enum ProviderKind { LOCAL,API,UNKNOWN }
     private ProviderKind providerKind(ChatModelCatalogService.Choice choice){
         if(choice==null)return ProviderKind.UNKNOWN;
@@ -258,6 +341,10 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             if(choice!=null&&!allowedTarget(choice,policy))throw new ModelSelectionException("model_request_invalid");
             return selection.modelId();
         }
+        // Soft profile default first: like resolveWebModel, the configured focus
+        // route wins only when it already resolves to a selectable catalog entry.
+        var focusPreferred=StringUtils.hasText(focusDefaultModel)?modelCatalog.resolve(focusDefaultModel).orElse(null):null;
+        if(focusPreferred!=null&&focusPreferred.selectable()&&allowedTarget(focusPreferred,policy))return focusDefaultModel;
         var preferred=StringUtils.hasText(defaultModel)?modelCatalog.resolve(defaultModel).orElse(null):null;
         if(allowedTarget(preferred,policy))return defaultModel;
         if(policy.executionTarget()==NovaFocusSettings.ExecutionTarget.API_ONLY&&routerConfig!=null){

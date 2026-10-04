@@ -118,6 +118,8 @@ public boolean hasSufficientCoverage(String question,
     GuardProfile profile = guardProfileProps.currentProfile();
     // 1) 증거가 아예 없으면 기본은 실패. gate.evidence.allow-empty=true 이면 soft-allow (힌트/대화 유지).
     if (totalEvidence == 0) {
+        com.example.lms.search.TraceStore.put("chat.evidence.count", 0);
+        com.example.lms.search.TraceStore.put("guard.citation.hint", java.util.Map.of("status", "근거 없음"));
         if (allowEmptyEvidence) {
             log.info("[EVIDENCE_GATE] No evidence at all -> soft allow (gate.evidence.allow-empty=true) queryHash12={} queryLength={}",
                     SafeRedactor.hash12(question), question.length());

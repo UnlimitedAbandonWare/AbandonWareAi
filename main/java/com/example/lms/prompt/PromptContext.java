@@ -14,6 +14,10 @@ import com.example.lms.domain.enums.AnswerMode;
 import com.example.lms.domain.enums.MemoryMode;
 import com.example.lms.learning.chat.LearningActorRole;
 import com.example.lms.learning.chat.LearningSignal;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -105,7 +109,14 @@ public class PromptContext {
         this.memory = b.memory;
         this.intent = b.intent;
         this.domain = b.domain;
-        this.interactionRules = b.interactionRules;
+        if (b.interactionRules == null) {
+            this.interactionRules = null;
+        } else {
+            Map<String, Set<String>> rules = new LinkedHashMap<>();
+            b.interactionRules.forEach((key, values) -> rules.put(key, values == null ? null
+                    : Collections.unmodifiableSet(new LinkedHashSet<>(values))));
+            this.interactionRules = Collections.unmodifiableMap(rules);
+        }
         this.interactionPolicyDecision = b.interactionPolicyDecision == null
                 ? InteractionEvidencePolicy.offDecision()
                 : b.interactionPolicyDecision;
@@ -114,10 +125,10 @@ public class PromptContext {
                 : b.conversationFrame;
         this.cognitiveState = b.cognitiveState;
         // null-safe: prompt builders and renderers assume these are non-null
-        this.web = b.web != null ? b.web : java.util.Collections.emptyList();
-        this.rag = b.rag != null ? b.rag : java.util.Collections.emptyList();
-        this.localDocs = b.localDocs != null ? b.localDocs : java.util.Collections.emptyList();
-        this.evidence = b.evidence != null ? b.evidence : java.util.Collections.emptyList();
+        this.web = b.web != null ? snapshotList(b.web) : java.util.Collections.emptyList();
+        this.rag = b.rag != null ? snapshotList(b.rag) : java.util.Collections.emptyList();
+        this.localDocs = b.localDocs != null ? snapshotList(b.localDocs) : java.util.Collections.emptyList();
+        this.evidence = b.evidence != null ? snapshotList(b.evidence) : java.util.Collections.emptyList();
         this.queryDomain = b.queryDomain;
         this.guardProfile = b.guardProfile;
         this.visionMode = b.visionMode;
@@ -126,11 +137,11 @@ public class PromptContext {
         this.history = b.history;
         this.systemInstruction = b.systemInstruction;
         this.verbosityHint = b.verbosityHint;
-        this.unsupportedClaims = b.unsupportedClaims;
+        this.unsupportedClaims = snapshotList(b.unsupportedClaims);
         this.citationStyle = b.citationStyle;
         this.minWordCount = b.minWordCount;
         this.targetTokenBudgetOut = b.targetTokenBudgetOut;
-        this.sectionSpec = b.sectionSpec;
+        this.sectionSpec = snapshotList(b.sectionSpec);
         this.audience = b.audience;
         this.resourceTier = b.resourceTier;
         this.resourceValueScore = b.resourceValueScore;
@@ -139,9 +150,9 @@ public class PromptContext {
         this.resourceRewriteTemperature = b.resourceRewriteTemperature;
         this.resourceSearchRangeMultiplier = b.resourceSearchRangeMultiplier;
         this.learningRole = b.learningRole != null ? b.learningRole : LearningActorRole.ANONYMOUS;
-        this.learningSignals = b.learningSignals != null ? b.learningSignals : java.util.Collections.emptyList();
+        this.learningSignals = b.learningSignals != null ? snapshotList(b.learningSignals) : java.util.Collections.emptyList();
         this.learningContextSummary = b.learningContextSummary;
-        this.ensembleCandidates = b.ensembleCandidates != null ? b.ensembleCandidates : java.util.Collections.emptyList();
+        this.ensembleCandidates = b.ensembleCandidates != null ? snapshotList(b.ensembleCandidates) : java.util.Collections.emptyList();
         this.ensembleJudgeMode = b.ensembleJudgeMode;
         this.preparedContextPacket = b.preparedContextPacket;
         this.contextRefinementSummary = b.contextRefinementSummary;
@@ -149,9 +160,14 @@ public class PromptContext {
         this.contextRefinementSignals = b.contextRefinementSignals != null
                 ? java.util.Collections.unmodifiableMap(new java.util.LinkedHashMap<>(b.contextRefinementSignals))
                 : java.util.Collections.emptyMap();
-        this.sourceUrls = b.sourceUrls != null ? b.sourceUrls : java.util.Collections.emptyList();
-        this.officialSources = b.officialSources != null ? b.officialSources : java.util.Collections.emptyList();
+        this.sourceUrls = b.sourceUrls != null ? snapshotList(b.sourceUrls) : java.util.Collections.emptyList();
+        this.officialSources = b.officialSources != null ? snapshotList(b.officialSources) : java.util.Collections.emptyList();
 
+    }
+
+    // Snapshot collection structure only; element objects retain their existing identity.
+    private static <T> List<T> snapshotList(List<T> input) {
+        return input == null ? null : Collections.unmodifiableList(new ArrayList<>(input));
     }
 
     // --- Backward-compatible accessors ---

@@ -22,7 +22,7 @@ def run(*args, root=None):
 
 
 def scan(ask, *extra, root=None):
-    return run("scan", ask, "--no-router", "--no-git", *extra,
+    return run("scan", ask, "--no-router", "--no-git", "--json", *extra,
                root=root)
 
 
@@ -127,7 +127,7 @@ class ToolPlacementScanTest(unittest.TestCase):
                          idle_hours=30)
             make_journal(root / BASE / "fresh-task-00000000",
                          idle_hours=0)
-            code, out = run("scan", "", "--no-router", root=root)
+            code, out = run("scan", "", "--no-router", "--json", root=root)
             self.assertEqual(code, 0, out)
             self.assertEqual(out["state"]["journals"]["inProgressCount"], 2)
             self.assertEqual(out["state"]["journals"]["staleCount"], 1)
@@ -141,7 +141,7 @@ class ToolPlacementScanTest(unittest.TestCase):
             root = Path(tmp)
             make_lease(root, "old-topic", expired=True)
             make_lease(root, "live-topic", expired=False)
-            code, out = run("scan", "", "--no-router", root=root)
+            code, out = run("scan", "", "--no-router", "--json", root=root)
             self.assertEqual(code, 0, out)
             self.assertEqual(out["state"]["leases"]["expiredCount"], 1)
             self.assertEqual(out["state"]["leases"]["activeCount"], 1)
@@ -150,7 +150,7 @@ class ToolPlacementScanTest(unittest.TestCase):
 
     def test_router_wrap_and_misroute_shape(self):
         # real root에서 router subprocess가 붙는지 + misroute 구조 확인
-        code, out = run("scan", "forcerestart meta display", "--no-git",
+        code, out = run("scan", "forcerestart meta display", "--no-git", "--json",
                         root=ROOT)
         self.assertEqual(code, 0, out)
         router = out.get("router") or {}

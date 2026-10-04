@@ -52,7 +52,7 @@ public class CitationGate {
         } else {
             log.debug("[CitationGate] Source count {} is below minCount {} (logOnly={}).", count, required, logOnly);
         }
-        GateDecision decision = logOnly ? GateDecision.WARN : GateDecision.DEGRADE;
+        GateDecision decision = logOnly || count == 0 ? GateDecision.WARN : GateDecision.DEGRADE;
         traceDecision(decision, count, required, allowlistRatio);
         return decision;
     }
@@ -61,6 +61,7 @@ public class CitationGate {
         String decisionName = decision == null ? "UNKNOWN" : decision.name();
         TraceStore.put("guard.citation.decision", decisionName);
         TraceStore.put("guard.citation.sourceCount", Math.max(0, count));
+        TraceStore.put("guard.citation.hint", count == 0 ? java.util.Map.of("status", "근거 없음") : null);
         TraceStore.put("guard.citation.requiredCount", Math.max(0, required));
         TraceStore.put("guard.citation.allowlistRatio",
                 Double.isFinite(allowlistRatio) ? Math.max(0.0d, Math.min(1.0d, allowlistRatio)) : 0.0d);

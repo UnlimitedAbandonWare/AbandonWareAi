@@ -308,13 +308,14 @@ class FallbackAwareReplaySafetyTest {
     }
 
     @Test
-    void structuredQueueOverloadUsesFallbackExactlyOnce() {
+    void structuredQueueOverloadDoesNotProveSafeReplay() {
         AtomicInteger fallbackCalls = new AtomicInteger();
         FallbackAwareChatModel model = wrapper(
                 ignored -> { throw httpFailure(503, "{\"error\":\"overloaded\"}"); },
                 ignored -> answer("backup", fallbackCalls));
-        assertEquals("backup", model.chat(messages()).aiMessage().text());
-        assertEquals(1, fallbackCalls.get());
+        LlmGatewayException failure = assertThrows(LlmGatewayException.class, () -> model.chat(messages()));
+        assertEquals("provider_execution_uncertain", failure.reasonCode());
+        assertEquals(0, fallbackCalls.get());
     }
 
     @ParameterizedTest

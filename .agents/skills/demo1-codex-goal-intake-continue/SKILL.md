@@ -16,6 +16,9 @@ description: Use when Codex or demo-1 session starts from goal-objective.md / at
    제목으로 쓰지 않는다 — 이미 그렇게 등록됐다면 mis-registration으로
    간주하고 본문의 Mission/WP 완료 정의로 재해석해 계속한다.
 2. 순서: Read intake → (optional) `demo1_goal_switch_barrier.py check` →
+   `python -B scripts/codex_auto_unblock.py superseded --ledger <내 ledger>`
+   (재개 작업만 — 같은 목표·topic 접두어의 더 새 ledger가 Acceptance를
+   PASS로 닫았으면 `SUPERSEDED by <ledger>`로 즉시 종료, D33) →
    **implement smallest seam** → verify → only then
    `$demo1-goal-complete-stop`.
 3. "완료까지 N초"인데 소스 diff 0이면 **미완료**. CONTINUE가 의무다.

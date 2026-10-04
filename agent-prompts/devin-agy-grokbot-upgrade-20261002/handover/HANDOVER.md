@@ -22,8 +22,8 @@
 ## 3. 지시서 저장 흐름 (매번, 묻지 않고)
 1. 파일 이름: `PASTE_<AGENT>_<topic>_<yyyymmdd>.txt` (AGENT = CODEX | DEVIN | GROK | CLEAN | GPTPRO, topic은 kebab-case).
 2. `C:\Users\nninn\Downloads\`에 UTF-8(BOM 없음)으로 저장한다.
-3. 같은 내용을 `src\agent-prompts\<agent>-<topic>-<yyyymmdd>\BRIEF.txt`에도 복사한다.
-4. 두 파일의 크기(바이트)와 sha256 앞 12자를 확인한다. 둘이 같아야 한다.
+3. `src\agent-prompts\<agent>-<topic>-<yyyymmdd>\BRIEF.txt` 사본은 만들지 않는다 — 지시서는 Downloads의 PASTE 한 파일뿐이다(2026-10-03 사용자 요청으로 폐기, R6).
+4. 파일의 크기(바이트)와 sha256 앞 12자를 확인한다.
 5. 경로·크기·sha12를 보고한다. 이미 같은 이름이 있으면 덮어쓰지 말고 `_R2`, `_R3`을 붙인다.
 
 ## 4. 지시서 형식 (순서 고정)
@@ -39,6 +39,8 @@
   - 첫 줄은 `$demo1-codex-auto-decide $demo1-codex-plugin-roles $demo1-work-ledger $demo1-project-root $agent-scope-lease $regression-check`
   - Codex는 목표 파일만 읽고 멈추는 버릇이 있어서 [ANTI-STOP]이 꼭 필요하다. 목표 파일을 고친 뒤에는 Codex 창에 한 줄 nudge를 넣어야 반영된다.
 - 완료 정의: 모든 Acceptance PASS. 읽기·계획만으로는 완료가 아니다.
+- (R7b) lease 명령: `__patch_drop__\source_edit_session.ps1 -Action` 값은 begin·end·status·verify·bind-scope·heartbeat·recover뿐 — 그 외 동사는 존재하지 않는다. 겹침 확인 `scripts\agent_scope_lease.py`, 기록 `scripts\work_journal.py`.
+- (R20) 수정 허용 목록은 예산 — 원인 체인상 필요한 작고(≤3파일·≤300줄) 되돌릴 수 있는 파일은 변경 금지·외부 lease가 아니면 AUTO 확장 + SCOPE_EXPAND 기록.
 
 ## 5. 모든 지시서의 절대 금지
 - push / pull / commit, `git add -A`, reset --hard / checkout / restore / stash / clean / force-push
@@ -58,7 +60,7 @@
 - Clean은 2026-10-01부터 worktree 모드가 꺼져 원본 트리에서 바로 돈다. 그래서 Clean 지시서는 읽기 전용이나 lease 범위 안으로 제한한다.
 
 ## 7. 비용 규칙
-- 비용 순서(2026-10-03 사용자 결정, 화력 위주): ① Codex 크레딧(현재 62,500) → ② 외부 유료 API → ③ 무료 → ④ 로컬 Ollama(RTX 3090)는 맨 마지막 예외 폴백이다. 예전 "무료·로컬 우선"은 폐기했다. 라이브 API 호출은 지시서마다 상한을 두고(전체 브라우저 자가점검 약 25회), 401/403/429면 재시도하지 않는다.
+- 비용 순서(2026-10-03 사용자 결정, 화력 위주): ① Codex 크레딧(현재 62,500) → ② 외부 유료 API → ③ 무료 → ④ 로컬 Ollama(RTX 3090)는 맨 마지막 예외 폴백이다. 예전 로컬·무료 우선 순서는 폐기했다. 라이브 API 호출은 지시서마다 상한을 두고(전체 브라우저 자가점검 약 25회), 401/403/429면 재시도하지 않는다.
 - 외부 API 오류는 원인을 찾아 보고서 맨 위에 쓴다. mock 통과는 live 검증이 아니다.
 - agy 자신도 크레딧·한도를 사거나 결제 설정을 바꾸지 않는다.
 

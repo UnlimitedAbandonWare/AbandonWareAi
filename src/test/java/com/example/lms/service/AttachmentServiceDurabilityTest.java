@@ -80,6 +80,10 @@ class AttachmentServiceDurabilityTest {
             var first=service(db.store,storage);id=first.saveAll(List.of(upload),"42",owner).get(0).id();
             assertTrue(db.store.find(id).isPresent(),"upload must create durable owner-bound metadata");
             var docs=first.asDocumentsForSession(List.of(id),"42",owner);assertFalse(docs.isEmpty());
+            for(var document:docs){
+                assertEquals("TOKEN_COUNT_UNVERIFIED",document.metadata().getString("semanticExtractionReason"));
+                assertEquals(0,document.metadata().toMap().get("semanticAttempts"));
+            }
             revision=docs.get(0).metadata().getLong("sourceRevision");
             assertEquals(revision,db.store.find(id).orElseThrow().sourceRevision());
         }
@@ -89,6 +93,10 @@ class AttachmentServiceDurabilityTest {
             assertTrue(restored.find(id,AttachmentOwnerIdentity.forAnonymous("foreign")).isEmpty());
             assertEquals(List.of(id),restored.findIdsBySession("42",16,owner));
             var docs=restored.asDocumentsForSession(List.of(id),"42",owner);assertFalse(docs.isEmpty());
+            for(var document:docs){
+                assertEquals("TOKEN_COUNT_UNVERIFIED",document.metadata().getString("semanticExtractionReason"));
+                assertEquals(0,document.metadata().toMap().get("semanticAttempts"));
+            }
             assertEquals(revision,docs.get(0).metadata().getLong("sourceRevision"));
             assertTrue(restored.asDocumentsForSession(List.of(id),"43",owner).isEmpty());
             assertFalse(restored.attachToSession("43",List.of(id),owner));

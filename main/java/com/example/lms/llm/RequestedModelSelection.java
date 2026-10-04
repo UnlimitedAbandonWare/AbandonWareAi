@@ -57,4 +57,7 @@ public final class RequestedModelSelection {
         Object requested = TraceStore.get(KEY);
         return requested instanceof String id && id.equals(model);
     }
+    public static boolean active() {
+        return TraceStore.get(KEY) instanceof String id && !id.isBlank();
+    }
 }

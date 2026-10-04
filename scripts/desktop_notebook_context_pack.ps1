@@ -568,7 +568,7 @@ $gitBranch = 'unknown'
 $gitChangedFiles = @()
 try {
     $gitBranch = (git branch --show-current).Trim()
-    $rawGitStatus = git status --short
+    $rawGitStatus = git --no-optional-locks status --short
     $gitFacts += "branch=$gitBranch"
     $gitFacts += ("changed_file_count={0}" -f $rawGitStatus.Count)
     $gitFacts += 'status='

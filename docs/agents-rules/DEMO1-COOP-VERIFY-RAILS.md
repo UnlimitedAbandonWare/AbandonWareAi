@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L413-L421 sha256=88b6444718adeec2452897f6a573481b2c4029e6fcdd1dde6feaa16a3f7d5cc0 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L421-L429 sha256=88b6444718adeec2452897f6a573481b2c4029e6fcdd1dde6feaa16a3f7d5cc0 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-COOP-VERIFY-RAILS -->
 ## Cooperative verification rails (multi-agent deferred verify)
 

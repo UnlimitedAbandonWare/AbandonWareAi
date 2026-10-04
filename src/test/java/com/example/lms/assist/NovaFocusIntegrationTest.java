@@ -30,6 +30,36 @@ class NovaFocusIntegrationTest {
         }
     }
     final String owner="a".repeat(64),client="a".repeat(32);
+    @Test void previewReadKeepsFoldTargetWhileOrdinaryReadSelectsLens() throws Exception {
+        var owners=mock(ClientOwnerKeyResolver.class);when(owners.ownerKey()).thenReturn("synthetic-preview-owner");
+        var focus=mock(NovaFocusService.class);
+        var http=new MockHttpServletRequest();http.setMethod("POST");http.setScheme("https");http.setServerName("example.test");http.setServerPort(443);
+        http.addHeader("Origin","https://example.test");http.addHeader("X-Display-Client","1");
+        try(var sessions=new ConversateSessionService()){
+            var c=new DisplayConversateController(sessions,owners,new InterviewDemoPublicAddress());
+            ReflectionTestUtils.setField(c,"phoneTestEnabled",true);ReflectionTestUtils.setField(c,"novaFocus",focus);
+            var v=c.phoneTest(new DisplayConversateController.Connection(null,0,client,true,false),http).getBody();
+            var auto=new DisplayConversateController.FocusCommand(v.assistId(),v.epoch(),client,"auto",null,null);
+            var link=c.lensLink(new DisplayConversateController.Connection(v.assistId(),v.epoch(),client),http).getBody();
+            var mapper=new com.fasterxml.jackson.databind.ObjectMapper().configure(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES,false);
+            var preview=mapper.readValue("{\"token\":\""+link.token()+"\",\"preview\":true}",DisplayConversateController.LensRead.class);
+            c.lensText(preview,http);c.focusOpen(auto,http);
+            verify(focus).open(anyString(),eq(v.assistId()),eq(v.epoch()),eq("fold"));
+            clearInvocations(focus);
+            c.lensText(new DisplayConversateController.LensRead(link.token()),http);c.focusOpen(auto,http);
+            verify(focus).open(anyString(),eq(v.assistId()),eq(v.epoch()),eq("lens"));
+            assertEquals("LensRead[redacted]",preview.toString());
+        }
+    }
+    @Test void testChannelPreviewDoesNotRegisterLensSubscriber(){
+        var relay=new DisplayRelay(java.time.Clock.systemUTC());
+        var channel="test-"+"c".repeat(32);
+        var p=relay.activate(channel,owner,client,"synthetic-session");
+        relay.poll(channel,"b".repeat(32),LensDisplayPrefs.defaults(1000),true);
+        assertEquals(0,relay.debug(channel,p).get("subscribers"));
+        relay.poll(channel,"b".repeat(32),LensDisplayPrefs.defaults(1000));
+        assertEquals(1,relay.debug(channel,p).get("subscribers"));
+    }
     @Test void hintsOffStillDeliversFocusAndDoesNotStopCapture(){
         var history=mock(NovaFocusHistoryService.class);
         var d=NovaFocusSettings.defaults();var enabled=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation());

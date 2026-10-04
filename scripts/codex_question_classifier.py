@@ -5,7 +5,7 @@ codex_question_classifier.py
 Codex가 사용자에게 묻기 직전의 "질문 문장"을 분류해 기본 판정을 JSON으로 출력.
 
   verdict : AUTO | ASK_ONCE | HOLD
-  rule    : D1..D20 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
+  rule    : D1..D34 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
   default_answer / log_line
 
 SSOT 표: .agents/skills/demo1-codex-auto-decide/SKILL.md
@@ -130,6 +130,124 @@ NARROW_OVERRIDES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# D29 범위 확장: 지시서 허용 목록 밖 파일이 원인 체인상 필요할 때의 질문 패턴.
+# ASK_ONCE 키워드는 기존 우선순위 구조 그대로 D29보다 먼저다. 범위 확장 문맥에서
+# SCOPE_EXPAND_FORBIDDEN(하드 금지)이 함께 언급되면 그 항목만 HOLD — classify가
+# D 표 검사 전에 걸러낸다.
+# ---------------------------------------------------------------------------
+D29_SCOPE_EXPAND = (
+    r"allowlist|allowed\s+(edit\s+)?(paths?|files?|targets?|list)\b|"
+    r"outside\s+(the\s+)?[\w'’\s-]{0,40}?"
+    r"(scope|allowlist|allowed\s+list|edit\s+list)|"
+    r"additional\s+(source\s+)?file|scope\s+expansion|"
+    r"expand\s+(the\s+)?\w*\s*scope|"
+    r"authoriz\w*\s+(this\s+)?(additional|extra|new|further)\s+\w*\s*file|"
+    r"허용\s*목록\s*밖|범위\s*확(장|대|넓)|수정\s*허용.{0,10}(밖|목록|범위)|"
+    r"추가\s*파일.{0,6}(승인|허용)|목록\s*밖.{0,10}파일|범위\s*밖.{0,10}파일"
+)
+
+# 하드 금지 대상 — 범위 확장 문맥에서 이들이 언급되면 AUTO로 넓히지 않는다.
+SCOPE_EXPAND_FORBIDDEN = (
+    r"chat\.js|\.env\b|\.secrets\b|secrets?\b|비밀|"
+    r"prod(uction)?[\s-]*(profile|프로필)|application-prod|"
+    r"운영\s*(프로필|환경)|프로드|forbidden\s+(list|paths?)|"
+    r"(변경|수정)\s*금지|db\s*schema|스키마"
+)
+
+# ---------------------------------------------------------------------------
+# D30~D34: 2026-10-03 실측 멈춤 사례 U1~U5 — 되돌릴 수 있는 멈춤은 질문 없이
+# AUTO. D1/D2/D6 같은 범용 규칙보다 먼저 매치되어야 하므로 D29 바로 뒤에 둔다.
+# ---------------------------------------------------------------------------
+
+# D30: 라이브 생성·호출 상한 "증액 승인?" 질문. 조건(같은 모델·엔드포인트,
+# 직전 401/403/429 0회, 검증 목적, 작업당 1회, ≤max(2, 상한의 50%), 공개 /chat
+# 작업당 3회 유지)은 실행 시 codex_auto_unblock.py budget이 판정한다 — 여기서는
+# "묻지 않는다"는 판정만 낸다. 모델 도달 전 실패(클래스 로딩·빌드·launcher·
+# controller 이전 HTTP 500)는 애초에 카운트하지 않는다.
+D30_LIVE_BUDGET = (
+    r"라이브.{0,16}(상한|최대|한도|횟수)|"
+    r"(상한|한도|예산|budget|cap).{0,16}(도달|소진|초과|다?\s*씀|\d+\s*/\s*\d+)|"
+    r"(생성|호출|발송|attempt|calls?|generation).{0,12}"
+    r"(횟수|상한|한도|cap|limit).{0,16}(도달|소진|승인|증액|늘|추가|reach)|"
+    r"live.{0,24}(cap|limit|budget).{0,24}"
+    r"(reach|hit|exceed|spent|increase|extend|more)|"
+    r"추가\s*\d*\s*(회|번|calls?|generations?|시도).{0,12}(승인|허용|허가)|"
+    r"(승인|증액|연장|extend).{0,12}(라이브|생성|호출|추가|more)"
+)
+
+# D30 예외 게이트: HARD_CAP·증액 금지 표기가 있으면 증액 없이 partial 종료 —
+# 그래도 질문 카드는 띄우지 않는다 (AUTO).
+D30_HARDCAP = (
+    r"hard[\s_-]?cap|절대\s*(증액|추가)\s*금지|증액\s*금지|"
+    r"no\s+(more|further)\s+(calls?|generations?|increase|extension)"
+)
+
+# D31: "사용자가 보낸 시각·화면 표시 여부를 알려 달라"는 사용자 증거 대기 —
+# 서버 로그·SSE 관찰로 대체 판정한다 (codex_auto_unblock.py log-evidence /
+# settings_defaults_sse_observe.py).
+D31_USER_EVIDENCE = (
+    r"사용자.{0,16}(직접|보낸|전송|입력).{0,24}"
+    r"(시각|시간|때|여부|확인|보였|표시|알려)|"
+    r"(보낸|전송한|입력한).{0,8}(시각|시간).{0,16}(알려|확인|여부)|"
+    r"(화면|표시).{0,8}(보였|표시됐|나타|보이|나왔).{0,16}(알려|확인|여부|증거|는지)|"
+    r"(답|답변|응답).{0,8}(표시|보이).{0,8}(여부|는지|알려|확인)|"
+    r"tell me.{0,48}(when|the time).{0,24}(sent|send)|"
+    r"(did|does|whether).{0,24}(the\s+)?(answer|response|reply|it).{0,24}"
+    r"(appear|show|display|render)|"
+    r"사용자.{0,8}(확인|증거).{0,8}(대기|기다|필요)"
+)
+
+# D32: live lease 겹침 — BLOCKED 종료 대신 겹치지 않는 일 먼저 + 최대 20분
+# 60초 간격 대기 후 이어서 진행. 강제 해제는 절대 금지.
+D32_LEASE_WAIT = (
+    r"live\s*lease|"
+    r"lease.{0,24}(겹|충돌|overlap|conflict|held|blocked|다른\s*세션|살아)|"
+    r"(다른|foreign).{0,8}(세션.{0,8})?(lease|예약|잠금).{0,24}"
+    r"(겹|충돌|보유|잡|active|live|held|overlap)|"
+    r"(lease|예약|잠금).{0,24}(기다릴|wait|대기|풀릴|해제).{0,12}(까요|\?|여부)|"
+    r"(lease|예약).{0,20}(겹|충돌).{0,24}"
+    r"(종료|중단|기다|wait|BLOCKED|어쩔|계속|진행)|"
+    r"BLOCKED.{0,16}(종료|보고|처리).{0,20}(lease|예약|겹)|"
+    r"source.?target.?overlap|exit\s*7.{0,16}(lease|overlap|겹)"
+)
+
+# D33: 같은 목표를 더 새 세션이 이미 끝냄 — 재개 대신 SUPERSEDED로 닫는다.
+D33_SUPERSEDED = (
+    r"(다른|newer|새로운).{0,8}(세션|ledger|session|run).{0,24}"
+    r"(이미|먼저|already).{0,16}"
+    r"(완료|해결|끝|closed|pass|verified|completed|solved)|"
+    r"(다른|newer|새로운).{0,8}(세션|ledger|session).{0,24}"
+    r"(완료|해결).{0,8}(했|됐|함)|"
+    r"(같은|동일).{0,8}(목표|goal|objective|topic).{0,16}"
+    r"(다른|newer|새).{0,8}(세션|ledger|session).{0,20}"
+    r"(완료|해결|끝|closed|verified|solved)|"
+    r"(같은|동일).{0,8}(목표|goal|objective|topic).{0,8}"
+    r"(세션|ledger|session).{0,60}"
+    r"(이미|먼저|already).{0,24}"
+    r"(완료|해결|끝|closed|verified|solved|pass)|"
+    r"(세션|ledger|session).{0,60}"
+    r"(이미|먼저|already).{0,24}"
+    r"(해결|완료).{0,8}(됐|했|함).{0,60}"
+    r"(재개|닫|resume|close)|"
+    r"superseded|already.{0,24}(solved|completed|closed).{0,16}(goal|this|session)|"
+    r"이미.{0,8}해결된.{0,8}(목표|작업|세션)"
+)
+
+# D34: 환경 일시 실패(브라우저 정책 거부·launcher 중복·재빌드 중 클래스 누락)
+# 는 라이브 카운트 0 — 대체 관찰 후 1회만 재시도.
+D34_ENV_TRANSIENT = (
+    r"url\s+protocol\s+is\s+not\s+allowed|protocol.{0,16}not\s+allowed|"
+    r"브라우저.{0,8}(도구|tool).{0,16}(정책|거부|policy|denied|실패|오류)|"
+    r"launcher.{0,24}already\s+running|"
+    r"already\s+running.{0,24}(launcher|런처|runtime|런타임)|"
+    r"(재빌드|rebuild).{0,16}(중|in\s+progress|완료\s*대기|기다)|"
+    r"(클래스|class).{0,8}(로딩.{0,4}(실패|오류)|누락)|NoClassDefFound|ClassNotFound|"
+    r"환경.{0,4}일시.{0,4}(실패|오류)|transient.{0,12}(env|environment|failure)|"
+    r"(라이브|live).{0,8}(카운트|count).{0,8}(넣을|포함|제외|계산)"
+)
+
+
 def _narrow_override(text, hit_rule):
     """ask_hit 1개일 때 좁은 예외 판정 -> (d_rule, answer) or None."""
     for allowed, d_rule, cond, answer in NARROW_OVERRIDES:
@@ -146,6 +264,11 @@ def _narrow_override(text, hit_rule):
 # ("범위 확대" 같은 단어가 D1의 범용 `범위`를 먼저 잡지 않게).
 # ---------------------------------------------------------------------------
 D_RULES = [
+    # D34: 환경 일시 실패 — D14의 `런처|launcher` 같은 범용 패턴보다 먼저
+    # 검사해야 "launcher already running"이 스크립트 수정으로 오분류되지 않는다.
+    ("D34", D34_ENV_TRANSIENT,
+     "환경 일시 실패는 라이브 카운트 0 — 기존 런타임 부착(소유자 확인 후) "
+     "또는 HTTP 관찰로 대체, 재빌드 ready 확인 뒤 1회만 재시도"),
     ("D13",
      r"좁은.{0,8}(인증|auth|예외)|narrow.{0,16}(auth|exception)|"
      r"owner별.{0,16}(patch|get|post|허용|메서드)|"
@@ -208,6 +331,30 @@ D_RULES = [
      r"가드가.{0,40}(차단|막)",
      "회귀 테스트와 함께 스캐너·가드 자체를 수정 "
      "(DEMO1-AGENT-GUARD-COMMON 방향); 다른 세션 lease 겹치면 해당 파일만 HOLD"),
+    # D29: 지시서 허용 목록 밖이지만 원인 체인상 필요한 작고 되돌릴 수 있는
+    # 수정 — ASK_ONCE 키워드와 하드 금지 대상(SCOPE_EXPAND_FORBIDDEN)은 위에서
+    # 이미 걸러진 뒤라 여기 도달하면 조건부 AUTO. 조건 ①~⑤는 SKILL.md 표 참조.
+    ("D29", D29_SCOPE_EXPAND,
+     "조건 ①~⑤ 확인 → 적용+checkpoint+집중 테스트, 실패 조건만 HOLD "
+     "(보고서에 SCOPE_EXPAND: 파일|근거 file:line|되돌리는 법 한 줄)"),
+    # D30~D34: U1~U5 실측 멈춤 — D1/D2 범용 패턴보다 먼저 검사한다.
+    ("D30", D30_LIVE_BUDGET,
+     "codex_auto_unblock.py budget으로 재집계 → 조건 충족이면 작업당 1회 "
+     "≤max(2, 상한 50%) 자동 증액 `AUTO_DECISION: D30 live-budget +N`; "
+     "조건 미충족·401/403/429 이력·두 번째 증액이면 남은 항목 NOT_RUN "
+     "partial 종료 — 어느 쪽이든 질문 없음 (공개 /chat 작업당 3회 유지)"),
+    ("D31", D31_USER_EVIDENCE,
+     "사용자 증거 대기 금지 — codex_auto_unblock.py log-evidence 또는 "
+     "settings_defaults_sse_observe.py로 phase/terminal/final-response 판정; "
+     "로그도 없을 때만 그 항목 NOT_RUN (질문 없이)"),
+    ("D32", D32_LEASE_WAIT,
+     "live lease 겹침은 BLOCKED 종료 금지 — 겹치지 않는 일 먼저, 최대 20분 "
+     "60초 간격 재확인(lease-wait), 풀리면 같은 턴 이어서; 계속 live면 "
+     "autoflow release 요청 1회 + partial + 재개 조건 한 줄 (강제 해제 금지)"),
+    ("D33", D33_SUPERSEDED,
+     "codex_auto_unblock.py superseded 확인 → 더 새 ledger가 Acceptance "
+     "핵심 PASS면 새 작업 없이 `SUPERSEDED by <ledger>`로 report/journal "
+     "닫기 (질문 없이)"),
     ("D1",
      r"범위|scope|읽기만|읽기\s*[·/]?\s*확인\s*까지|까지인가|구현\s*[·/]?\s*검증\s*까지|"
      r"just\s+(read|review|inspect)|read\s*(only|ing)?.{0,20}(or|vs|versus)\b|"
@@ -267,7 +414,9 @@ D_RULES = [
 
 SELFASK_ANSWER = (
     "demo1-vibe-selfask-judge-auto 루프 수행 → "
-    "판정이 ASK여도 ASK_ONCE 목록에 없으면 가장 보수적인 가역 선택으로 AUTO"
+    "판정이 ASK여도 ASK_ONCE 목록에 없으면 AUTO — 보수적 가역 선택은 "
+    "목표에 필요한 되돌릴 수 있는 수정이면 '적용 + checkpoint'다 "
+    "('적용 안 함'은 목표 미완료 보관이라 기본값이 아니다)"
 )
 
 EXIT_CODES = {"AUTO": 0, "ASK_ONCE": 3, "HOLD": 4}
@@ -390,6 +539,29 @@ def classify(text):
             "rule": rule,
             "default_answer": f"{answer} — 사용자 승인 필요 (질문 1개만)",
             "log_line": f"ASK_ONCE: {rule} | {answer} | {excerpt}",
+        }
+    # 범위 확장 문맥 + 하드 금지 대상 → 그 항목만 HOLD (나머지 작업은 계속).
+    if re.search(D29_SCOPE_EXPAND, text, re.IGNORECASE) and \
+            re.search(SCOPE_EXPAND_FORBIDDEN, text, re.IGNORECASE):
+        return {
+            "verdict": "HOLD",
+            "rule": "D29-forbidden",
+            "default_answer": "범위 확장 대상이 하드 금지(chat.js/.env/.secrets/"
+                              "prod 프로필/DB 스키마/변경금지 목록)에 해당 — "
+                              "그 항목만 HOLD하고 나머지 작업 계속 (질문 카드 금지)",
+            "log_line": f"HOLD: D29-forbidden | {excerpt}",
+        }
+    # D30 예외: 상한 질문 문맥 + HARD_CAP·증액 금지 표기 → 증액 없이
+    # partial 종료. 질문 카드는 띄우지 않으므로 AUTO.
+    if re.search(D30_LIVE_BUDGET, text, re.IGNORECASE) and \
+            re.search(D30_HARDCAP, text, re.IGNORECASE):
+        return {
+            "verdict": "AUTO",
+            "rule": "D30-cap",
+            "default_answer": "HARD_CAP·증액 금지 명시 — 증액 없이 남은 항목 "
+                              "NOT_RUN으로 partial 종료 (질문 없이)",
+            "log_line": f"AUTO_DECISION: D30-cap | {excerpt} → hard-cap, "
+                        f"partial close | evidence: codex_question_classifier",
         }
     d_hits = _hits(D_RULES, text)
     if d_hits:

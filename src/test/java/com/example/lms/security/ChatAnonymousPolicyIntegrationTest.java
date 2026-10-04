@@ -78,4 +78,10 @@ class ChatAnonymousPolicyIntegrationTest {
     @Test void sensitiveActuatorIsStillDenied() throws Exception {
         mvc.perform(get("/actuator/env")).andExpect(status().isUnauthorized());
     }
+    @Test void onlyLensAssetsAllowSameOriginFrames() throws Exception {
+        mvc.perform(get("/assets/display/meta/index.html")).andExpect(header().string("X-Frame-Options","SAMEORIGIN"));
+        for(String path:new String[]{"/chat","/assets/display/index.html","/assets/display/meta-other/index.html","/api/chat/state"}){
+            mvc.perform(get(path)).andExpect(header().string("X-Frame-Options","DENY"));
+        }
+    }
 }

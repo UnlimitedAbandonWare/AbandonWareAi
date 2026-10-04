@@ -139,6 +139,37 @@ class VerdictTests(unittest.TestCase):
                                 runner=make_runner(origin_main="b2eaba46aa"))
             self.assertEqual("b2eaba46aa", r["git"]["originMainSha"])
 
+    def test_work_branch_sha_and_main_relation(self):
+        tmp, root = make_tree([])
+        with tmp:
+            cfg = root / "configs" / "git-branch-context.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text('{"workBranch":"codex/owned-runtime-browser-restart",'
+                           '"remote":"origin","snapshotBranch":"main"}',
+                           encoding="utf-8")
+
+            def runner(root, args, timeout=30):
+                joined = " ".join(args)
+                if joined == "rev-parse --show-toplevel":
+                    return 0, str(root) + "\n", ""
+                if joined == "rev-parse HEAD":
+                    return 0, "433bd6f5\n", ""
+                if joined == "branch --show-current":
+                    return 0, BRANCH + "\n", ""
+                if joined.startswith("worktree list"):
+                    return 0, "worktree x\nHEAD 433bd6f5\n\n", ""
+                if joined.startswith("for-each-ref"):
+                    return (0, "origin/main b2eaba46aa\n"
+                            "origin/codex/owned-runtime-browser-restart 433bd6f5\n", "")
+                if joined == "merge-base HEAD origin/main":
+                    return 1, "", ""  # unrelated snapshot history
+                return 0, "", ""
+
+            r = probe_mod.probe(root, EXPECT, BRANCH, [], runner=runner)
+            self.assertEqual("433bd6f5", r["git"]["originWorkBranchSha"])
+            self.assertEqual("unrelated", r["git"]["mainRelation"])
+            self.assertEqual("b2eaba46aa", r["git"]["originMainSha"])
+
 
 class SymbolTests(unittest.TestCase):
     def test_reference_only(self):

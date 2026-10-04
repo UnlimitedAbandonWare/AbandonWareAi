@@ -191,6 +191,10 @@ public class ChatOpenSecurityConfig {
                 AntPathRequestMatcher.antMatcher("/ws/**"),
                 AntPathRequestMatcher.antMatcher("/api/chat/**")
             ))
+            .headers(headers -> headers.frameOptions(frame -> frame.disable()).addHeaderWriter((request,response) -> {
+                String path=request.getRequestURI().substring(request.getContextPath().length());
+                response.setHeader("X-Frame-Options",path.startsWith("/assets/display/meta/")?"SAMEORIGIN":"DENY");
+            }))
             .cors(cors -> { if (interviewDemo) cors.disable(); else cors.configurationSource(corsConfigurationSource()); })
             .csrf(csrf -> csrf
                 .ignoringRequestMatchers(

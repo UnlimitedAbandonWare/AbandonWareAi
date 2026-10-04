@@ -2,6 +2,7 @@ package com.example.lms.learning.gemini;
 
 import com.example.lms.guard.ProviderCredentialResolver;
 import com.example.lms.agent.FreeTierApiThrottleService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.env.MockEnvironment;
@@ -20,6 +21,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -507,6 +509,150 @@ class GeminiGatewayContractTest {
         assertEquals("", expansion.query());
         assertEquals(1, exchanges.get());
         assertEquals("duplicate-expansion", expansion.status().fallbackReason());
+    }
+
+    @Test
+    void groundingOptInAddsGoogleSearchToolToTheNativeBody() {
+        Map<String, Object> grounded = GeminiGateway.generationBody("private prompt", true);
+        assertEquals(List.of(Map.of("google_search", Map.of())), grounded.get("tools"));
+
+        Map<String, Object> plain = GeminiGateway.generationBody("private prompt", false);
+        assertFalse(plain.containsKey("tools"));
+    }
+
+    @Test
+    void groundingOptInCarriesTheToolBlockToTheWireAndHonorsTheKillSwitch() throws Exception {
+        AtomicReference<com.fasterxml.jackson.databind.JsonNode> payload = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            payload.set(new com.fasterxml.jackson.databind.ObjectMapper().readTree(exchange.getRequestBody()));
+            byte[] response = "{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"grounded\"}]}}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream body = exchange.getResponseBody()) {
+                body.write(response);
+            }
+        });
+        server.start();
+
+        try {
+            MockEnvironment environment = baseEnvironment()
+                    .withProperty("GEMINI_API_KEY", "gemini-grounding-test-value")
+                    .withProperty("gemini.gateway.purpose.understanding.enabled", "true")
+                    .withProperty("gemini.gateway.base-url",
+                            "http://127.0.0.1:" + server.getAddress().getPort());
+            GeminiGateway gateway = new GeminiGateway(WebClient.builder(),
+                    new ProviderCredentialResolver(environment), environment);
+
+            GeminiGateway.GenerationResult result = gateway
+                    .generate("private prompt", GeminiGateway.Purpose.UNDERSTANDING, true).block();
+
+            assertNotNull(result);
+            assertEquals("grounded", result.text());
+            assertTrue(payload.get().path("tools").get(0).has("google_search"));
+
+            payload.set(null);
+            MockEnvironment disabled = baseEnvironment()
+                    .withProperty("GEMINI_API_KEY", "gemini-grounding-test-value")
+                    .withProperty("gemini.gateway.purpose.understanding.enabled", "true")
+                    .withProperty("gemini.gateway.grounding.enabled", "false")
+                    .withProperty("gemini.gateway.base-url",
+                            "http://127.0.0.1:" + server.getAddress().getPort());
+            GeminiGateway offGateway = new GeminiGateway(WebClient.builder(),
+                    new ProviderCredentialResolver(disabled), disabled);
+
+            assertEquals("grounded", offGateway
+                    .generate("private prompt", GeminiGateway.Purpose.UNDERSTANDING, true).block().text());
+            assertFalse(payload.get().has("tools"), "kill switch strips the tool block");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void t1NativeMultipartConcatenatesOrdinaryTextInOrder() {
+        assertNativeResponse("""
+                {"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"앞"},{"text":"뒤"}]}}]}
+                """, "앞뒤");
+    }
+
+    @Test
+    void t2NativeMultipartSkipsNullAndNonTextLeadingParts() {
+        for (String leadingPart : List.of("null", "{}", "{\"text\":null}",
+                "{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"AA==\"}}",
+                "{\"functionCall\":{\"name\":\"synthetic\",\"args\":{}}}",
+                "{\"executableCode\":{\"language\":\"PYTHON\",\"code\":\"pass\"}}")) {
+            assertNativeResponse("{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":["
+                    + leadingPart + ",{\"text\":\"뒤쪽 본문\"}]}}]}", "뒤쪽 본문");
+        }
+    }
+
+    @Test
+    void t3NativeMultipartExcludesThoughtAndPreservesAbsentFalseOrNullThought() {
+        assertNativeResponse("""
+                {"candidates":[{"finishReason":"STOP","content":{"parts":[
+                  {"thought":true,"text":"SYNTHETIC_THOUGHT_MARKER"},
+                  {"text":"앞"},null,{"thought":false,"text":"뒤"},{"thought":null,"text":"끝"}]}}]}
+                """, "앞뒤끝");
+    }
+
+    @Test
+    void t4NativeMultipartReadsOnlyTheFirstCandidate() {
+        assertNativeResponse("""
+                {"candidates":[
+                  {"finishReason":"STOP","content":{"parts":[{"text":"앞"},{"text":"뒤"}]}},
+                  {"finishReason":"STOP","content":{"parts":[{"text":"SECOND_CANDIDATE_MARKER"}]}}]}
+                """, "앞뒤");
+    }
+
+    @Test
+    void t5NativeMultipartEmptyShapesRemainFailSoftWithoutAdditionalCalls() {
+        for (String payload : List.of("{}", "{\"candidates\":null}", "{\"candidates\":[]}",
+                "{\"candidates\":[null]}", "{\"candidates\":[{}]}",
+                "{\"candidates\":[{\"content\":null}]}", "{\"candidates\":[{\"content\":{}}]}",
+                "{\"candidates\":[{\"content\":{\"parts\":null}}]}",
+                "{\"candidates\":[{\"content\":{\"parts\":[]}}]}",
+                "{\"candidates\":[{\"content\":{\"parts\":[null,{}, {\"text\":null}]}}]}",
+                "{\"candidates\":[{\"content\":{\"parts\":[{\"inlineData\":{\"mimeType\":\"image/png\",\"data\":\"AA==\"}}]}}]}",
+                "{\"candidates\":[{\"content\":{\"parts\":[{\"thought\":true,\"text\":\"SYNTHETIC_THOUGHT_MARKER\"}]}}]}",
+                "{\"candidates\":[null,{\"content\":{\"parts\":[{\"text\":\"SECOND_CANDIDATE_MARKER\"}]}}]}")) {
+            assertNativeResponse(payload, "");
+        }
+    }
+
+    @Test
+    void t6NativeMultipartPreservesSinglePartUnicodeCrLfWhitespaceAndJsonTokens() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        String first = "  한국어 😀\r";
+        String second = "\n{\"to";
+        String third = "ken\":\"그대로\"}\r\n  ";
+        String expected = first + second + third;
+        assertNativeResponse("{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":"
+                + mapper.writeValueAsString(expected) + "}]}}]}", expected);
+        assertNativeResponse("{\"candidates\":[{\"finishReason\":\"STOP\",\"content\":{\"parts\":[{\"text\":"
+                + mapper.writeValueAsString(first) + "},{\"text\":" + mapper.writeValueAsString(second)
+                + "},{\"text\":" + mapper.writeValueAsString(third) + "}]}}]}", expected);
+    }
+
+    private static void assertNativeResponse(String payload, String expected) {
+        AtomicInteger exchanges = new AtomicInteger();
+        GeminiGateway gateway = gateway(baseEnvironment()
+                .withProperty("GEMINI_API_KEY", "gemini-multipart-test-value"), request -> {
+            exchanges.incrementAndGet();
+            return Mono.just(ClientResponse.create(HttpStatus.OK)
+                    .header("Content-Type", "application/json").body(payload).build());
+        });
+        GeminiGateway.GenerationResult result = gateway
+                .generate("synthetic multipart prompt", GeminiGateway.Purpose.SEARCH_EXPANSION).block();
+
+        assertNotNull(result);
+        assertEquals(expected, result.text());
+        assertEquals(1, exchanges.get());
+        assertEquals(1, result.status().attemptCount());
+        assertEquals(200, result.status().statusCode());
+        assertEquals("", result.status().fallbackReason());
+        assertEquals("", result.status().errorClass());
     }
 
     private static MockEnvironment baseEnvironment() {

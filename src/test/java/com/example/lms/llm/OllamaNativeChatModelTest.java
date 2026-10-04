@@ -1086,12 +1086,58 @@ class OllamaNativeChatModelTest {
         assertTrue(prompt.contains("second"), prompt);
     }
 
+    @Test
+    void nativeResponsePreservesWireModelInsteadOfRequestedModel() throws Exception {
+        AtomicReference<String> requestBody = new AtomicReference<>("");
+        HttpServer server = startServer(requestBody,
+                "{\"model\":\"synthetic-actual:latest\",\"message\":{\"content\":\"OK\"},\"done_reason\":\"stop\"}");
+        try {
+            OllamaNativeChatModel model = new OllamaNativeChatModel(
+                    "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "synthetic-requested:latest", Duration.ofSeconds(2), 32, 0.1d);
+            ChatResponse response = model.chat(List.of(UserMessage.from("synthetic model receipt")));
+            assertEquals("OK", response.aiMessage().text());
+            assertEquals("synthetic-actual:latest", response.metadata().modelName());
+            assertEquals("synthetic-actual:latest",
+                    com.example.lms.dto.GenerationObservation.capture(response, "ollama", "native", 0, null).observedModel());
+            assertTrue(requestBody.get().contains("\"model\":\"synthetic-requested:latest\""));
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void nativeMissingOrInvalidWireModelStaysUnobserved() throws Exception {
+        for (String field : List.of("", "\"model\":null,", "\"model\":\"\",",
+                "\"model\":42,", "\"model\":{},", "\"model\":\"invalid model\",",
+                "\"model\":\"" + "x".repeat(201) + "\",")) {
+            HttpServer server = startServer(new AtomicReference<>(""),
+                    "{" + field + "\"message\":{\"content\":\"OK\"},\"done_reason\":\"stop\"}");
+            try {
+                OllamaNativeChatModel model = new OllamaNativeChatModel(
+                        "http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                        "synthetic-requested:latest", Duration.ofSeconds(2), 32, 0.1d);
+                ChatResponse response = model.chat(List.of(UserMessage.from("synthetic model receipt")));
+                var observation = com.example.lms.dto.GenerationObservation.capture(response, "ollama", "native", 0, null);
+                assertEquals("OK", response.aiMessage().text());
+                assertEquals(null, observation.observedModel());
+                assertEquals("response_model_missing", observation.observedReason());
+            } finally {
+                server.stop(0);
+            }
+        }
+    }
+
     private static HttpServer startServer(AtomicReference<String> requestBody) throws IOException {
+        return startServer(requestBody, "{\"message\":{\"content\":\"OK\"},\"done_reason\":\"stop\"}");
+    }
+
+    private static HttpServer startServer(AtomicReference<String> requestBody, String responseBody) throws IOException {
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         server.createContext("/api/chat", exchange -> {
             byte[] bytes = exchange.getRequestBody().readAllBytes();
             requestBody.set(new String(bytes, StandardCharsets.UTF_8));
-            byte[] response = "{\"message\":{\"content\":\"OK\"},\"done_reason\":\"stop\"}".getBytes(StandardCharsets.UTF_8);
+            byte[] response = responseBody.getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(200, response.length);
             exchange.getResponseBody().write(response);

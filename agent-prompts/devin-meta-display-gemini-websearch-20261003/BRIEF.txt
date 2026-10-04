@@ -1,0 +1,80 @@
+[ANTI-STOP] 읽고 멈추지 마세요. G0~G9를 순서대로 끝까지 하고 보고합니다. 되돌릴 수 있는 단계는 Self-Ask AUTO로 진행하고, 막히는 경우에만 HOLD합니다.
+
+# [DEVIN 지시서] 메타 레이벤 디스플레이 Gemini 기본 모델 및 웹서치 연동 — 2026-10-03 21:08 KST
+파일 ID: PASTE_DEVIN_META_DISPLAY_GEMINI_WEBSEARCH_20261003
+@demo1-meta-display-simple-caption
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+메타 레이벤 디스플레이(Conversate 힌트 및 Nova Focus)의 기본 모델 설정을 Gemini(gemini-3.8-flash / gemini-3.5-flash-lite)로 지정하고 웹서치 RAG 보강 경로를 안정적으로 연동·검증한다.
+
+## 1. 사실 (2026-10-03 21:05~21:08 KST)
+- 메타 디스플레이 전사 힌트(`ConversateCueRoutingPolicy.java` C2981C0F49B8 L133)의 큐 후보 정렬은 `estimatedCost * latency` 기준이며, `openai-economy`($0.20/$1.20)가 `gemini-cue`($0.30/$2.50)보다 저렴하여 현재 기본 1순위로 선별됨.
+- 노바 포커스 음성 호출(`NovaFocusAnswerService.java` 97B5522E5E5A L38, L261)의 AUTO 기본 모델은 `llm.chat-model`(기본값 `gemma4:26b` 로컬 Ollama)로 바인딩되어 있음.
+- 메타 디스플레이 설정(`main/resources/application-meta-display.yml` 6AF5CCB2ECBD L91-106, L191-214)에는 `gemini-cue`(gemini-3.5-flash-lite)와 `gemini-pro`(gemini-3.8-flash)가 정의되어 있으나 기본 활성 선택자로 고정되어 있지 않음.
+- 웹서치 연동은 `ConversateApiCueService.java`가 `UnifiedRagOrchestrator`(Naver/Brave)를 통해 검색 증거를 수집한 뒤 모델에 주입하는 RAG 방식이 이미 구현되어 있음.
+- 사용자는 폴드6 `#nova-settings` 및 `/settings` 설정을 통해 선택 가능하게 했으나, 기본 디폴트 자체를 Gemini 웹서치 버전으로 동작시키길 원함.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 시작 시 `Set-Location C:\AbandonWare\demo-1\demo-1\src`를 실행한다.
+- 보고는 반드시 `외부 API:` 줄로 시작한다.
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+
+## WP1 [Devin] application-meta-display.yml 디스플레이 기본 라우트 및 Gemini 우선순위 설정
+- 증거: `main/resources/application-meta-display.yml:91-106`, `191-214`
+- RED 검사: `.\gradlew.bat :test --tests com.example.lms.assist.DisplayConversateHttpTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- 최소 수정:
+  1) `conversate.cue.routes.gemini-cue`의 가중치 또는 `conversate.cue.preferred-provider: gemini` 설정 추가/반영
+  2) Nova Focus 기본 모델 프로퍼티(`conversate.focus.default-model: gemini-3.8-flash` 또는 `llmrouter.gemini-pro`)가 설정되었을 때 이를 최우선 기본값으로 사용하도록 매핑
+- GREEN: 위 테스트 패스 및 exit 0
+- 완료 조건: 설정 프로파일 로드 시 Gemini 라우트가 기본 선택 가능 상태로 확인됨
+
+## WP2 [Devin] ConversateCueRoutingPolicy.java 힌트 라우팅 우선순위 조정
+- 증거: `main/java/com/example/lms/assist/ConversateCueRoutingPolicy.java:133-138`
+- RED 검사: `.\gradlew.bat :test --tests com.example.lms.assist.ConversateCueRoutingPolicyTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- 최소 수정:
+  - `conversate.cue.preferred-provider` (예: `gemini`) 설정이 있을 경우, 해당 프로바이더 후보를 최우선 순위로 정렬하도록 비교자(`Comparator`) 로직 확장
+- GREEN: 위 테스트 패스 및 exit 0
+- 완료 조건: Gemini 키와 라우트가 유효할 때 `gemini-cue` / `gemini-pro`가 1순위 Choice로 반환됨
+
+## WP3 [Devin] NovaFocusAnswerService.java AUTO 모드 기본 모델 및 웹서치 연동 확인
+- 증거: `main/java/com/example/lms/assist/NovaFocusAnswerService.java:38-40`, `253-275`
+- RED 검사: `.\gradlew.bat :test --tests com.example.lms.assist.NovaFocusAnswerServiceTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- 최소 수정:
+  - `@Value("${conversate.focus.default-model:}") private String focusDefaultModel;` 추가
+  - `primaryModel` 결정 시 `focusDefaultModel`이 존재하면 로컬 `defaultModel`보다 먼저 카탈로그에서 매핑
+  - `conversate.focus.unknown-web-enabled=true` 및 기본 웹서치 트리거 정책 보장
+- GREEN: 위 테스트 패스 및 exit 0
+- 완료 조건: 노바 포커스 대화 시 AUTO 모드에서 Gemini 모델이 선택되고 웹서치 파이프라인 정상 연동
+
+## 3. HOLD (중단 조건)
+- `GEMINI_API_KEY` 환경변수가 없어 라이브 Gemini 호출 검증이 불가능한 경우 (키 발급 또는 모의 검증 여부 확인)
+- 타 에이전트의 active lease가 대상 파일에 걸려 있는 경우
+
+## 4. ASK_ONCE
+- A-1: 메타 렌즈 전사 힌트(실시간 1~2초 요약)에도 Gemini 3.5 Flash Lite를 우선할지, 아니면 노바 포커스 음성 대화("노바야")에만 Gemini 3.8 Flash를 우선할지 선택.
+  - 기본 권장값: 둘 다 Gemini 계열(힌트는 Flash Lite, 대화는 Flash 3.8)을 기본으로 적용.
+
+## 5. 절대 금지
+- git commit / git push / git add -A 금지
+- remote 추가 금지
+- PROTO_OPEN 상태 변경 및 인증 레이어 강제 추가 금지
+- 비밀 값(API 키 등) 평문 노출 금지
+- 전체 `:test` 스위트 실행 금지 (지정된 포커스 테스트만 실행)
+
+## 6. Acceptance (수용 기준)
+- `ConversateCueRoutingPolicy`에서 Gemini가 최우선 선택 후보로 산출되는 단위 테스트 통과
+- `NovaFocusAnswerService`에서 AUTO 모드 시 Gemini 모델이 기본 선택되는 단위 테스트 통과
+- `application-meta-display.yml` 설정 정합성 확인
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+
+## 7. 보고 형식
+외부 API: Gemini (API_KEY 환경변수 필요), Naver/Brave (기존 검색 RAG)
+| 항목 | 결과 | 증거 경로 |
+|---|---|---|
+| WP1 설정 갱신 | DONE | `main/resources/application-meta-display.yml` |
+| WP2 큐 라우팅 정책 | DONE | `main/java/com/example/lms/assist/ConversateCueRoutingPolicy.java` |
+| WP3 포커스 기본 모델 | DONE | `main/java/com/example/lms/assist/NovaFocusAnswerService.java` |
+
+[ANTI-STOP] 지시서 수행 중 임의 중단하지 말고 모든 단계를 검증한 후 위 보고 형식에 맞춰 최종 보고를 작성하세요.

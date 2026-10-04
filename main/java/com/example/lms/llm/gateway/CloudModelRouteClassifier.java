@@ -207,7 +207,7 @@ public class CloudModelRouteClassifier {
                     eligibility.eligible(),
                     eligibility.fallbackOnly(),
                     eligibility.failureClasses(),
-                    disabledReason);
+                    disabledReason, eligibility.safeMeta().get("disabledReasons"));
         }
 
         static CloudModelRouteRow fromSnapshot(
@@ -219,7 +219,18 @@ public class CloudModelRouteClassifier {
                 boolean fallbackOnly,
                 List<LlmFailureClass> failureClasses,
                 String disabledReason) {
+            return fromSnapshot(routeKey, snapshot, stage, routeScore, eligible, fallbackOnly,
+                    failureClasses, disabledReason, null);
+        }
+
+        private static CloudModelRouteRow fromSnapshot(
+                String routeKey, ModelSpecSnapshot snapshot, String stage, int routeScore,
+                boolean eligible, boolean fallbackOnly, List<LlmFailureClass> failureClasses,
+                String disabledReason, Object disabledReasons) {
             Map<String, Object> metadata = new LinkedHashMap<>(snapshot.metadata());
+            if (disabledReasons instanceof Collection<?> codes)
+                metadata.put("disabledReasons", codes.stream().filter(String.class::isInstance)
+                        .map(String.class::cast).filter(s -> s.matches("[a-z][a-z0-9_]*")).distinct().toList());
             if (stage != null && !stage.isBlank()) {
                 metadata.put("stage", stage);
             }

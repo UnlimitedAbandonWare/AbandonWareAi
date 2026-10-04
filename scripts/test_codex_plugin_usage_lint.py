@@ -124,6 +124,20 @@ class PluginUsageLintTests(unittest.TestCase):
         self.assertIn("openai-key", res["secretPatterns"])
         self.assertNotIn(fake, proc_safe(res))
 
+    def test_task_owned_artifact_filename_is_not_a_secret(self):
+        code, res = run_lint(GOOD + "Evidence: data/task-owned-diff-summary.json\n")
+        self.assertEqual(code, 0, res)
+        self.assertEqual(res["secretPatterns"], [])
+
+    def test_openai_key_after_common_separators_is_still_detected(self):
+        fake = "sk-" + ("T5" * 20)
+        for separator in ("=", ":", "\""):
+            with self.subTest(separator=separator):
+                code, res = run_lint(GOOD + separator + fake + "\n")
+                self.assertEqual(code, 3, res)
+                self.assertIn("openai-key", res["secretPatterns"])
+                self.assertNotIn(fake, proc_safe(res))
+
     def test_secret_github_pat(self):
         fake = "ghp" + "_" + ("aB3" * 12)
         code, res = run_lint(GOOD + f"sample: {fake}\n")

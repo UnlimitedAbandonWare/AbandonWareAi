@@ -1,0 +1,91 @@
+[ANTI-STOP] 읽기는 intake일 뿐, 진짜 끝은 ACC 전원 PASS입니다. 바로 DV0부터 순서대로 실행하고 끝까지 완료한 뒤 보고합니다. 되돌릴 수 있는 로컬 작업은 Self-Ask AUTO로 진행하고 멈추지 마세요.
+
+@demo1-nova-focus @meta-rayban-display @demo1-meta-display-simple-caption @demo1-project-root @agent-scope-lease @demo1-work-ledger
+
+[DEVIN 지시서] 제미나이 API 웹서치(Search Grounding) 활성화 및 메타레이벤 디스플레이 노바 포커스 연동 — 2026-10-03 21:00 KST
+파일 ID: PASTE_DEVIN_NOVA_GEMINI_WEBSEARCH_20261003
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: push / pull / commit 0 · git add -A 0 · 비밀값 출력 0 · remote 추가 0 · PROTO_OPEN 약화 0
+
+## 한 줄 목표
+Gemini Flash API 실시간 웹서치(Google Search Grounding)를 메타레이벤 디스플레이의 렌즈 규격(최대 6줄·간결 캡션)에 맞추고, '노바' 웨이크워드 기반 Nova Focus의 웹서치 활성도와 Gemini 모델 라우팅을 상향 검증한다.
+
+## 사실 (라이브 확인, 2026-10-03 20:55~21:00 KST)
+- Nova Focus 구현체(`NovaFocusAnswerService`, `NovaFocusSettings`, `NovaFocusService`)가 `main/java/com/example/lms/assist/`에 존재함.
+- `NovaFocusAnswerService.java:56-57`에서 `decisions.decide(question, SearchMode.AUTO, ...)`를 통해 웹서치 여부를 판별하나, 현재는 조건이 보수적이고 모름 재시도(`unknown-web-scoped-enabled`)가 기본 false임.
+- `GeminiGateway.java`는 generateContent 호출 및 라우터 모델 빌드를 지원하며, `gemini-3.8-flash` 및 `gemini-3.5-flash-lite`가 `application-meta-display.yml`에 등록되어 있음.
+- 메타레이벤 렌즈는 sequential typewriter(6줄 visible, 약 200~280자 내외)로 표출되므로 1~2문장 컴팩트 요약이 필수적임.
+- 활성 lease는 desktop 1건만 존재하며 대상 파일들은 lock 없이 작업 가능함.
+
+### 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 (읽기/수정/생성/금지) |
+|---|---|---|---|
+| main/java/com/example/lms/assist/NovaFocusAnswerService.java | 97B5522E5E5A | - | 수정/보강 |
+| main/java/com/example/lms/assist/NovaFocusSettings.java | A8626186112F | - | 수정/보강 |
+| main/java/com/example/lms/learning/gemini/GeminiGateway.java | D03D509E073A | - | 읽기/보강 |
+| main/resources/application-meta-display.yml | 6AF5CCB2ECBD | - | 읽기/수정 |
+| src/test/java/com/example/lms/assist/NovaFocusAnswerServiceTest.java | - | - | 실행/추가 |
+
+## 공통 규칙
+- 첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+- lease: 파일 수정 전 `python -B scripts/agent_scope_lease.py check --path <대상>` 확인 후 수정 진행.
+- 작업 장부: repo 내 파일 수정 시 `python -B scripts/work_journal.py open --task <task_id> --agent devin --purpose "..."` 사용.
+- 되돌릴 수 있는 로컬 결정은 Self-Ask AUTO(긍정/부정/반례 검토 후 즉시 진행).
+- 비밀값(API 키, 토큰)은 코드나 출력에 노출하지 않고 환경변수명(`GEMINI_API_KEY`, `GOOGLE_API_KEY` 등)으로만 참조.
+
+## 작업 항목 (DV0~DV4)
+- DV0 [devin] 현행 Nova Focus 웹서치 트리거 및 Gemini 라우트 분석
+  - 증거: `NovaFocusAnswerService.java:56-63`, `application-meta-display.yml:91-106`
+  - 확인 명령: `Select-String -Path main/java/com/example/lms/assist/NovaFocusAnswerService.java -Pattern "SearchMode|shouldSearch|unknownWebEnabled"`
+  - 패스 조건: 웹서치 판단 분기 및 Gemini Flash 호출 경로 매핑 확인 완료.
+- DV1 [devin] Gemini API Google Search Grounding 연동 및 웹서치 민감도 상향
+  - 최소 수정:
+    1) `GeminiGateway.java`에 Google Search Grounding(`tools: [{"google_search": {}}]`) 파라미터 옵션 지원 또는 프롬프트 보강 seam 점검.
+    2) `NovaFocusAnswerService.java`에서 질문 분석 시 최신 정보·사실 질의에 대해 웹서치 활성도(SearchMode.AUTO 판정 완화 및 Gemini 우선 배정)를 높이도록 조정.
+    3) 모름/재시도 설정(`conversate.focus.unknown-web-enabled: true`, `unknown-web-scoped-enabled: true` 허용) 점검.
+  - RED/GREEN 검사: `.\gradlew.bat :test --tests com.example.lms.assist.NovaFocusAnswerServiceTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+  - 패스 조건: Gemini 모델 대상 질의 시 웹서치 활성화 플래그 정상 주입 및 단위 테스트 통과.
+- DV2 [devin] 메타레이벤 디스플레이 렌즈용 답변 컴팩트 포맷터/요약 가드 강화
+  - 증거: `NovaFocusSettings.java:24-28` (Presentation), `docs/PRIMARY_SURFACE.md`
+  - 최소 수정: 웹서치 생성 답변이 메타 안경 렌즈 표출 시 가독성을 해치지 않도록 최대 280자 내외 또는 핵심 1~2문장으로 요약되도록 프롬프트 힌트/후처리 가드 확인.
+  - 패스 조건: 300자 초과 장문 웹서치 결과 발생 시 렌즈용 캡션 롤오프 버짓에 맞춰 안전하게 축약됨을 단위 테스트로 입증.
+- DV3 [devin] Nova Focus 기본 설정 및 모델 선택 활성화
+  - 최소 수정: `NovaFocusSettings.defaults()` 또는 `application-meta-display.yml`에서 Nova 활성화 여부(`enabled: true` 전환 또는 설정 기본값 점검) 및 Gemini Flash(`gemini-3.8-flash`) 선택 활성화.
+  - 패스 조건: 클라이언트 요청 시 별도 설정 없이도 Nova Focus와 Gemini 웹서치 모드가 활성 상태로 진입 가능.
+- DV4 [devin] 통합 회귀 검증 및 종합 보고
+  - 실행 명령:
+    - `.\gradlew.bat :test --tests com.example.lms.assist.NovaFocus* --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+    - `.\gradlew.bat :test --tests com.example.lms.learning.gemini.Gemini* --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+  - 패스 조건: 기존 노바 포커스 및 제미나이 테스트 전원 PASS(exit=0).
+
+## HOLD 조건
+- `GEMINI_API_KEY` 부재 또는 유효하지 않은 인증 오류(401/403) 발생 시 실호출 중단하고 모의(Mock/Fake) 검증 상태로 전환 후 HOLD.
+- 대상 파일이 외부 에이전트의 실시간 active lease와 충돌할 경우 강제 릴리즈하지 않고 대기.
+
+## ASK_ONCE (기본값 포함, 답 없으면 안전 기본값 진행)
+- Q1. 노바 포커스 질의 시 웹서치 모드를 항상 켤 것인가(ALWAYS_ON), 아니면 질문 의도 기반 적극적 검색(AGGRESSIVE_AUTO)으로 둘 것인가?
+  - 기본값: (a) 권장 - AGGRESSIVE_AUTO (인사/간단 질의는 불필요한 레이턴시 방지, 지식/최신/사실 질의는 100% 웹서치)
+- Q2. 렌즈 출력 시 검색 출처(URL 도메인)를 렌즈 끝에 괄호로 간결 표기할 것인가?
+  - 기본값: (a) 권장 - 표기 (예: "[출처: naver/google]", 렌즈 공간 고려해 도메인명만 짧게)
+
+## 절대 금지
+- Git remote 변경/remote 추가 금지, commit/push/add -A 실행 금지
+- PROTO_OPEN 약화 또는 로그인 강제 금지
+- 전체 `:test` 실행 또는 `./gradlew clean` 금지 (포커스 테스트만 실행)
+- 비밀값(API 키) 파일/로그 출력 금지
+- 기존 일반 대화(Conversate cue/caption)의 페이징 및 TTL 임의 변경 금지
+
+## Acceptance (모두 PASS해야 완료, 미실행은 NOT_RUN + 사유)
+- [ ] ACC-1: `NovaFocusAnswerServiceTest` 전체 통과 (exit=0)
+- [ ] ACC-2: Gemini Flash 모델 선택 시 SearchMode 활성화 확인
+- [ ] ACC-3: 메타레이벤 렌즈 디스플레이 글자수/라인 제한(6줄 이내) 준수 확인
+- [ ] ACC-4: Nova Focus ON/OFF 전환 시 기존 일반 캡션 무영향(회귀 없음) 검증
+
+## 보고 형식
+외부 API: <호출 횟수 및 사용 여부, 없으면 '없음'>
+- 변경 파일 및 sha12 표
+- 포커스 테스트 실행 결과 (명령 및 exit code)
+- 미실행 항목 및 NOT_RUN 사유 (해당 시)
+- 다음 조치 사항
+
+[ANTI-STOP] 읽기는 intake일 뿐, 진짜 끝은 ACC 전원 PASS입니다. 바로 DV0부터 순서대로 실행하고 끝까지 완료한 뒤 보고합니다. 되돌릴 수 있는 로컬 작업은 Self-Ask AUTO로 진행하고 멈추지 마세요.

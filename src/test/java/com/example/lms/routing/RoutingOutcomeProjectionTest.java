@@ -6,7 +6,7 @@ class RoutingOutcomeProjectionTest{
   var observations=List.of(new RoutingInvocation.Observation(RoutingProfile.Role.MAIN_DEFAULT,1,0,"main-model","llmrouter.main",null,true),
    new RoutingInvocation.Observation(RoutingProfile.Role.SELFASK_RC,2,1,"aux-model","llmrouter.aux",null,true));
   var view=RoutingOutcomeProjector.project(RunRoutingSnapshot.disabled(),observations,terminal(true));
-  assertEquals("main-model",view.mainResponseModelId());assertTrue(view.mainFinalAdopted());assertEquals(6,view.roles().size());
+  assertEquals("main-model",view.mainResponseModelId());assertTrue(view.mainFinalAdopted());assertEquals(RoutingProfile.Role.values().length,view.roles().size(),"Projection must contain every routing role");
  }
  @Test void unobservedAndAmbiguousMainStayNull(){
   var view=RoutingOutcomeProjector.project(RunRoutingSnapshot.disabled(),List.of(),terminal(true));assertNull(view.mainResponseModelId());assertFalse(view.mainFinalAdopted());

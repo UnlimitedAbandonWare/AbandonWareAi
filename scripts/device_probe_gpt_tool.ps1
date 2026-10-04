@@ -353,7 +353,7 @@ function Get-RepoFacts {
         }
     }
 
-    $status = git -C $Path status --short 2>$null
+    $status = git --no-optional-locks -C $Path status --short 2>$null
     if ($LASTEXITCODE -ne 0) { $status = @() }
 
     $branchRaw = (git -C $Path rev-parse --abbrev-ref HEAD 2>$null)

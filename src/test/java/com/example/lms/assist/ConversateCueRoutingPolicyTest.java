@@ -215,6 +215,42 @@ class ConversateCueRoutingPolicyTest {
         t[0]+=21000;assertNotNull(p.reserve(demand(),Set.of()));
     }
 
+    @Test void configuredPreferredProviderSortsBeforeCheaperPrimaryRoutes() {
+        route("openai",1,.2,1.2,1000);route("gemini",1,.3,2.5,800);
+        routes.getModels().get("gemini").setProvider("gemini");
+        env.withProperty("gemini.gateway.purpose.router.enabled","true")
+                .withProperty("conversate.cue.preferred-provider","gemini");
+        var hint=new ConversateCueRoutingPolicy.Demand(false,1,300,100,6500,.02);
+        assertEquals("gemini",policy().candidates(hint,Set.of()).get(0).key());
+        assertEquals("gemini",policy().reserve(demand(),Set.of()).choice().key());
+    }
+    @Test void preferredProviderAlsoLeadsHigherQualityDemands() {
+        route("openai-balanced",3,2.0,12.0,2200);route("gemini-pro",3,4.0,20.0,3000);
+        routes.getModels().get("gemini-pro").setProvider("gemini");
+        env.withProperty("gemini.gateway.purpose.router.enabled","true");
+        var q3=new ConversateCueRoutingPolicy.Demand(false,3,300,100,6500,.02);
+        assertEquals("openai-balanced",policy().candidates(q3,Set.of()).get(0).key());
+        env.withProperty("conversate.cue.preferred-provider","gemini");
+        assertEquals("gemini-pro",policy().candidates(q3,Set.of()).get(0).key());
+    }
+    @Test void preferredProviderMatchesCaseInsensitivelyAndUnknownValueKeepsCostOrder() {
+        route("openai",1,.2,1.2,1000);route("gemini",1,.3,2.5,800);
+        routes.getModels().get("gemini").setProvider("gemini");
+        env.withProperty("gemini.gateway.purpose.router.enabled","true");
+        var hint=new ConversateCueRoutingPolicy.Demand(false,1,300,100,6500,.02);
+        env.withProperty("conversate.cue.preferred-provider"," bogus ");
+        assertEquals("openai",policy().candidates(hint,Set.of()).get(0).key());
+        env.withProperty("conversate.cue.preferred-provider","GEMINI");
+        assertEquals("gemini",policy().candidates(hint,Set.of()).get(0).key());
+    }
+    @Test void preferredProviderNeverResurrectsIneligibleCandidates() {
+        route("openai",1,.2,1.2,1000);route("gemini",1,.3,2.5,800);
+        routes.getModels().get("gemini").setProvider("gemini");
+        env.withProperty("conversate.cue.preferred-provider","gemini");
+        var hint=new ConversateCueRoutingPolicy.Demand(false,1,300,100,6500,.02);
+        assertEquals("openai",policy().candidates(hint,Set.of()).get(0).key());
+    }
+
     @Test void fastCheapGateDoesNotSpendPrimaryHintRoutesOnClassificationTimeouts()throws Exception{
         route("openai",1,.2,1.2,1000);route("groq",2,.15,.6,800);
         routes.getModels().get("groq").setProvider("groq");

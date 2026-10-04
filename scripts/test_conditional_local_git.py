@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from functools import partial
 
 # Windows may hold a finished fixture directory briefly; functional assertions still fail normally.
@@ -135,6 +136,36 @@ class ConditionalLocalGitTests(unittest.TestCase):
             proc = run_tool("commit", "--repo", str(repo), "--message-file", str(message), "--path", "owned.txt")
             self.assertEqual(json.loads(proc.stdout)["reason"], "index-lock")
             self.assertEqual(proc.returncode, 4)
+
+    def test_user_commit_window_flag_blocks_and_expired_flag_allows(self) -> None:
+        with FixtureDirectory() as tmp:
+            repo = self.make_repo(Path(tmp))
+            (repo / "owned.txt").write_text("owned\n", encoding="utf-8")
+            git(repo, "add", "--", "owned.txt")
+            flag_dir = repo / "var"
+            flag_dir.mkdir()
+            flag = flag_dir / "git-commit-window.flag"
+            flag.write_text(json.dumps({
+                "openedAt": datetime.now(timezone.utc).isoformat(),
+                "ttlMinutes": 10, "by": "fixture"}), encoding="utf-8")
+            message = repo / "msg.txt"
+            message.write_text("Reason: x\nVerify: y\nConstraint: z\n", encoding="utf-8")
+            proc = run_tool("commit", "--repo", str(repo), "--message-file", str(message), "--path", "owned.txt")
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "blocked")
+            self.assertEqual(payload["reason"], "user-commit-window-open")
+            self.assertEqual(proc.returncode, 4)
+            # no commit happened while the window was open
+            head = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "HEAD"],
+                                  capture_output=True, text=True)
+            self.assertNotEqual(head.returncode, 0)
+            flag.write_text(json.dumps({
+                "openedAt": (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(),
+                "ttlMinutes": 10, "by": "fixture"}), encoding="utf-8")
+            proc = run_tool("commit", "--repo", str(repo), "--message-file", str(message), "--path", "owned.txt")
+            payload = json.loads(proc.stdout)
+            self.assertNotEqual(payload.get("reason"), "user-commit-window-open")
+            self.assertEqual(payload["reason"], "committed")
 
     def test_scan_rejects_oversized_candidate_set(self) -> None:
         with FixtureDirectory() as tmp:

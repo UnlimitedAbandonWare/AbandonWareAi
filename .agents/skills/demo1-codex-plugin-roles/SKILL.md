@@ -99,10 +99,12 @@ This skill owns only the work-type allowlist and the per-plugin contract.
   docs/dashboard (`/v1/evaluate` etc). Forbidden: key/token values in
   chat/logs/Git, deploys, project config changes, domain/DNS/build-pipeline
   edits, unrelated Vercel app touches, `npx vercel ai-gateway setup`-style
-  config overwrites; env-pulled files are never committed. Smoke 401/403 →
-  report `auth-blocked` + the auth path tried AND the API_ROUTING_SPEC detail
-  class (401=`KEY_INVALID_OR_EXPIRED`; 403 body → `PLAN_GATE` vs
-  `FORBIDDEN_REGION_OR_IP`) — don't wire live lanes until the user re-auths.
+  config overwrites; env-pulled files are never committed. Smoke 401/403/429 →
+  no retry that session; report `auth-blocked` + the auth path tried AND the
+  API_ROUTING_SPEC detail class (401=`KEY_INVALID_OR_EXPIRED`; 403 body →
+  `PLAN_GATE` vs `FORBIDDEN_REGION_OR_IP`; 429=`QUOTA_OR_RATE_LIMIT`) — don't
+  wire live lanes until the user re-auths. AI Gateway ZDR stays off by
+  default; never enable it without an explicit goal line.
 - **Meta Wearables** — only for Display work. **Sites / Plugin Management /
   Data / Visualize / Supabase / Ads Manager** — off by default; only when the
   goal names them: one-line reason, read-mostly, and config/deploy/data
@@ -145,5 +147,17 @@ Auto-applied to all Codex work on this checkout (AGENTS.md
 one-liner in `agent-prompts/codex-plugin-roles-shortcut.md` is an emphasis
 shortcut only, not required. Update the matrix/contract here only — not in
 AGENTS.md, chat pastes, or per-task rules.
+
+A plugin mention line (`@Exa @Superpowers …`) is a force-use hint, not
+enablement: enabled plugins' skills and `codex_apps` connector tools load in
+every new session with no mention (verified 2026-10-03 over 68 recent demo-1
+rollouts — identical catalog with/without the pasted roles paragraph; Exa and
+GitHub connector calls completed in mention-free sessions). Do not paste or
+request a mention line. If a lane's tool is genuinely not exposed in the
+session, still do not ask for a mention — record `UNAVAILABLE(미노출)` in the
+report block and take the fallback lane (`glm_agent` MCP for GLM, local
+`awx-control-tower` MCP for AWX, web search for spec lookups, direct checks
+otherwise). Note `codex exec`/headless sessions mount a reduced catalog —
+judge plugin exposure on Desktop/vscode sessions.
 
 - 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.

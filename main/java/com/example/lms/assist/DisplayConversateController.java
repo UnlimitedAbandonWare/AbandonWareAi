@@ -56,7 +56,7 @@ public class DisplayConversateController {
         public Connection(String assistId,long epoch,String clientId){this(assistId,epoch,clientId,false,false,null);}
         public Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation){this(assistId,epoch,clientId,activate,continuation,null);}
     }
-    public record RelayPoll(String clientId,long eventId){}
+    public record RelayPoll(String clientId,long eventId,Boolean preview){public RelayPoll(String clientId,long eventId){this(clientId,eventId,null);}}
     public record RelaySettings(String assistId,long epoch,String clientId,boolean enabled,int segmentSeconds){}
     public record RelayTest(String assistId,long epoch,String clientId,int number,boolean fromFold){}
     public record Input(String assistId,long epoch,String clientId,String requestId,String text,List<String> eventOrder,String verificationMode){@Override public String toString(){return "DisplayInput[redacted]";}}
@@ -172,7 +172,7 @@ public class DisplayConversateController {
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(Map.of("received",true));
     }
     public record LensView(String assistId,long epoch,long version,boolean ready,DisplayContentView.TextCard card,DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs){}
-    public record LensRead(String token){@Override public String toString(){return "LensRead[redacted]";}}
+    public record LensRead(String token,Boolean preview){public LensRead(String token){this(token,null);}@Override public String toString(){return "LensRead[redacted]";}}
     public record LensLink(String token,long expiresAt,boolean sticky){@Override public String toString(){return "LensLink[redacted]";}}
     public record LensText(String conversation,String hint,String hintId,long hintExpiresAt,long conversationExpiresAt,LensDisplayPrefs display,NovaFocusState.View focus){}
     public record LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults){}
@@ -303,7 +303,7 @@ public class DisplayConversateController {
         if(b==null||b.id==null||!sticky&&!grant.assistId().equals(b.id))throw error(sticky?HttpStatus.SERVICE_UNAVAILABLE:HttpStatus.NOT_FOUND,sticky?"lens_producer_waiting":"lens_link_expired");
         Snapshot s;
         try{s=sessions.status(b.owner,b.id);}catch(ResponseStatusException missing){if(sticky&&missing.getStatusCode().value()==404)throw error(HttpStatus.SERVICE_UNAVAILABLE,"lens_producer_waiting");throw missing;}
-        b.lastFocusLensRead=now;
+        if(!Boolean.TRUE.equals(request.preview()))b.lastFocusLensRead=now;
         var caption=DisplayContentView.caption(s.caption(),now);
         var hint=sessions.hintsEnabled(b.owner,b.id)?DisplayContentView.card(s.card(),now):null;
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new LensText(shortLensText(caption==null?null:caption.text(),lensConversationChars),shortLensText(hint==null?null:hint.text(),ConversateSessionService.HINT_TEXT_MAX),hint==null?null:hint.requestId(),hint==null?0:hint.expiresAt(),caption==null?0:caption.expiresAt(),prefsFor(b.owner),lensFocus(b,s)));
@@ -369,7 +369,7 @@ public class DisplayConversateController {
         String caller=owner(http),channel=relayChannel(http);validateClient(request.clientId());limited(caller,2);
         var p=relay.active(channel);
         if(p!=null)try{var s=sessions.status(p.owner(),p.assistId());relay.publish(channel,p,DisplayContentView.caption(s.caption(),clock.millis()),sessions.hintsEnabled(p.owner(),p.assistId())?DisplayContentView.card(s.card(),clock.millis()):null,lensFocus(bindings.get(p.owner()),s));}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;relay.publish(channel,p,null,null);}
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(relay.poll(channel,request.clientId(),p==null?null:prefsFor(p.owner())));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(relay.poll(channel,request.clientId(),p==null?null:prefsFor(p.owner()),Boolean.TRUE.equals(request.preview())));
     }
     @PostMapping("/api/assist/display/relay/ack")
     public synchronized ResponseEntity<?> relayAck(@RequestBody RelayPoll request,HttpServletRequest http){

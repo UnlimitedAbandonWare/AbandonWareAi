@@ -6,7 +6,9 @@ description: >-
   brief-writing task to Codex and declared the save scope in the FIRST
   message). If the tag is absent, never use this skill: normal Codex chats,
   other agents' save flows (brief_save.py), and parallel lanes stay untouched.
-  Saves a written 지시서 to Downloads + agent-prompts via scripts/dot_brief_save.py.
+  Delivers a written 지시서 as a work-folder file attached to the reply as a
+  ChatGPT Library file card; scripts/dot_brief_save.py (Downloads +
+  agent-prompts) runs only when the user explicitly asks.
 ---
 
 # dot-brief-save
@@ -18,20 +20,26 @@ description: >-
 
 ## 동작 (태그가 있을 때만)
 
-1. 지시서 본문을 임시 파일로 작성한다 (예: `%TEMP%\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt`).
-   본문에 비밀값·키·토큰을 넣지 않는다 — 저장기가 `sk-`, `AIza`, `ghp_`, `xox`,
-   `-----BEGIN`, 그리고 `password` `=` 대입 형태를 보면 `BLOCKED_SECRET`으로 거부한다.
-2. 저장 명령을 **정확히 1회** 실행한다:
+1. 지시서 본문을 작업 폴더(`Documents\Codex\<날짜>\task-*` 또는 현재 cwd)에
+   파일로 작성한다. 본문에 비밀값·키·토큰을 넣지 않는다.
+2. 그 파일을 ChatGPT Library 파일로 업로드해 답변에 **파일 카드**로 첨부한다 —
+   상세: `docs/agents-rules/DEMO1-DOT-FILE-CARD.md`. Downloads 복사·이동 금지.
+3. 답변에는 파일명·크기·sha12 한 줄만 보고한다.
+4. (선택 — 사용자가 Downloads 저장을 **명시로** 요청할 때만) 저장 명령을
+   정확히 1회 실행한다:
 
    ```
    python -B scripts/dot_brief_save.py save --agent <AGENT> --topic <topic> --from <임시파일>
    ```
 
    (`--date YYYYMMDD`는 선택. 기본은 오늘. 파일명은 `PASTE_<AGENT>_<topic>_<date>.txt`.)
-3. 출력 JSON 한 줄의 `paths`, `size`, `sha12`를 그대로 보고한다.
+   실행했으면 출력 JSON 한 줄의 `paths`, `size`, `sha12`를 그대로 보고한다.
 
 ## 막혔을 때
 
+- 카드 업로드가 실패하면 1회만 재시도하고, 그래도 실패하면 `카드 첨부 실패: <이유 한 줄>`
+  + 작업 폴더 경로만 남긴다(Downloads 이동 금지). Windows `os.setxattr`
+  AttributeError는 `METADATA_SKIPPED_WINDOWS`로 기록하고 재시도하지 않는다.
 - `BLOCKED_SECRET`·거부·승인 요청이 나오면 **재시도·우회 없이** 이 한 줄만 남긴다:
 
   ```
@@ -44,7 +52,9 @@ description: >-
 
 ## 범위
 
-- 쓰기 대상은 딱 두 곳: `Downloads/` 와 `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt`,
-  그리고 `data/agent-handoff/dot-brief-save/log.jsonl` (경로·크기·sha만).
+- 기본 쓰기 대상: 작업 폴더 파일 + ChatGPT Library 파일 카드 +
+  `data/agent-handoff/dot-brief-save/log.jsonl` (경로·크기·sha만).
+  `Downloads/`와 `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt`는
+  `dot_brief_save.py`를 통한 **명시 요청 시에만**.
 - 상세 계약·테스트: `scripts/dot_brief_save.py` docstring, `scripts/test_dot_brief_save.py`.
 - 사용자 카드: `docs/codex/DOT_BRIEF_SAVE_KO.md`.

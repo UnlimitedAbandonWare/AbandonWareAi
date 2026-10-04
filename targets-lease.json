@@ -1,0 +1,16 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "ef9bcb16063adbc53a2bd9c7ea7141e0a5a2eacf1e437db0548059642ac57151",
+                        "path":  "scripts/agent_signal_digest.py"
+                    },
+                    {
+                        "sha256":  "246573f8af5b0d5d91573e7232c0802586a9713bef956780c66f996676b88b0f",
+                        "path":  ".agents/skills-intent-index.yaml"
+                    },
+                    {
+                        "sha256":  "f3de73c62ea31a30bae903cbea991d80bb8bd0d61979d97577bac1dee1584523",
+                        "path":  "scripts/fixtures/skill_routing_cases.json"
+                    }
+                ]
+}

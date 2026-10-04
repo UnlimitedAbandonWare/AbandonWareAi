@@ -239,8 +239,7 @@ function Stop-RagSpringForRestart {
             continue
         }
         if ($null -eq $identity) {
-            Write-RagStage 'SPRING' 'STOP' "pid=$procId (no-identity)"
-            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+            Write-RagStage 'SPRING' 'SKIP' "pid=$procId identity-unproven; left running"
             continue
         }
         Write-RagStage 'SPRING' 'STOP' "pid=$procId process=$($identity.processName) role=$role force-restart"
@@ -252,17 +251,18 @@ function Stop-RagSpringForRestart {
             if ($null -eq $owner) { continue }
             $ownerPid = [int]$owner.processId
             $ownerRole = Get-RagProcessRole -ProcessId $ownerPid
-            if ($ownerRole -eq 'wear' -and -not $Wear) {
+            if (($ownerRole -eq 'wear') -ne [bool]$Wear) {
                 Write-RagStage 'SPRING' 'SKIP' "port=$fixedPort leftover pid=$ownerPid role=$ownerRole protected-by-runtime-role"
                 continue
             }
-            Write-RagStage 'SPRING' 'STOP' "port=$fixedPort leftover pid=$ownerPid"
-            $identity = Get-AwxProcessIdentity -ProcessId $ownerPid
-            if ($null -ne $identity) {
-                Stop-AwxStartedProcessTree -LauncherIdentity $identity -TimeoutSeconds 30 | Out-Null
-            } else {
-                Stop-Process -Id $ownerPid -Force -ErrorAction SilentlyContinue
+            $manifest = Find-RagRuntimeManifest -ProcessId $ownerPid
+            $validation = Test-AwxOwnedRuntimeIdentity -Manifest $manifest -Root $script:RagRoot
+            if (-not $validation.ok) {
+                Write-RagStage 'SPRING' 'SKIP' "port=$fixedPort pid=$ownerPid ownership-unproven; left running"
+                continue
             }
+            Write-RagStage 'SPRING' 'STOP' "port=$fixedPort leftover pid=$ownerPid owned-runtime"
+            Stop-AwxOwnedRuntime -Manifest $manifest -Root $script:RagRoot -TimeoutSeconds 30 | Out-Null
         }
     }
     Start-Sleep -Seconds 2

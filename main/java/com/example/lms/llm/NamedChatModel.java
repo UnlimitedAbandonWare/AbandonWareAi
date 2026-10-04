@@ -52,9 +52,19 @@ public interface NamedChatModel extends ChatModel {
         String simpleName = model == null ? "" : model.getClass().getSimpleName();
         boolean collapsed = resolved.isEmpty()
                 || "unknown".equalsIgnoreCase(resolved)
+                || resolved.startsWith("llmrouter.")
                 || (!simpleName.isEmpty() && resolved.equals(simpleName));
         if (!collapsed) {
             return resolved;
+        }
+        // Use construction evidence from this exact client, never the last request's trace.
+        if (resolved.startsWith("llmrouter.")) {
+            String configured = configuredBreakerTag(model);
+            if (configured != null) return configured;
+            String named = resolve(model);
+            if (isConcreteModelTag(named) && !named.equals(simpleName)) {
+                return named;
+            }
         }
         try {
             com.example.lms.search.TraceStore.put("chat.breaker.keyCollapsed", true);
@@ -64,12 +74,33 @@ public interface NamedChatModel extends ChatModel {
             // 진단 기록 실패는 키 해석을 방해하지 않는다.
         }
         String requested = requestedModel == null ? "" : requestedModel.trim();
-        if (isUsableModelTag(requested)) {
+        if (isConcreteModelTag(requested)) {
             CollapseLog.warnOnce(requested);
             return requested;
         }
         CollapseLog.warnOnce(simpleName.isEmpty() ? resolved : simpleName);
         return resolved.isEmpty() ? "unknown" : resolved;
+    }
+
+    /** Preserve route-tag fail-soft behavior when this client has no concrete model identity. */
+    private static boolean isConcreteModelTag(String tag) {
+        return isUsableModelTag(tag) && !tag.trim().startsWith("llmrouter.");
+    }
+
+    private static String configuredBreakerTag(ChatModel model) {
+        var identity = DynamicChatModelFactory.configuredModelIdentity(model);
+        if (identity == null || !isConcreteModelTag(identity.modelId())) return null;
+        String actual = identity.modelId().trim();
+        return isConcreteModelTag(identity.provider()) ? identity.provider().trim() + ":" + actual : actual;
+    }
+
+    /** Model identity plus call phase; regeneration must not consume the draft's permit. */
+    public static String breakerKey(ChatModel model, String resolvedName, String requestedModel, String phase) {
+        String configured = configuredBreakerTag(model);
+        String draftKey = com.example.lms.infra.resilience.NightmareKeys.chatDraftKey(configured == null
+                ? breakerTag(model, resolvedName, requestedModel) : configured);
+        return "final".equalsIgnoreCase(phase)
+                ? "chat:final" + draftKey.substring("chat:draft".length()) : draftKey;
     }
 
     /** 브레이커 태그로 쓸 수 있는 구체 모델 ID인지 판정한다. 센티널/공백은 거부. */

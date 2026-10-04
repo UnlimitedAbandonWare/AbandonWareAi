@@ -1,4 +1,4 @@
-<!-- moved-from: AGENTS.md L52-L56 sha256=85cea99faa792967195e2381a31a8924f99b6f365fa2cfea1221a9a0ee26cdf4 movedAt=2026-10-03T00:10:40.401654+00:00 -->
+<!-- moved-from: AGENTS.md L53-L57 sha256=85cea99faa792967195e2381a31a8924f99b6f365fa2cfea1221a9a0ee26cdf4 movedAt=2026-10-04T02:47:32.936911+00:00 -->
 <!-- BEGIN DEMO1-WORK-LEDGER -->
 ## Work Ledger: status, journal, per-change backup (Git-free)
 - Principle: **start = read status + register scope; before each change = preserve current bytes; after = record change + real verification.** Detail SSOT: `.agents/skills/demo1-work-ledger/SKILL.md` (`$demo1-work-ledger`); applies to file-changing work only.
