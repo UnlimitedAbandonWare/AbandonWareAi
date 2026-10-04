@@ -609,6 +609,16 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     public List<String> getFormattedRecentHistory(Long sessionId, int limit) {
         if (sessionId == null)
             return List.of();
+        return getRecentHistoryWindow(sessionId, limit).orElseGet(List::of).stream()
+                .map(RecentHistoryTurn::formattedLine)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<List<RecentHistoryTurn>> getRecentHistoryWindow(Long sessionId, int limit) {
+        if (sessionId == null)
+            return Optional.of(List.of());
         int requestedLimit = Math.max(1, limit);
         int pageSize = ChatHistoryService.clampSessionDetailLimit(requestedLimit);
         List<ChatMessage> visible = new java.util.ArrayList<>();
@@ -632,21 +642,12 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         visible.sort(Comparator
                 .comparing(ChatMessage::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()))
                 .thenComparing(ChatMessage::getId, Comparator.nullsLast(Comparator.naturalOrder())));
-        return visible.stream()
-                .map(m -> {
-                    String rawRole = (m.getRole() == null ? "user" : m.getRole());
-                    String r = rawRole.trim().toLowerCase(Locale.ROOT);
-                    String label;
-                    switch (r) {
-                        case "user" -> label = "User";
-                        case "assistant" -> label = "Assistant";
-                        case "system" -> label = "System";
-                        default -> label = rawRole;
-                    }
-                    String content = (m.getContent() == null ? "" : m.getContent());
-                    return label + ": " + content;
-                })
-                .collect(Collectors.toList());
+        List<RecentHistoryTurn> turns = new java.util.ArrayList<>(visible.size());
+        for (int order = 0; order < visible.size(); order++) {
+            ChatMessage message = visible.get(order);
+            turns.add(new RecentHistoryTurn(message.getId(), message.getRole(), message.getContent(), order));
+        }
+        return Optional.of(List.copyOf(turns));
     }
 
     @Override

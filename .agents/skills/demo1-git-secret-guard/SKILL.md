@@ -28,6 +28,19 @@ or times out is `ERROR`/`UNKNOWN`, never a PASS.
    (`scripts/git_publish_review.py`): a secret deleted from the final file
    can still sit inside a commit being sent. Target URL and refs are checked
    there too; a clean tree does not clear history.
+4. **pre-push** — the blobs inside the commits being pushed
+   (`.githooks/pre-push`): the pushed commit's blob is the evidence, not
+   the working-tree file on disk.
+
+### 허용 목록 (configs/git-guard-allow.json)
+
+- `{path, rule, oid, reason}` 네 필드가 스캔된 blob과 전부 일치하고 reason이
+  비어 있지 않을 때만 allowed — 내용이 바뀌면 oid가 달라져 자동 재차단된다
+  (계약 원본 `docs/agents-rules/demo1-git-guard-fast.md`:19-23).
+- 규칙 id `openai`·`google-ai`는 허용 판정에서 provider-key 계열로 본다 —
+  `scripts/test_*`, `*/fixtures/*`, `src/test/**` 경로에서만 허용 가능하다.
+- 허용 목록의 정확 일치 적용은 가드 완화가 아니다. 완화 = 탐지 regex·skip
+  목록·차단 경로 변경, 검토 없이 허용 항목 추가, `--no-verify`·훅 끄기.
 
 ## Do
 
@@ -54,14 +67,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\git_secret_guard.ps1
   merely named like a placeholder still fails on a real-looking value.
 - Fix findings by removing the value, moving it into an ignored env/local
   file, or unstaging the protected path — never by editing guard patterns to
-  silence a real hit.
+  silence a real hit (허용 목록의 정확 일치 적용은 완화가 아님).
 
 ## Do not
 
 - Never print secret values, matched line content, or paste raw finding text
   into reports/commits.
 - Never weaken or bypass the guard to land a commit (`--no-verify` is
-  forbidden).
+  forbidden; 허용 목록의 정확 일치 적용은 완화가 아님).
 - `.secrets/`, `config/secrets/`, `.env*` (non-template), `apikey*`,
   `*.pem/.key/.p12/.pfx/.jks/.keystore/.der`, DB files, Spring secret
   profiles, `data/`/`var/`/`logs/` are blocked paths — not "false
@@ -72,6 +85,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\git_secret_guard.ps1
 ## Related
 
 - `$demo1-conditional-local-git` — the commit gate that calls this scan.
-- `$demo1-git-doctor` — read-only diagnosis when the gate itself is blocked.
+- `$demo1-vibe-git-auto-continue` — read-only diagnosis when the gate itself is blocked.
 - `.githooks/pre-commit` and `.githooks/pre-push` run this guard when
   `core.hooksPath=.githooks` (install: `scripts/install_git_publish_guard.ps1`).

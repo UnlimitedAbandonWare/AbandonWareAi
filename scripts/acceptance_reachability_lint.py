@@ -23,6 +23,9 @@ Rules:
              acceptance item.
     R5 INFO  directive lacks a "out-of-scope HOLD items are excluded from
              completion" escape clause.
+    R6 FAIL  acceptance/forbid lines use "보호 파일/보호 대상/protected"
+             but the directive never enumerates the protected set — no
+             "변경 금지(보호 대상, ...)" line and no parenthesized list.
 
 Structural checks already covered by scripts/brief_lint.py (ANTI-STOP etc.)
 are intentionally NOT repeated here.
@@ -55,6 +58,11 @@ UNMEASURABLE_RE = re.compile(
     r"요청별.{0,8}호출|actual.{0,12}(count|calls|dispatch)|every call|all calls|"
     r"호출 수를|wire.{0,6}count", re.I)
 TOOL_REF_RE = re.compile(r"scripts[\\/][A-Za-z0-9_.\-]+\.(py|bat|ps1)|[A-Za-z0-9_.\-]+\.py")
+PROTECTED_WORD_RE = re.compile(r"보호\s*(파일|대상|범위)|protected", re.I)
+PROTECT_ENUM_HEADER_RE = re.compile(r"변경\s*금지\s*\(\s*보호\s*대상")
+PROTECT_ENUM_PAREN_RE = re.compile(
+    r"(?:보호\s*(?:파일|대상|범위)|protected)[^()\n]{0,40}"
+    r"\([^()\n]*[\\/·,][^()\n]*\)", re.I)
 ACCEPT_LINE_RE = re.compile(r"^\s*(?:[-*•|]|\|)?\s*(A\d{1,2})(?![0-9A-Za-z])[\s:：.\-—는은이가을를의]*")
 HEADER_KW = {
     "allowed": re.compile(r"수정 허용|허용 목록|편집 허용|작성 가능|쓰기 허용|allowed.{0,10}(edit|paths|scope)", re.I),
@@ -79,7 +87,7 @@ def parse_doc(text):
     """Return dict: allowed[], forbidden[], acceptance[{id,text}], hold_text,
     all_pass, has_exclusion, tool_refs[], lines."""
     allowed, forbidden, acceptance, tool_refs = set(), set(), [], set()
-    hold_lines = []
+    hold_lines, forbid_lines = [], []
     section = None
     for raw in text.splitlines():
         line = raw.strip()
@@ -95,6 +103,8 @@ def parse_doc(text):
                 bucket = allowed if section == "allowed" else forbidden
                 for m in PATH_RE.finditer(line):
                     bucket.add(m.group(0).replace("\\", "/").lower())
+            if section == "forbidden":
+                forbid_lines.append(line)
             continue
         for m in TOOL_REF_RE.finditer(line):
             tool_refs.add(m.group(0).replace("\\", "/").lower())
@@ -104,6 +114,7 @@ def parse_doc(text):
         elif section == "forbidden":
             for m in PATH_RE.finditer(line):
                 forbidden.add(m.group(0).replace("\\", "/").lower())
+            forbid_lines.append(line)
         elif section == "acceptance":
             am = ACCEPT_LINE_RE.match(line)
             if am:
@@ -128,6 +139,8 @@ def parse_doc(text):
                           if PARTIAL_RE.search(l) or FORBID_BUILD_RE.search(l)],
         "hold_lines": [l.strip() for l in text.splitlines()
                        if re.match(r"^\s*[-*]?\s*HOLD", l, re.I)],
+        "forbid_lines": forbid_lines,
+        "raw_text": text,
     }
 
 
@@ -243,6 +256,20 @@ def lint_file(path, doc, leases, live_leases):
                     "HOLD item has a not-build order but completion=all PASS, "
                     "no exclusion: %s" % weak[0][:80],
                     "HOLD 항목 제외 문구 추가")
+    # R6: protected-scope words without an enumerated protected set
+    r6_hits = [i for i in doc["acceptance"]
+               if PROTECTED_WORD_RE.search(i["text"])]
+    r6_forbid = [l for l in doc["forbid_lines"]
+                 if PROTECTED_WORD_RE.search(l)]
+    if (r6_hits or r6_forbid) and not (
+            PROTECT_ENUM_HEADER_RE.search(doc["raw_text"])
+            or PROTECT_ENUM_PAREN_RE.search(doc["raw_text"])):
+        iid = r6_hits[0]["id"] if r6_hits else "-"
+        ev = (r6_hits[0]["text"] if r6_hits else r6_forbid[0])[:90]
+        finding("R6", "FAIL", iid,
+                "protected-scope word but protected set not enumerated: %s"
+                % ev,
+                "'변경 금지(보호 대상, ...)' 줄이나 Acceptance 괄호에 보호 대상을 열거")
     if not doc["has_exclusion"]:
         finding("R5", "INFO", "-",
                 "no 'out-of-scope HOLD items excluded from completion' clause",

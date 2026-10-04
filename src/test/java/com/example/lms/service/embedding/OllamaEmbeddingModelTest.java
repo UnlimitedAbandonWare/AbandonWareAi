@@ -286,6 +286,44 @@ class OllamaEmbeddingModelTest {
     }
 
     @Test
+    void localWarnOnlyRejectsUnderDimWhenZeroPadDisabled() {
+        OllamaEmbeddingModel model = newModel(false, false);
+        ReflectionTestUtils.setField(model, "dimensions", 1536);
+        ReflectionTestUtils.setField(model, "dimensionGuardMode", "WARN_ONLY");
+        ReflectionTestUtils.setField(model, "allowZeroPad", false);
+        ReflectionTestUtils.setField(model, "provider", "ollama");
+        float[] raw = new float[768];
+        raw[0] = 0.5f;
+
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> ReflectionTestUtils.invokeMethod(model, "normalizeEmbedding", raw, "private-query"));
+
+        assertTrue(ex.getMessage().contains("underflow"));
+        assertTrue(ex.getMessage().contains("1536"));
+        assertTrue(ex.getMessage().contains("768"));
+        assertFalse(ex.getMessage().contains("private-query"));
+    }
+
+    @Test
+    void exact1536VectorPassesThroughWithoutPaddingOrSlicing() {
+        TraceStore.clear();
+        OllamaEmbeddingModel model = newModel(false, false);
+        ReflectionTestUtils.setField(model, "dimensions", 1536);
+        ReflectionTestUtils.setField(model, "dimensionGuardMode", "WARN_ONLY");
+        ReflectionTestUtils.setField(model, "allowZeroPad", false);
+        ReflectionTestUtils.setField(model, "provider", "ollama");
+        float[] raw = new float[1536];
+        raw[0] = 0.5f;
+
+        float[] normalized = ReflectionTestUtils.invokeMethod(model, "normalizeEmbedding", raw, "single");
+
+        org.junit.jupiter.api.Assertions.assertSame(raw, normalized);
+        assertEquals(1536, normalized.length);
+        assertEquals(Boolean.FALSE, TraceStore.get("embed.normalizeApplied"));
+        assertEquals(Boolean.FALSE, TraceStore.get("embedding.matryoshkaSliced"));
+    }
+
+    @Test
     void emptyEmbeddingVectorFailsInsteadOfPaddingToConfiguredDimension() {
         OllamaEmbeddingModel model = newModel(false, false);
         ReflectionTestUtils.setField(model, "dimensions", 1536);

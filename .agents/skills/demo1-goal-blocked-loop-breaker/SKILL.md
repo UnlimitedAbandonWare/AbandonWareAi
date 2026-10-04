@@ -11,6 +11,7 @@ description: Use when a demo-1 Codex goal hits the same blocker twice, is marked
 ## 코덱스(실행자)가 할 일
 
 1. 같은 막힘을 **두 번째** 확인했으면 세 번째 감사를 하지 말고 진단기를 돌린다.
+   범위 해석 질문으로 2턴 연속 멈추면 그것도 같은 막힘(SCOPE_AMBIGUITY)이다.
    `python -B scripts/goal_block_triage.py --rollout <내 세션 jsonl>`
    (또는 `--ledger data/agent-handoff/<작업폴더>` — blocked-audit 파일이 이미 있으면 그것이 우선 근거)
 2. 원인이 범위 밖이면 그 항목을 **HOLD-EXT**로 표시한다. 범위 밖 원인 = 다른 세션
@@ -38,6 +39,7 @@ description: Use when a demo-1 Codex goal hits the same blocker twice, is marked
 ## 분류 → 붙여 넣을 말 (triage가 자동 생성)
 
 - RESUMABLE_NOW: 「막힘 원인 <X>가 풀렸어. 같은 감사 반복하지 말고 남은 항목부터 바로 이어서 해줘.」
+- SCOPE_AMBIGUITY(보호·범위 해석이 모호해 멈춤): 「보호 범위 해석이 모호한 게 막힘 원인이야. `docs/agents-rules/DEMO1-AGENT-GUARD-COMMON.md`의 '보호 범위 해석' (1)~(5)를 적용해 바로 진행하고, 같은 질문으로 다시 감사하지 말아줘.」
 - 범위 밖 원인: 「<항목>은 범위 밖(<원인>)이라 HOLD로 빼고, 범위 안 항목이 전부 PASS면 완료로 보고해줘.」
 - 지시서 모순: 「<항목>은 지시서대로 PARTIAL이 정답이니 완료 조건에서 빼고 완료로 보고해줘.」
 

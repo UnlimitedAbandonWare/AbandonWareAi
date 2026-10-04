@@ -1,0 +1,102 @@
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 한 줄 목표부터 끝까지 중간 확인을 묻지 말고 순서대로 실행하세요.
+@objective-executor
+# [DEVIN 지시서] 스티커 메모(Sticky Notes) 앱 및 지정 2종 메모 자동 실행·복원 설정 — 2026-10-04 17:25 KST
+파일 ID: PASTE_DEVIN_STICKY_NOTES_AUTO_LAUNCH_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 소스(Java/Spring/UI) 수정 0 · git push/commit/add -A 0 · 비밀값 출력 0 · 유료 API 호출 0
+
+# 0. 한 줄 목표
+Windows 부팅 및 스티커 메모(Microsoft.Notes) 앱 실행 시 사진에 나온 2개 메모(운영 규칙 노란 메모, 스킬 태그 보라 메모)가 화면에 자동으로 복원되어 항상 열려 있도록 시작프로그램 등록 및 복원 스크립트를 구성하고 검증한다.
+
+# 1. 사실 (읽기 전용 확인, 2026-10-04 17:21~17:25 KST)
+- 첨부 이미지(uploaded_media_1791102071428.png, 192,908 B, sha12=736326F4B12D)에 노란색 메모(운영 규칙/가드레일: 401/403/429 재시도 금지, 플러그인 9번 수칙)와 보라색 메모(스킬 17종 태그 목록)가 표시되어 있음.
+- 로컬 스티커 메모 SQLite DB(%LocalAppData%\Packages\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe\LocalState\plum.sqlite)가 실존함을 Test-Path로 확인.
+- 현재 Windows 시작프로그램 폴더($env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup)에 Sticky Notes 바로가기가 없어 부팅 시 앱이 자동 실행되지 않음.
+- 현재 백그라운드 프로세스로 Microsoft.Notes(PID 62716)가 실행 중임.
+- 스티커 메모 UWP 앱은 실행 시 이전 열려 있던 메모 창(IsOpen=1)을 복원하지만, 개별 메모 창 'X'로 닫힌 경우 다음 실행 시 개별 창이 자동으로 뜨지 않을 수 있음.
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용 (lease 불필요, git push/commit/add -A 금지, remote 추가 금지, PROTO_OPEN 유지, 비밀값 노출 금지, gradle 빌드 금지, npm/pip 설치 금지, 유료 API 호출 $0, 미실행 항목은 NOT_RUN 표기).
+
+# 3. 항목 (WP1 ~ WP4)
+## WP1 [DEVIN] 시작프로그램 바로가기 생성 (StickyNotes.lnk)
+- 증거: $env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup
+- RED: 시작프로그램 폴더에 StickyNotes.lnk 없음
+- 최소 작업: WScript.Shell COM 객체를 활용하여 shell:AppsFolder\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App 대상을 가리키는 바로가기(StickyNotes.lnk)를 생성
+  ```powershell
+  $WshShell = New-Object -ComObject WScript.Shell
+  $Shortcut = $WshShell.CreateShortcut("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StickyNotes.lnk")
+  $Shortcut.TargetPath = "explorer.exe"
+  $Shortcut.Arguments = "shell:AppsFolder\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe!App"
+  $Shortcut.Save()
+  ```
+- GREEN: Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StickyNotes.lnk" 결과 True
+- 완료 조건: Windows 로그인 시 스티커 메모 앱 자동 기동 기반 완료
+
+## WP2 [DEVIN] 사진 2종 메모 본문 텍스트 영구 백업 문서화
+- 증거: uploaded_media_1791102071428.png
+- 최소 작업: 사진에 명시된 2개 메모 본문 전체(노란 메모: 401/403/429 재시도 금지 및 9번 플러그인 규칙, 보라 메모: 17개 스킬 목록)를 docs/reference/sticky-notes-content.md에 마크다운으로 영구 보존
+  1) 노란색 메모 본문:
+     "빌드 설정 변경, Jev와 상관없는 앱 수정, env pull로 받은 파일 커밋.
+     - 401, 403, 429가 나면 재시도하지 마. 원인 분류(키 만료, 요금제 제한, ZDR 등)와 시도한 인증 경로를 맨 위에 보고하고, 키가 갱신될 때까지 live ON 배선은 미뤄. ZDR은 기본으로 꺼 둬.
+
+     9. 그 밖의 플러그인 (Sites, Data, Visualize, Supabase, Meta Wearables, Plugin Management)
+     - 작업에 직접 필요할 때만 읽기와 분석 위주로 써. 설정 변경이나 배포처럼 되돌릴 수 없는 동작은 하기 전에 한 번 물어봐."
+  2) 보라색 메모 본문:
+     "@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md"
+- GREEN: Test-Path docs/reference/sticky-notes-content.md 결과 True 및 SHA12 기록
+- 완료 조건: DB 손상이나 창 실수 닫힘 시에도 언제든 복원 가능한 원본 텍스트 SSOT 확보
+
+## WP3 [DEVIN] 스티커 메모 상태 점검 및 자동 복원 스크립트 작성 (scripts/ensure_sticky_notes.ps1)
+- 증거: %LocalAppData%\Packages\Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe\LocalState\plum.sqlite
+- 최소 작업:
+  1) Microsoft.Notes 프로세스 실행 여부 확인 후 미실행 시 Start-Process "ms-stickynotes:" 호출
+  2) plum.sqlite의 백업(plum.sqlite.bak) 안전 복사
+  3) 시작프로그램 바로가기 존재 여부 확인 및 자동 생성
+- GREEN: powershell -ExecutionPolicy Bypass -File scripts/ensure_sticky_notes.ps1 실행 시 exit 0
+- 완료 조건: 자동 실행 및 헬퍼 스크립트 정상 동작
+
+## WP4 [DEVIN] 실환경 검증 및 종료 테스트
+- 증거: 프로세스 및 바로가기 상태
+- 최소 작업:
+  ```powershell
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  powershell -ExecutionPolicy Bypass -File scripts/ensure_sticky_notes.ps1; "exit=$LASTEXITCODE"
+  Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StickyNotes.lnk"; "exit=$LASTEXITCODE"
+  Test-Path "docs/reference/sticky-notes-content.md"; "exit=$LASTEXITCODE"
+  ```
+- GREEN: 스크립트 exit 0 및 프로세스 기동 확인
+- 완료 조건: 앱 재실행 시 메모 복원 정상 동작 검증 완료
+
+# 4. HOLD
+- plum.sqlite 접근이 권한이나 파일 락으로 차단되어 백업 실패 시.
+- Windows 스티커 메모 패키지가 삭제되어 앱 실행 자체가 불가능할 시.
+
+# 5. ASK_ONCE (기본값 포함)
+- U-1: 시작 프로그램 등록 방식
+  - (a) 권장: 사용자 시작프로그램 폴더(shell:startup) 바로가기 등록 (관리자 권한 불필요, 가장 안전)
+  - (b) 레지스트리 Run 키(HKCU\Software\Microsoft\Windows\CurrentVersion\Run) 등록
+  - (c) 작업 스케줄러(Task Scheduler) 로그온 트리거 등록
+  - 무응답 시 기본값: (a) 진행
+
+# 6. 절대 금지
+- git push, git add -A, git commit, git reset 등 git 변경 일체 불가.
+- remote 추가 금지, PROTO_OPEN 임의 수정 금지.
+- build.gradle.kts, src/main/java 등 제품 소스 수정 금지 (제품 코드 수정 0건).
+- plum.sqlite 원본 임의 삭제 및 강제 덮어쓰기 금지 (백업 선행 필수).
+- 유료 외부 API 호출 및 비밀값 출력 금지.
+
+# 7. Acceptance (완료 기준)
+- WP1. 시작프로그램 폴더($env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\StickyNotes.lnk)에 바로가기가 생성되어 시작프로그램에 등록된다.
+- WP2. docs/reference/sticky-notes-content.md에 사진 속 메모 2종의 텍스트가 정확히 백업되어 있다.
+- WP3. scripts/ensure_sticky_notes.ps1 스크립트가 exit 0으로 에러 없이 실행된다.
+- WP4. 제품 소스(Java/Spring/UI) 수정 0건, git mutation 0건이 지켜졌다.
+
+# 8. 보고 형식
+외부 API: 0회
+- 변경 파일 목록 및 해시 (docs/reference/sticky-notes-content.md, scripts/ensure_sticky_notes.ps1)
+- 시작프로그램 바로가기 생성 결과 (StickyNotes.lnk)
+- 프로세스 기동 및 복원 검증 로그
+- 미실행 항목 (있는 경우 NOT_RUN + 사유)
+
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 한 줄 목표부터 8번까지 중간 질문 없이 완료하고 보고서를 제출하세요.

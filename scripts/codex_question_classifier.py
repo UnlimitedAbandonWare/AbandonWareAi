@@ -247,6 +247,38 @@ D34_ENV_TRANSIENT = (
     r"(라이브|live).{0,8}(카운트|count).{0,8}(넣을|포함|제외|계산)"
 )
 
+# ---------------------------------------------------------------------------
+# 세션 누적 토큰 임계 — 이 값 이상이면 demo1-session-state-checkpoint를 권고
+# 한다(컴팩션 전 ≤20줄 state.md). --session-tokens 플래그와 D35 문맥 패턴이
+# 공유하는 단일 조정 상수.
+# ---------------------------------------------------------------------------
+SESSION_TOKEN_CHECKPOINT_THRESHOLD = 140_000
+
+# D35: 세션 누적 토큰·컴팩션 문맥 + 체크포인트/정리 행위가 함께 있을 때 —
+# 질문 없이 state.md를 남기고 계속. 두 패턴 모두 매치돼야 한다(문맥만이거나
+# bare 'checkpoint' 언급만으로는 다른 규칙을 가로채지 않는다).
+D35_SESSION_CONTEXT = (
+    r"세션.{0,24}(누적|토큰|token|컨텍스트|context)|"
+    r"누적.{0,8}토큰|토큰.{0,8}누적|"
+    r"session.{0,24}tokens?|"
+    r"컴팩션|compaction"
+)
+D35_CHECKPOINT_ACTION = (
+    r"체크포인트|checkpoint|state\.md|"
+    r"상태.{0,4}(압축|파일|저장|정리)|"
+    r"문맥.{0,4}(유실|보존|정리)|"
+    r"계속.{0,4}(진행|할까)|줄일까|정리할까"
+)
+
+# D36: 서브에이전트 스폰 여부 질문 — 스폰은 실행 판단이지 사용자 승인 항목이
+# 아니다. Tier 0/1 범위면 스폰 없이 인라인으로 직접 수행한다.
+D36_SUBAGENT_SPAWN = (
+    r"서브\s*에이전트|sub[\s-]?agent|스폰|spawn\b|"
+    r"\bexplorer\b|glm_worker|"
+    r"서브\s*(태스크|작업).{0,8}(위임|맡길|띄울)|"
+    r"delegate.{0,16}(sub|worker|agent)"
+)
+
 
 def _narrow_override(text, hit_rule):
     """ask_hit 1개일 때 좁은 예외 판정 -> (d_rule, answer) or None."""
@@ -355,6 +387,9 @@ D_RULES = [
      "codex_auto_unblock.py superseded 확인 → 더 새 ledger가 Acceptance "
      "핵심 PASS면 새 작업 없이 `SUPERSEDED by <ledger>`로 report/journal "
      "닫기 (질문 없이)"),
+    ("D36", D36_SUBAGENT_SPAWN,
+     "스폰 여부는 묻지 않는다 — Tier 0/1 범위면 서브에이전트 없이 인라인으로 "
+     "직접 수행, 병렬이 유리할 때만 bounded 스폰 1개"),
     ("D1",
      r"범위|scope|읽기만|읽기\s*[·/]?\s*확인\s*까지|까지인가|구현\s*[·/]?\s*검증\s*까지|"
      r"just\s+(read|review|inspect)|read\s*(only|ing)?.{0,20}(or|vs|versus)\b|"
@@ -563,6 +598,19 @@ def classify(text):
             "log_line": f"AUTO_DECISION: D30-cap | {excerpt} → hard-cap, "
                         f"partial close | evidence: codex_question_classifier",
         }
+    # D35: 세션 토큰·컴팩션 문맥 + 체크포인트 행위가 함께 있을 때만 — D 표의
+    # 범용 패턴(D1 '까지인가' 등)보다 먼저 체크포인트 권고를 돌려준다.
+    if re.search(D35_SESSION_CONTEXT, text, re.IGNORECASE) and \
+            re.search(D35_CHECKPOINT_ACTION, text, re.IGNORECASE):
+        return {
+            "verdict": "AUTO",
+            "rule": "D35",
+            "default_answer": "demo1-session-state-checkpoint로 ≤20줄 "
+                              "state.md를 남기고 계속 — 컴팩션 전 문맥 보존 "
+                              "(질문 없이)",
+            "log_line": f"AUTO_DECISION: D35 | {excerpt} → session-state "
+                        f"checkpoint | evidence: codex_question_classifier",
+        }
     d_hits = _hits(D_RULES, text)
     if d_hits:
         rule, answer = d_hits[0]
@@ -593,6 +641,21 @@ def classify_with_options(text, options):
     return result
 
 
+def session_checkpoint_advisory(session_tokens):
+    """누적 세션 토큰 → 체크포인트 권고 dict 또는 None(임계 미만)."""
+    if session_tokens is None or \
+            session_tokens < SESSION_TOKEN_CHECKPOINT_THRESHOLD:
+        return None
+    return {
+        "session_tokens": session_tokens,
+        "threshold": SESSION_TOKEN_CHECKPOINT_THRESHOLD,
+        "advisory": "demo1-session-state-checkpoint",
+        "log_line": "CHECKPOINT_ADVISORY: session tokens "
+                    f"{session_tokens}>={SESSION_TOKEN_CHECKPOINT_THRESHOLD} "
+                    "→ demo1-session-state-checkpoint ≤20줄 state.md 후 계속",
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Codex question classifier")
     src = parser.add_mutually_exclusive_group(required=True)
@@ -600,6 +663,9 @@ def main(argv=None):
     src.add_argument("--file", help="file containing the question (utf-8)")
     parser.add_argument("--options",
                         help="card options joined by | (e.g. \"진행|보류\")")
+    parser.add_argument("--session-tokens", type=int, default=None,
+                        help="cumulative session tokens — emits "
+                             "checkpoint_advisory at >=140k")
     args = parser.parse_args(argv)
 
     text = args.text if args.text is not None else Path(args.file).read_text(
@@ -608,6 +674,9 @@ def main(argv=None):
     if args.options:
         result = classify_with_options(
             text, [o for o in args.options.split("|") if o.strip()])
+    advisory = session_checkpoint_advisory(args.session_tokens)
+    if advisory:
+        result["checkpoint_advisory"] = advisory
     print(json.dumps(result, ensure_ascii=False))
     return EXIT_CODES[result["verdict"]]
 

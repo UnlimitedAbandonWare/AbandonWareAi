@@ -3,9 +3,11 @@ import unittest
 from codex_question_classifier import classify
 
 import io
+import json
 from contextlib import redirect_stdout
 from codex_question_classifier import (
-    classify_with_options, main, pick_option)
+    classify_with_options, main, pick_option,
+    session_checkpoint_advisory)
 
 
 class CodexQuestionClassifierTest(unittest.TestCase):
@@ -402,6 +404,57 @@ class CodexQuestionClassifierTest(unittest.TestCase):
 
     def test_server_restart_stays_d9_not_d34(self):
         self.assertVerdict("검증용 서버를 재기동할까요?", "AUTO", "D9")
+
+    # --- add-only: D35 세션 토큰 체크포인트 + D36 스폰 인라인 (2026-10-04) ---
+
+    def test_session_token_checkpoint_is_auto_d35(self):
+        self.assertVerdict(
+            "세션 누적 토큰이 150,000을 넘었습니다. 체크포인트를 만들고 "
+            "계속 진행할까요?",
+            "AUTO", "D35")
+
+    def test_compaction_checkpoint_is_auto_d35(self):
+        self.assertVerdict(
+            "Session tokens keep growing and compaction is near — should "
+            "I write a checkpoint state.md first?",
+            "AUTO", "D35")
+
+    def test_bare_checkpoint_mention_is_not_d35(self):
+        result = classify("codex_work_checkpoint begin을 실행할까요?")
+        self.assertNotEqual("D35", result["rule"])
+
+    def test_session_tokens_flag_emits_advisory(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = main(["--text", "이 순서대로 진행할까요?",
+                         "--session-tokens", "150000"])
+        self.assertEqual(0, code)
+        out = json.loads(buf.getvalue())
+        self.assertEqual("demo1-session-state-checkpoint",
+                         out["checkpoint_advisory"]["advisory"])
+        self.assertEqual(140000,
+                         out["checkpoint_advisory"]["threshold"])
+
+    def test_session_tokens_below_threshold_no_advisory(self):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            code = main(["--text", "이 순서대로 진행할까요?",
+                         "--session-tokens", "139999"])
+        self.assertEqual(0, code)
+        out = json.loads(buf.getvalue())
+        self.assertNotIn("checkpoint_advisory", out)
+
+    def test_subagent_spawn_question_is_auto_d36(self):
+        self.assertVerdict(
+            "explorer 서브에이전트를 스폰해서 코드베이스를 조사할까요?",
+            "AUTO", "D36")
+
+    def test_tier01_option_quiz_auto_inline(self):
+        result = classify_with_options(
+            "어느 쪽으로 진행할까요?",
+            ["1) 경량 패스로 바로 구현", "2) 3축 심의 후 구현"])
+        self.assertEqual("AUTO", result["verdict"])
+        self.assertIsNotNone(result["picked_option"])
 
 
 if __name__ == "__main__":

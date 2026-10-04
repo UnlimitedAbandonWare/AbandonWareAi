@@ -17,7 +17,7 @@ Usage:
 Classification labels (multi):
     LEASE_HELD, UNMEASURABLE_EVIDENCE, CONTRADICTORY_ACCEPTANCE,
     TOOL_LIMIT, PERMISSION, BUDGET, SUPERSEDED, USER_EVIDENCE_WAIT,
-    ENV_TRANSIENT, UNKNOWN
+    ENV_TRANSIENT, SCOPE_AMBIGUITY, UNKNOWN
 
 Never prints secret values: message text is truncated and run through
 redact() before output. .env/.secrets are never opened.
@@ -169,35 +169,67 @@ def parse_rollout(path):
 # ---------------------------------------------------------------------------
 # evidence: blocked-audit files + goal-objective docs
 # ---------------------------------------------------------------------------
-def load_audits(dirs, limit=500):
+BLOCKED_AUDIT_MARKER_RE = re.compile(r"blocked.{0,10}audit", re.I)
+
+
+def _load_audit_file(f):
+    try:
+        text = f.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    entry = {"path": str(f), "text": text, "json": None, "uuid": None}
+    try:
+        entry["json"] = json.loads(text)
+    except ValueError:
+        pass
+    m = ATTACH_RE.search(text)
+    if m:
+        entry["uuid"] = m.group(1).lower()
+    j = entry["json"] or {}
+    gof = j.get("goalObjectiveFile") or ""
+    m2 = ATTACH_RE.search(gof)
+    if m2:
+        entry["uuid"] = m2.group(1).lower()
+    return entry
+
+
+def load_audits(dirs, limit=500, deep=False):
+    """Collect blocked-audit evidence. deep=True also scans *.md files whose
+    text contains a 'blocked audit' marker — ledger naming drift puts the
+    audit narrative inside *REPORT*.md files (e.g. SHIP_REPORT.md)."""
     audits = []
     seen = 0
+    seen_paths = set()
     for d in dirs:
         d = Path(d)
         if not d.is_dir():
             continue
-        for pat in ("**/blocked-audit*.json", "**/blocked-audit*.md"):
+        for pat in ("**/blocked-audit*.json", "**/blocked-audit*.md",
+                    "**/*blocked-audit*.json", "**/*blocked-audit*.md"):
             for f in sorted(d.glob(pat)):
                 if seen >= limit:
                     return audits
-                seen += 1
-                try:
-                    text = f.read_text(encoding="utf-8", errors="replace")
-                except OSError:
+                key = str(f)
+                if key in seen_paths:
                     continue
-                entry = {"path": str(f), "text": text, "json": None, "uuid": None}
-                try:
-                    entry["json"] = json.loads(text)
-                except ValueError:
-                    pass
-                m = ATTACH_RE.search(text)
-                if m:
-                    entry["uuid"] = m.group(1).lower()
-                j = entry["json"] or {}
-                gof = j.get("goalObjectiveFile") or ""
-                m2 = ATTACH_RE.search(gof)
-                if m2:
-                    entry["uuid"] = m2.group(1).lower()
+                seen_paths.add(key)
+                seen += 1
+                entry = _load_audit_file(f)
+                if entry is not None:
+                    audits.append(entry)
+        if deep:
+            for f in sorted(d.glob("**/*.md")):
+                if seen >= limit:
+                    return audits
+                key = str(f)
+                if key in seen_paths:
+                    continue
+                entry = _load_audit_file(f)
+                if entry is None or not BLOCKED_AUDIT_MARKER_RE.search(
+                        entry["text"]):
+                    continue
+                seen_paths.add(key)
+                seen += 1
                 audits.append(entry)
     return audits
 
@@ -241,6 +273,13 @@ RULES = {
     ],
     "PERMISSION": [
         re.compile(r"허용 범위 밖|수정 허용.{0,6}밖|변경 금지 목록|out-of-scope.{0,12}(file|path)|forbidden path", re.I),
+    ],
+    # D35 대응: 열거 없는 "보호 파일/보호 대상" 문구를 세션이 파일 전체 보호로
+    # 넓게 해석해 같은 질문으로 멈춤 — '보호 범위 해석' 룰 (1)~(5)로 풀 수
+    # 있으므로 RESUMABLE_NOW.
+    "SCOPE_AMBIGUITY": [
+        re.compile(r"scope.{0,2}unresolved|protected\s+scope|whole[-\s]file|"
+                   r"보호\s*(파일|범위).{0,20}(미정|모호|불명)|범위\s*해석", re.I),
     ],
     "BUDGET": [
         re.compile(r"재기동.{0,6}상한 소진|호출 상한 소진|한도.{0,4}소진|예산.{0,4}소진|budget.{0,10}exhaust|rate.?limit.{0,10}exceed", re.I),
@@ -416,6 +455,11 @@ def suggest_message(labels, verdict, items):
     if "CONTRADICTORY_ACCEPTANCE" in labels:
         return ("「%s은 지시서대로 PARTIAL이 정답이니 완료 조건에서 빼고 "
                 "완료로 보고해줘.」" % itxt)
+    if "SCOPE_AMBIGUITY" in labels:
+        return ("「보호 범위 해석이 모호한 게 막힘 원인이야. "
+                "docs/agents-rules/DEMO1-AGENT-GUARD-COMMON.md의 "
+                "'보호 범위 해석' (1)~(5)를 적용해 바로 진행하고, "
+                "같은 질문으로 다시 감사하지 말아줘.」")
     if "SUPERSEDED" in labels:
         return ("「더 새 세션이 같은 목표를 이미 끝냈어 — "
                 "codex_auto_unblock.py superseded로 확인하고 "
@@ -483,6 +527,8 @@ def triage_session(info, audits, leases, coop_fixed, attachments_root, root):
         verdict = "STILL_HELD"
     elif "TOOL_LIMIT" in labels and coop_fixed is not True:
         verdict = "BLOCKED_EXTERNAL"
+    elif "SCOPE_AMBIGUITY" in labels:
+        verdict = "RESUMABLE_NOW"
     elif not labels or labels == {"UNKNOWN"}:
         verdict = "UNKNOWN_CAUSE"
     elif labels & {"UNMEASURABLE_EVIDENCE", "PERMISSION", "BUDGET"}:
@@ -518,7 +564,8 @@ def audit_row(audit, leases):
     items = acceptance_items_near(text)
     verdict = ("NEEDS_DIRECTIVE_FIX" if "CONTRADICTORY_ACCEPTANCE" in labels
                else "STILL_HELD" if held else
-               "RESUMABLE_NOW" if not (labels & {"UNMEASURABLE_EVIDENCE"})
+               "RESUMABLE_NOW" if "SCOPE_AMBIGUITY" in labels
+               or not (labels & {"UNMEASURABLE_EVIDENCE"})
                else "BLOCKED_EXTERNAL")
     return {
         "audit": audit["path"],
@@ -581,7 +628,7 @@ def main(argv=None):
             continue
         report["sessions"].append(row)
     for ld in args.ledger:
-        for a in load_audits([ld]):
+        for a in load_audits([ld], deep=True):
             report["audits"].append(audit_row(a, leases))
 
     if args.as_json:

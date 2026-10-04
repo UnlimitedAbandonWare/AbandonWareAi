@@ -1707,9 +1707,8 @@ try {
             return sliceVector(raw, target);
         }
 
-        // Local warn-only compatibility path. Strict/non-local under-dim cases are rejected in resolveTargetDim.
-        recordDimensionTrace(actual, target, tag,
-                allowZeroPad ? "pad_to_configured_dim_allowed" : "pad_to_configured_dim_warn_only", false);
+        // Zero-padding is explicit opt-in; otherwise resolveTargetDim rejects underflow.
+        recordDimensionTrace(actual, target, tag, "pad_to_configured_dim_allowed", false);
         float[] out = new float[target];
         System.arraycopy(raw, 0, out, 0, actual);
         return out;
@@ -1725,9 +1724,9 @@ try {
             throw new IllegalStateException("Embedding dimension " + kind + ": expected " + configuredDim + ", got "
                     + actualDim + " (" + tag + ")");
         }
-        if (actualDim > 0 && actualDim < configuredDim && !allowZeroPad && !isLocalEmbeddingProvider()) {
+        if (actualDim > 0 && actualDim < configuredDim && !allowZeroPad) {
             throw new IllegalStateException("Embedding dimension underflow: expected " + configuredDim + ", got "
-                    + actualDim + " (" + tag + ", provider=" + safeProviderName() + ")");
+                    + actualDim);
         }
 
         // WARN_ONLY: warn once

@@ -101,6 +101,52 @@ class R5ExclusionClauseTest(unittest.TestCase):
         self.assertEqual(fs, [])
 
 
+R6_UNENUMERATED = """## 수정 허용
+- scripts/foo.py
+
+## 변경 금지
+- scripts/git_secret_guard.ps1의 탐지 규칙 완화 금지
+
+## Acceptance
+- A1 테스트 통과
+- A7 이 세션이 보호 파일에 쓴 횟수 = 0 (다른 세션 변경은 EXTERNAL_DRIFT로 기록)
+"""
+
+R6_ENUM_HEADER = """## 변경 금지(보호 대상, 여기 열거한 것만 보호)
+- scripts/protected_a.py, main/ 제품 소스
+
+## Acceptance
+- A7 이 세션이 '변경 금지(보호 대상)' 줄에 열거된 것에 쓴 횟수 = 0
+"""
+
+R6_ENUM_PAREN = """## Acceptance
+- A7 보호 대상(scripts/a.py, scripts/b.py)에 쓴 횟수 = 0
+"""
+
+
+def findings_text(text):
+    return ARL.lint_file("<inline>", ARL.parse_doc(text), {}, False)
+
+
+class R6ProtectedScopeTest(unittest.TestCase):
+    def test_fail_protected_word_without_enumeration(self):
+        fs = rules(findings_text(R6_UNENUMERATED), "R6", "FAIL")
+        self.assertEqual(len(fs), 1)
+        self.assertEqual(fs[0]["item"], "A7")
+
+    def test_ok_header_enumeration(self):
+        fs = rules(findings_text(R6_ENUM_HEADER), "R6")
+        self.assertEqual(fs, [])
+
+    def test_ok_acceptance_paren_enumeration(self):
+        fs = rules(findings_text(R6_ENUM_PAREN), "R6")
+        self.assertEqual(fs, [])
+
+    def test_absent_when_no_protected_word(self):
+        fs = rules(findings("lint_r3_ok.md"), "R6")
+        self.assertEqual(fs, [])
+
+
 class ExitCodeTest(unittest.TestCase):
     def test_exit_1_on_fail_0_clean(self):
         rc_fail = ARL.main([str(FIX / "lint_r3_contradictory.md"), "--root",

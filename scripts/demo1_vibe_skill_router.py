@@ -8,6 +8,9 @@ Default forbid families (counter-evidence, macsrc-patchdrop, triad) stay off the
 default path unless the user text itself matches a family's `unlock` pattern;
 a family declaring `veto: soft` keeps its skills with a `veto_relaxed` warning
 instead of dropping them — `veto: hard` (macsrc-patchdrop) still removes.
+Index `auto_promote` adds difficulty tiering: tier1/2 signals promote the
+result to high-performance skills and unlock their gated families; the default
+tier0_light emits no extra output fields (baseline contract preserved).
 
 Usage:
     python -B scripts/demo1_vibe_skill_router.py resolve "<user text>"
@@ -215,15 +218,63 @@ def _missing_skill_error(root, result, missing):
     return result
 
 
+# --- difficulty auto-promote (index `auto_promote` block) ---------------------
+# tier0_light = 기본(출력 계약 불변) < tier1_tactical < tier2_strategic.
+# 승격된 티어의 primary/optional_skill과 unlock_families는 인덱스에서 읽는다.
+
+_SUBSYSTEM_BOUNDARY = r"(?<![a-z0-9]){}(?![a-z0-9])"
+
+
+def _subsystem_name_hits(names, text):
+    """Count distinct canonical subsystem names mentioned (extremez/overdrive/
+    cfvm/moe). `extreme-z` and `extremez` canonicalize to one hit."""
+    canon = set()
+    for name in names or []:
+        if not isinstance(name, str) or not name:
+            continue
+        norm = re.sub(r"[^a-z0-9]", "", name.lower())
+        if norm and re.search(_SUBSYSTEM_BOUNDARY.format(re.escape(name.lower())), text):
+            canon.add(norm)
+    return len(canon)
+
+
+def _auto_promote(index, text):
+    """Return (tier, matched_signals, tier_cfg). tier2 is evaluated before
+    tier1 so strategic signals always win; tier0_light means no promotion."""
+    promote = index.get("auto_promote") or {}
+    names = promote.get("subsystem_names") or []
+    multi = _subsystem_name_hits(names, text) >= 2
+    for tier in ("tier2_strategic", "tier1_tactical"):
+        cfg = promote.get(tier) or {}
+        hits = []
+        for pat in cfg.get("signals") or []:
+            if pat == "multi_subsystem":
+                if multi:
+                    hits.append(pat)
+            elif _match_count([pat], text):
+                hits.append(pat)
+        if hits:
+            return tier, hits, cfg
+    return "tier0_light", [], {}
+
+
+def _invariant_guards(index):
+    """승격 시 항상 함께 적용되는 불변 가드 스킬 목록(index `invariant_guards`)."""
+    return list((index.get("auto_promote") or {}).get("invariant_guards") or [])
+
+
 def resolve(index, user_text, root="."):
     text = _norm(user_text)
     families = index.get("families") or {}
     defaults = index.get("default_forbid_families") or []
+    tier, tier_hits, tier_cfg = _auto_promote(index, text)
+    tier_unlocks = set(tier_cfg.get("unlock_families") or [])
 
     unlocked = sorted(
         name for name, fam in families.items()
         if _match_count((fam or {}).get("unlock"), text) > 0
     )
+    unlocked = sorted(set(unlocked) | tier_unlocks)
 
     intents = index.get("intents") or []
     scored = []
@@ -260,10 +311,11 @@ def resolve(index, user_text, root="."):
         fallback = index.get("fallback") or {}
         signals = fallback.get("development_signals")
         use_fallback = signals is None or _match_count(signals, text) > 0
-        return {
+        primary = fallback.get("primary_skill") if use_fallback else None
+        result = {
             "schemaVersion": SCHEMA,
             "intent": None,
-            "primary": fallback.get("primary_skill") if use_fallback else None,
+            "primary": primary,
             "optional": None,
             "forbidden_skipped": sorted(set(defaults) - set(unlocked)),
             "unlocked_families": unlocked,
@@ -271,6 +323,21 @@ def resolve(index, user_text, root="."):
             "via": "fallback" if use_fallback else "none",
             "notes": fallback.get("notes") if use_fallback else None,
         }
+        if tier != "tier0_light":
+            result["autoPromotedFrom"] = {
+                "intent": None, "primary": primary, "optional": None}
+            result["primary"] = tier_cfg.get("primary_skill") or primary
+            result["optional"] = tier_cfg.get("optional_skill")
+            result["tier"] = tier
+            result["tierSignals"] = tier_hits
+            guards = _invariant_guards(index)
+            if guards:
+                result["guards"] = guards
+            missing = [name for name in (result["primary"], result["optional"])
+                       if name and not _skill_exists(root, name)]
+            if missing:
+                return _missing_skill_error(root, result, missing)
+        return result
 
     forbidden = (set(defaults) | set(best.get("forbid_families") or [])) - set(unlocked)
     # `veto: hard` (default) drops the family's skills; `veto: soft` keeps them
@@ -302,6 +369,22 @@ def resolve(index, user_text, root="."):
     elif optional in soft_skills:
         veto_relaxed.append(optional)
 
+    # Difficulty promotion: tier2 overrides primary+optional with the tier's
+    # configured high-performance skills (already unlocked above so the veto
+    # pass cannot strip them); tier1 keeps the resolved primary and only fills
+    # an empty optional slot. The pre-promotion routing is preserved for audit.
+    promoted_from = None
+    if tier != "tier0_light":
+        promoted_from = {
+            "intent": best.get("intent"),
+            "primary": primary,
+            "optional": optional,
+        }
+        if tier_cfg.get("primary_skill"):
+            primary = tier_cfg["primary_skill"]
+        if optional is None or tier_cfg.get("optional_skill"):
+            optional = tier_cfg.get("optional_skill") or optional
+
     redirects = {}
     if primary:
         primary = _follow_redirects(root, primary, redirects)
@@ -323,6 +406,13 @@ def resolve(index, user_text, root="."):
         "redirects": redirects,
         "notes": best.get("notes"),
     }
+    if tier != "tier0_light":
+        result["tier"] = tier
+        result["tierSignals"] = tier_hits
+        result["autoPromotedFrom"] = promoted_from
+        guards = _invariant_guards(index)
+        if guards:
+            result["guards"] = guards
     missing = [name for name in (primary, optional) if name and not _skill_exists(root, name)]
     if missing:
         return _missing_skill_error(root, result, missing)

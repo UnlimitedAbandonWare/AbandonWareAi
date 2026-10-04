@@ -65,6 +65,69 @@ default_forbid_families:
   - macsrc-patchdrop
   - triad
 
+# 난이도 자동 승격(auto-promote, 2026-10-04 skill-performance tiering):
+# 질의 속 고난도 시그널이 켜지면 resolve()가 결과를 고성능 스킬로 승격하고
+# tier별 unlock_families를 forbid 해금에 더한다. tier0_light=기본(출력 필드
+# 추가 없음) < tier1_tactical < tier2_strategic. 승격 시에만 tier/tierSignals/
+# autoPromotedFrom이 붙는다. 시그널·스킬 매핑·해금은 여기서 조정한다.
+auto_promote:
+  # 불변 가드: 어떤 tier로 승격해도 항상 함께 적용된다. 승격 출력의 `guards`
+  # 필드로 에코된다(콘솔 출력 ≤30줄/1KB, 상세는 var/diagnostics/ 경로만 참조).
+  invariant_guards:
+    - demo1-output-budget
+    - demo1-session-state-checkpoint
+  # multi_subsystem: 아래 이름 중 서로 다른 2개 이상이 질의에 나타나면
+  # tier2 시그널 1개로 계산한다(단일 서브시스템 패치는 승격하지 않는다).
+  subsystem_names:
+    - extremez
+    - extreme-z
+    - overdrive
+    - cfvm
+    - moe
+  tier1_tactical:
+    # 복합 로직·첫 실패 — primary 유지 + evidence-debugging 자동 페어링
+    signals:
+      - 복합 로직
+      - 복합 디버깅
+      - 첫 테스트 실패
+      - 첫 시도 실패
+      - 1차 테스트 실패
+      - re:첫\s*(번째)?\s*(시도|테스트|빌드).{0,8}실패
+      - first test fail
+      - first attempt fail
+    optional_skill: demo1-evidence-debugging
+    unlock_families: []
+  tier2_strategic:
+    # 복합 서브시스템 충돌·반복 실패 루프·아키텍처 재설계·정교/완벽/근본 요청 —
+    # 3축 심의 + 반증 체인 자동 발동 (반복 실패는 회수 명시 패턴만: bare '반복'은
+    # blocker-recovery 같은 기존 인텐트를 훔치지 않게 회수 토큰을 요구한다)
+    signals:
+      - multi_subsystem
+      - 복합 서브시스템
+      - 서브시스템 충돌
+      - cross-subsystem
+      - multi-subsystem
+      - re:\d+\s*(회|번|차)\s*이상.{0,16}(실패|재시도|오류|에러)
+      - re:(실패|재시도|오류|에러).{0,16}\d+\s*(회|번|차)\s*이상
+      - re:(실패|재시도|오류|에러).{0,8}(두|세|여러)\s*(번|회|차)
+      - 실패 루프
+      - 재시도 루프
+      - failure loop
+      - retry loop
+      - 동일 실패 반복
+      - 같은 실패 반복
+      - 아키텍처 재설계
+      - 구조 재설계
+      - 근본적으로
+      - 근본 원인 재설계
+      - 정교히
+      - 완벽히
+    primary_skill: demo1-triad-deliberation
+    optional_skill: demo1-triangulating-counter-evidence
+    unlock_families:
+      - triad
+      - counter-evidence
+
 # Skills intentionally NOT routed by intent patterns: deprecated `redirect:`
 # aliases (resolved through their target) and explicit-call-only helpers whose
 # own description gates them (PROTO-LIGHT / "ONLY when the user explicitly
@@ -1381,6 +1444,20 @@ intents:
     optional_skill: null
     forbid_families: []
     notes: GPT Pro에 demo1_*.zip 작업 지시서 — v2 harmonized 템플릿 우선; Grok Bot export 2026-10-03
+
+  - intent: retrieval-sparse-facts
+    match:
+      - sparse bm25
+      - bm25props
+      - retrieval.bm25.enabled
+      - pinecone hybrid
+      - rag_sparse_status
+      - retrieval facts guard
+      - retrieval_facts_guard
+    primary_skill: demo1-retrieval-sparse-facts
+    optional_skill: null
+    forbid_families: []
+    notes: Pointer only. SSOT is docs/RAG_SPARSE_STATUS.md. Product edits stay with Codex.
 
 fallback:
   primary_skill: demo1-vibe-max-agency

@@ -1624,11 +1624,19 @@ public class ChatWorkflow {
         Long sessionIdLong = parseNumericSessionId(req.getSessionId());
         throwIfCancelled(sessionIdLong); // ??異붽?
 
+        var recentHistoryWindow = !conversationContext.present() && memoryReadEnabled && sessionIdLong != null
+                ? recentHistoryWindowForRecall(chatHistoryService, sessionIdLong, 5)
+                : java.util.Optional.<java.util.List<ChatHistoryService.RecentHistoryTurn>>empty();
         java.util.List<String> recentHistory = conversationContext.present()?conversationContext.interpretationHistory():(memoryReadEnabled && sessionIdLong != null)
-                ? chatHistoryService.getFormattedRecentHistory(sessionIdLong, 5)
+                ? recentHistoryWindow.map(window -> window.stream()
+                        .map(ChatHistoryService.RecentHistoryTurn::formattedLine).toList())
+                        .orElseGet(() -> chatHistoryService.getFormattedRecentHistory(sessionIdLong, 5))
                 : java.util.Collections.emptyList();
 
-        String earlyRecentHistoryFallback = composeRecentHistoryFallback(userQuery, String.join("\n", recentHistory));
+        String earlyRecentHistoryFallback = recentHistoryWindow.isPresent()
+                ? composeRecentHistoryFallback(userQuery, String.join("\n", recentHistory),
+                        sessionIdLong, recentHistoryWindow.get())
+                : composeRecentHistoryFallback(userQuery, String.join("\n", recentHistory));
         if (interactionShortCircuitAllowed && earlyRecentHistoryFallback != null && !earlyRecentHistoryFallback.isBlank()) {
             try {
                 TraceStore.put("chat.historyFallback.shortCircuit", true);
@@ -11183,7 +11191,24 @@ public class ChatWorkflow {
                         .find();
     }
 
+    static java.util.Optional<java.util.List<ChatHistoryService.RecentHistoryTurn>> recentHistoryWindowForRecall(
+            ChatHistoryService service, Long sessionId, int limit) {
+        ChatRunExecutionContext run = ChatRunExecutionContext.current();
+        if (run == null || !run.belongsToSession(sessionId)) {
+            return java.util.Optional.empty();
+        }
+        var window = service.getRecentHistoryWindow(sessionId, limit);
+        return window == null ? java.util.Optional.empty() : window;
+    }
+
     static String composeRecentHistoryFallback(String query, String recentHistory) {
+        return composeRecentHistoryFallback(query, recentHistory, null, null);
+    }
+
+    static String composeRecentHistoryFallback(String query, String recentHistory, Long sessionId,
+            java.util.List<ChatHistoryService.RecentHistoryTurn> historyWindow) {
+        ChatRunExecutionContext run = ChatRunExecutionContext.current();
+        boolean trustedWindow = historyWindow != null && run != null && run.belongsToSession(sessionId);
         if (!currentTurnMemoryValues(query).isEmpty()) {
             return null;
         }
@@ -11210,8 +11235,10 @@ public class ChatWorkflow {
         boolean firstMessageQuestion = asksForKoreanFirstMessageRepeat(query);
         String previousUserMessage = firstMessageQuestion
                 ? firstUserMessageAnswerFromHistory(recentHistory, query)
-                : previousUserMessageFromHistory(recentHistory, query,
-                        previousTurnQuestion, previousTopicQuestion);
+                : previousTurnQuestion && trustedWindow
+                        ? previousUserMessageFromWindow(historyWindow, run.persistedUserMessageId())
+                        : previousUserMessageFromHistory(recentHistory, query,
+                                previousTurnQuestion, previousTopicQuestion);
         if (firstMessageQuestion && (previousUserMessage == null || previousUserMessage.isBlank())) {
             previousUserMessage = firstUserMessageFromHistory(recentHistory, query);
         }
@@ -12611,6 +12638,22 @@ public class ChatWorkflow {
                 || text.contains("\uB2F5\uD574")
                 || text.contains("\uBCF4\uC5EC");
         return pronounValue && repeat && action;
+    }
+
+    private static String previousUserMessageFromWindow(
+            java.util.List<ChatHistoryService.RecentHistoryTurn> window, Long currentMessageId) {
+        for (int i = window.size() - 1; i >= 0; i--) {
+            var turn = window.get(i);
+            if (currentMessageId != null && currentMessageId.equals(turn.messageId())) {
+                continue;
+            }
+            String role = turn.role() == null ? "user" : turn.role();
+            String content = turn.content() == null ? "" : turn.content().trim();
+            if ("user".equalsIgnoreCase(role.trim()) && !content.isBlank()) {
+                return content;
+            }
+        }
+        return null;
     }
 
     private static String previousUserMessageFromHistory(String recentHistory, String currentQuery,

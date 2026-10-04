@@ -44,7 +44,7 @@
 <!-- END DEMO1-WORK-LEDGER -->
 <!-- BEGIN DEMO1-AGENT-GUARD-COMMON -->
 ## Common Guard Entry Points (Codex / Grok / Devin / Cline)
-- 공통 가드 진입점: preflight/스킬 라우터/checkpoint/조건부 Git/워치독 명령 모음. — 상세: `docs/agents-rules/DEMO1-AGENT-GUARD-COMMON.md`
+- 공통 가드 진입점: preflight/스킬 라우터/checkpoint/조건부 Git/워치독 명령 모음·보호 범위 해석. — 상세: `docs/agents-rules/DEMO1-AGENT-GUARD-COMMON.md`
 <!-- END DEMO1-AGENT-GUARD-COMMON -->
 <!-- BEGIN DEMO1-DB-AGENT-SSOT -->
 ## Local DB agent entry (lmsdb file H2)
@@ -210,6 +210,7 @@
 ## Skill And Prompt Routing
 <!-- BEGIN DEMO1-VIBE-SKILL-ROUTER -->
 - 모든 vibe 요청의 단일 primary 스킬 resolve 절차. — 상세: `docs/agents-rules/DEMO1-VIBE-SKILL-ROUTER.md`
+- 난이도 3티어 승격·토큰 예산 — 상세: `docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md`
 <!-- END DEMO1-VIBE-SKILL-ROUTER -->
 <!-- BEGIN DEMO1-TOOL-PLACEMENT-SCAN -->
 ## Tool placement scan (advisory, reuse-only)
@@ -249,7 +250,7 @@
 
 <!-- BEGIN DEMO1-LOCAL-FIRST-RAG -->
 ## Local-First RAG Repair Overlay
-- Local-First RAG 수리 오버레이 — 소스 작업 전 확인·추적 순서. — 상세: `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md`
+- RAG 수리·채택 설정 보존·안전 복구 범위. — 상세: `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md`
 <!-- END DEMO1-LOCAL-FIRST-RAG -->
 <!-- BEGIN DEMO1-GIT-LOCAL-FIRST -->
 ## Local Source First; Conditional Local Git (this canonical root only)

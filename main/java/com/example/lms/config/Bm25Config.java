@@ -3,8 +3,16 @@ package com.example.lms.config;
 import com.example.lms.search.TraceStore;
 
 /**
- * Simple feature flag container for BM25 retriever.
+ * Legacy system-property container; not a Spring bean or the main {@code /chat} retrieval switch.
+ * The actual Lucene BM25 switch is {@code bm25.enabled}, declared by {@code Bm25Props}
+ * with a default of {@code true}. Lucene retrieval is called by the separate
+ * {@code /api/probe/search} chain, not the main LMS retrieval chain.
+ * Enabling {@code retrieval.bm25.enabled} does not change main chat retrieval.
+ * See {@code docs/RAG_SPARSE_STATUS.md} for the LATER assessment and evidence.
+ *
+ * @deprecated No active application consumer; retained for legacy configuration compatibility.
  */
+@Deprecated(forRemoval = false)
 public class Bm25Config {
     public boolean enabled = Boolean.parseBoolean(System.getProperty("retrieval.bm25.enabled", "false"));
     public String indexPath = System.getProperty("bm25.index.path", "");

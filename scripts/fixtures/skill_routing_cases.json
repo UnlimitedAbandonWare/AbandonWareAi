@@ -237,7 +237,7 @@
   ],
   "skill_contracts": {
     ".agents/skills/demo1-agy-directive-writer/SKILL.md": {
-      "body_sha256": "4671cba499131b25b5bcef781b0dd8321b4bb9aef35e01f52d2e577222537029"
+      "body_sha256": "9df1e10e448ce2487d5585878def89d77468fce154dadbea38860136ae3d700b"
     },
     ".agents/skills/demo1-devin-directive-loop/SKILL.md": {
       "body_sha256": "ac81ed9c1f28c92f9491cdb7d9166b361cdfc0243699b70705c2ce7acb6bf11b"
@@ -252,7 +252,7 @@
       "body_sha256": "6b2473bf38deea42d88fda570def64b91e81af78f7ab657bb36a8975657afe32"
     },
     ".agents/skills/demo1-work-ledger/SKILL.md": {
-      "body_sha256": "c1645d1b3acbf1ffcb4b97dd6ab51342e71cb5cc555b430224208b07c8d09721"
+      "body_sha256": "067d320d7a29ae2a40515fb4c39a41fed33d3ebb621544f048bbb70d7afa2b9d"
     }
   }
 }

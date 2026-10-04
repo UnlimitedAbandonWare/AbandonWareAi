@@ -6,6 +6,9 @@ import com.example.lms.repository.AdministratorRepository;
 import com.example.lms.repository.ChatMessageRepository;
 import com.example.lms.repository.ChatSessionRepository;
 import com.example.lms.search.TraceStore;
+import com.example.lms.service.chat.ChatRunExecutionContext;
+import com.example.lms.service.chat.ChatRunRegistry;
+import org.springframework.test.util.ReflectionTestUtils;
 import com.example.lms.web.ClientOwnerKeyResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
@@ -142,6 +145,7 @@ class ChatWorkflowRecentTurnRecallContractTest {
         f.append("user", U4);
         f.append("assistant", "synthetic recall answer");
         f.append("user", U4);
+        f.currentRequest(5L);
         f.assertWindow(5, List.of(1L, 2L, 3L, 4L, 5L),
                 List.of("user", "assistant", "user", "assistant", "user"));
         assertAnswer(U4, f.recall(U4, 5));
@@ -152,6 +156,7 @@ class ChatWorkflowRecentTurnRecallContractTest {
         f.append("user", U3);
         f.append("assistant", "synthetic topic answer");
         f.append("user", U4);
+        f.currentRequest(null);
         // Current request has not been appended; this equal-text row belongs to an older ID.
         assertAnswer(U4, f.recall(U4, 5));
     }
@@ -226,6 +231,12 @@ class ChatWorkflowRecentTurnRecallContractTest {
         final LocalDateTime epoch = LocalDateTime.of(2026, 10, 4, 0, 0);
         final ChatMessageRepository messages = mock(ChatMessageRepository.class);
         final ChatHistoryServiceImpl service;
+        boolean currentRequestBound;
+        Long currentMessageId;
+        void currentRequest(Long messageId) {
+            currentRequestBound = true;
+            currentMessageId = messageId;
+        }
         Fixture() { this(41L, "synthetic-owner-A"); }
         Fixture(long id, String owner) {
             sessionId = id;
@@ -253,6 +264,22 @@ class ChatWorkflowRecentTurnRecallContractTest {
         }
         List<String> history(int limit) { return service.getFormattedRecentHistory(sessionId, limit); }
         String recall(String query, int limit) {
+            if (currentRequestBound) {
+                ChatRunRegistry registry = new ChatRunRegistry();
+                ReflectionTestUtils.setField(registry, "replayCapacity", 16);
+                var run = registry.beginOrJoin(sessionId).context();
+                if (currentMessageId != null) {
+                    assertTrue(run.bindPersistedUserMessage(currentMessageId));
+                }
+                try (var scope = ChatRunExecutionContext.bind(run)) {
+                    var window = ChatWorkflow.recentHistoryWindowForRecall(service, sessionId, limit).orElseThrow();
+                    return ChatWorkflow.composeRecentHistoryFallback(query,
+                            String.join("\n", window.stream().map(ChatHistoryService.RecentHistoryTurn::formattedLine).toList()),
+                            sessionId, window);
+                } finally {
+                    ReflectionTestUtils.invokeMethod(registry, "shutdown");
+                }
+            }
             return ChatWorkflow.composeRecentHistoryFallback(query, String.join("\n", history(limit)));
         }
         void assertWindow(int limit, List<Long> ids, List<String> roles) {

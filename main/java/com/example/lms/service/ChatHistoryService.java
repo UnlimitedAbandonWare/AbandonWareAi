@@ -168,6 +168,25 @@ public interface ChatHistoryService {
 
     List<String> getFormattedRecentHistory(Long sessionId, int limit);
 
+    /** Internal filtered history window; empty Optional means identity is unsupported. */
+    default Optional<List<RecentHistoryTurn>> getRecentHistoryWindow(Long sessionId, int limit) {
+        return Optional.empty();
+    }
+
+    /** Service-only row identity, never a public response payload. */
+    record RecentHistoryTurn(Long messageId, String role, String content, int order) {
+        String formattedLine() {
+            String rawRole = role == null ? "user" : role;
+            String label = switch (rawRole.trim().toLowerCase(java.util.Locale.ROOT)) {
+                case "user" -> "User";
+                case "assistant" -> "Assistant";
+                case "system" -> "System";
+                default -> rawRole;
+            };
+            return label + ": " + (content == null ? "" : content);
+        }
+    }
+
     Optional<String> getRollingSummary(Long sessionId);
 
     default ConversationMemorySnapshot getConversationMemorySnapshot(Long sessionId) {

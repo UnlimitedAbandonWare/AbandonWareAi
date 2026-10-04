@@ -11,6 +11,46 @@ from scripts.test_codex_work_checkpoint import CP, decision
 class SourceExpressionCheckpointTest(unittest.TestCase):
     setting = "api" + "Key"
 
+    def test_java_empty_query_label_can_precede_more_runtime_concatenation(self):
+        label = "api" + "_key="
+        body = ('String body = "' + label + '" + value + " Author' + 'ization: "'
+                + ' + "Bea' + 'rer " + "raw-owner-to' + 'ken-123456";')
+        CP.secret_free(body.encode(), "src/test/java/Example.java")
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(('String body = "' + label + '" + value + "' + 'x' * 32 + '";').encode(),
+                           "src/test/java/Example.java")
+        for extra in (' "' + 'sk-' + 'x' * 24 + '";',
+                      '\n' + self.setting + '="opaque-value";'):
+            with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free((body + extra).encode(), "src/test/java/Example.java")
+
+    def test_split_public_header_marker_keeps_opaque_credentials_strict(self):
+        header = "Author" + "ization"
+        prefix = 'String body = "' + header + ': " + "Bea' + 'rer " + "'
+        body = prefix + 'raw-owner-to' + 'ken-123456";'
+        CP.secret_free(body.encode(), "src/test/java/Example.java")
+        for changed in (prefix + 'x' * 32 + '";',
+                        body.replace("123456", "123457"),
+                        body.replace("123456", "123456-extra"),
+                        body.replace('123456";', '123456" + "' + 'x' * 32 + '";'),
+                        'String body = (' + body[len('String body = '):-1] + ') + "' + 'x' * 32 + '";',
+                        'String body = ((' + body[len('String body = '):-1] + ')) + "' + 'x' * 32 + '";',
+                        body + '\n"' + 'sk-' + 'x' * 24 + '";',
+                        "// " + body, "/* " + body + " */",
+                        '"""\n' + body + '\n"""', '\\u0022' + body):
+            with self.subTest(length=len(changed)), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(changed.encode(), "src/test/java/Example.java")
+        for path in ("main/java/Example.java", "docs/example.md"):
+            with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(body.encode(), path)
+
+    def test_existing_embedding_redaction_fixture_passes_without_path_bypass(self):
+        path = "src/test/java/com/example/lms/service/embedding/OllamaEmbeddingModelTest.java"
+        source = Path(path).read_bytes()
+        CP.secret_free(source, path)
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(source + ('\n' + self.setting + '="opaque-value";').encode(), path)
+
     def test_display_continuity_fixture_is_bounded_to_its_exact_synthetic_rhs(self):
         path = "src/test/js/display-continuity.test.cjs"
         name = "to" + "ken"
