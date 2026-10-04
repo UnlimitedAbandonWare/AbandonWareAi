@@ -41,6 +41,9 @@ def path_rule(path):
     leaf = lower[-1] if lower else ""
     if not parts or path.startswith("/") or "\\" in path or ":" in path or any(p in (".", "..", "") for p in parts):
         return "invalid-index-path"
+    readme_doc = leaf == "readme.md" or leaf.endswith("_readme.md")
+    if readme_doc and ".secrets" not in lower and not path.lower().startswith("config/secrets/"):
+        return None
     if any(p in (".git", ".secrets", ".gradle", "build", "logs", "node_modules", "__patch_drop__", "models") for p in lower):
         return "private-or-generated-path"
     if path.lower().startswith(("data/", "var/", "config/secrets/")):

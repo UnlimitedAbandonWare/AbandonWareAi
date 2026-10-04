@@ -76,6 +76,29 @@ class StagedGuardTest(unittest.TestCase):
         self.stage("note.txt", "AK" + "IA" + "Z" * 16)
         self.assertNotEqual(0, self.check().returncode)
 
+    def test_tracked_readme_docs_skip_directory_path_rules(self):
+        self.assertIsNone(scanner.path_rule("__patch_drop__/README.md"))
+        self.assertIsNone(scanner.path_rule("main/resources/models/MODEL_README.md"))
+
+    def test_non_readme_files_in_the_same_dirs_stay_blocked(self):
+        self.assertEqual("private-or-generated-path",
+                         scanner.path_rule("__patch_drop__/x.patch"))
+        self.assertEqual("private-or-generated-path",
+                         scanner.path_rule("main/resources/models/x.bin"))
+
+    def test_credential_dirs_still_block_readme_docs(self):
+        self.assertEqual("private-or-generated-path", scanner.path_rule(".secrets/README.md"))
+        self.assertEqual("runtime-data-path", scanner.path_rule("config/secrets/README.md"))
+
+    def test_readme_in_blocked_dirs_scans_content_and_passes(self):
+        self.stage("__patch_drop__/README.md", "plain documentation")
+        self.stage("main/resources/models/MODEL_README.md", "plain documentation")
+        self.assertEqual(0, self.check().returncode)
+
+    def test_readme_with_fake_key_keeps_content_finding(self):
+        self.stage("__patch_drop__/README.md", "docs " + "sk-" + "B" * 30)
+        self.assertNotEqual(0, self.check().returncode)
+
 
 if __name__ == "__main__":
     unittest.main()
