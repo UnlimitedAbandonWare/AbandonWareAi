@@ -94,15 +94,17 @@ Verify every FQCN/path/script you cite exists (Test-Path / Select-String) before
 ## 6. Save and verify
 - Name: `PASTE_<TARGET>_<TOPIC>_<YYYYMMDD>.txt` (TARGET ∈ CODEX|DEVIN|GROK|CLEAN|GPTPRO|…, TOPIC UPPER_SNAKE).
   Never overwrite an existing file: if the name exists, add `_R2`, `_R3`.
-- **저장은 `scripts/brief_save.py`가 한다** (2026-10-02 인계 팩 §3):
+- **저장은 `scripts/brief_save.py`가 한다** (2026-10-02 인계 팩 §3, 2026-10-03 R6 갱신):
   `python -B scripts/brief_save.py save --draft <파일> --agent DEVIN|CODEX|GROK|CLEAN|GPTPRO --topic <kebab>`.
   lint(FAIL 시 저장 거부) → Downloads 저장(UTF-8 no BOM) →
-  `agent-prompts\<agent>-<topic>-<date>\BRIEF.txt` 사본 → 두 파일 sha12 대조 →
   `data/agent-handoff/brief-registry/briefs.jsonl` 기록까지 한 번에 처리한다.
+  `agent-prompts\<agent>-<topic>-<date>\BRIEF.txt` 사본은 2026-10-03 사용자 결정(R6)으로
+  폐기 — 산출물은 Downloads의 PASTE 파일 하나다. brief_save.py가 repo 사본을
+  아직 쓰면 그 출력은 deprecated로 취급하고 보고에 남긴다.
   과거 지시서 검색: `brief_save.py list|latest|search <단어>`.
 - 단, 사용자가 "Downloads에만"/"붙여넣을 텍스트만" 같은 **단독 산출**을 요청하면
-  repo 사본·기록부 쓰기를 강제하지 않는다 — Downloads 파일 하나만 쓰고
-  바이트·sha12를 보고한다. 이중 저장+기록부(brief_save.py)는 지시서 저장이
+  기록부 쓰기를 강제하지 않는다 — Downloads 파일 하나만 쓰고
+  바이트·sha12를 보고한다. 저장+기록부(brief_save.py)는 지시서 저장이
   승인된 기본 흐름일 때만 쓴다.
 - Write UTF-8 (no BOM). Then `Get-Item` Length + sha12; re-read the first and last 20 lines.
 - Copy referenced source docs next to it only if the target cannot read the repo.
