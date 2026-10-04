@@ -1,66 +1,324 @@
 {
-  "schema": "awx.git-guard-allow.v1",
-  "note": "path+rule+oid must all match and reason must be non-empty. provider-key/github-token/slack-token/aws-access-key/private-key rules are honored only under scripts/test_*, */fixtures/*, src/test/**.",
-  "entries": [
-    {
-      "path": "scripts/fixtures/goal_block/rollout_secret.jsonl",
-      "rule": "provider-key",
-      "oid": "fdaa382ee280a6ac1b1b910f250f24e5e0af57eb",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_brief_lint.py",
-      "rule": "provider-key",
-      "oid": "85f16a7e02527630a7b21ac8d2ca2eafcebe3d0e",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_codex_assist.py",
-      "rule": "slack-token",
-      "oid": "1cce1375d117ab3533d272fb8f47ecb85c3eeeeb",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_codex_work_checkpoint_lease_identity.py",
-      "rule": "provider-key",
-      "oid": "bd651d9991e64a01c56b2435ffb8b0d017cc091b",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_f01b_admission_key_demo.py",
-      "rule": "provider-key",
-      "oid": "35929f18b69ed63656f386858d708243f871a397",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_goal_block_triage.py",
-      "rule": "provider-key",
-      "oid": "e8d34bd413311e2200508cf7e4c7bb9897ba9ca3",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_jev_payload_guard.py",
-      "rule": "provider-key",
-      "oid": "5380e8903d78af2cae77f6708be99382fb5d9618",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_log_redact.py",
-      "rule": "github-token",
-      "oid": "70b5a84eaaafe95e3584a28d1b662a4f1bbe4977",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "scripts/test_settings_routing_guard.py",
-      "rule": "provider-key",
-      "oid": "17a004688dcce9205430edbe5f6d322f4f14002e",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    },
-    {
-      "path": "src/test/java/com/example/lms/api/TraceSnapshotsDiagnosticsSecurityIntegrationTest.java",
-      "rule": "sensitive-assignment",
-      "oid": "0b847909002fd747033379456cb9b3009f13ae78",
-      "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
-    }
-  ]
+    "schema": "awx.git-guard-allow.v1",
+    "note": "path+rule+oid must all match and reason must be non-empty. provider-key/github-token/slack-token/aws-access-key/private-key rules are honored only under scripts/test_*, */fixtures/*, src/test/**.",
+    "entries": [
+        {
+            "path": "scripts/fixtures/goal_block/rollout_secret.jsonl",
+            "rule": "provider-key",
+            "oid": "fdaa382ee280a6ac1b1b910f250f24e5e0af57eb",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_brief_lint.py",
+            "rule": "provider-key",
+            "oid": "85f16a7e02527630a7b21ac8d2ca2eafcebe3d0e",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_codex_assist.py",
+            "rule": "slack-token",
+            "oid": "1cce1375d117ab3533d272fb8f47ecb85c3eeeeb",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_codex_work_checkpoint_lease_identity.py",
+            "rule": "provider-key",
+            "oid": "bd651d9991e64a01c56b2435ffb8b0d017cc091b",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_f01b_admission_key_demo.py",
+            "rule": "provider-key",
+            "oid": "35929f18b69ed63656f386858d708243f871a397",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_goal_block_triage.py",
+            "rule": "provider-key",
+            "oid": "e8d34bd413311e2200508cf7e4c7bb9897ba9ca3",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_jev_payload_guard.py",
+            "rule": "provider-key",
+            "oid": "5380e8903d78af2cae77f6708be99382fb5d9618",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_log_redact.py",
+            "rule": "github-token",
+            "oid": "70b5a84eaaafe95e3584a28d1b662a4f1bbe4977",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "scripts/test_settings_routing_guard.py",
+            "rule": "provider-key",
+            "oid": "17a004688dcce9205430edbe5f6d322f4f14002e",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": "src/test/java/com/example/lms/api/TraceSnapshotsDiagnosticsSecurityIntegrationTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "0b847909002fd747033379456cb9b3009f13ae78",
+            "reason": "테스트용 가짜 키/값, 2026-10-03 확인"
+        },
+        {
+            "path": ".env.example",
+            "rule": "sensitive-assignment",
+            "oid": "9bdff76450903162aaf04d4b6e19103e1a1933cd",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "__patch_drop__/README.md",
+            "rule": "private-or-generated-path",
+            "oid": "1b22a7dc73d58732d58ab086e3aadec0124b3a30",
+            "reason": "문서/모델 설명 경로 오탐 (2026-10-04 확인)"
+        },
+        {
+            "path": "agent-prompts/gpu-lane-repair-20260924/orchestrate-plan.json",
+            "rule": "binary-scan-unavailable",
+            "oid": "2ac20a5e537e5d5ff4ec3be3a1cd9181d30b3a4d",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "app/quarantine/resources_legacy/whitening/lowrank_zca.bin",
+            "rule": "binary-scan-unavailable",
+            "oid": "09f370e38f498a462e1ca0faa724559b6630c04f",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "docs/figures/sigmoid_distribution.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "a7b4d17960c72a631eb093e7d4b4387df9ccec80",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "gradle/wrapper/gradle-wrapper.jar",
+            "rule": "binary-scan-unavailable",
+            "oid": "dbb75c88e9bfd1a917de0685b1fa835a611682a7",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java",
+            "rule": "sensitive-assignment",
+            "oid": "e57ea88121bc642203c6a6bb07b3cb00baaefdc6",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/java/com/example/lms/api/FeedbackController.java",
+            "rule": "sensitive-assignment",
+            "oid": "3a5cb8bfc590bed5025b06c82cf276db381d28f7",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/java/com/example/lms/config/LlmConfig.java",
+            "rule": "sensitive-assignment",
+            "oid": "524af84976ddaeb4ca553aff41a77d446ea48551",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/java/com/example/lms/service/ModelFetchService.java",
+            "rule": "sensitive-assignment",
+            "oid": "d76c29021f83a87883a17a3a58796bcafa76be91",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/resources/application-verification.properties",
+            "rule": "sensitive-assignment",
+            "oid": "5b984f951921a79bc1475b1292865824d4aa7d2a",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/resources/models/MODEL_README.md",
+            "rule": "private-or-generated-path",
+            "oid": "acacd8ade7547d6ee0c9b3eb16040469dd727b52",
+            "reason": "문서/모델 설명 경로 오탐 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/resources/static/assets/display/favicon.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "9c1a8c7efdbef88b51c8184fccb10d215d56214a",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "main/resources/static/conversate/favicon.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "9c1a8c7efdbef88b51c8184fccb10d215d56214a",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "scripts/__pycache__/analyze_build_output.cpython-311.pyc",
+            "rule": "binary-scan-unavailable",
+            "oid": "5390adf0833c65ddec4960984b119325257b8bd7",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "scripts/__pycache__/persist_build_error_patterns.cpython-311.pyc",
+            "rule": "binary-scan-unavailable",
+            "oid": "7c59ddd769fe99743801e39b8c58f37e4c4a8795",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "scripts/awx_mcp_toolbox_tests.ps1",
+            "rule": "sensitive-assignment",
+            "oid": "f1702066e800dda914d312ded92ef6a1f212f353",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "scripts/read_rag_debug_trail_tests.ps1",
+            "rule": "sensitive-assignment",
+            "oid": "123159c30ffe61069576fbb234f533af9a8bb810",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "scripts/test_awx_resource_freshness.py",
+            "rule": "sensitive-assignment",
+            "oid": "7892ed1ba928e30a2fea9106a02265c9405e1edb",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/autoconfig/NovaDebugPortAutoConfigurationTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "60d5e331974ccbf614c15531ba2f354861db7dc1",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/boot/exec/CancelShieldExecutorServicePostProcessorTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "695a3f4ff96dc95cfa5d89f2f2c2cf15d4aada73",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/boot/exec/ExecutorServiceContextPropagationPostProcessorRedactionTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "e01ac3ad0db123151cf400e9971e06905ab94ec1",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/orch/anchor/AnchorNarrowerTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "aeb8721c5c960e54b5c3d6853b6db7634138d4ff",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/orch/aop/LlmRouterGatewaySecurityTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "2a89d70db5e670584ec06abe93d4d253e4f68475",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/orch/aop/ModelGuardExpectedFailureContractTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "5ee32019760cdd1863018510242c8b4b5fdde552",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/ai/abandonware/nova/orch/aop/WebFailSoftSearchAspectTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "a586cd9f3290549aa21bbc9e1101355a44a03a83",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/abandonware/ai/agent/tool/impl/ops/safe/SafePatchToolsTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "aa2cfe3ff253ff83394f6617a6da39a60d6d43bc",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/Phase2ApplicationTestSupport.java",
+            "rule": "sensitive-assignment",
+            "oid": "4d18f222bccdf2c629d98c538952bccb9fc0e3e5",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/api/DesktopRouterStatusBridgeControllerTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "62a18416091eb77e16c9876fd52cbb5e040ca84e",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/api/VectorDiagnosticsControllerTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "00a997c0b98505ded8079ff75cfa24f4bdcba5d0",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/debug/DebugEventStoreFingerprintRetentionTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "1da8b65a0ae1acfdd4e6e5426b54afdb217ef755",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/debug/ai/DebugAiMetricsServicePostprocessTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "781579f0d43bebdfdcd64ec0ead9f37ff9120465",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/health/GpuGatewayDiagnosticsTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "19146b3b746c532fb7f4d60e0772bdb7e0d60fc0",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/health/LlmHealthIndicatorTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "179da9d0aca7d60cf6d5153119c187dd4836d7e8",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/learning/ops/RagLearningOpsDashboardServiceTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "c6997b3fbb756f06e19759676cb1ee8e895ede4a",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/ops/RagOpsLedgerServiceTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "c124fcab48842cc7606a6530fc15ea14b0aa55ea",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/service/rag/LangChainRAGServiceVectorDiagnosticsTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "21fd65b15cb24e6d15e64a6ac639471a516fbeae",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/service/trace/TraceHtmlBuilderRedactionTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "37c3a01db5945ceb79c1bf659a56e6493d9b12ce",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/service/web/SearchProviderTraceStandardizationTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "bcece20327a9983ac818a736719f38ff9968e738",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/telemetry/MlaBreadcrumbTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "b9a7e7d4941d99b6472d01fb6f53b0223560d99f",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/transform/QueryTransformerRedactionContractTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "203629317837790903147b792b4c822bc9005111",
+            "reason": "플레이스홀더/테스트 더미 키, 실비밀 아님 (2026-10-04 확인)"
+        },
+        {
+            "path": "tools/__pycache__/build_error_guard.cpython-311.pyc",
+            "rule": "binary-scan-unavailable",
+            "oid": "a8392504105529f57e02b0932fee8afae4e6fe4b",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "tools/__pycache__/build_error_miner.cpython-311.pyc",
+            "rule": "binary-scan-unavailable",
+            "oid": "6b5d5448475165265a19d23437fe94e81275fbef",
+            "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        }
+    ]
 }
