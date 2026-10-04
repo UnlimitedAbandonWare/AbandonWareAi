@@ -737,7 +737,13 @@ def cmd_push(g: Git, args) -> dict:
     url = _push_url(g, remote)
     if not url:
         raise ShipError(EXIT_ERROR, f"no push URL for remote {remote}")
-    argv = ["-c", f"publish.allowTarget={url}",
+    if __package__:
+        from .git_publish_review import parse_target
+    else:
+        from git_publish_review import parse_target
+    target = parse_target(url)
+    allow_target = f"{target['host']}/{target['owner']}/{target['repo']}"
+    argv = ["-c", f"publish.allowTarget={allow_target}",
             "-c", f"publish.allowRef=refs/heads/{branch}",
             "push", "-u", remote, branch]
     if no_verify:

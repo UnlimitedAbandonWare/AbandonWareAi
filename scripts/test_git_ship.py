@@ -471,6 +471,39 @@ class SelectedCommitCase(ShipCase):
         self.assertEqual(self.staged(),{'foreign.txt':'A'})
 
 
+class PushTargetContractCase(ShipCase):
+    def test_push_allow_target_matches_existing_reviewer_contract(self):
+        from scripts import git_publish_review as review, git_ship as gs, git_ship_easy as ge
+        from unittest import mock
+        git(self.repo, 'checkout', '-b', 'ship/target')
+        g = gs.Git(str(self.repo), GIT)
+        real_run = g.run
+        seen = []
+        def run(argv, **kwargs):
+            if 'push' in argv:
+                target = next(a.split('=', 1)[1] for a in argv
+                              if a.startswith('publish.allowTarget='))
+                result = review.review_remote(self.repo, 'origin', target)
+                self.assertTrue(result['ok'], result['reasons'])
+                self.assertIn('publish.allowRef=refs/heads/ship/target', argv)
+                self.assertNotIn('--no-verify', argv)
+                seen.append(target)
+                return 0, '', ''
+            return real_run(argv, **kwargs)
+        for suffix in ('', '.git'):
+            with self.subTest(suffix=suffix):
+                git(self.repo, 'remote', 'set-url', 'origin',
+                    'https://github.com/UnlimitedAbandonWare/AbandonWareAi' + suffix)
+                with mock.patch.dict(os.environ, {'AWX_PUBLISH_APPROVED': '1'}), \
+                     mock.patch.object(g, 'run', side_effect=run), \
+                     mock.patch.object(gs, 'ls_remote_sha', return_value=self.head()):
+                    result = gs.cmd_push(g, ge._push_args(True))
+                self.assertTrue(result['push']['pushed'])
+                self.assertEqual(git(self.repo, 'config', '--get', 'publish.allowTarget',
+                                     check=False).returncode, 1)
+        self.assertEqual(seen, ['github.com/UnlimitedAbandonWare/AbandonWareAi'] * 2)
+
+
 class PushFailureDetailCase(ShipCase):
     def test_hook_stdout_reason_codes_are_retained_without_values(self):
         from scripts import git_ship as gs,git_ship_easy as ge
