@@ -14,6 +14,8 @@
 | `scripts/orchestra_board.py` | `agent_signal_digest --json` + 신호 저장소 → 30줄 이내 BOARD.md |
 | `scripts/orchestra_paste.py` | 라우팅된 신호 → 에이전트별 `PASTE_<AGENT>_<topic>_<yyyymmdd>.txt` + `말로:` 줄 |
 | `scripts/Orchestra-Board.bat` | board `--md` 래퍼 |
+| `scripts/agent_quick_signal.py` | 원스톱 퀵 CLI: `emit`(new+route+paste 1회) / `inbox` / `copy`(클립보드) / `done` / `counts` |
+| `scripts/Agent-Signal.bat` | 위 CLI의 윈도우 래퍼: 무인자면 `[Codex: N] [Devin: N] [Grok: N]` + 번호 메뉴, 인자면 그대로 위임 |
 | `data/agent-handoff/orchestra/` | 신호 저장소(`inbox/<agent>/`, `outbox/<agent>/`, `archive/`) |
 | `var/orchestra/` | 사람용 출력(BOARD.md, outbox/PASTE_*) |
 
@@ -100,3 +102,30 @@ scripts\Orchestra-Board.bat   # var\orchestra\BOARD.md
 # 4) 다음 에이전트용 붙여넣기 파일 + 말로 줄
 python -B scripts/orchestra_paste.py --id <id> --agent codex
 ```
+
+## 3대 에이전트 핑퐁 규칙 (Codex ↔ Devin ↔ Grok)
+
+위 4단계를 한 번에 처리하는 퀵 경로가 `scripts/agent_quick_signal.py`
+(배치 `scripts\Agent-Signal.bat`)이다. 단계를 나눠 부를 필요가 없을 때 —
+작업 완료 통지, 검증 요청, 아이디어 한 줄 전달 — 에 사용한다.
+
+- 각 에이전트가 작업을 마치면 **1줄 신호**를 권고 포맷으로 남긴다:
+
+  ```powershell
+  scripts\Agent-Signal.bat emit --from <me> --to <target> --summary "..." --files <목록>
+  # 예) devin이 codex에게 검증 요청을 넘길 때
+  scripts\Agent-Signal.bat emit --from devin --to codex --summary "x 패치 검증 요청" --files scripts/x.py
+  ```
+
+- `--clip`을 붙이면 생성된 `PASTE_<AGENT>_*.txt` 본문이 Windows
+  클립보드(`clip.exe` → `powershell Set-Clipboard` 순서로 시도)에 복사된다.
+- 받은 쪽은 `scripts\Agent-Signal.bat inbox --agent <me>`로 대기 신호를 확인하고,
+  `copy --id <id>`로 해당 PASTE 본문을 클립보드에 옮겨 창에 붙여넣는다.
+- 처리가 끝난 신호는 `done --id <id>`로 `archive/` 이동 + `status=done`.
+- 배치를 인자 없이 실행하면 `[Codex: N] [Devin: N] [Grok: N]` 대기 현황과
+  번호 메뉴(1. 신호 생성, 2. 최신 PASTE 복사, 3. 현황판, 4. 종료)가 뜬다.
+- `emit`은 내부적으로 `orchestra_signal.py new` → `orchestra_route.py
+  --apply` → `orchestra_paste.py`를 순서대로 subprocess 호출한다 — 분류기·
+  라우터 로직을 복사하지 않는다. `--no-classify`를 주면 근거 수집 호출을 건너뛴다.
+- 여전히 자동 전송은 없다. 생성된 `말로:` 줄을 사용자가 해당 에이전트 창에
+  직접 붙여넣는다. 비밀값 패턴은 `orchestra_signal.py`가 그대로 거부한다.

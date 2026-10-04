@@ -4,7 +4,9 @@ rem 기존 Start-Agy-CLI.bat와 다른 점: --dangerously-skip-permissions 를
 rem 기본으로 붙이지 않는다 (AWX_AGY_YOLO=1 일 때만), 첫 메시지로 Grok Bot
 rem 프라이머를 -i 로 주입한다. cwd는 레포 루트로 고정.
 setlocal
-set "ROOT=C:\AbandonWare\demo-1\demo-1\src"
+chcp 65001 >nul
+set "ROOT=%~dp0"
+set "ROOT=%ROOT:~0,-1%"
 cd /d "%ROOT%"
 
 if defined AGY_EXE (set "AGY=%AGY_EXE%") else (
@@ -22,4 +24,5 @@ echo [agy-grokbot] 최근 크레딧/한도 판정: USABLE_BASE_QUOTA (2026-10-02
 
 rem -c / --conversation 는 그대로 통과
 "%AGY%" %ARGS% -i "%PRIMER%" %*
-endlocal
+set "EXITCODE=%ERRORLEVEL%"
+exit /b %EXITCODE%

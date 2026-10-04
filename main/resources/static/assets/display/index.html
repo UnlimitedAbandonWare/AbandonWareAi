@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
 <title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
-<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-memory-3" defer></script><script src="app.js?v=focus-memory-3" defer></script>
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-memory-3" defer></script><script src="app.js?v=lens-preview-2" defer></script>
 <style>
 #app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
 #app > * { margin-bottom:16px; }
@@ -19,6 +19,10 @@
 #nova-history-list article { border-bottom:1px solid #58626a; padding:12px 0; }
 #app details > * { margin-top:12px; }
 #app summary { cursor:pointer; font-size:18px; }
+#lens-preview { min-width:0; }
+#lens-preview input { width:100%; min-width:0; box-sizing:border-box; font:inherit; }
+#lens-preview-viewport { width:100%; max-width:600px; position:relative; overflow:hidden; background:#000; }
+#lens-preview-frame { position:absolute; top:0; left:0; width:600px; height:600px; border:0; transform-origin:top left; }
 #display-url { display:block; color:#fff; }
 #lens-address { width:100%; font-size:16px; }
 #phone-controls { padding:0; }
@@ -40,10 +44,19 @@
 <p id="caption-text" aria-live="polite">폴드6에서 들어오는 대화가 여기에 표시됩니다.</p><p id="hint-text" hidden></p>
 </section>
 <button id="connect-lens" class="focusable" type="button" disabled>안경 연결 주소 만들기</button>
-<input id="lens-address" class="focusable" type="text" readonly hidden aria-label="저장된 안경 연결 주소"><button id="copy-lens" class="focusable" type="button" hidden>주소 복사</button>
+<input id="lens-address" class="focusable" type="password" autocomplete="off" readonly hidden aria-label="저장된 안경 연결 주소"><button id="copy-lens" class="focusable" type="button" hidden>주소 복사</button>
 <a id="add-lens" class="focusable" hidden>Meta AI에 전사 화면 등록</a>
 <a id="display-url" class="focusable" href="meta/index.html" target="_blank" rel="noopener noreferrer">안경 기본 화면 확인</a>
 <p id="lens-link-note" class="hint">처음에는 안경 연결 주소를 만들어 Meta AI에 등록하세요.</p>
+<details id="lens-preview"><summary class="focusable" tabindex="0">안경 화면 미리보기(디버그)</summary>
+<p class="hint">저장된 안경 화면을 이 페이지에서 확인합니다.</p>
+<label class="hint" for="lens-preview-address">저장된 주소가 없으면 안경 연결 주소 또는 토큰 붙여넣기</label>
+<input id="lens-preview-address" class="focusable" type="password" autocomplete="off" spellcheck="false" aria-label="미리보기 안경 연결 주소 또는 토큰">
+<div class="actions"><button id="lens-preview-open" class="focusable" type="button">미리보기 열기</button><button id="lens-preview-close" class="focusable" type="button">닫기</button><button id="lens-preview-clear" class="focusable" type="button">저장된 주소 지우기</button></div>
+<p id="lens-preview-note" class="hint" role="status"></p>
+<a id="lens-preview-tab" class="focusable" target="_blank" rel="noopener noreferrer" hidden>새 탭으로 열기</a>
+<div id="lens-preview-viewport" hidden><iframe id="lens-preview-frame" title="안경 화면 미리보기" src="about:blank" referrerpolicy="no-referrer"></iframe></div>
+</details>
 <p class="hint">수음 시작을 누르고 말하세요. 힌트를 켜면 짧은 답변도 안경에 표시됩니다.</p>
 <div class="actions"><button id="nova-open" class="focusable" type="button" disabled>노바 대화 열기</button><button id="nova-history-open" class="focusable" type="button" disabled>노바 처리 기록</button></div>
 <section id="nova-fold" hidden aria-label="노바 집중 대화">

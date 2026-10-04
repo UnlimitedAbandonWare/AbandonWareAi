@@ -111,7 +111,7 @@
     const readyKey=s.assistId+':'+s.epoch;
     if(lensReady&&(!lensWasReady||readyKey!==lensReadyKey)){
       lensWasReady=true;lensReadyKey=readyKey;lensRestoreAttempts=0;clearTimeout(lensRestoreTimer);
-      if(lensRequested||client.storedLensLink({includeExpired:true}))void restoreLensLink();
+      if(lensRequested)void restoreLensLink();
     }else if(!lensReady)lensWasReady=false;
     if(voice)debug();
     if(voice?.isActive()&&s.role==='PHONE'&&!s.linked&&voice.state.phase==='LISTENING')voice.stop('안경 표시 연결이 끊겨 수음을 중지했습니다.',true);
@@ -143,6 +143,72 @@
   }
   $('finish').onclick=act(()=>voice.finish());
   showLensLink(client.storedLensLink());
+  const preview=$('lens-preview'),previewFrame=$('lens-preview-frame'),previewViewport=$('lens-preview-viewport');
+  const previewKey='awx.display.lensPreview.'+(testChannel||'live');let previewObserver=null;
+  function scaleLensPreview(){
+    if(!previewViewport||previewViewport.hidden)return;
+    const size=Math.min(600,previewViewport.clientWidth);
+    previewFrame.style.transform='scale('+(size/600)+')';previewViewport.style.height=size+'px';
+  }
+  function closeLensPreview(){
+    if(!previewFrame)return;
+    previewObserver?.disconnect();previewObserver=null;
+    previewFrame.src='about:blank';previewViewport.hidden=true;
+  }
+  function lensPreviewToken(value){
+    const input=(value||'').trim();if(/^[a-f0-9]{64}$/.test(input))return input;
+    try{
+      const view=new URLSearchParams(new URL(input,location.href).hash.slice(1)).get('view')||'';
+      return /^[a-f0-9]{64}$/.test(view)?view:'';
+    }catch{return '';}
+  }
+  function savedLensPreview(){
+    try{const saved=JSON.parse(localStorage.getItem(previewKey)||'null');if(/^[a-f0-9]{64}$/.test(saved?.token||''))return saved.token;}catch{}
+    return '';
+  }
+  function showSavedLensPreview(){
+    const savedPreview=savedLensPreview();$('lens-preview-address').placeholder=savedPreview?'저장됨 · …'+savedPreview.slice(-6):'안경 연결 주소 또는 토큰';
+    if(!preview.open)$('lens-preview-note').textContent=savedPreview?$('lens-preview-address').placeholder:'';
+  }
+  function forgetLensPreview(note){
+    try{localStorage.removeItem(previewKey);}catch{}
+    closeLensPreview();preview.open=false;$('lens-preview-address').value='';showSavedLensPreview();
+    $('lens-preview-tab').hidden=true;$('lens-preview-tab').removeAttribute('href');$('lens-preview-note').textContent=note;
+  }
+  if(preview&&previewFrame&&previewViewport){
+    showSavedLensPreview();
+    previewFrame.onload=()=>{
+      previewObserver?.disconnect();previewObserver=null;if(previewFrame.src==='about:blank')return;
+      try{
+        const doc=previewFrame.contentDocument,status=doc?.getElementById('status');if(!status)return;
+        const check=()=>{if(previewFrame.contentDocument===doc&&/^Lens link (invalid|expired|denied)\./.test(status.textContent||''))forgetLensPreview('주소를 다시 붙여넣으세요');};
+        if(typeof MutationObserver==='function'){previewObserver=new MutationObserver(check);previewObserver.observe(status,{childList:true,subtree:true,characterData:true});}check();
+      }catch{}
+    };
+    $('lens-preview-open').onclick=()=>{
+      const input=$('lens-preview-address').value.trim(),stored=client.storedLensLink()?.token||'';
+      const candidate=input||(/^[a-f0-9]{64}$/.test(stored)?stored:savedLensPreview());
+      const token=lensPreviewToken(candidate);let url;
+      if(standalone&&testChannel){
+        url=new URL('meta/index.html',location.href);url.search=new URLSearchParams({clientRole:'test',channel:testChannel,preview:'1'}).toString();
+      }else{
+        if(!/^[a-f0-9]{64}$/.test(token)){
+          closeLensPreview();$('lens-preview-tab').hidden=true;$('lens-preview-tab').removeAttribute('href');
+          $('lens-preview-note').textContent='먼저 안경 연결 주소 만들기를 누르세요';return;
+        }
+        url=new URL('meta/index.html',location.href);url.hash='view='+token+'&preview=1';
+      }
+      if(token){try{localStorage.setItem(previewKey,JSON.stringify({token,savedAt:Date.now()}));}catch{}showSavedLensPreview();}
+      $('lens-preview-address').value='';$('lens-preview-note').textContent=token?'안경 화면 · …'+token.slice(-6):'테스트 안경 화면';
+      $('lens-preview-tab').href=url.href;$('lens-preview-tab').hidden=false;
+      preview.open=true;previewViewport.hidden=false;previewFrame.src=url.href;scaleLensPreview();
+    };
+    $('lens-preview-close').onclick=()=>{closeLensPreview();preview.open=false;};
+    if($('lens-preview-clear'))$('lens-preview-clear').onclick=()=>forgetLensPreview('저장된 주소를 지웠습니다.');
+    preview.addEventListener('toggle',()=>{if(!preview.open)closeLensPreview();});
+    if(window.ResizeObserver)new window.ResizeObserver(scaleLensPreview).observe(previewViewport);
+    window.addEventListener('resize',scaleLensPreview);window.addEventListener('pagehide',closeLensPreview);
+  }
   if(typeof settings.device==='string'&&settings.device){$('input-device').add(new Option('저장된 입력 장치',settings.device));$('input-device').value=settings.device;}
   if(Number.isFinite(settings.segment)){$('segment-preset').value=['0','5','10','15'].includes(String(settings.segment))?String(settings.segment):'custom';$('segment-custom').value=settings.segment;$('segment-custom').hidden=$('segment-preset').value!=='custom';}
   if($('connect-lens'))$('connect-lens').onclick=act(()=>{lensRestoreAttempts=0;return restoreLensLink();});

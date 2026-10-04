@@ -77,6 +77,20 @@ python -B scripts/orchestra_board.py --md
 python -B scripts/orchestra_paste.py --id <id> --agent codex
 ```
 
+## 3대 에이전트 핑퐁 규칙 (Codex ↔ Devin ↔ Grok)
+
+단계를 나눠 부를 필요 없는 빠른 왕복은 `scripts/agent_quick_signal.py`
+(배치 `scripts\Agent-Signal.bat`) — emit이 new+route --apply+paste를
+한 번에 처리하고 `말로:` 줄과 PASTE 경로를 출력한다.
+
+- 작업 완료·검증 요청·아이디어 전달 시 1줄 신호 권고 포맷:
+  `Agent-Signal.bat emit --from <me> --to <target> --summary "..." --files <목록>`
+- `--clip`: PASTE 본문을 클립보드로(clip.exe → Set-Clipboard 순).
+- 받는 쪽: `inbox --agent <me>` 대기 확인 → `copy --id <id>` 본문 복사 →
+  처리 후 `done --id <id>`로 archive+status=done.
+- 무인자 `Agent-Signal.bat`: `[Codex: N] [Devin: N] [Grok: N]` + 번호 메뉴.
+- `--no-classify`는 route 근거 수집(분류기 3 subprocess)을 건너뛴다.
+
 ## 금지
 
 - 다른 에이전트 창·방·DM에 자동 게시하는 코드 추가 금지

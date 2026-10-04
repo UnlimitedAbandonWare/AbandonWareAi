@@ -6,9 +6,11 @@ REM    --dangerously-skip-permissions (Auto-approve tool calls)
 REM    --mode accept-edits (Allows workspace file modifications)
 REM ============================================================
 setlocal
+chcp 65001 >nul
 
 set "AWX_AGY_YOLO=1"
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 
 set "AGY="
 if defined AGY_EXE set "AGY=%AGY_EXE%"

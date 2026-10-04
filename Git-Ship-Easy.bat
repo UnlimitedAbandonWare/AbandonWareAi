@@ -7,7 +7,8 @@ REM  ASCII-only on purpose: the .py prints the Korean text.
 REM ============================================================
 chcp 65001 >nul
 setlocal
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 if defined AWX_GIT_EXE (
   set "GITEXE=%AWX_GIT_EXE%"

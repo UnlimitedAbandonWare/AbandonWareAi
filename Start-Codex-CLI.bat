@@ -29,8 +29,10 @@ REM    no git push/fetch, no secret printing, no edits outside the
 REM    project root, no bulk source deletion.
 REM ============================================================
 setlocal
+chcp 65001 >nul
 
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 
 REM  Shared toolchain env (same block as Start-Agy-CLI.bat / Start-Grok-CLI.bat):

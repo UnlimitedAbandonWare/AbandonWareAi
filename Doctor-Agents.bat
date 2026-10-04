@@ -6,7 +6,9 @@ REM  MCP config locations/env set-ness/login evidence).
 REM  Makes NO generation calls. Read-only.
 REM ============================================================
 setlocal
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+chcp 65001 >nul
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 node "%PROJECT_ROOT%\tools\agents\doctor.mjs" %*
 set "EXITCODE=%ERRORLEVEL%"

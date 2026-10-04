@@ -16,8 +16,10 @@ REM
 REM  Auth: cached Google/Antigravity session under %USERPROFILE%\.gemini
 REM ============================================================
 setlocal
+chcp 65001 >nul
 
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 
 REM  Shared toolchain env (same block as Start-Grok-CLI.bat / Start-Codex-CLI.bat):
 REM  JDK17 + Git + Node/npm + agy bin on PATH so agent-spawned subprocesses see

@@ -11196,11 +11196,22 @@ public class ChatWorkflow {
         if (isCurrentModeStatusRequest(query)) {
             return null;
         }
-        boolean recentHistoryQuestion = isRecentHistoryQuestion(query);
+        boolean previousTopicQuestion = query != null && Pattern.compile(
+                "(?iu)(?:(?:\\uC9C1\\uC804|\\uC774\\uC804|\\uC9C0\\uB09C)\\s*(?:\\uB300\\uD654\\s*)?\\uC8FC\\uC81C|\\b(?:previous|last)\\s+topic\\b)")
+                .matcher(query).find();
+        boolean recentHistoryQuestion = isRecentHistoryQuestion(query) || previousTopicQuestion;
+        boolean previousTurnQuestion = recentHistoryQuestion && !previousTopicQuestion
+                && Pattern.compile("(?iu)\\s*(?:(?:내가\\s*)?(?:방금|직전(?:에)?|이전(?:에)?)\\s*"
+                        + "(?:뭐라고\\s*(?:했|헀)(?:냐|지|어|더라)?|(?:보낸\\s*)?(?:사용자\\s*)?"
+                        + "(?:메시지|발화|질문|턴)(?:를|을)?\\s*(?:그대로\\s*)?(?:다시\\s*)?"
+                        + "(?:말해|알려|반복해)(?:줘|주세요)?)|what\\s+did\\s+i\\s+(?:just\\s+)?(?:say|ask|send)"
+                        + "|(?:repeat\\s+)?(?:my\\s+)?(?:previous|last)\\s+(?:user\\s+)?(?:message|turn))\\s*[?.!]*\\s*")
+                        .matcher(query).matches();
         boolean firstMessageQuestion = asksForKoreanFirstMessageRepeat(query);
         String previousUserMessage = firstMessageQuestion
                 ? firstUserMessageAnswerFromHistory(recentHistory, query)
-                : previousUserMessageFromHistory(recentHistory, query);
+                : previousUserMessageFromHistory(recentHistory, query,
+                        previousTurnQuestion, previousTopicQuestion);
         if (firstMessageQuestion && (previousUserMessage == null || previousUserMessage.isBlank())) {
             previousUserMessage = firstUserMessageFromHistory(recentHistory, query);
         }
@@ -11245,11 +11256,12 @@ public class ChatWorkflow {
         if (containsHangul(query)) {
             String messageLabel = firstMessageQuestion
                     ? "\uCC98\uC74C \uC0AC\uC6A9\uC790 \uBA54\uC2DC\uC9C0: "
+                    : previousTopicQuestion ? "\uC9C1\uC804 \uC8FC\uC81C: "
                     : "\uC9C1\uC804 \uC0AC\uC6A9\uC790 \uBA54\uC2DC\uC9C0: ";
             return messageLabel + safeMessage
                     + "\n\n출처: 세션 최근 기록";
         }
-        return "Previous user message: " + safeMessage
+        return (previousTopicQuestion ? "Previous topic: " : "Previous user message: ") + safeMessage
                 + "\n\nSource: session recent history";
     }
 
@@ -12601,7 +12613,8 @@ public class ChatWorkflow {
         return pronounValue && repeat && action;
     }
 
-    private static String previousUserMessageFromHistory(String recentHistory, String currentQuery) {
+    private static String previousUserMessageFromHistory(String recentHistory, String currentQuery,
+            boolean previousTurnOnly, boolean topicOnly) {
         if (recentHistory == null || recentHistory.isBlank()) {
             return null;
         }
@@ -12620,7 +12633,12 @@ public class ChatWorkflow {
             if (!current.isBlank() && normalizeHistoryCompare(content).equals(current)) {
                 continue;
             }
-            boolean transientLabelFollowUp = isStandaloneLabelOnlyFollowUp(content);
+            // A recall question or a label request is still a legitimate user turn.
+            if (previousTurnOnly) {
+                return content;
+            }
+            boolean transientLabelFollowUp = topicOnly
+                    ? isExplicitLabelOnlyFollowUp(content) : isStandaloneLabelOnlyFollowUp(content);
             if (fallback == null && !transientLabelFollowUp) {
                 fallback = content;
             }

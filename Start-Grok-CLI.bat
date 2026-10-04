@@ -14,8 +14,10 @@ REM  Auth: uses the cached auth.x.ai session in %USERPROFILE%\.grok
 REM  (same subscription pool as the Grok Bot desktop app).
 REM ============================================================
 setlocal
+chcp 65001 >nul
 
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 set "GROK_EXE=%USERPROFILE%\.grok\bin\grok.exe"
 
 REM  Shared toolchain env (same block as Start-Agy-CLI.bat / Start-Codex-CLI.bat):

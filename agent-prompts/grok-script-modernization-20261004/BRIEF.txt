@@ -1,0 +1,95 @@
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 한 줄 목표부터 8번 최종 결과 보고까지 중간 중단 없이 완수합니다.
+[GROK 지시서] 스크립트 전수 자산(.bat, .ps1, .py, .cmd, .sh, .mjs 등) 조사 및 개량화 — 2026-10-04 15:20 KST
+파일 ID: PASTE_GROK_SCRIPT_MODERNIZATION_20261004
+금지: 제품 소스 수정 0 · git push / add -A / add . / commit -a 0 · 비밀값 평문 출력 0 · 유료 호출 0
+
+0. 한 줄 목표
+프로젝트 내 산재된 배치(.bat/.cmd), 파워쉘(.ps1), 파이썬(.py), 쉘(.sh), 노드(.mjs) 등 전체 1,500+개 스크립트 자산을 전수 분류하고, 경로 하드코딩 제거·에러 제어 강화·배치 파사드화·통합 닥터 도구 구축으로 스크립트 생태계를 견고화(Hardening)한다.
+
+# 1. 사실 (라이브 확인, 2026-10-04 15:20 KST)
+- 스크립트 분포: .py 866개(scripts/ 581개), .ps1 320개(scripts/ 185개), .js 305개, .bat 42개(루트 31개), .sql 26개, .sh 25개, .mjs 23개, .cmd 5개 실존.
+- 디렉터리 집중도: scripts/ 디렉터리에 806개 집중, 루트에 36개(bat 31, ps1 2, cmd 1, sh 2), tools/ 38개 등.
+- 미지의 스크립트: bat/ps1/py 외에 `.cmd`, `.sh`, `.mjs`(Node CLI 사이드카), `.sql`, `.codex/hooks` 실존.
+- 경로 하드코딩: Doctor-Agents.bat 등 일부 bat에 `PROJECT_ROOT=C:\AbandonWare\...` 고정 경로 존재.
+- 배치-파워쉘 연계: 루트 bat 다수가 파워쉘/파이썬/노드 래퍼이나 인자 전파·UTF-8·에러 코드 반환이 불균일.
+- Project Root: C:\AbandonWare\demo-1\demo-1\src.
+
+# 2. 공통 규칙
+- Project Root(C:\AbandonWare\demo-1\demo-1\src) 기준 상대경로 및 동적 경로(%~dp0, $PSScriptRoot, __file__)만 사용.
+- 제품 소스(src/main/java, build.gradle.kts) 변경 금지 — 도구, 스크립트, 검증기 레이어만 수정.
+- PROTO_OPEN 상태 유지 — 추가 권한 게이트나 로그인 장벽 설치 금지.
+- 절대 git push / git add -A / git add . / commit -a 금지. remote 추가 금지.
+- 비밀값(API 키, 토큰, 패스워드) 원문 출력 금지 — 환경변수 NAME 및 마스킹 처리 필수.
+- 모든 파이썬 스크립트 호출은 `python -B` (pycache 오염 방지) 강제.
+
+# 3. 항목 (WP1 ~ WP4)
+- WP1 [GROK] 스크립트 전수 인벤토리 매니페스트 생성기(scripts/scripts_inventory.py) 구현
+  - 역할: bat, cmd, ps1, py, sh, mjs, sql 등 8개 확장자를 전수 수집하여 메타데이터(경로, 크기, sha12, 카테고리 태그)를 var/diagnostics/scripts_manifest.json 및 요약으로 출력.
+  - 카테고리: LAUNCHER_FACADE, OPS_DIAGNOSTIC, AGENT_TOOL, TEST_VERIFY, SIDECAR_NODE, DB_MIGRATION, UNCLASSIFIED.
+  - RED: `python -B scripts/scripts_inventory.py --check; "exit=$LASTEXITCODE"` (미존재 시 exit!=0)
+  - 최소 수정: scripts/scripts_inventory.py 신규 작성 (파이썬 표준 라이브러리만 사용, $0).
+  - GREEN: `python -B scripts/scripts_inventory.py --json var/diagnostics/scripts_manifest.json; "exit=$LASTEXITCODE"` -> exit 0.
+  - 완료 조건: var/diagnostics/scripts_manifest.json 생성 및 전체 스크립트 1,500+건 집계 완료.
+
+- WP2 [GROK] 루트 배치(.bat/.cmd) 런처 파사드(Thin Facade) 표준화 및 절대경로 제거
+  - 대상: 루트 31개 .bat 및 1개 .cmd 파일 전수 점검.
+  - 내용: 하드코딩된 `C:\AbandonWare\...` 경로를 `%~dp0` 및 상대경로 기반으로 개량. UTF-8(`chcp 65001 >nul`) 명시 및 ERRORLEVEL 정상 반환 보장. 배치는 PowerShell/Python을 호출하는 'Thin Facade'로 정돈.
+  - RED: `python -B scripts/scripts_inventory.py --check-hardcoded-paths; "exit=$LASTEXITCODE"`
+  - 최소 수정: 루트 .bat 파일들의 경로 선언부 수정 및 표준 헤더 적용.
+  - GREEN: `python -B scripts/scripts_inventory.py --check-hardcoded-paths; "exit=$LASTEXITCODE"` -> 절대경로 0건, exit 0.
+  - 완료 조건: 루트 런처들이 어떤 작업 디렉터리에서 호출되어도 정상 작동.
+
+- WP3 [GROK] PowerShell(.ps1) 및 Python(.py) 에러 제어·Strict Mode·보안 마스킹 표준화
+  - 대상: scripts/ 및 루트 주요 PowerShell(.ps1)과 Python(.py) 스크립트.
+  - 내용:
+    1) PowerShell: `[CmdletBinding()]`, `$ErrorActionPreference = 'Stop'`, `Set-StrictMode -Version Latest` 적용, 파괴적 동작 스크립트에 `-WhatIf` / `-Confirm` 지원 추가.
+    2) Python: `argparse` 표준 인자 파싱(`--help`, `--json`), `sys.exit(0/1/3)` 명시적 종료 코드, 비밀값/토큰 평문 출력 방지 마스킹 적용.
+  - RED: `python -B scripts/test_script_standards.py; "exit=$LASTEXITCODE"`
+  - 최소 수정: scripts/ 내 주요 유틸 인자 처리 및 표준 마스킹 보완.
+  - GREEN: `python -B scripts/test_script_standards.py; "exit=$LASTEXITCODE"` -> exit 0.
+  - 완료 조건: 스크립트 실행 시 무음 실패 방지 및 비밀값 평문 노출 0건 달성.
+
+- WP4 [GROK] 종합 스크립트 닥터(Script Doctor) 진단 런처 구축
+  - 산출물: scripts/script_doctor.py 및 루트 Doctor-Scripts.bat 신규 배치 파사드.
+  - 기능: 전체 스크립트 구문 오류, 절대 경로 하드코딩, 비밀값 패턴 누출 원클릭 점검 후 보고서(var/diagnostics/script_doctor_report.json) 발행 ($0 로컬).
+  - RED: `python -B scripts/script_doctor.py --summary; "exit=$LASTEXITCODE"`
+  - GREEN: `.\Doctor-Scripts.bat; "exit=$LASTEXITCODE"` -> 건강 상태 정상 판정 및 exit 0.
+  - 완료 조건: 클릭 한 번으로 모든 스크립트 자산의 상태와 개량 현황을 점검 가능.
+
+# 4. HOLD (중단 조건)
+- 제품 소스(src/main/java/**, build.gradle.kts) 변경 요구 시 -> 즉시 중단 및 보고.
+- 활성 lease 파일과 충돌 시 -> 해당 파일만 건너뛰고(BLOCKED_LEASE) 나머지 진행.
+- 외부 유료 API 호출 시도 감지 시 -> 즉시 중단.
+
+# 5. ASK_ONCE
+- Q1 [고아 스크립트 처리]: scripts/ 내 장기 미사용되었거나 참조 없는 스크립트 처리 방안?
+  - (a) [권장] scripts/archive/ 디렉터리로 안전 이동(Move) 보관하여 메인 디렉터리 경량화.
+  - (b) 이동 없이 현행 위치를 유지하고 매니페스트에만 STALE 플래그 표기.
+
+# 6. 절대 금지
+- 절대 git push, git add -A, git add ., git commit -a 금지.
+- remote 추가 또는 git remote URL 변경 금지.
+- 비밀값(API 토큰, 비밀번호, 사설 키)의 평문 출력 또는 파일 기록 금지.
+- PROTO_OPEN 상태 변경 및 신규 권한/로그인 강제 장벽 설치 금지.
+- 사전 백업 또는 검증 없이 기존 동작하던 배치/파워쉘 스크립트 영구 삭제 금지.
+
+# 7. Acceptance (완료 기준)
+- [ ] scripts/scripts_inventory.py가 전체 스크립트(8개 확장자)를 스캔하여 var/diagnostics/scripts_manifest.json 생성 완료.
+- [ ] 루트 .bat 파일(31개)에서 `C:\AbandonWare\...` 고정 경로 하드코딩 0건 달성.
+- [ ] 주요 PowerShell 스크립트에 StrictMode 및 ErrorActionPreference 적용 완료.
+- [ ] 주요 Python 스크립트에 argparse 및 비밀값 마스킹 표준 적용.
+- [ ] `Doctor-Scripts.bat` 원클릭 실행 시 종합 검증 보고서 정상 발행 및 exit 0 확인.
+- [ ] 미실행 항목 발생 시 반드시 NOT_RUN 표기 및 사유 명시.
+
+# 8. 보고 형식
+- 1. 완료 요약: 인벤토리 통계(확장자별 수량), 개량된 파일 수, 신규 추가된 도구.
+- 2. 검증 결과 표:
+| 항목 | 검증 명령 | Exit Code | 판정 (PASS/FAIL) |
+| WP1 인벤토리 | python -B scripts/scripts_inventory.py | 0 | PASS |
+| WP2 경로점검 | python -B scripts/scripts_inventory.py --check-hardcoded-paths | 0 | PASS |
+| WP3 표준화 | python -B scripts/test_script_standards.py | 0 | PASS |
+| WP4 닥터 | .\Doctor-Scripts.bat | 0 | PASS |
+- 3. 산출물 위치 (manifest.json, script_doctor_report.json 등).
+- 4. 고아 스크립트 관련 사용자 결정 권고안.
+
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 한 줄 목표부터 8번 최종 결과 보고까지 중간 중단 없이 완수합니다.

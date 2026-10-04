@@ -8,7 +8,9 @@ REM    facts   -> scripts\brief_fact_check.py (needs brief txt files)
 REM  Read-only on the repo index/tree. No write flags are defaulted here.
 REM ============================================================
 setlocal
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+chcp 65001 >nul
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 where py >nul 2>&1
 if %ERRORLEVEL%==0 (set "PY=py -3") else (set "PY=python")

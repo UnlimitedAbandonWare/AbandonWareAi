@@ -4,12 +4,66 @@ const {createClient}=require('../../../main/resources/static/assets/display/disp
 const {createLensReceiver}=require('../../../main/resources/static/assets/display/meta/receiver.js');
 const html=fs.readFileSync('main/resources/static/assets/display/meta/index.html','utf8');
 const flush=()=>new Promise(setImmediate);
+const previewKey='awx.display.lensPreview.live',grantKey='awx.display.lens.live';
+function previewStorage(){const data=new Map();return {data,getItem:k=>data.get(k)||null,setItem:(k,v)=>data.set(k,v),removeItem:k=>data.delete(k)};}
+function previewPage(storage){
+ const nodes=new Map(),calls=[],status={textContent:''};let client,observe;
+ const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',hidden:false,style:{},src:'about:blank',open:false,clientWidth:320,files:[],
+  classList:{toggle(){}},setAttribute(){},removeAttribute(k){delete this[k];},focus(){},add(){},replaceChildren(){},getClientRects:()=>[],addEventListener(e,fn){this[e]=fn;}});return nodes.get(id);};
+ get('lens-preview-frame').contentDocument={getElementById:id=>id==='status'?status:null};
+ const host={DisplayCore:{},DisplayConversate:{createClient(options){client=createClient({...options,storage,uuid:()=>id,setTimer:()=>1,clearTimer(){},
+  fetchImpl:async(url,options)=>{calls.push(url.split('/').slice(4).join('/'));return {ok:true,status:200,headers:{get:()=>null},json:async()=>view()};}});return client;}},
+  DisplayVoice:{createCapture:()=>({state:{},isActive:()=>false,stop(){}})},location:{href:'https://example.test/assets/display/index.html',search:''},addEventListener(){}};
+ const context={window:host,location:host.location,document:{body:{hasAttribute:()=>false},getElementById:get,addEventListener(){},visibilityState:'visible'},navigator:{},localStorage:storage,
+  URL,URLSearchParams,crypto:{randomUUID:()=>id},setTimeout:()=>1,clearTimeout(){},requestAnimationFrame:fn=>fn(),
+  MutationObserver:class{constructor(fn){observe=fn;}observe(){}disconnect(){observe=null;}}};
+ vm.runInNewContext(fs.readFileSync('main/resources/static/assets/display/app.js','utf8'),context);
+ return {get,calls,client,open(){get('lens-preview-open').onclick();},reject(code){get('lens-preview-frame').onload?.();status.textContent=code===403?'Lens link denied.':'Lens link expired. Create a new glasses address.';observe?.();},dispose(){client.dispose();}};
+}
+
+test('preview remembers a pasted address across page recreation without input',async()=>{
+ const storage=previewStorage(),a='c'.repeat(64),first=previewPage(storage);await flush();
+ first.get('lens-preview-address').value='https://other.example/meta/index.html#view='+a;first.open();first.dispose();
+ const next=previewPage(storage);await flush();assert.equal(next.get('lens-preview-address').value,'');next.open();
+ assert.equal(new URL(next.get('lens-preview-frame').src).hash,'#view='+a+'&preview=1');
+ assert.equal(JSON.parse(storage.getItem(previewKey)).token,a);assert.ok(next.get('lens-preview-address').placeholder.endsWith(a.slice(-6)));next.dispose();
+});
+test('preview uses its saved address after the Fold grant expires without issuing a grant',async()=>{
+ const storage=previewStorage(),a='d'.repeat(64);storage.setItem(previewKey,JSON.stringify({token:a,savedAt:Date.now()}));
+ storage.setItem(grantKey,JSON.stringify({token:'a'.repeat(64),expiresAt:Date.now()-1000}));
+ const p=previewPage(storage);await flush();assert.equal(p.client.storedLensLink(),null);p.open();
+ assert.equal(new URL(p.get('lens-preview-frame').src).hash,'#view='+a+'&preview=1');assert.equal(p.calls.includes('lens/link'),false);p.dispose();
+});
+test('remembered preview stays blank at page load and makes no lens reads',async()=>{
+ const storage=previewStorage(),a='c'.repeat(64);storage.setItem(previewKey,JSON.stringify({token:a,savedAt:Date.now()}));
+ const p=previewPage(storage);await flush();assert.equal(p.get('lens-preview-frame').src,'about:blank');assert.equal(p.get('lens-preview').open,false);
+ assert.equal(p.calls.includes('lens/text'),false);assert.equal(p.calls.includes('lens/link'),false);p.dispose();
+});
+test('preview rejection clears only preview storage and asks for a new address',async()=>{
+ for(const code of [403,404]){
+  const storage=previewStorage(),grant={token:'a'.repeat(64),expiresAt:Date.now()+43200000},remembered='c'.repeat(64);storage.setItem(grantKey,JSON.stringify(grant));
+  storage.setItem(previewKey,JSON.stringify({token:remembered,savedAt:Date.now()}));const p=previewPage(storage);await flush();p.open();p.reject(code);
+  assert.equal(storage.getItem(previewKey),null);assert.equal(p.get('lens-preview-frame').src,'about:blank');
+  assert.match(p.get('lens-preview-note').textContent,/주소를 다시 붙여넣으세요/);assert.deepEqual(JSON.parse(storage.getItem(grantKey)),grant);p.dispose();
+ }
+});
+test('new pasted preview takes priority over Fold and preview saved addresses',async()=>{
+ const storage=previewStorage(),a='e'.repeat(64),remembered='c'.repeat(64);storage.setItem(grantKey,JSON.stringify({token:'a'.repeat(64),expiresAt:Date.now()+43200000}));
+ storage.setItem(previewKey,JSON.stringify({token:remembered,savedAt:Date.now()}));const p=previewPage(storage);await flush();
+ p.get('lens-preview-address').value=a;p.open();assert.equal(new URL(p.get('lens-preview-frame').src).hash,'#view='+a+'&preview=1');
+ assert.equal(JSON.parse(storage.getItem(previewKey)).token,a);assert.equal(p.calls.includes('lens/link'),false);p.dispose();
+});
+test('forgetting preview storage closes the frame without clearing the Fold grant',async()=>{
+ const storage=previewStorage(),grant={token:'a'.repeat(64),expiresAt:Date.now()+43200000};storage.setItem(grantKey,JSON.stringify(grant));
+ const p=previewPage(storage);await flush();p.open();p.get('lens-preview-clear').onclick();assert.equal(storage.getItem(previewKey),null);
+ assert.equal(p.get('lens-preview-frame').src,'about:blank');assert.deepEqual(JSON.parse(storage.getItem(grantKey)),grant);p.dispose();
+});
 function lensFixture(options={}){
  const timers=new Map(),calls=[];let n=0,reply={conversation:'',hint:''},status=200,fail=false;
  const receiver=createLensReceiver({token:'a'.repeat(64),setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:id=>timers.delete(id),
   fetchImpl:async(url,opts)=>{calls.push({url,body:JSON.parse(opts.body)});if(fail)throw Error('offline');return{ok:status===200,status,json:async()=>reply};},...options});
  return {receiver,timers,calls,set(body,code=200){reply=body;status=code;fail=false;},fail(){fail=true;},
-  async poll(){await receiver.poll();await flush();},async next(){const item=[...timers][0];assert.ok(item,'retry scheduled');timers.delete(item[0]);await item[1].fn();await flush();}};
+  async poll(){await receiver.poll();await flush();},async next(){const item=[...timers].sort((a,b)=>a[1].ms-b[1].ms)[0];assert.ok(item,'retry scheduled');timers.delete(item[0]);await item[1].fn();await flush();}};
 }
 test('lens text retains valid content through empty, malformed, unavailable and network responses',async()=>{
  const f=lensFixture();f.set({conversation:'대화 <b>글자</b>',hint:'짧은 힌트'});await f.poll();
@@ -23,8 +77,8 @@ test('lens text retains valid content through empty, malformed, unavailable and 
 });
 test('lens polls sequentially, retries 503 and stops with actionable invalid-token state',async()=>{
  const f=lensFixture();f.set({},503);f.receiver.start();await flush();assert.equal(f.receiver.state.connection,'RECONNECTING');assert.equal(f.timers.size,1);
- f.set({conversation:'다시 연결됨',hint:''});await f.next();assert.equal(f.receiver.state.connection,'CONNECTED');assert.equal(f.timers.size,1);
- f.set({},404);await f.next();assert.equal(f.receiver.state.connection,'DISCONNECTED');assert.equal(f.receiver.state.errorCode,'lens_link_expired');assert.equal(f.receiver.state.action,'reconnect_from_phone');assert.equal(f.timers.size,0);
+ f.set({conversation:'다시 연결됨',hint:''});await f.next();assert.equal(f.receiver.state.connection,'CONNECTED');assert.equal([...f.timers.values()].filter(t=>t.ms===1000).length,1);
+ f.set({},404);await f.next();assert.equal(f.receiver.state.connection,'DISCONNECTED');assert.equal(f.receiver.state.errorCode,'lens_link_expired');assert.equal(f.receiver.state.action,'reconnect_from_phone');assert.equal([...f.timers.values()].filter(t=>t.ms<20000).length,0);
  f.receiver.start();await f.poll();assert.equal(f.calls.length,3);f.receiver.dispose();
 });
 test('pending lens request has bounded timeout and cannot overlap a second poll',async()=>{

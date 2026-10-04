@@ -10,7 +10,9 @@ REM  vars (AWX_PUBLISH_APPROVED, AWX_SHIP_SKIP_GUARD) are NOT set here --
 REM  the caller grants them only for that one run.
 REM ============================================================
 setlocal
-set "PROJECT_ROOT=C:\AbandonWare\demo-1\demo-1\src"
+chcp 65001 >nul
+set "PROJECT_ROOT=%~dp0"
+set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 cd /d "%PROJECT_ROOT%"
 if "%~1"=="" goto easy
 where py >nul 2>nul
