@@ -920,7 +920,7 @@ def _fail_ship(result, step, err, out):
 def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
                    verify_fn=None, commit_only=False, selected_paths=None):
     """Hold unsafe paths, commit selected bytes, and persist every exit."""
-    result = {"holds": {}, "shipped": 0, "unstaged": [], "commitSha": None,
+    result = {"holds": {}, "shipped": 0, "stagedThenHeld": 0, "unstaged": [], "commitSha": None,
               "pushed": False, "verified": None, "failedStep": None, "error": ""}
     step = "verify"
     try:
@@ -951,11 +951,12 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
             unstage(held)
         step = "add"
         ship = [e["path"] for e in cand if e["path"] not in holds]
+        added = set()
         if ship:
             failures = {}
             _git_add(g, ship, out, failures=failures)
             holds.update(failures)
-            result["shipped"] = len(set(ship) - set(failures))
+            added = set(ship) - set(failures)
         scope = {_norm(p) for _st, p in git_ship.staged_name_status(g)} - set(holds)
         if selected_paths is not None:
             scope &= set(selected_paths)
@@ -980,6 +981,7 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
             blocked = sorted(scope & set(holds))
             if blocked:
                 unstage(blocked)
+                result["stagedThenHeld"] = len(added & set(blocked))
             scope -= set(holds)
         _hold_lines(holds, out)
         if scope:

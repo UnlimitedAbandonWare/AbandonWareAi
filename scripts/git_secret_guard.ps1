@@ -3,7 +3,8 @@ param(
     [string]$Mode = "manual",
     [switch]$ScanAll,
     [switch]$SelfTest,
-    [string[]]$Path = @()
+    [string[]]$Path = @(),
+    [string]$Commit = "HEAD"
 )
 
 Set-StrictMode -Version 2.0
@@ -181,11 +182,6 @@ function Get-GitPathList {
             $ErrorActionPreference = $oldErrorActionPreference
             return $paths
         }
-        if ($ModeValue -eq "pre-push") {
-            $paths = @(& git ls-files 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-            $ErrorActionPreference = $oldErrorActionPreference
-            return $paths
-        }
         $paths = @(& git --no-optional-locks diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
         if ($All -or $paths.Count -eq 0) {
             $paths = @(& git ls-files --cached --others --exclude-standard 2>$null | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -237,13 +233,89 @@ function Get-FallbackPathList {
     return @($paths.ToArray() | Sort-Object -Unique)
 }
 
+function Start-GitReader {
+    param([string]$Root, [string]$Arguments)
+    $info = New-Object Diagnostics.ProcessStartInfo
+    $info.FileName = (Get-Command git -ErrorAction Stop).Source
+    $info.Arguments = "--no-optional-locks " + $Arguments
+    $info.WorkingDirectory = $Root
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardInput = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $info.StandardOutputEncoding = [Text.UTF8Encoding]::new($false)
+    $process = New-Object Diagnostics.Process
+    $process.StartInfo = $info
+    [void]$process.Start()
+    return $process
+}
+
+function Get-CommittedBlobMap {
+    param([string]$Root, [string]$Revision)
+    Push-Location $Root
+    try {
+        $revisionArg = $Revision + '^{commit}'
+        $oid = [string](& git rev-parse --verify --end-of-options $revisionArg 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $oid -notmatch '^[0-9a-f]{40,64}$') { throw 'push-commit-unavailable' }
+        $process = Start-GitReader $Root ("ls-tree -r -z --full-tree " + $oid)
+        try {
+            $raw = $process.StandardOutput.ReadToEnd()
+            $process.WaitForExit()
+            if ($process.ExitCode -ne 0) { throw 'push-tree-unavailable' }
+        } finally { $process.Dispose() }
+        $map = [Collections.Hashtable]::new([StringComparer]::Ordinal)
+        foreach ($row in $raw.Split([char]0)) {
+            if (-not $row) { continue }
+            if ($row -notmatch '^\d+ blob ([0-9a-f]+)\t([\s\S]+)$') { continue }
+            $map[$Matches[2]] = $Matches[1]
+        }
+        return $map
+    } finally { Pop-Location }
+}
+
+function Read-CommittedTextOrNull {
+    param($Process, [string]$Oid)
+    $Process.StandardInput.WriteLine($Oid)
+    $Process.StandardInput.Flush()
+    $reader = [IO.BinaryReader]::new($Process.StandardOutput.BaseStream)
+    $header = New-Object Text.StringBuilder
+    do {
+        $b = $reader.ReadByte()
+        if ($b -ne 10) { [void]$header.Append([char]$b) }
+    } while ($b -ne 10)
+    $parts = $header.ToString().Split(' ')
+    if ($parts.Count -ne 3 -or $parts[0] -ne $Oid -or $parts[1] -ne 'blob') { throw 'push-blob-unavailable' }
+    $size = [long]$parts[2]
+    $bytes = $null
+    if ($size -le 2MB) {
+        $bytes = $reader.ReadBytes([int]$size)
+        if ($bytes.Length -ne $size) { throw 'push-blob-incomplete' }
+    } else {
+        $remaining = $size
+        while ($remaining -gt 0) {
+            $chunk = $reader.ReadBytes([int][Math]::Min($remaining, 65536))
+            if ($chunk.Length -eq 0) { throw 'push-blob-incomplete' }
+            $remaining -= $chunk.Length
+        }
+    }
+    if ($reader.ReadByte() -ne 10) { throw 'push-blob-framing' }
+    if ($null -eq $bytes -or [Array]::IndexOf($bytes, [byte]0) -ge 0) { return $null }
+    return [Text.UTF8Encoding]::new($false, $false).GetString($bytes)
+}
+
 function Find-SecretGuardFindings {
     param(
         [Parameter(Mandatory = $true)][string]$Root,
-        [Parameter(Mandatory = $true)][string[]]$RelativePaths
+        [Parameter(Mandatory = $true)][string[]]$RelativePaths,
+        [hashtable]$BlobMap = @{},
+        $BlobProcess = $null
     )
     $findings = New-Object System.Collections.Generic.List[object]
-    foreach ($relative in @($RelativePaths | Sort-Object -Unique)) {
+    $scanPaths = if ($null -ne $BlobProcess) {
+        @($RelativePaths | Sort-Object -Unique -CaseSensitive)
+    } else { @($RelativePaths | Sort-Object -Unique) }
+    foreach ($relative in $scanPaths) {
         $rel = $relative.Replace('\', '/')
         # Block the entire private area before skipped directories/template rules,
         # and never open its values or recovery files during a generic scan.
@@ -261,10 +333,14 @@ function Find-SecretGuardFindings {
             $findings.Add([pscustomobject]@{ Path = $rel; Line = 0; Rule = $pathReason; Detail = "blocked sensitive path" }) | Out-Null
         }
 
-        if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
-            continue
+        if ($null -ne $BlobProcess) {
+            $text = Read-CommittedTextOrNull $BlobProcess $BlobMap[$rel]
+        } else {
+            if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
+                continue
+            }
+            $text = Read-TextFileOrNull $absolute
         }
-        $text = Read-TextFileOrNull $absolute
         if ($null -eq $text) {
             continue
         }
@@ -347,8 +423,13 @@ if ($SelfTest) {
 
 $rootPath = Resolve-RepoRoot
 $gitAvailable = Test-GitAvailable
+$blobMap = @{}
 
-if ($Path.Count -gt 0) {
+if ($Mode -eq 'pre-push') {
+    if (-not $gitAvailable -or $ScanAll -or $Path.Count -gt 0) { throw 'pre-push-scope-unavailable' }
+    $blobMap = Get-CommittedBlobMap $rootPath $Commit
+    $candidatePaths = @($blobMap.Keys)
+} elseif ($Path.Count -gt 0) {
     $inputPaths = @($Path | ForEach-Object {
             $_ -split ","
         } | ForEach-Object {
@@ -371,12 +452,41 @@ if ($Path.Count -gt 0) {
 
 $candidatePaths = @($candidatePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
-$findings = if ($candidatePaths.Count -eq 0) {
-    @()
-} else {
-    @(Find-SecretGuardFindings -Root $rootPath -RelativePaths $candidatePaths)
+$blobProcess = $null
+try {
+    if ($Mode -eq 'pre-push') { $blobProcess = Start-GitReader $rootPath 'cat-file --batch' }
+    $findings = if ($candidatePaths.Count -eq 0) { @() } else {
+        @(Find-SecretGuardFindings -Root $rootPath -RelativePaths $candidatePaths -BlobMap $blobMap -BlobProcess $blobProcess)
+    }
+} finally {
+    if ($null -ne $blobProcess) {
+        $blobProcess.StandardInput.Close()
+        $blobProcess.WaitForExit()
+        $blobProcess.Dispose()
+    }
 }
 $findings = @($findings)
+if ($Mode -eq 'pre-push' -and $findings.Count -gt 0) {
+    # Only allowance lookup maps IDs; regexes and displayed IDs stay unchanged.
+    $allowRuleMap = @{ openai = 'provider-key'; 'google-ai' = 'provider-key' }
+    $metadata = @($findings | ForEach-Object {
+        $rule = if ($allowRuleMap.ContainsKey($_.Rule)) { $allowRuleMap[$_.Rule] } else { $_.Rule }
+        @{ path = $_.Path; rule = $rule; oid = [string]$blobMap[$_.Path] }
+    })
+    $decisions = ConvertTo-Json -InputObject $metadata -Compress | & python -B (Join-Path $PSScriptRoot 'git_guard_fast.py') --root $rootPath --check-allow-stdin
+    if ($LASTEXITCODE -ne 0) { throw 'allowance-check-unavailable' }
+    $decisions = ConvertFrom-Json -InputObject ($decisions -join "`n")
+    if (@($decisions).Count -ne $findings.Count) { throw 'allowance-check-incomplete' }
+    $blocked = New-Object System.Collections.Generic.List[object]
+    for ($i = 0; $i -lt $findings.Count; $i++) {
+        if ($decisions[$i] -isnot [bool]) { throw 'allowance-check-invalid' }
+        $finding = $findings[$i]
+        if ($decisions[$i]) {
+            Write-Host "[AWX][git-guard] allowed path=$($finding.Path) rule=$($finding.Rule) oidPrefix=$($blobMap[$finding.Path].Substring(0, 12))"
+        } else { $blocked.Add($finding) | Out-Null }
+    }
+    $findings = @($blocked.ToArray())
+}
 $findingCount = $findings.Count
 Write-Host "[AWX][git-guard] mode=$Mode gitAvailable=$gitAvailable scanned=$(@($candidatePaths).Count) findings=$findingCount root=$rootPath"
 

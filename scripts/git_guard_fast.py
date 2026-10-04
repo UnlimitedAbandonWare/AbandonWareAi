@@ -190,8 +190,8 @@ def _load_allow(root, allow_file=None):
         doc = json.loads(src.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return []
-    entries = doc.get("entries", [])
-    return [e for e in entries if isinstance(e, dict)]
+    entries = doc.get("entries", []) if isinstance(doc, dict) else []
+    return [e for e in entries if isinstance(e, dict)] if isinstance(entries, list) else []
 
 
 def _is_allowed(finding, allow_entries):
@@ -199,18 +199,22 @@ def _is_allowed(finding, allow_entries):
     and carry a non-empty reason. Key rules additionally require a
     test/fixture path."""
     for e in allow_entries:
-        if not (e.get("reason") or "").strip():
+        if not isinstance(e.get("reason"), str) or not e["reason"].strip():
             continue
         if e.get("path") != finding["path"] or e.get("rule") != finding["rule"]:
             continue
         e_oid, f_oid = e.get("oid"), finding.get("oid")
-        if (e_oid or None) != (f_oid or None) and not (
-                e_oid and f_oid and (e_oid.startswith(f_oid) or f_oid.startswith(e_oid))):
+        if not isinstance(e_oid, str) or not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", e_oid) or e_oid != f_oid:
             continue
         if set(finding["rule"].split(",")) & set(KEY_RULES) and not _allow_path_ok(finding["path"]):
             continue
         return True
     return False
+
+
+# Public entry points keep every consumer on this exact allowance contract.
+load_allow = _load_allow
+is_allowed = _is_allowed
 
 
 def _content_rules(blob):
@@ -469,6 +473,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--root", default=".")
     ap.add_argument("--staged", action="store_true")
+    ap.add_argument("--check-allow-stdin", action="store_true",
+                    help="partition metadata-only path/rule/oid records")
     ap.add_argument("--diff", nargs=2, metavar=("A", "B"))
     ap.add_argument("--paths-file")
     ap.add_argument("--reference", action="store_true")
@@ -485,6 +491,19 @@ def main():
     if args.no_cache:
         cache_file = Path(os.devnull)
     allow_entries = _load_allow(root, args.allow_file)
+    if args.check_allow_stdin:
+        try:
+            records = json.load(sys.stdin)
+            if not isinstance(records, list) or not all(
+                    isinstance(f, dict) and all(isinstance(f.get(k), str)
+                                                for k in ("path", "rule", "oid"))
+                    for f in records):
+                raise ValueError("invalid-allowance-metadata")
+            print(json.dumps([is_allowed(f, allow_entries) for f in records]))
+            return 0
+        except (OSError, ValueError):
+            print(json.dumps({"ok": False, "reason": "invalid-allowance-metadata"}))
+            return 2
     try:
         expected = None
         if args.expected_paths_file:

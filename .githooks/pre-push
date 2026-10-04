@@ -10,11 +10,15 @@ if [ -z "$ROOT" ]; then
 fi
 REMOTE="$1"
 REVIEW_STDIN="$(cat)"
+PUSH_COMMIT="$(printf '%s\n' "$REVIEW_STDIN" | awk 'NF == 4 { print $2; exit }')"
+if [ -z "$PUSH_COMMIT" ]; then
+  PUSH_COMMIT=HEAD
+fi
 
 if command -v pwsh >/dev/null 2>&1; then
-  pwsh -NoProfile -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+  pwsh -NoProfile -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push -Commit "$PUSH_COMMIT"
 elif command -v powershell.exe >/dev/null 2>&1; then
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$ROOT/scripts/git_secret_guard.ps1" -Mode pre-push -Commit "$PUSH_COMMIT"
 else
   echo "[AWX][git-guard] BLOCK: PowerShell is required for the secret guard hook." >&2
   exit 1

@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from git_staged_guard import MAX_BYTES, PATTERNS, path_rule  # noqa: E402
+from git_guard_fast import load_allow, is_allowed  # noqa: E402
 
 SCHEMA = "awx.publish-review.v1"
 GIT_TIMEOUT = 20
@@ -96,14 +97,23 @@ def parse_target(url: str) -> dict:
             "hasCredentials": bool(parsed.username or parsed.password)}
 
 
-def scan_blob(root: Path, oid: str, path: str, findings: list, scanned: set) -> int:
-    if oid in scanned or oid == ZERO_OID:
+def scan_blob(root: Path, oid: str, path: str, findings: list, scanned: set,
+              allowed=None, allow_entries=None) -> int:
+    identity = (path, oid)  # Allowances and path restrictions are path-specific.
+    if identity in scanned or oid == ZERO_OID:
         return 0
-    scanned.add(oid)
+    scanned.add(identity)
+    def record(rule):
+        finding = {"pathHash": hashlib.sha256(path.encode()).hexdigest(), "rule": rule}
+        metadata = {"path": path, "rule": rule, "oid": oid}
+        if allowed is not None and is_allowed(metadata, allow_entries or []):
+            allowed.append(finding)
+        else:
+            findings.append(finding)
     rule = path_rule(path)
     if rule:
-        findings.append({"pathHash": hashlib.sha256(path.encode()).hexdigest(),
-                         "rule": rule})
+        # Existing private/path gates retain precedence and never read values.
+        findings.append({"pathHash": hashlib.sha256(path.encode()).hexdigest(), "rule": rule})
         return 0
     size = int(git(root, "cat-file", "-s", oid))
     if size > MAX_BYTES:
@@ -117,14 +127,15 @@ def scan_blob(root: Path, oid: str, path: str, findings: list, scanned: set) -> 
     if b"\0" in blob:
         rules.append("binary-scan-unavailable")
     if rules:
-        findings.append({"pathHash": hashlib.sha256(path.encode()).hexdigest(),
-                         "rule": ",".join(rules)})
+        record(",".join(rules))
     return 1
 
 
 def scan_tree(root: Path, candidate: str) -> dict:
     raw = git(root, "ls-tree", "-r", "-z", "--full-tree", candidate)
     findings: list = []
+    allowed: list = []
+    allow_entries = load_allow(root)
     scanned: set = set()
     files = blobs = 0
     for row in raw.split(b"\0"):
@@ -136,10 +147,10 @@ def scan_tree(root: Path, candidate: str) -> dict:
             continue
         path = path_b.decode("utf-8", errors="surrogateescape")
         files += 1
-        blobs += scan_blob(root, fields[2], path, findings, scanned)
+        blobs += scan_blob(root, fields[2], path, findings, scanned, allowed, allow_entries)
     return {"scope": "candidate-tree", "commit": candidate,
             "fileCount": files, "scannedBlobCount": blobs,
-            "findings": findings, "ok": not findings}
+            "findings": findings, "allowed": allowed, "ok": not findings}
 
 
 def scan_history(root: Path, base: str, candidate: str) -> dict:
@@ -152,6 +163,8 @@ def scan_history(root: Path, base: str, candidate: str) -> dict:
     truncated = len(commits) > HISTORY_COMMIT_LIMIT
     commits = commits[:HISTORY_COMMIT_LIMIT]
     findings: list = []
+    allowed: list = []
+    allow_entries = load_allow(root)
     scanned: set = set()
     blobs = 0
     for oid in commits:
@@ -173,10 +186,10 @@ def scan_history(root: Path, base: str, candidate: str) -> dict:
                 idx += 1
             else:
                 path = ""
-            blobs += scan_blob(root, new_oid, path, findings, scanned)
+            blobs += scan_blob(root, new_oid, path, findings, scanned, allowed, allow_entries)
     return {"scope": "outgoing-history", "base": base, "candidate": candidate,
             "commitCount": len(commits), "truncated": truncated,
-            "scannedBlobCount": blobs, "findings": findings,
+            "scannedBlobCount": blobs, "findings": findings, "allowed": allowed,
             "ok": not findings and not truncated}
 
 

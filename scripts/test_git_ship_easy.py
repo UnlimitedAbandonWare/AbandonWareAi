@@ -764,6 +764,22 @@ class UnblockCase(unittest.TestCase):
             self.assertNotIn(p,self.staged())
         self.assertEqual(git(self.repo,'show','HEAD:mine.txt').stdout,'mine\n')
 
+    def test_auto_all_added_files_held_reports_zero_shipped(self):
+        self.w('held.txt', 'safe\n')
+        finding = {'pathHash': hashlib.sha256(b'held.txt').hexdigest(),
+                   'rule': 'fixture-guard'}
+        with mock.patch.object(git_ship, 'run_staged_guard',
+                               return_value={'ok': False, 'findings': [finding]}), \
+                mock.patch.object(git_ship, 'cmd_commit') as commit:
+            result = ge.auto_ship_flow(self.g, self.repo, commit_only=True,
+                                       selected_paths=['held.txt'], out=self.out.append)
+        self.assertEqual(result['shipped'], 0)
+        self.assertIsNone(result['commitSha'])
+        self.assertEqual(result['stagedThenHeld'], 1)
+        commit.assert_not_called()
+        record = json.loads((self.repo / ge.LAST_SHIP_JSON).read_text(encoding='utf-8'))
+        self.assertEqual(record['shipped'], 0)
+
     def test_u4_failures_always_record_step_and_redacted_single_line(self):
         self.make_origin(); git(self.repo,'checkout','-b','ship/errors')
         cases=[('restore','_git_restore_staged'),('add','_git_add'),
@@ -785,6 +801,8 @@ class UnblockCase(unittest.TestCase):
                 rec=json.loads((self.repo/ge.LAST_SHIP_JSON).read_text(encoding='utf-8'))
                 self.assertNotEqual(rc,0)
                 self.assertEqual(rec['failedStep'],step)
+                if rec['commitSha'] is None:
+                    self.assertEqual(rec['shipped'], 0)
                 self.assertNotIn('\n',rec['error'])
                 self.assertNotIn(secret,rec['error']); self.assertNotIn(secret,self.joined())
                 self.assertTrue(any(rec['error'] in line and step in line for line in self.out))

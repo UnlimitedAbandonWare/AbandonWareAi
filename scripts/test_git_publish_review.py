@@ -92,6 +92,19 @@ class PublishReviewTests(unittest.TestCase):
         self.assertIn("tree-secret-or-path-finding", res["data"]["reasons"])
         self.assertNotIn(FAKE_AWS_KEY, res["stdout"] + res["stderr"])
 
+    def test_path_rule_allowance_cannot_skip_private_path_gate(self):
+        path = 'main/resources/models/fixture.py'
+        self.commit_file(path, 'safe = True\n')
+        allow = self.repo / 'configs/git-guard-allow.json'
+        allow.parent.mkdir(parents=True, exist_ok=True)
+        allow.write_text(json.dumps({'entries': [{
+            'path': path, 'rule': 'private-or-generated-path',
+            'oid': git(self.repo, 'rev-parse', 'HEAD:' + path).stdout.strip(),
+            'reason': 'must not suppress the private path gate'}]}), encoding='utf-8')
+        result = run_review(self.repo, '--base', self.base)
+        self.assertEqual(result['code'], 1)
+        self.assertTrue(result['data']['treeScan']['findings'])
+
     def test_secret_removed_in_tip_still_found_in_history(self):
         self.commit_file("gone.txt", f"{FAKE_AWS_KEY}\n")
         (self.repo / "gone.txt").unlink()

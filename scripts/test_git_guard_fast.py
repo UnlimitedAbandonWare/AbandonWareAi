@@ -72,6 +72,24 @@ def fixture_repo():
 
 
 class FastGuardTests(unittest.TestCase):
+    def test_allow_oid_requires_full_exact_match(self):
+        finding = {'path': 'scripts/test_fixture.py', 'rule': 'provider-key', 'oid': 'a' * 40}
+        for oid in ('a' * 12, None, ''):
+            entry = dict(finding, oid=oid, reason='reviewed')
+            self.assertFalse(ggf._is_allowed(finding, [entry]))
+        self.assertTrue(ggf._is_allowed(finding, [dict(finding, reason='reviewed')]))
+
+    def test_invalid_allowlist_shapes_fail_closed(self):
+        root = Path(tempfile.mkdtemp(prefix='allow-shape-'))
+        try:
+            path = root / 'configs/git-guard-allow.json'
+            path.parent.mkdir()
+            for doc in ([], {'entries': None}, {'entries': 'invalid'}):
+                path.write_text(json.dumps(doc), encoding='utf-8')
+                self.assertEqual(ggf._load_allow(root), [])
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     @classmethod
     def setUpClass(cls):
         os.environ["GIT_GUARD_GIT"] = GIT
