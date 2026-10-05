@@ -1,8 +1,0 @@
-﻿{
-    "targets":  [
-                    {
-                        "sha256":  "e374b90bd0161df98ee3a9df7cb38a23796d66d546502e59dcf43f7e2731a222",
-                        "path":  "Start-Agy-CLI.bat"
-                    }
-                ]
-}
