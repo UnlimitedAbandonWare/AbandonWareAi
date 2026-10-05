@@ -65,7 +65,8 @@ public class DebugEventsDiagnosticsController {
                 "persistenceHealthy", apiFailureRecorder != null && apiFailureRecorder.persistenceHealthy(),
                 "status", apiFailureRecorder == null ? Map.of("overall", "OK", "providers", List.of())
                         : apiFailureRecorder.statusSummary(),
-                "routeHealth", cueService == null ? List.of() : cueService.routeHealth());
+                "routeHealth", cueService == null ? List.of() : cueService.routeHealth(),
+                "ndjsonMirrorStats", store.ndjsonMirrorStats());
     }
     private final DebugEventsSseRuntime sseRuntime;
     private final long sseTimeoutMs;

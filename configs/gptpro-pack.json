@@ -3,9 +3,10 @@
   "userOnly": true,
   "comment": "[USER-ONLY] Pack-GPTPro.bat profiles. Agents must not run/modify/auto-invoke unless the user explicitly asks. JSON because the tool uses stdlib only (no yaml dep).",
   "defaultOut": "C:/Users/nninn/OneDrive/Desktop/zipHome",
+  "defaultProfile": "backup",
   "maxFileMb": 2.0,
-  "maxZipMb": 64,
-  "allowFiles": [],
+  "maxZipMb": 128,
+  "allowFiles": ["gradle/wrapper/gradle-wrapper.jar"],
   "evidence": {
     "evidenceDays": 3,
     "evidenceHistoryDays": 30,
@@ -56,6 +57,30 @@
         { "path": "scripts", "ext": [".py", ".js", ".ps1", ".bat"] },
         { "path": "docs", "ext": [".md"] },
         "src/test"
+      ]
+    },
+    "backup": {
+      "comment": "full + Gradle wrapper/launcher BATs + .agents 규칙·스킬 + frontend 설정류 — 복원 가능한 90% 소스 백업. defaultProfile이라 인자 없이 실행 시 적용. (DevWatch.bat·frontend public/tsconfig 등 현 체크아웃에 없는 경로는 무해한 no-op)",
+      "extends": "full",
+      "include": [
+        "gradlew",
+        "gradlew.bat",
+        "Start-RAG.bat",
+        "Close-RAG.bat",
+        "Verify-RAG.bat",
+        "DevWatch.bat",
+        "Pack-GPTPro.bat",
+        "Git-Ship.bat",
+        "Start-Agy-CLI.bat",
+        "frontend/public",
+        "frontend/tailwind.config.js",
+        "frontend/postcss.config.js",
+        "frontend/tsconfig.json",
+        ".agents/skills",
+        ".agents/rules",
+        "GEMINI.md",
+        ".gitignore",
+        "gradle/wrapper/gradle-wrapper.jar"
       ]
     },
     "ctx": {

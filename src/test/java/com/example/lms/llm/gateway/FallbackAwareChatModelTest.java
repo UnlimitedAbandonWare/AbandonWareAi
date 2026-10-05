@@ -702,6 +702,82 @@ class FallbackAwareChatModelTest {
         }
     }
 
+    @Test
+    void modelMissingSameRequestFallsBackAndTracesReason() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        ChatModel primary = new ChatModel() {
+            @Override
+            public ChatResponse chat(List<ChatMessage> messages) {
+                throw new dev.langchain4j.exception.HttpException(404,
+                        "{\"error\":{\"code\":\"model_not_found\","
+                                + "\"message\":\"The model 'qwen3.5:9b' does not exist\"}}");
+            }
+        };
+        ChatModel fallback = new ChatModel() {
+            @Override
+            public ChatResponse chat(List<ChatMessage> messages) {
+                fallbackCalls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(AiMessage.from("fallback ok")).build();
+            }
+        };
+        FallbackAwareChatModel model = new FallbackAwareChatModel(
+                primary,
+                () -> fallback,
+                new LlmGatewayFailureClassifier(),
+                null,
+                "local",
+                "api3");
+
+        ChatResponse response = model.chat(List.<ChatMessage>of(UserMessage.from("probe")));
+
+        assertEquals("fallback ok", response.aiMessage().text());
+        assertEquals(1, fallbackCalls.get());
+        assertEquals("MODEL_MISSING", TraceStore.get("llm.gateway.fallbackAware.primaryFailure"));
+        assertEquals(true, TraceStore.get("llm.gateway.fallbackAware.sameRequestRetry"));
+        assertEquals(true, TraceStore.get("llm.gateway.fallback.started"));
+        assertEquals("model_missing", TraceStore.get("llm.gateway.fallbackReason"));
+    }
+
+    @Test
+    void apiFirstDeprecatedModelFailsOverToResolvedRoute() {
+        AtomicInteger fallbackCalls = new AtomicInteger();
+        ChatModel primary = new ChatModel() {
+            @Override
+            public ChatResponse chat(List<ChatMessage> messages) {
+                throw new dev.langchain4j.exception.HttpException(400,
+                        "{\"error\":{\"code\":\"model_deprecated\","
+                                + "\"message\":\"The model 'gpt-5.6-sol' has been deprecated\"}}");
+            }
+        };
+        ChatModel stable = new ChatModel() {
+            @Override
+            public ChatResponse chat(List<ChatMessage> messages) {
+                fallbackCalls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(AiMessage.from("stable ok")).build();
+            }
+        };
+        FallbackAwareChatModel model = new FallbackAwareChatModel(
+                primary,
+                (failureClass, usedRoutes) -> new FallbackAwareChatModel.ResolvedFallback(
+                        stable, "stable-route", null),
+                new LlmGatewayFailureClassifier(),
+                null,
+                "deprecated-route",
+                null,
+                null,
+                null,
+                2).withApiFirstPolicy();
+
+        ChatResponse response = model.chat(List.<ChatMessage>of(UserMessage.from("probe")));
+
+        assertEquals("stable ok", response.aiMessage().text());
+        assertEquals(1, fallbackCalls.get());
+        assertEquals("MODEL_MISSING", TraceStore.get("llm.gateway.fallbackAware.primaryFailure"));
+        assertEquals(true, TraceStore.get("llm.gateway.fallback.started"));
+        assertEquals(1, TraceStore.get("llm.gateway.fallback.count"));
+        assertEquals("model_missing", TraceStore.get("llm.gateway.fallbackReason"));
+    }
+
     private static String activeTimeline(
             ModelRuntimeHealthTracker tracker,
             String requestId,

@@ -209,6 +209,14 @@ paths:
     consumers: [scripts/start_rag_stack.ps1]
     old_paths: []
     moved_at: null
+  var.agent_trace:
+    path: var/agent-trace
+    env: AWX_PATH_AGENT_TRACE
+    status: STABLE
+    owner: debug-tooling
+    consumers: [scripts/server_trace_digest.py, scripts/debug_rag_stack.ps1]
+    old_paths: []
+    moved_at: null
   var.codex_runtime:
     path: var/codex-runtime
     env: LOCAL_LLM_LOG_DIR

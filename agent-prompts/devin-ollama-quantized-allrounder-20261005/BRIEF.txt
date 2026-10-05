@@ -1,0 +1,109 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 정의된 Ollama 모델 진단·설치·설정 작업을 실제로 완수해야 한다.
+[DEVIN 지시서] Ollama 듀얼 GPU(3090+3060) 올라운더 양자화 모델 선별·설치 및 정합성 배선 — 2026-10-05 00:05 KST
+파일 ID: PASTE_DEVIN_OLLAMA_QUANTIZED_ALLROUNDER_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+@demo1-gpu-lane-evidence
+
+0. 한 줄 목표
+RTX 3090(24GB, Main 11434) 및 RTX 3060(12GB, Fast 11435) 환경에서 Codex 크레딧(62,500) 및 외부 유료 API에 이은 3순위 로컬 fallback용 올라운더 양자화 모델(Qwen2.5 32B/14B Q4_K_M)을 선별·설치하고, 프로젝트 모델 락(configs/api-routing.yaml, check-model-lock.ps1, application-llm.yaml)에 안전하게 배선·검증한다.
+
+## 1. 사실 (2026-10-05 00:01 KST 진단)
+- GPU 하드웨어 (scripts/ollama-status-snapshot.ps1 확인):
+  - Index 0: RTX 3060 (12GB, UUID: GPU-3d34d77c-1173-6bc7-a96d-c2d9b7c4e670) — 디스플레이 겸용 (가용 VRAM ~10.8 GB).
+  - Index 1: RTX 3090 (24GB, UUID: GPU-4032bebe-fd12-b9cb-77fa-d4ac53a0e586) — 디스플레이 없음 (가용 VRAM 24.5 GB 전량 연산용).
+- Ollama 데몬 포트 분리 구조:
+  - 포트 11434: RTX 3090 전용 Main 레인 (대형/고지능 모델, 스토어 E:\models).
+  - 포트 11435: RTX 3060 전용 Fast 레인 (경량/고속 모델, 스토어 %USERPROFILE%\.ollama\models).
+- 현재 설치된 모델 (ollama ls 기준 11개):
+  - smtek/Qwen3.8-27B:Q3_K_XL (14GB), gemma4:31b (19GB), qwen3.6:27b (17GB), gemma4:12b (7.6GB), qwen3.5:9b (6.6GB), gemma4:26b (17GB) 등.
+- 우선순위 정책 (사용자 지침):
+  - 1순위 Codex 62,500 크레딧 > 2순위 외부 유료 API > 3순위 로컬 Ollama (비용 $0 fallback, 우선도 낮음).
+  - 로컬 Ollama는 상시 VRAM 점유보다 필요 시 가볍고 안정적인 오픈소스 올라운더 양자화 모델(Q4_K_M)로 구성하는 것이 최적.
+- 모델 락 SSOT:
+  - configs/api-routing.yaml + docs/API_ROUTING_SPEC.md가 SSOT이며 scripts/check-model-lock.ps1로 검증함.
+
+## 2. 공통 규칙
+- 시작 전 반드시 `Set-Location C:\AbandonWare\demo-1\demo-1\src` 실행.
+- 작업 디렉터리는 오직 Project Root(`C:\AbandonWare\demo-1\demo-1\src`) 기준 상대경로로 다룬다.
+- 로컬 변경 전 대상 파일의 agent_scope_lease 확인 및 work_journal 열기.
+- 기존 설치 모델(smtek/Qwen3.8-27B:Q3_K_XL 등)을 임의 삭제(ollama rm)하지 않는다.
+- 모든 신규 모델은 Q4_K_M 양자화를 우선하여 VRAM 오버헤드를 최소화한다.
+- 인증 프로토콜은 PROTO_OPEN 상태를 유지하며 불필요한 인증 게이트를 신설하지 않는다.
+
+## 3. 항목 (Work Packages)
+
+### ## WP1 [Devin] Ollama 인벤토리 및 GPU 여유 공간 사전 확인
+- 목표: 현재 디스크 여유 공간(C:, E:), Ollama 인벤토리, 포트 활성화 상태 확인.
+- 실행 명령:
+  ```powershell
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  Get-PSDrive C, E | Select-Object Name, @{N='FreeGB';E={[math]::Round($_.Free/1GB,2)}}
+  ollama ls
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ollama-status-snapshot.ps1
+  ```
+- 완료 조건: 디스크 잔여 용량 25GB 이상 및 로드 모델 0개 확인.
+
+### ## WP2 [Devin] 추천 올라운더 양자화 모델 선별 및 설치 (ollama pull)
+- 추천 모델 근거:
+  - [3090 Main] `qwen2.5:32b` (Q4_K_M, 약 19GB): 코딩·한국어·추론 최상위 올라운더. 3090 24GB VRAM에 완벽 적재.
+  - [3060 Fast] `qwen2.5:14b` (Q4_K_M, 약 9GB): 12GB VRAM(실가용 10.8GB) 맞춤 고효율 올라운더.
+- 실행 명령:
+  ```powershell
+  ollama pull qwen2.5:32b
+  ollama pull qwen2.5:14b
+  ```
+- 완료 조건: `ollama ls`에 `qwen2.5:32b`, `qwen2.5:14b` 정상 등록 확인.
+
+### ## WP3 [Devin] 모델 락 및 API 라우팅 SSOT 정합성 반영
+- 목표: 설치한 새 모델을 프로젝트 SSOT 및 허용 목록에 안전하게 등록.
+- 대상 파일:
+  - `configs/api-routing.yaml`: `installed_models.all`, `chat`, `coder`, `judge`에 추가.
+  - `scripts/check-model-lock.ps1`: `$Allowed` 배열에 새 모델 태그 추가.
+  - `docs/API_ROUTING_SPEC.md`: 인벤토리 테이블 및 모델 목록 업데이트.
+  - `main/resources/application-llm.yaml`: fallback 옵션 확인.
+- 완료 조건: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-model-lock.ps1` 결과 `RESULT=PASS`.
+
+### ## WP4 [Devin] 듀얼 GPU 추론 및 포트별 응답 검증
+- 목표: 11434(3090) 및 11435(3060)에서 신규 모델이 실제 GPU로 로드되고 추론되는지 확인.
+- 실행 명령:
+  ```powershell
+  Invoke-RestMethod -Uri "http://127.0.0.1:11434/api/generate" -Method Post -Body '{"model":"qwen2.5:32b","prompt":"안녕! 자기소개 한 줄.","stream":false}' -ContentType "application/json" -TimeoutSec 60
+  Invoke-RestMethod -Uri "http://127.0.0.1:11435/api/generate" -Method Post -Body '{"model":"qwen2.5:14b","prompt":"테스트 응답 한 줄.","stream":false}' -ContentType "application/json" -TimeoutSec 30
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ollama-status-snapshot.ps1
+  ```
+- 완료 조건: 두 포트 정상 응답 및 해당 GPU에 VRAM 할당 확인.
+
+## 4. HOLD
+- 디스크 공간 부족: 모델 다운로드 중 C: 또는 E: 잔여 공간이 15GB 이하 시 다운로드 중단 및 HOLD.
+- 3060 VRAM OOM: `qwen2.5:14b` 로드 시 3060 디스플레이 충돌로 OOM 발생 시 7B급(`qwen2.5:7b`)으로 전환 검토 후 보고.
+- check-model-lock 실패: banned_as_defaults 태그 충돌 등으로 검증 실패 시 HOLD.
+
+## 5. ASK_ONCE
+- Q1. 3090(24GB)에 `qwen2.5:32b`(약 19GB), 3060(12GB)에 `qwen2.5:14b`(약 9GB)를 설치할까요?
+  - (a) 권장: 예, 현재 3090+3060 조화에서 가장 뛰어난 올라운더 오픈소스 모델 조합입니다.
+  - (b) 아니오, 디스크 절약을 위해 14B 하나만 공용 설치합니다.
+  - (c) 기존 설치된 모델(`smtek/Qwen3.8-27B:Q3_K_XL`, `gemma4:12b` 등)만 재활용합니다.
+
+## 6. 절대 금지
+- git push, git remote 추가, git add -A, git commit -a 절대 금지.
+- API 키, 토큰, 패스워드 등 비밀값 로그/콘솔/파일 출력 금지 (환경변수 이름만 표기).
+- 기존에 설치되어 정상 작동 중인 모델(`smtek/Qwen3.8-27B:Q3_K_XL` 등) 임의 `ollama rm` 삭제 금지.
+- PROTO_OPEN 프로토콜 변경 또는 로그인 인증 락 신설 금지.
+- 전체 Gradle 테스트 스위프(`gradlew test`) 실행 금지.
+
+## 7. Acceptance (수용 기준)
+- [AC-1] WP1: `ollama ls` 및 `ollama-status-snapshot.ps1`로 포트 및 GPU 사전 상태가 기록된다.
+- [AC-2] WP2: `ollama ls` 명령 결과 설치 대상 모델(`qwen2.5:32b`, `qwen2.5:14b`) 태그가 정상 노출된다.
+- [AC-3] WP3: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-model-lock.ps1` 실행 결과가 `RESULT=PASS`로 종료된다.
+- [AC-4] WP4: 포트 11434(3090) 및 11435(3060)을 통해 신규 설치 모델로 텍스트 생성 추론이 1회 이상 성공한다.
+- [AC-5] 미실행 항목 발생 시 반드시 사유를 `NOT_RUN: <이유>`로 명시한다.
+
+## 8. 보고 형식
+외부 API: 0 call ($0)
+- 결과 요약: PASS / FAIL / HOLD
+- 설치된 Ollama 모델: 모델명 및 크기
+- 듀얼 GPU 추론 검증 결과: 11434(3090) 및 11435(3060) 응답 상태
+- check-model-lock 결과: RESULT=PASS 확인 여부
+- 수정된 설정 파일 목록 및 단일 파일 변경 내역
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 정의된 Ollama 모델 진단·설치·설정 작업을 실제로 완수해야 한다.

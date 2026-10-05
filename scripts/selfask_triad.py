@@ -22,6 +22,17 @@ Subcommands:
       `evidence_tier:` T1..T4, and every `file:line` citation must resolve
       under --root with the line in range. Verdict precedence mirrors the
       NEUTRAL JUDGE: HOLD > ASK_ONCE > AUTO.
+
+  rewrite --question "..." [--trigger T] [--paths "a,b"] [--json]
+      UAW analyze.selfAsk query rewrite (expand.selfAsk.count: 3), fully
+      offline/deterministic. FinalSigmoidGate-style strong-evidence bypass:
+      with no --trigger and at least one --paths entry that exists on disk,
+      returns bypass="strong_evidence", rewritten=false, verdict="AUTO" so a
+      vibe-coding step proceeds without an approval quiz. With an explicit
+      trigger (zero_hit | unexpected_red | ambiguous_goal | multi_hop |
+      force) — or no trigger and no existing path (auto=ambiguous_goal) —
+      emits three rewritten subqueries, one per axis (definer/aliaser/
+      challenger). Always exit 0 on success.
 """
 from __future__ import annotations
 
@@ -281,6 +292,122 @@ def decide(branches: list[dict]) -> dict:
             "not_run": not_run, "invalid": invalid}
 
 
+# --- rewrite (UAW analyze.selfAsk, expand.selfAsk.count: 3) ------------------
+REWRITE_TRIGGERS = ("zero_hit", "unexpected_red", "ambiguous_goal",
+                    "multi_hop", "force")
+
+REWRITE_FOCUS = {
+    "zero_hit": {
+        "definer": (
+            "STRICT — search returned zero hits for '{q}'. What is the exact "
+            "contract term or artifact it names? Identify the file, index, "
+            "or table that must contain it and the precise identifier "
+            "spelling to retry."),
+        "aliaser": (
+            "RELAXED — enumerate aliases for '{q}' the searcher should also "
+            "try: renamed classes, synonyms, doubled config keys, prior "
+            "lineage, alternate spellings, stale doc names."),
+        "challenger": (
+            "EXPLORE — why could '{q}' legitimately return zero hits? Check "
+            "boundaries: wrong corpus/index, too-strict filter, stale index, "
+            "term never persisted. Name the smallest probe per hypothesis."),
+    },
+    "unexpected_red": {
+        "definer": (
+            "STRICT — '{q}' went RED or a hypothesis failed twice. Which "
+            "assertion/contract does it violate? Locate the failing test and "
+            "spec file:line; quote expected vs observed literally."),
+        "aliaser": (
+            "RELAXED — is '{q}' failing under a different name? Check "
+            "renamed methods/fixtures/config keys, other callers, and stale "
+            "artifacts that still run the old path."),
+        "challenger": (
+            "EXPLORE — form one causal chain for the unexpected RED on "
+            "'{q}': ordering, environment, cached artifact, or genuine "
+            "regression. Name the smallest falsification check."),
+    },
+    "ambiguous_goal": {
+        "definer": (
+            "STRICT — '{q}' is short or ambiguous. What single concrete "
+            "artifact or behavior does it most likely name? Bind it to one "
+            "file:line or config key and say what is out of scope."),
+        "aliaser": (
+            "RELAXED — list the top alternative interpretations of '{q}' "
+            "(other modules, older lineage, homonyms) and the evidence that "
+            "would distinguish each."),
+        "challenger": (
+            "EXPLORE — which interpretation of '{q}' breaks first under "
+            "scrutiny, and what is the single smallest check that "
+            "disambiguates intent?"),
+    },
+    "multi_hop": {
+        "definer": (
+            "STRICT — '{q}' needs several hops. What is hop 1: the first "
+            "artifact/decision that must be pinned (file:line, contract) "
+            "before later hops can be answered?"),
+        "aliaser": (
+            "RELAXED — what alternative entry points or parallel chains "
+            "answer '{q}' if the obvious first hop is wrong (aliases, side "
+            "doors, sibling callers)?"),
+        "challenger": (
+            "EXPLORE — which assumed hop order or dependency in '{q}' is "
+            "most likely wrong? Give the counterexample and the cheapest "
+            "reorder test."),
+    },
+    "force": {
+        "definer": (
+            "STRICT — for '{q}': what do the contract, spec, and source "
+            "literally say? Cite file:line."),
+        "aliaser": (
+            "RELAXED — for '{q}': does the same concept exist under another "
+            "name — duplicate lineage, renamed classes, doubled config keys, "
+            "stale docs?"),
+        "challenger": (
+            "EXPLORE — for '{q}': how does the claim/plan break? One causal "
+            "hypothesis, one counterexample, the smallest falsification "
+            "test."),
+    },
+}
+
+
+def rewrite_subqueries(trigger: str, question: str,
+                       paths: list[str]) -> list[dict]:
+    focus = REWRITE_FOCUS[trigger]
+    scope = (" | scope hints: " + ", ".join(paths)) if paths else ""
+    return [{"axis": role, "agent": ROLES[role][0],
+             "query": focus[role].format(q=question) + scope}
+            for role in BRANCHES]
+
+
+def cmd_rewrite(args) -> int:
+    paths = [p.strip() for p in args.paths.split(",") if p.strip()]
+    existing = [p for p in paths if Path(p).is_file()]
+    trigger = args.trigger
+    trigger_src = "explicit" if trigger else None
+    subqueries: list[dict] = []
+    bypass = None
+    if trigger is None and existing:
+        bypass = "strong_evidence"
+    else:
+        if trigger is None:
+            trigger = "ambiguous_goal"
+            trigger_src = "auto"
+        subqueries = rewrite_subqueries(trigger, args.question, paths)
+    payload = {"schemaVersion": SCHEMA, "action": "rewrite",
+               "generatedAtUtc": utcnow(), "question": args.question,
+               "paths": paths, "existingPaths": existing,
+               "trigger": trigger, "triggerSource": trigger_src,
+               "bypass": bypass, "rewritten": bool(subqueries),
+               "verdict": "AUTO",
+               "selfAskCount": len(subqueries),
+               "subqueries": subqueries,
+               "note": ("strong_evidence bypass — proceed without quiz"
+                        if bypass else
+                        "feed subqueries to packet/spawn or inline triad")}
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
 def journal_line(root: Path, task: str, verdict: str, reason: str,
                  slug_: str) -> str:
     text = f"SELFASK_TRIAD {verdict} | {reason} | {slug_}"
@@ -334,6 +461,14 @@ def main(argv=None) -> int:
     jd.add_argument("--task")
     jd.add_argument("--slug")
     jd.set_defaults(fn=cmd_judge)
+    rw = sub.add_parser(
+        "rewrite", help="UAW 3-axis query rewrite + strong-evidence bypass")
+    rw.add_argument("--question", required=True)
+    rw.add_argument("--trigger", choices=REWRITE_TRIGGERS)
+    rw.add_argument("--paths", default="")
+    rw.add_argument("--json", action="store_true",
+                    help="accepted for CLI symmetry; output is always JSON")
+    rw.set_defaults(fn=cmd_rewrite)
     args = ap.parse_args(argv)
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")

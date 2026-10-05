@@ -1,7 +1,8 @@
 @echo off
 REM [USER-ONLY] Manual user tool. Agents: do NOT run/modify/auto-invoke unless the user explicitly asks.
-REM Packs demo-1 source (secret-free) into zipHome for manual GPT Pro upload.
-REM Usage: Pack-GPTPro.bat [main|core|full|ctx|brief|evidence] [--dry-run] [--list] [--max-zip-mb N] [--focus "kw,kw"] [--briefs DIR] [--drop-legacy] [--evidence-days N] [--no-codex]
+REM Packs demo-1 source (secret-free) into zipHome for backup (90% restore-ready) & GPT Pro upload.
+REM Usage: Pack-GPTPro.bat [backup|main|core|full|ctx|brief|evidence] [--dry-run] [--list] [--max-zip-mb N] [--focus "kw,kw"] [--briefs DIR] [--drop-legacy] [--evidence-days N] [--no-codex]
+REM   backup = 90% source restore-ready backup (default)
 REM   ctx   = core + GPT Pro context sections (_START_HERE.._TEST_INDEX)
 REM   brief = ctx + java skeleton bodies stripped (focus matches keep full text)
 REM Non-interactive: GPTPRO_NOPAUSE=1, GPTPRO_NOEXPLORER=1 or --no-explorer

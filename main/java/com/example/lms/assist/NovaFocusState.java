@@ -5,7 +5,10 @@ import java.util.*;
 /** Pure, clock-driven Focus state; callers serialize access per assist session. */
 final class NovaFocusState {
     record Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,
-                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion) {
+                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled) {
+        Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version){
+            this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,selection,version,400,false);
+        }
         Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType){this(activationId,requestId,question,imageBase64,imageMediaType,Set.of());}
         Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds){
             this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,NovaFocusSettings.AnswerSelection.defaults(),0);
@@ -21,9 +24,14 @@ final class NovaFocusState {
     record View(String serverInstanceId,String activationId,String turnId,long stateVersion,long answerVersion,
                 boolean active,String phase,String draftText,String questionText,String answerText,
                 String renderTarget,String renderReceiptTicket,long idleRemainingMs,String reason,
-                NovaFocusSettings.Presentation presentation,boolean answerTruncated,boolean hasMoreOnFold) {
+                NovaFocusSettings.Presentation presentation,boolean answerTruncated,boolean hasMoreOnFold,int answerLengthChars) {
+        View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more){
+            this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,8000);
+        }
         @Override public String toString(){return "NovaFocusView[redacted]";}
-        View forTarget(String surface){return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,answerText,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,answerTruncated,hasMoreOnFold);}
+        View forTarget(String surface){String visible="lens".equals(surface)?NovaFocusAnswerService.boundDisplay(answerText,answerLengthChars):answerText;
+            boolean clipped=answerTruncated||!Objects.equals(visible,answerText);
+            return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars);}
     }
     final String server;
     NovaFocusSettings settings;
@@ -33,6 +41,8 @@ final class NovaFocusState {
     private String phase="OFF",activation="",turn="",question="",answer="",receipt="",candidate="",target="lens",reason="";
     private long version,answerVersion,listenUntil,generationUntil,presentationUntil,idleUntil;
     private boolean inFlight,firstVisible,done,answerTruncated;
+    private int runAnswerLength=400;
+    private NovaFocusSettings.Presentation runPresentation;
     private String sourceNamespace="";
     private String inFlightRequest="";
     private String snapshotImageBase64;
@@ -151,7 +161,7 @@ final class NovaFocusState {
         if(phase.equals("SNAPSHOT")&&!snapshotReady&&now>=snapshotUntil)snapshotFailed("snapshot_timeout",now);
         if(capacity&&phase.equals("SNAPSHOT")&&snapshotReady){
             var request=new Request(activation,pendingRequest.requestId(),pendingRequest.question(),snapshotImageBase64,snapshotImageMediaType,pendingRequest.sourceIds(),
-                pendingRequest.answerSelection(),pendingRequest.settingsVersion());
+                pendingRequest.answerSelection(),pendingRequest.settingsVersion(),pendingRequest.answerLengthChars(),pendingRequest.quickAnswerEnabled());
             pendingRequest=null;snapshotImageBase64=null;snapshotImageMediaType=null;clearCapture();snapshotReady=false;
             phase="THINKING";inFlight=true;inFlightRequest=request.requestId();generationUntil=now+90000;version++;return request;
         }
@@ -160,7 +170,8 @@ final class NovaFocusState {
             String source=String.join("\n",draftKeys);
             String requestKey=NovaFocusHistoryService.digest((draftKeys.size()==1&&source.startsWith("typed-")?"typed:":"")+source);
             var request=new Request(activation,requestKey,question,null,null,draftKeys.stream().map(NovaFocusHistoryService::digest).collect(java.util.stream.Collectors.toSet()),
-                settings.answerSelectionOrDefault(),settingsVersion);
+                settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer());
+            runPresentation=settings.effectivePresentation();
             committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
             draft.clear();draftKeys.clear();answer=receipt="";turn="";
             if(snapshotEnabled()){
@@ -231,7 +242,7 @@ final class NovaFocusState {
     void accepted(Request request,String turnId){if(accepts(request)){turn=turnId;version++;}}
     void answer(Request request,String turnId,String text,String ticket,long now){
         if(!accepts(request)||!turnId.equals(turn))return;
-        inFlight=false;answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);answerVersion++;receipt=ticket;phase="ANSWER_READY";reason="";
+        inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);answerVersion++;receipt=ticket;phase="ANSWER_READY";reason="";
         firstVisible=done=false;idleUntil=0;
         presentationUntil=now+Math.max(120000,Math.min(1500000L,answer.codePointCount(0,answer.length())*(long)settings.presentation().charIntervalMs()+120000));
         version++;
@@ -244,7 +255,7 @@ final class NovaFocusState {
         if(!done){done=true;phase=draft.hasInput()?"LISTENING":"WAITING";idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
     }
     View view(long now){return new View(server,activation,turn,version,answerVersion,active(),phase,
-        NovaFocusHistoryService.clip(draft.text(),2000),question,answer,target,receipt,Math.max(0,idleUntil-now),reason,settings.presentation(),answerTruncated,answerTruncated);}
+        NovaFocusHistoryService.clip(draft.text(),2000),question,answer,target,receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength);}
     Map<String,Object> diagnostics(){var m=new LinkedHashMap<String,Object>();
         m.put("active",active());m.put("phase",phase);m.put("stateVersion",version);m.put("answerVersion",answerVersion);
         m.put("bufferedQuestions",draft.hasInput()?1:0);m.put("snapshotPending",phase.equals("SNAPSHOT")&&pendingRequest!=null);

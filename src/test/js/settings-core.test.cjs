@@ -6,6 +6,15 @@ const memory = () => {
   return { getItem: k => values.has(k) ? values.get(k) : null,
     setItem(k,v) { writes++; values.set(k,v); }, removeItem:k=>values.delete(k), get writes() { return writes; } };
 };
+test('unsaved first visit uses AUTO search and RAG while explicit OFF remains sparse', () => {
+  assert.equal(core.mergeDefaults({}).searchMode, 'AUTO');
+  assert.equal(core.mergeDefaults({}).useRag, true);
+  assert.deepEqual(core.mergeDefaults({searchMode:'OFF',useRag:false}),
+    {modelSelectionMode:'preferred',executionMode:'AUTO',searchMode:'OFF',useRag:false});
+  const html = require('node:fs').readFileSync(require.resolve('../../../main/resources/templates/chat-ui.html'),'utf8');
+  assert.match(html, /<option value="AUTO" selected>/);
+  assert.match(html, /id="useRagToggle"[^>]*\bchecked\b/);
+});
 test('false and explicit OFF survive defaults and round trip', () => {
   const values = {useRag:false,searchMode:'OFF'};
   assert.deepEqual(core.importSettings(core.exportSettings(values)), values);
@@ -31,15 +40,23 @@ test('single-key export and reset preserve independent browser values', () => {
   assert.equal(storage.writes,1);
   assert.deepEqual(core.withoutKeys(core.readSettings(storage),['model']),{useRag:false,searchMode:'AUTO'});
 });
+test('response preferences validate Unicode limits, sparse clearing and existing memory scope', () => {
+  const values={customInstructions:'🙂'.repeat(2000),responseTone:'neutral',responseLength:'brief',responseLanguage:'auto',memoryMode:'hybrid'};
+  assert.deepEqual(core.importPreferences(JSON.stringify({version:2,values})),values);
+  assert.deepEqual(core.validatePreferences({customInstructions:''}),{customInstructions:''});
+  for(const invalid of [{customInstructions:'🙂'.repeat(2001)},{responseTone:'system'},{responseLength:'max'},
+    {responseLanguage:'xx'},{memoryMode:'global'},{reasoningEffort:'high'}]) assert.throws(()=>core.validatePreferences(invalid));
+});
 
-const factoryValues={model:'fixture:a',modelSelectionMode:'preferred',searchMode:'OFF',useRag:true,
+const factoryValues={model:'fixture:a',modelSelectionMode:'preferred',executionMode:'AUTO',searchMode:'OFF',useRag:true,
   useWebSearch:false,temperature:0.2,topP:1,frequencyPenalty:0,presencePenalty:0,maxTokens:2048,ragAnswerPolicy:'adaptive'};
 function windowFixture(active = false, overrides = {}) {
   const listeners=new Map(),docListeners=new Map(),controls={},requests=[];
   for(const [id,value]of [['modelSelect','fixture:a'],['modelSelectionMode','preferred'],['searchModeSelect','OFF'],['useRagToggle',false],
+    ['executionModeSelect','AUTO'],
     ['chat-save-defaults',''],['chat-defaults-status',''],['sendBtn','']]) {
     controls[id]={dataset:{},value,checked:value,disabled:false,
-      options:[{value:'fixture:a'},{value:'fixture:b'},{value:'preferred'},{value:'strict'},{value:'auto'},{value:'OFF'},{value:'AUTO'}],
+      options:[{value:'fixture:a'},{value:'fixture:b'},{value:'preferred'},{value:'strict'},{value:'auto'},{value:'OFF'},{value:'AUTO'},{value:'STRIKE'},{value:'SELF_ASK'}],
       addEventListener(name,fn){listeners.set(id+name,fn);},
       dispatchEvent(e){listeners.get(id+e.type)?.(e);}};
   }
@@ -63,7 +80,54 @@ function windowFixture(active = false, overrides = {}) {
   return {win,storage,controls,requests,emit:(name,detail)=>docListeners.get(name)?.({detail})};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-test('bridge applies all four server defaults without saving initialization',async()=>{
+test('sampling metadata is read-only, bound and allowlisted without changing saved preferences',async()=>{
+  const f=windowFixture();
+  const value={overrides:{temperature:0},effective:factoryValues,factoryDefaults:factoryValues,sources:{},
+    revision:1,hash:'a'.repeat(64),defaultsVersion:'1',
+    sampling:{temperature:{model:'fixture:a',modelSelectionMode:'strict',support:'NO',reasonCode:'adapter_omits_sampling',privatePrompt:'private'}}};
+  f.win.fetch=async()=>({ok:true,status:200,redirected:false,json:async()=>value});
+  const snapshot=await core.readPreferences(f.win);
+  assert.deepEqual(snapshot.sampling.temperature,{model:'fixture:a',modelSelectionMode:'strict',support:'NO',reasonCode:'adapter_omits_sampling'});
+  assert.equal(snapshot.overrides.temperature,0);
+  assert.equal(JSON.stringify(snapshot).includes('private'),false);
+  value.sampling.temperature.reasonCode='private text';
+  assert.equal((await core.readPreferences(f.win)).sampling,undefined);
+  assert.throws(()=>core.validatePreferences({sampling:value.sampling}));
+});
+test('execution control hydrates STRIKE and saves an explicit AUTO only after Save',async()=>{
+  const f=windowFixture(false,{executionMode:'STRIKE'});
+  core.installBridge(f.win);f.emit('chat:model-catalog',{ready:true,hydrated:true});await tick();
+  assert.equal(f.controls.executionModeSelect.value,'STRIKE');
+  f.controls.executionModeSelect.value='AUTO';f.controls.executionModeSelect.dispatchEvent(new f.win.Event('change'));
+  assert.equal(f.requests.filter(r=>r.method==='PATCH').length,0);
+  f.controls['chat-save-defaults'].dispatchEvent(new f.win.Event('click'));await tick();
+  const patch=JSON.parse(f.requests.find(r=>r.method==='PATCH').body);
+  assert.equal(patch.set.executionMode,'AUTO');
+  assert.equal((await core.readPreferences(f.win)).overrides.executionMode,'AUTO');
+});
+test('explicit AUTO draft survives late server SELF_ASK defaults',async()=>{
+  const f=windowFixture(false,{executionMode:'SELF_ASK'});
+  f.win.sessionStorage.getItem=key=>key==='chat.controlSettings'
+    ? JSON.stringify({source:'composer',executionMode:'AUTO'}) : null;
+  core.installBridge(f.win);f.emit('chat:model-catalog',{ready:true,hydrated:true});await tick();
+  assert.equal(f.controls.executionModeSelect.value,'AUTO');
+  assert.equal(f.requests.filter(r=>r.method==='PATCH').length,0);
+});
+test('execution strategy is validated as a sparse server preference without changing existing controls',async()=>{
+  for(const mode of ['AUTO','STRIKE','SELF_ASK']) {
+    const values={executionMode:mode};
+    assert.deepEqual(core.validatePreferences(values),values);
+    assert.deepEqual(core.importPreferences(JSON.stringify({version:2,values})),values);
+  }
+  for(const mode of ['BYPASS','auto',0,null])assert.throws(()=>core.validatePreferences({executionMode:mode}));
+  const f=windowFixture(false,{executionMode:'SELF_ASK'});
+  core.installBridge(f.win);f.emit('chat:model-catalog',{ready:true,hydrated:true});await tick();
+  assert.equal(f.controls.modelSelect.dataset.awxSettingsReady,'ready');
+  f.controls['chat-save-defaults'].dispatchEvent(new f.win.Event('click'));await tick();
+  const state=await core.readPreferences(f.win);
+  assert.equal(state.overrides.executionMode,'SELF_ASK');
+});
+test('bridge applies server control defaults without saving initialization',async()=>{
   const f=windowFixture(false,{model:'fixture:b',modelSelectionMode:'strict',searchMode:'AUTO',useRag:false});
   core.installBridge(f.win);await tick();
   assert.equal(f.controls.modelSelect.value,'fixture:a'); // response alone is not catalog readiness

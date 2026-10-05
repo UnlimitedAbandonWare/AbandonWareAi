@@ -73,6 +73,16 @@ willpower, bounds the output.
 - `refused secret-pattern`: the message names file:line — mask or
   env-ize the literal; do not fight the guard.
 
+## 6. Same failure three times — stop (3-Strike)
+
+- Same error signature on the same target (patch `Failed to find expected
+  lines`, wait-no-change, lease/guard refusal, non-JSON banner) three
+  consecutive times → stop the loop. Never a 4th identical attempt.
+- The one-retry allowances above (§3: stop after 3 unchanged waits, §4:
+  re-read then apply ONCE) are the strikes themselves, not extra chances.
+- On stop: record the cause in one line in `state.md` or a journal note,
+  then hand off or ASK the user — do not keep burning context on the loop.
+
 ## Related tools
 
 `out_peek.py` · `json_safe_run.py` · `patch_preflight.py` ·

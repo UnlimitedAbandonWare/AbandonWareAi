@@ -1,0 +1,89 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-devin-source-orchestrator
+# DEVIN 실행 지시서: Tri-Agent 컨텍스트 카탈로그 구축 및 90일 TTL/불변 수명주기 검증기 신설
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 한 줄 목표
+코덱스·데빈·그록의 최근 세션과 공식 가이드 웹서치 결과를 융합하여 Tri-Agent 공유 컨텍스트 문서군(`docs/tri-agent-context/`)을 구축하고, 90일 가변 정보(TTL 90일)와 불변 정보(PERPETUAL)를 분리·검증하는 스크립트(`scripts/validate_agent_context_docs.py`)를 신설한다.
+
+## 사실 (2026-10-05 09:00 KST 기준)
+1. 코덱스 활성 세션: `application-llm.yaml`, `SelfAskPlanner.java`, `WeightedReciprocalRankFuser.java`, `DEMO1-LOCAL-FIRST-RAG.md`에서 RAG 채택, 샘플링 선호도, 하이브리드 그래프 재사용 작업 진행 중.
+2. 데빈·그록 최근 세션: `docs/api-spec-catalog/`(MCP stdio vs SSE, Realtime WebRTC, DPoP RFC 9449, SSE 버퍼링), CP949 인코딩 패치, SWE-2 튜닝 규칙 등 런타임/도구 지식 축적 완료.
+3. 웹서치 결과 (Cognition Devin 가이드 & AI Agent Context Freshness 표준):
+   - Cognition Labs: 프롬프트/문서의 기술 명세(Spec)화, 불필요한 컨텍스트 배제 및 선택적 Context Pinning, 슬라이스(Slice) 단위 분해 권장.
+   - Context Freshness 표준: 고유 ID, 생성일, 만료일(`expires_at`), TTL(`ttl_days`), 유효성 근거(`validity_basis`), 라이프사이클(`INVARIANT` vs `VOLATILE`) 헤더 필수.
+4. 만료 정책: 90일 가변 정보는 `ttl_days: 90`, `expires_at: 2027-01-03T09:00:00+09:00` 부여. 아키텍처 불변 정보는 `lifecycle: INVARIANT`, `expires_at: PERPETUAL`, `ttl_days: null` 부여.
+5. 리스 상태: 제품 소스 무변경(문서 및 검증 스크립트 전용), 소스 리스 불필요.
+
+## 공통 규칙
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- 범위 한정: `docs/tri-agent-context/` 및 `scripts/validate_agent_context_docs.py`만 작성. 코어 제품 Java/HTML 소스 수정 0건.
+- 외부 API 라이브 호출: 0회 ($0 local, 라이브 유료 호출 금지).
+- 문서 형식: UTF-8 no BOM 마크다운, YAML 프론트매터 메타데이터 헤더 필수.
+
+## 항목 (WP1 ~ WP4)
+
+### WP1. 아키텍처 및 협업 불변 규격서 수립 (`docs/tri-agent-context/01_ARCHITECTURAL_INVARIANTS.md`, `02_TRI_AGENT_ROLES_AND_HANDOFF.md`)
+- `01_ARCHITECTURAL_INVARIANTS.md` (`lifecycle: INVARIANT`, `expires_at: PERPETUAL`, `ttl_days: null`):
+  * Project Root SSOT, PROTO_OPEN 보안 경계, Git Local-First 원칙, H2 lmsdb 단일 접근 원칙.
+- `02_TRI_AGENT_ROLES_AND_HANDOFF.md` (`lifecycle: INVARIANT`, `expires_at: PERPETUAL`, `ttl_days: null`):
+  * 역할 분담: Codex(코어 소스) / Devin(런타임 검증/YAML/문서) / Grok CLI(도구/스크립트/모의체) / agy(지시서 증폭).
+  * Single-Seam 리스 및 저널 절차, FOR_<owner> / TOSS 핸드오프 프로토콜.
+
+### WP2. 코덱스 최근 작업 반영 90일 가변 RAG/LLM 레지스트리 (`docs/tri-agent-context/03_LIVE_LLM_RAG_REGISTRY_90D.md`)
+- `03_LIVE_LLM_RAG_REGISTRY_90D.md` (`lifecycle: VOLATILE`, `expires_at: 2027-01-03T09:00:00+09:00`, `ttl_days: 90`):
+  * `application-llm.yaml` 인터뷰 표준 기본값 및 RAG 라우팅 순위.
+  * `SelfAskPlanner`: 샘플링 선호도(temperature) 최종 엔드포인트 보존 및 추론 경계.
+  * `WeightedReciprocalRankFuser`: 하이브리드 RRF 그래프 식별자 보존 및 답변 출처 UI 연결.
+  * Ollama 모델 잠금(3060 Fast/Chat vs 3090 Embed/RAG) 및 ChatGPT OAuth/Vercel Gateway 크레딧 정책.
+
+### WP3. 데빈·그록 세션 및 웹서치 반영 90일 가변 도구/프로토콜 규격서 (`docs/tri-agent-context/04_AGENT_TOOLING_AND_PROTOCOL_SPECS_90D.md`, `05_RECENT_DISCOVERED_EDGE_CASES_90D.md`)
+- `04_AGENT_TOOLING_AND_PROTOCOL_SPECS_90D.md` (`lifecycle: VOLATILE`, `expires_at: 2027-01-03T09:00:00+09:00`, `ttl_days: 90`):
+  * Devin 최적 프롬프트 규격: Spec 중심 구조화, Context Pinning 권장 세트.
+  * MCP stdio vs SSE 프레이밍 및 `$cancellation`, Windows CP949 방어.
+  * Grok CLI 메모리 브리지 및 agy CLI 엔트리 포인트 규격.
+- `05_RECENT_DISCOVERED_EDGE_CASES_90D.md` (`lifecycle: VOLATILE`, `expires_at: 2027-01-03T09:00:00+09:00`, `ttl_days: 90`):
+  * RFC 9449 DPoP `htu` 쿼리 제외 및 `jti` 재생성 엣지케이스.
+  * Realtime WebRTC 1~2분 수명 Ephemeral Token 갱신, SSE 버퍼링 방어(`X-Accel-Buffering: no`).
+  * Self-Ask rewrite bypass 및 영수증 신선도(Receipt freshness) 검증.
+
+### WP4. 통합 인덱스 및 90일 TTL/수명주기 자동 검증기 신설 (`docs/tri-agent-context/README.md`, `scripts/validate_agent_context_docs.py`)
+- `docs/tri-agent-context/README.md`: 전체 문서(01~05) 내비게이션 매트릭스, 에이전트별 추천 Pinning 세트, TTL 정책.
+- `scripts/validate_agent_context_docs.py`:
+  * `docs/tri-agent-context/` 내 마크다운 파일의 YAML 프론트매터 메타데이터 검증.
+  * `INVARIANT` 문서: `expires_at == PERPETUAL`, `ttl_days is None` 확인.
+  * `VOLATILE` 문서: `ttl_days == 90`, `expires_at == created_at + 90일(2027-01-03)` 일치 확인.
+  * 내부 상호 링크 유효성 검사, 모두 통과 시 exit 0 반환.
+
+## HOLD 조건
+- 제품 코어 소스(`main/`, `app/`, `frontend/`, `configs/`) 수정이 요구되는 경우 즉시 HOLD.
+- 유료 외부 API 호출이 요구되거나 외부 결제/토큰 소비가 발생하는 경우 즉시 HOLD.
+- 작업 경로가 `docs/tri-agent-context/` 또는 `scripts/` 외로 침범하는 경우 즉시 HOLD.
+
+## ASK_ONCE (자동 결정 및 기본값)
+- 추가 프로토콜 확장(Webhook 서명, gRPC-Web 등):
+  * 기본값 (AUTO): 4대 핵심 트랙(AI Agent, RAG, DPoP, SSE)을 우선 완성하고 나머지는 90일 2차 스프린트로 배정.
+
+## 절대 금지
+- push, add -A, commit -a, git reset, git checkout 등 위험 Git 명령 실행 금지.
+- API 키, 토큰, 패스워드 등 비밀 정보 노출 및 출력 절대 금지 (환경변수 이름만 표기).
+- 원격 저장소 remote 추가/변경 금지.
+- PROTO_OPEN 보안 완화 정책 임의 수정 금지.
+- 전체 테스트 스위트(`gradle test`) 실행 금지 — 검증 스크립트만 실행.
+
+## Acceptance (완료 기준)
+- [ ] **WP1**: `docs/tri-agent-context/01_ARCHITECTURAL_INVARIANTS.md`, `02_TRI_AGENT_ROLES_AND_HANDOFF.md` 생성 및 `INVARIANT` 태깅 완비.
+- [ ] **WP2**: `03_LIVE_LLM_RAG_REGISTRY_90D.md` 생성 및 코덱스 최신 RAG/LLM 반영, 90일 만료(`2027-01-03`) 태깅 완비.
+- [ ] **WP3**: `04_AGENT_TOOLING_AND_PROTOCOL_SPECS_90D.md`, `05_RECENT_DISCOVERED_EDGE_CASES_90D.md` 생성 및 90일 만료 태깅 완비.
+- [ ] **WP4**: `docs/tri-agent-context/README.md` 인덱스 완비 및 `python -B scripts/validate_agent_context_docs.py` 실행 시 exit=0 통과.
+- [ ] 코어 제품 소스 무변경 확인 (`git status --short main src app frontend configs` 0건).
+
+## 보고 형식
+외부 API: 라이브 0건, 비용 0원 ($0 local)
+1. 작성된 문서 및 검증 스크립트 목록과 SHA12 해시
+2. `python -B scripts/validate_agent_context_docs.py` 실행 결과 요약 (exit=0)
+3. 90일 만료 문서군과 불변 문서군 분류 요약
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 완수하고 검증 보고서를 제출해야 완료된다.

@@ -62,6 +62,7 @@ param(
     [string]$Root = '',
     [string]$JsonPath = '',
     [switch]$JsonStdout,
+    [switch]$Compact,
     [switch]$AiAssist,
     [ValidateRange(3,12)][int]$ExcerptLines = 8
 )
@@ -514,6 +515,27 @@ function Invoke-ReadRagDebugTrail {
     return $report
 }
 
+function Write-TrailCompactCard {
+    # Bounded 4-line card for token-limited agents (Codex ~2-3KB budget): verdict,
+    # failureClass, first error line, nextCommand only. Full report and -JsonStdout
+    # stay unchanged; this is an opt-in alternative view, never a contract change.
+    param($Report)
+    $firstErr = ''
+    foreach ($line in @($Report.evidence.firstErrorExcerpt)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) { $firstErr = [string]$line; break }
+    }
+    if ($firstErr.Length -gt 160) { $firstErr = $firstErr.Substring(0, 160) }
+    $runId = ''; $status = ''
+    if ($null -ne $Report.latest) {
+        $runId = [string]$Report.latest.runId
+        $status = [string]$Report.latest.status
+    }
+    Write-Host "[TRAIL CARD] verdict=$($Report.verdict) class=$($Report.failureClass) exit=$($Report.exitCode) source=$($Report.source)"
+    Write-Host "[TRAIL CARD] run=$runId status=$status"
+    if ($firstErr) { Write-Host "[TRAIL CARD] error=$firstErr" }
+    Write-Host "[TRAIL CARD] next=$($Report.nextCommand)"
+}
+
 function Write-TrailReport {
     param($Report)
     Write-Host "[TRAIL ROOT] $($script:TrailRoot)"
@@ -574,6 +596,8 @@ try {
     if ($JsonStdout) {
         [Console]::Out.Write(($trailReport | ConvertTo-Json -Depth 10 -Compress))
         [Console]::Out.Write([Environment]::NewLine)
+    } elseif ($Compact) {
+        Write-TrailCompactCard -Report $trailReport
     } else {
         Write-TrailReport -Report $trailReport
     }

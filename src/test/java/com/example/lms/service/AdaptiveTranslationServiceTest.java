@@ -72,6 +72,19 @@ class AdaptiveTranslationServiceTest {
     }
 
     @Test
+    void exactHashMatchBypassesMemoryScan() {
+        TranslationMemory memory = new TranslationMemory();
+        memory.setCorrected("해시 정확 일치 번역");
+        memory.setCosineSimilarity(1.0);
+        when(memories.findBySourceHash(anyString())).thenReturn(Optional.of(memory));
+        when(bandit.decideWithBoltzmann(memory)).thenReturn(true);
+
+        assertEquals("해시 정확 일치 번역", service.translate("hello", "en", "ko").block(Duration.ofSeconds(3)));
+        verify(memories, never()).findAll();
+        assertSample("해시 정확 일치 번역", TranslationRoute.MEMORY);
+    }
+
+    @Test
     void emptyProviderResultPreservesOriginalWithFailedRoute() {
         noMemory();
         when(gemini.translate("hello", "en", "ko")).thenReturn(Mono.empty());

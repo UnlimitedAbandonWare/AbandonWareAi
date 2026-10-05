@@ -23,6 +23,30 @@ import static org.mockito.Mockito.*;
 import static org.mockito.Answers.CALLS_REAL_METHODS;
 
 class ChatWaitWorkflowFocusedTest {
+    @Test void cancelledTransportAdmissionCannotClaimMemoryInclusion() {
+        var registry = new com.example.lms.service.chat.ChatRunRegistry();
+        ReflectionTestUtils.setField(registry, "replayCapacity", 16);
+        ReflectionTestUtils.setField(registry, "ttlSeconds", 300);
+        var run = registry.beginOrJoin(2L).context();
+        assertTrue(registry.cancelExact(2L, run.clientToken()));
+        assertTrue(run.isCancellationRequested());
+        var calls = new AtomicInteger();
+        ChatModel model = new ChatModel() {
+            @Override public ChatResponse chat(List<ChatMessage> messages) {
+                var boundRun = com.example.lms.service.chat.ChatRunExecutionContext.current();
+                if (boundRun == null || !boundRun.admitCall(calls::incrementAndGet)) {
+                    throw new java.util.concurrent.CancellationException("synthetic transport admission rejected");
+                }
+                return ChatResponse.builder().aiMessage(AiMessage.from("synthetic answer")).build();
+            }
+        };
+        TraceStore.put("prompt.memory.preparedForModel", true);
+        try (var scope = com.example.lms.service.chat.ChatRunExecutionContext.bind(run)) {
+            assertThrows(RuntimeException.class, () -> call(workflow(), model, ignored -> {}));
+            assertEquals(0, calls.get());
+            assertNull(TraceStore.get("llm.call.memoryIncluded"));
+        } finally { TimeBudgetContext.clear(); TraceStore.clear(); }
+    }
     private ChatWorkflow workflow() {
         var workflow = mock(ChatWorkflow.class, CALLS_REAL_METHODS);
         ReflectionTestUtils.setField(workflow, "llmTimeoutSeconds", 1);

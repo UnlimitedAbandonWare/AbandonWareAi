@@ -63,6 +63,7 @@ public class FactStatusClassifier {
      * 휴리스틱과 LLM(사용 가능 시)을 이용해 검증 상태를 분류합니다.
      */
     public FactVerificationStatus classify(String question, String context, String draft, String model) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         JudgeCallObservation observation = JudgeCallObservation.start("fact_status_classifier");
         TraceStore.put("factStatusClassifier.judge.disabledReason", null);
         // 1. 강화된 휴리스틱 분류를 먼저 실행합니다.
@@ -98,6 +99,7 @@ public class FactStatusClassifier {
                 traceJudgeFailSoft("judge_malformed_response");
                 observation.finish("heuristic", false, "judge_malformed_response");
             } catch (Exception e) {
+                TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
                 traceJudgeFailSoft("judge_call_failed");
                 log.debug("FactStatusClassifier LLM classification failed. errorHash={} errorLength={}",
                         SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -175,6 +177,7 @@ public class FactStatusClassifier {
      * allow callers to safely fall back to heuristics.
      */
     private String callChatModel(ChatModel llm, String factStatusClassificationPrompt, JudgeCallObservation observation) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         if (llm == null || factStatusClassificationPrompt == null) return "";
         try {
             TimeBudget requestBudget = TimeBudgetContext.get();
@@ -207,6 +210,7 @@ public class FactStatusClassifier {
                         "fact_status_classifier_judge",
                         llm.getClass().getName(), observation);
             }
+            com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
             var ai = response == null ? null : response.aiMessage();
             if (ai == null || ai.text() == null || ai.text().isBlank()) {
                 observation.finish("heuristic", false, "judge_empty_response");
@@ -214,6 +218,7 @@ public class FactStatusClassifier {
             }
             return ai.text();
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             observation.failed(e);
             observation.finish("heuristic", false, "judge_call_failed");
             traceJudgeFailSoft("judge_call_failed");

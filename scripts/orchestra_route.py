@@ -257,6 +257,14 @@ def overlap_warnings(root, store, sig):
     return warnings
 
 
+def tower_agent(lane, rules):
+    """controlTower marker only: who commands the lane, never how it was picked."""
+    tower = rules.get("controlTower") or {}
+    if lane in (tower.get("appliesTo") or []):
+        return tower.get("agent")
+    return None
+
+
 def next_agent(lane, sig, rules):
     lane_info = rules.get("lanes", {}).get(lane, {})
     if lane == "GPTPRO_THEN_CODEX" and sig.get("kind") in ("gptpro-brief", "codex-brief"):
@@ -404,6 +412,7 @@ def main():
             "signalId": sig.get("id"),
             "signalPath": str(path),
             "lane": decision["lane"],
+            "tower": tower_agent(decision["lane"], rules),
             "reasons": decision.get("reasons", [])[:3],
             "nextAgent": next_agent(decision["lane"], sig, rules),
             "requiredInputs": required_inputs(decision["lane"], sig,

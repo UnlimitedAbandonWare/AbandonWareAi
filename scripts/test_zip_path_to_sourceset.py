@@ -121,7 +121,7 @@ class ResolveTests(unittest.TestCase):
             missing = next(a for a in report["anchors"] if "Gone.java" in a["directive"]["zipPath"])
             self.assertEqual("ANCHOR_MISSING+ZIP_MEMBER_MISSING", missing["status"])
 
-    def test_app_module_mapping(self):
+    def test_stale_app_java_is_not_an_active_anchor(self):
         tmp = tempfile.TemporaryDirectory()
         with tmp:
             root = Path(tmp.name)
@@ -132,12 +132,50 @@ class ResolveTests(unittest.TestCase):
             d.write_text("main/java/x/Y.java, go(), 1~1\n", encoding="utf-8")
             report = z.translate(root, [d])
             row = report["anchors"][0]
-            # main/java/x/Y.java missing under main/ -> falls to alternate root
-            self.assertIn(row["status"], ("OK", "ANCHOR_MISSING"))
-            if row["status"] == "OK":
-                self.assertEqual(":app", row["module"])
-                self.assertEqual("app/src/test/java", row["testSourceRoot"])
-                self.assertIn(":app:test", row["testTask"])
+            self.assertEqual("ANCHOR_MISSING", row["status"])
+            self.assertFalse(row["live"]["exists"])
+            self.assertIsNone(row["module"])
+            self.assertIsNone(row["testSourceRoot"])
+            self.assertIsNone(row["testTask"])
+
+    def test_stale_app_resource_is_not_an_active_anchor(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            f = root / "app/src/main/resources/static/demo.js"
+            f.parent.mkdir(parents=True)
+            f.write_text("function go() {}\n", encoding="utf-8")
+            d = root / "d.md"
+            d.write_text("main/resources/static/demo.js\n", encoding="utf-8")
+            row = z.translate(root, [d])["anchors"][0]
+            self.assertEqual("ANCHOR_MISSING", row["status"])
+            self.assertFalse(row["live"]["exists"])
+            self.assertIsNone(row["module"])
+            self.assertIsNone(row["testSourceRoot"])
+            self.assertIsNone(row["testTask"])
+
+    def test_canonical_root_wins_over_stale_app_files(self):
+        cases = (
+            ("main/java/x/Y.java", "app/src/main/java_clean/x/Y.java",
+             "package x;\npublic class Y {}\n", "test --tests 'x.Y'"),
+            ("main/resources/static/demo.js", "app/src/main/resources/static/demo.js",
+             "function go() {}\n", None),
+        )
+        for canonical, stale, body, expected_task in cases:
+            with self.subTest(path=canonical), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                for rel in (canonical, stale):
+                    f = root / rel
+                    f.parent.mkdir(parents=True)
+                    f.write_text(body, encoding="utf-8")
+                d = root / "d.md"
+                d.write_text(canonical + "\n", encoding="utf-8")
+                row = z.translate(root, [d])["anchors"][0]
+                self.assertEqual("OK_FILE_ONLY", row["status"])
+                self.assertTrue(row["live"]["exists"])
+                self.assertEqual(canonical, row["live"]["path"])
+                self.assertEqual(":", row["module"])
+                self.assertEqual("src/test/java", row["testSourceRoot"])
+                self.assertEqual(expected_task, row["testTask"])
 
 
 if __name__ == "__main__":

@@ -14,6 +14,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PromptBuilderBoundaryTest {
 
+    @Test
+    void publicPreferencesHaveTheirOwnUserMessageAndNeverEnterTheSystemContext() throws Exception {
+        String source = Files.readString(Path.of("main/java/com/example/lms/service/ChatWorkflow.java"));
+        assertTrue(source.contains("promptBuilder.buildUserPreferences(ctx)"));
+        assertTrue(source.contains("UserMessage.from(userPreferences)"));
+        var builder = PromptContext.builder().userQuery("current explicit question");
+        builder.getClass().getMethod("responsePreferences", java.util.Map.class).invoke(builder,
+                java.util.Map.of("customInstructions", "<script>synthetic fixture</script>", "responseTone", "friendly"));
+        var ctx = builder.build();
+        PromptBuilder prompt = new StandardPromptBuilder();
+        assertFalse(prompt.build(ctx).contains("synthetic fixture"));
+        String rendered = (String) PromptBuilder.class.getMethod("buildUserPreferences", PromptContext.class).invoke(prompt, ctx);
+        assertTrue(rendered.contains("synthetic fixture"));
+        assertTrue(rendered.contains("current question"));
+        assertEquals(rendered, PromptBuilder.class.getMethod("buildUserPreferences", PromptContext.class).invoke(prompt, ctx.toBuilder().build()));
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

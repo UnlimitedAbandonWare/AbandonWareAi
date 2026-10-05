@@ -117,7 +117,8 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
         out.put("triggerQuietMs",triggerQuietMs);out.put("cueCooldownMs",cueCooldownMs);out.put("forceAfterMs",forceAfterMs);
         return out;
     }
-    public record Patch(Integer transcriptFontPx,Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
+    public record Patch(@com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer transcriptFontPx,
+                        @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
                         Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,
                         Boolean historyEnabled,Long historyWindowMs,Integer historyMaxChars,Integer historyMaxTokens,
                         Boolean topicResetEnabled,

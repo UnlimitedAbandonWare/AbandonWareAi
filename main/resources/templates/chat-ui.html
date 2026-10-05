@@ -2,7 +2,7 @@
 <html lang="ko" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="chat-request-budget-ms" th:content="${chatRequestBudgetMs}">
     <meta name="_csrf" th:if="${_csrf != null}" th:content="${_csrf.token}">
     <meta name="_csrf_header" th:if="${_csrf != null}" th:content="${_csrf.headerName}">
@@ -18,10 +18,11 @@
     <script defer src="/js/chat-trace-dock.js?v=trace-dock-r2-20260929"></script>
     <script defer src="/js/vendor/chat/katex-0.18.7.min.js"></script>
     <script defer src="/js/chat-answer-renderer.js?v=20260923-document-1"></script>
-  <script defer src="/js/chat.js?v=trace-dock-r2-20260929"></script>
+    <script defer src="/js/chat-evidence-graph.js?v=answer-provenance-20261005"></script>
+  <script defer src="/js/chat.js?v=sol-first-session-20261005"></script>
   <script defer src="/assets/interview/interview-core.js?v=interview-absorb-20261001"></script>
   <script defer src="/js/chat-display-bridge.js?v=interview-absorb-20261001"></script>
-  <script defer src="/js/chat-model-picker.js?v=20260923-dialog-1"></script>
+  <script defer src="/js/chat-model-picker.js?v=sol-first-session-20261005"></script>
 </head>
 <body class="chat-app" data-auth-mode="form-login" data-vibe-feature-pool="open" data-feature-pool="open" th:attr="data-chat-surface=${chatSurface}">
 <span hidden data-testid="feature-pool" data-vibe-feature-pool-state="open">open</span>
@@ -59,7 +60,8 @@
             <div class="conversation-copy"><h1>대화</h1><span class="workspace-caption">생각을 이어가는 공간</span></div>
             <details class="answer-tools">
                 <summary>답변별 디버깅 <span aria-hidden="true">↗</span></summary>
-                <div class="answer-tools-panel" data-admin-diagnostics th:if="${chatDiagnosticsEnabled}">
+                <div class="answer-tools-panel">
+                    <div data-admin-diagnostics th:if="${chatDiagnosticsEnabled}">
                     <p class="panel-heading">답변별 디버깅 표시</p>
                     <label class="chat-trace-toggle"><input type="checkbox" data-chat-trace-toggle> 각 답변의 디버깅 트레이스 표시</label>
 <details class="diagnostics-disclosure" data-testid="chat-diagnostics">
@@ -222,8 +224,7 @@
         </nav>
             </div>
         </details>
-                </div>
-            </details>
+                    </div>
             <div class="status-rail" id="coreStatusRail" data-core-status="idle" data-testid="chat-core-status-rail" >
                 <div class="status-pill" aria-label="Route: idle" title="Route: idle"><strong>Route</strong> <span id="streamStatus" data-orch-field="route" data-testid="chat-stream-status">idle</span></div>
                 <div class="status-pill" aria-label="Model: gemma4:26b" title="Model: gemma4:26b"><strong>Model</strong> <span id="modelStatus" data-testid="chat-model-status" th:text="${currentModel} ?: 'gemma4:26b'">gemma4:26b</span></div>
@@ -265,7 +266,18 @@
                     </ol>
                 </div>
             </div>
-        </header>
+        <details id="contextSummary" class="context-summary" data-testid="chat-context-summary" open>
+            <summary>대화 상태 · 컨텍스트</summary>
+            <div class="context-summary__body" aria-live="polite">
+                <div id="contextGauge" class="context-gauge" role="progressbar" aria-label="컨텍스트 한도 확인 안 됨" aria-valuemin="0" aria-valuemax="100"><span id="contextPercent">?</span></div>
+                <div>
+                    <p id="contextUsageText">컨텍스트 관측 대기 · 한도 확인 안 됨</p>
+                    <p id="memoryCompressionText">기억 압축 관측 대기</p>
+                    <p id="contextEvidenceText">근거 수 관측 대기</p>
+                    <small>입력 토큰은 텍스트 길이 기반 추정이며, 압축 길이는 UTF-16 문자 수입니다.</small>
+                </div>
+            </div>
+        </details>
         <aside class="trace-dock" data-trace-dock data-diagnostics-read="false" data-testid="trace-dock" aria-label="진단 창">
             <button type="button" class="trace-dock-toggle" data-testid="trace-dock-toggle" aria-expanded="false" aria-controls="traceDockBody">진단</button>
             <div id="traceDockBody" class="trace-dock-body" hidden>
@@ -274,10 +286,14 @@
                 <p class="trace-dock-status" role="status" data-testid="trace-dock-status">진단 대기</p>
             </div>
         </aside>
-        <div class="response-settings" data-testid="chat-response-settings">
+                </div>
+            </details>
+        </header>
+        <details class="response-settings" data-testid="chat-response-settings">
+            <summary>대화 설정</summary>
             <div class="control-panel" aria-label="Chat controls">
                 <label class="model-control"><span>모델</span>
-<select id="modelSelect" name="model" aria-label="Model" data-testid="chat-model-select">
+<select id="modelSelect" name="model" aria-label="Model" data-testid="chat-model-select" data-first-session-model="chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5">
                         <option th:if="${models == null || #lists.isEmpty(models)}"
                                 th:value="${currentModel} ?: 'gemma4:26b'"
                                 th:text="${currentModel} ?: 'gemma4:26b'"
@@ -314,18 +330,27 @@
                         <button type="button" data-model-more hidden>모델 더 보기</button>
                     </div>
                 </dialog>
+                <label><span>실행 전략</span>
+                    <select id="executionModeSelect" aria-label="실행 전략" aria-describedby="execution-mode-help">
+                        <option value="AUTO" selected>자동 · 필요할 때 근거 보완</option>
+                        <option value="STRIKE">빠르게 · 추가 질의 확장 끄기</option>
+                        <option value="SELF_ASK">추가 검색 · 질의 확장</option>
+                    </select>
+                </label>
+                <small id="execution-mode-help">추가 검색은 시간이 더 걸릴 수 있습니다. 선택 변경은 다음 질문부터 적용됩니다.</small>
                 <label><span>검색</span>
                     <select id="searchModeSelect" name="searchMode" aria-label="Search" data-testid="chat-search-mode-select">
-                        <option value="AUTO">자동 검색</option>
-                        <option value="OFF" selected>검색 끔</option>
+                        <option value="AUTO" selected>자동 검색</option>
+                        <option value="OFF">검색 끔</option>
                         <option value="FORCE_LIGHT">빠른 검색</option>
                         <option value="FORCE_DEEP">깊이 검색</option>
                     </select>
                 </label>
-                <label class="toggle-row"><input id="useRagToggle" type="checkbox" aria-label="Use RAG context" data-testid="chat-rag-toggle"><span>RAG</span></label>
+                <label class="toggle-row"><input id="useRagToggle" type="checkbox" checked aria-label="Use RAG context" data-testid="chat-rag-toggle"><span>RAG</span></label>
             </div>
+            <div class="help"><button type="button" id="chat-save-defaults" disabled>현재 선택을 개인 기본값으로 저장</button><span id="chat-defaults-status" role="status" aria-live="polite">개인 설정 확인 중</span></div>
             <span id="responseSettingsSummary" class="sr-only">설정 확인 중</span>
-        </div>
+        </details>
         <div id="chatAccessNotice" class="chat-access-notice" role="status" hidden></div>
         <div class="chat-transcript-region">
             <div id="chatEmptyState" class="chat-empty-state">
@@ -362,7 +387,7 @@
     </section>
 </main>
 <!-- === Scripts -->
-<div class="help"><button type="button" id="chat-save-defaults" disabled>현재 선택을 개인 기본값으로 저장</button><span id="chat-defaults-status" role="status" aria-live="polite">개인 설정 확인 중</span></div>
+
 <script defer src="/js/chat-settings-bridge.js"></script>
 </body>
 </html>

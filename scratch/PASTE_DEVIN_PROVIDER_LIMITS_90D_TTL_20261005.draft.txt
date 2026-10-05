@@ -1,0 +1,101 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+
+@demo1-api-routing-inventory
+[DEVIN 지시서] 4대 API 최신 정보 SSOT 문서화 및 90일 TTL 자동 만료·아카이빙 체계 구축 — 2026-10-05 01:55 KST
+파일 ID: PASTE_DEVIN_PROVIDER_LIMITS_90D_TTL_20261005
+금지: 제품 Java 소스 수정 0 · git push/commit/add -A/remote 추가 0 · 비밀 노출 0 · 유료 API 라이브 호출 0 · PROTO_OPEN 위반 0
+
+한 줄 목표
+OpenAI, Gemini, Vercel AI Gateway(Jev 연계), Groq 4대 API의 최신 엔드포인트·모델·한도 정보를 docs/provider-limits/에 SSOT로 확충하고, 90일 후 자동 효력 상실 및 아카이빙되는 TTL 수명주기 자동화 체계를 구축한다.
+
+# 1. 사실 (읽기 전용 확인, 2026-10-05 01:50~01:55 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- docs/provider-limits/ 에 openai-api-limits.md(BCB23719ACFD), gemini-limits.md(D6411329701F), groq-limits.md(D1B0E5FD9B99)는 있으나 Vercel AI Gateway/Jev 전용 문서(vercel-ai-gateway-limits.md) 부재.
+- README.md(9E182EAC0FFE)에 reviewAfterDays: 90 필드는 있으나 만료일(expiresAt) 및 90일 경과 시 자동 아카이브/격리 janitor 스크립트 부재.
+- 룰 DEMO1-PROVIDER-LIMITS-SSOT.md(E198F4E743E9) 및 DEMO1-VERCEL-AI-GATEWAY-CREDIT.md(292896AA3D01)에 상호 참조 및 만료 연계 미비.
+- 4대 API 상태:
+  1) OpenAI: OPENAI_API_KEY, gpt-4o, gpt-4o-mini, o1, o3-mini, 프롬프트 캐싱(1024토큰↑ 50% 할인).
+  2) Gemini: GEMINI_API_KEY/GOOGLE_API_KEY, gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash, Free(15 RPM) vs 유료.
+  3) Vercel AI Gateway/Jev: AI_GATEWAY_API_KEY, https://ai-gateway.vercel.sh/v1, Jev는 decision 전용, Hobby+Credit(~$22.32), ZDR은 기본 OFF(ON 시 403 plan_gate).
+  4) Groq: GROQ_API_KEY, llama-3.3-70b-versatile, llama-3.1-8b-instant, service_tier, GroqFreeTierGuard 90일 증빙 연계.
+
+2. 공통 규칙
+- Project Root 외 작업 금지.
+- Git 금지: git push, commit, add -A, remote 추가, rebase, reset 일체 금지. 파일 시스템 직접 작업.
+- 비밀값 보호: 환경변수 이름(OPENAI_API_KEY, GEMINI_API_KEY, AI_GATEWAY_API_KEY, GROQ_API_KEY)만 사용, 키값 노출 엄격 금지.
+- 비용 가드: 유료 API 실호출 금지 ($0 오프라인 검증).
+- PROTO_OPEN 준수: 새 로그인 게이트나 어드민 차단 조건 추가 금지.
+- 원장 기록: 파일 수정 시 scripts/work_journal.py 사용 (open -> note -> close).
+
+# 3. 항목 (WP1 ~ WP3)
+
+## WP1 [Devin] 4대 API SSOT 문서 확충 및 90일 TTL 헤더 표준화
+- 대상: docs/provider-limits/vercel-ai-gateway-limits.md (신규), openai-api-limits.md, gemini-limits.md, groq-limits.md, README.md
+- 내용:
+  1) frontmatter TTL 규격: capturedAt: "2026-10-05", timezone: "Asia/Seoul", reviewedAt: "2026-10-05", ttlDays: 90, expiresAt: "2027-01-03", status: "ACTIVE", expiryAction: "archive", sourceType: "official_public_documentation".
+  2) 문서 상단 [에이전트 빠른 참조] 표: Env 이름, 엔드포인트, 주력 모델, RPM/TPM, 에러코드(401, 403, 429, 5xx).
+  3) vercel-ai-gateway-limits.md: Jev 제약, 엔드포인트 https://ai-gateway.vercel.sh/v1, AI_GATEWAY_API_KEY, Hobby/Credit, ZDR=OFF 주의사항.
+  4) README.md: 통합 비교표 및 90일 만료 계약(expiresAt 경과 시 STALE_DISCARD).
+- RED: Test-Path docs/provider-limits/vercel-ai-gateway-limits.md -> False
+- GREEN: Test-Path docs/provider-limits/vercel-ai-gateway-limits.md -> True 및 4개 문서 expiresAt: "2027-01-03" 확인.
+
+## WP2 [Devin] 90일 TTL 검증 및 자동 아카이브 스크립트 작성
+- 대상: scripts/provider_limits_janitor.py (신규), scripts/test_provider_limits_janitor.py (신규)
+- 내용:
+  1) provider_limits_janitor.py:
+     - `check`: expiresAt 초과 만료 문서 검출 (만료 시 exit 1, 유효 시 exit 0).
+     - `status`: capturedAt, expiresAt, D-day 잔여일, status(ACTIVE/EXPIRED) 표 출력.
+     - `archive`: expiresAt 경과 문서를 docs/provider-limits/archive/ 폴더로 이동 및 워터마크 추가.
+  2) test_provider_limits_janitor.py: check, status, archive 기능 자동 단위 테스트.
+- RED: python -B scripts/test_provider_limits_janitor.py -> 파일 없음 실패
+- GREEN: python -B scripts/test_provider_limits_janitor.py -> exit=0 (ALL PASS)
+
+## WP3 [Devin] 에이전트 규칙 및 프로젝트 가이드 동기화
+- 대상: docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md, DEMO1-VERCEL-AI-GATEWAY-CREDIT.md
+- 내용:
+  1) DEMO1-PROVIDER-LIMITS-SSOT.md: vercel-ai-gateway-limits.md 추가 및 90일 TTL 만료 시 효력 상실(STALE_DISCARD) 계약 명시.
+  2) DEMO1-VERCEL-AI-GATEWAY-CREDIT.md: vercel-ai-gateway-limits.md 링크 연결.
+- RED: Select-String -Path docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md -Pattern "vercel-ai-gateway-limits.md" -> 매칭 없음
+- GREEN: Select-String -Path docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md -Pattern "vercel-ai-gateway-limits.md" -> 매칭 확인
+
+# 4. HOLD
+- 외부 API 유료 결제/충전/플랜 업그레이드 요청 시 (HOLD).
+- Vercel AI Gateway Pro 업그레이드 또는 ZDR 강제 활성화 시도 시 (HOLD).
+- Git remote 조작(push, merge, rebase) 시도 시 (HOLD).
+
+# 5. ASK_ONCE
+- Q1 [90일 만료 후 처리 방식]:
+  - (a) [권장] archive: 90일 경과 시 docs/provider-limits/archive/로 이동해 에이전트 인덱스에서 물리적 격리(사라짐).
+  - (b) watermark_only: 파일 유지 및 EXPIRED 워터마크 부착.
+  (무응답 시 기본값: (a) archive 격리)
+
+# 6. 절대 금지
+- 제품 Java 코드(main/java/com/example/lms/**) 런타임 로직 임의 수정 금지.
+- 실제 API 키값, 토큰, 비밀번호 노출 금지.
+- git commit, push, add -A, remote 추가 금지.
+- 유료 크레딧 소비 라이브 호출 금지 ($0 오프라인 검증).
+- PROTO_OPEN 원칙 위반 금지.
+
+# 7. Acceptance (완료 기준)
+- [ ] WP1: docs/provider-limits/vercel-ai-gateway-limits.md 생성 및 4대 API 문서에 expiresAt: "2027-01-03" 반영 완료.
+- [ ] WP2: scripts/provider_limits_janitor.py 및 scripts/test_provider_limits_janitor.py 생성 후 테스트 ALL PASS (exit=0).
+- [ ] WP2: python -B scripts/provider_limits_janitor.py check 실행 결과 exit=0 확인.
+- [ ] WP3: docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md 및 DEMO1-VERCEL-AI-GATEWAY-CREDIT.md 동기화 완료.
+- 미실행 항목은 NOT_RUN: <사유> 형태로 명시할 것.
+
+# 8. 보고 형식
+외부 API: OpenAI, Gemini, Vercel AI Gateway(Jev), Groq 4대 API SSOT 및 90일 TTL 수명주기 체계 완료
+
+보고 표:
+| 파일 경로 | 작업 내용 | sha12 | 검증 결과 |
+| docs/provider-limits/vercel-ai-gateway-limits.md | 신규 생성 (엔드포인트, Jev, Hobby/Credit, TTL) | <sha12> | PASS |
+| docs/provider-limits/openai-api-limits.md | 갱신 (최신 모델, 프롬프트 캐싱, TTL 헤더) | <sha12> | PASS |
+| docs/provider-limits/gemini-limits.md | 갱신 (최신 모델, Free/유료 한도, TTL 헤더) | <sha12> | PASS |
+| docs/provider-limits/groq-limits.md | 갱신 (최신 모델, service_tier, TTL 헤더) | <sha12> | PASS |
+| docs/provider-limits/README.md | 갱신 (통합 요약표, 90일 만료 계약) | <sha12> | PASS |
+| scripts/provider_limits_janitor.py | 신규 생성 (TTL 검사/상태/아카이브 CLI) | <sha12> | PASS |
+| scripts/test_provider_limits_janitor.py | 신규 생성 (janitor 단위 테스트) | <sha12> | PASS (exit 0) |
+| docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md | 갱신 (Vercel 링크 및 90일 계약) | <sha12> | PASS |
+| docs/agents-rules/DEMO1-VERCEL-AI-GATEWAY-CREDIT.md | 갱신 (상세 SSOT 링크) | <sha12> | PASS |
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 WP1~WP3 작업을 순서대로 완료하고 test_provider_limits_janitor.py 실행 결과와 함께 완료 보고서를 작성해야 한다.

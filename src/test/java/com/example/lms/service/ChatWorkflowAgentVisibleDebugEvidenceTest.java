@@ -104,7 +104,7 @@ class ChatWorkflowAgentVisibleDebugEvidenceTest {
 
         assertTrue(source.contains("String verifierEvidenceContext = buildVerifierEvidenceContext("));
         assertTrue(source.contains("promptWebDocs, promptVectorDocs, promptLocalDocs);"));
-        assertTrue(source.contains("String verifierMemoryContext = verifierFollowUp ? memoryCtx : \"\";"));
+        assertTrue(source.contains("String verifierMemoryContext = org.springframework.util.StringUtils.hasText(memoryCtx) ? memoryCtx : \"\";"));
         assertTrue(source.contains("shouldVerify(verifierEligibilityEvidence, llmReq, sig)"));
         assertTrue(source.contains("/* context */ verifierEvidenceContext,"));
         assertTrue(source.contains("/* memory */ verifierMemoryContext,"));

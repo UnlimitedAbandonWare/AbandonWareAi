@@ -30,12 +30,13 @@ $Allowed = @(
   'qwen3.6:27b',
   'gemma4:12b',
   'qwen3.5:9b',
-  'gemma4:latest',
   'gemma4:26b',
   'nomic-embed-text:latest',
   'qwen3-embedding:latest',
   'bge-m3:latest',
-  'qwen3-vl:8b'
+  'qwen3-vl:8b',
+  'qwen2.5:32b',
+  'qwen2.5:14b'
 )
 
 $BannedDefaults = @(

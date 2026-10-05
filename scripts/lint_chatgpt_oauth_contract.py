@@ -21,6 +21,11 @@ CHATGPT_OAUTH_HOST_ID / CHATGPT_OAUTH_REDIRECT_URI / CHATGPT_OAUTH_SCOPE, and
 .secrets/chatgpt_oauth_hostid.txt + .secrets/chatgpt_oauth_credentials.json.
 Values are never printed - presence/shape only.
 
+--offline checks explicit synthetic CLI values only; it never reads environment
+variables, credentials, or product source. source-literals is SKIP/not_observed.
+Exit 0 means only the supplied shapes passed (or were absent), not deployment,
+account availability, or source proof. --strict still fails on every SKIP.
+
 Verdicts: PASS / SKIP (not_observed; --strict upgrades SKIP to FAIL) / FAIL.
 Exit 1 on any FAIL; exit 0 otherwise. Read-only; no network.
 """
@@ -87,8 +92,10 @@ def load_cred():
         return {}
 
 
-def check_host_id(cli, cred):
-    value = cli or os.environ.get("CHATGPT_OAUTH_HOST_ID") or read_secret_file(HOST_ID_FILE)
+def check_host_id(cli, cred, *, runtime=True):
+    value = cli
+    if runtime and not value:
+        value = os.environ.get("CHATGPT_OAUTH_HOST_ID") or read_secret_file(HOST_ID_FILE)
     if isinstance(cred, dict) and not value:
         v = cred.get("ext_agent_host_id") or cred.get("host_id")
         value = v.strip() if isinstance(v, str) else None
@@ -123,8 +130,10 @@ def validate_redirect(uri):
     return (not problems), ",".join(problems)
 
 
-def check_redirect(cli, cred):
-    value = cli or os.environ.get("CHATGPT_OAUTH_REDIRECT_URI")
+def check_redirect(cli, cred, *, runtime=True):
+    value = cli
+    if runtime and not value:
+        value = os.environ.get("CHATGPT_OAUTH_REDIRECT_URI")
     if isinstance(cred, dict) and not value:
         v = cred.get("redirect_uri")
         value = v.strip() if isinstance(v, str) else None
@@ -137,8 +146,10 @@ def check_redirect(cli, cred):
             f"path={urlparse(value).path}" + ("" if ok else f" - {detail}"))
 
 
-def check_scope(cli, cred):
-    value = cli or os.environ.get("CHATGPT_OAUTH_SCOPE")
+def check_scope(cli, cred, *, runtime=True):
+    value = cli
+    if runtime and not value:
+        value = os.environ.get("CHATGPT_OAUTH_SCOPE")
     if isinstance(cred, dict) and not value:
         v = cred.get("scope")
         value = v.strip() if isinstance(v, str) else None
@@ -190,20 +201,27 @@ def _sha12(text):
     return hashlib.sha256(text.encode()).hexdigest()[:12]
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--host-id")
     ap.add_argument("--redirect-uri")
     ap.add_argument("--scope")
     ap.add_argument("--strict", action="store_true",
                     help="treat SKIP (not configured) as FAIL")
-    args = ap.parse_args()
+    ap.add_argument("--offline", action="store_true",
+                    help="synthetic CLI values only; no env/credential/source reads; "
+                         "source proof SKIP, not deployment/account eligibility")
+    args = ap.parse_args(argv)
+    results.clear()
 
-    cred = load_cred()
-    check_host_id(args.host_id, cred)
-    check_redirect(args.redirect_uri, cred)
-    check_scope(args.scope, cred)
-    check_source_literals()
+    cred = None if args.offline else load_cred()
+    check_host_id(args.host_id, cred, runtime=not args.offline)
+    check_redirect(args.redirect_uri, cred, runtime=not args.offline)
+    check_scope(args.scope, cred, runtime=not args.offline)
+    if args.offline:
+        verdict("source-literals", "SKIP", "offline: product source not read (not_observed)")
+    else:
+        check_source_literals()
 
     fails = sum(1 for _, s, _ in results if s == "FAIL")
     skips = sum(1 for _, s, _ in results if s == "SKIP")

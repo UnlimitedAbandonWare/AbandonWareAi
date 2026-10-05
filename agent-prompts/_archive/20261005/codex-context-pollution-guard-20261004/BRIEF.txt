@@ -1,0 +1,97 @@
+$demo1-output-budget
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 수행하고 증거를 남기는 지시서다.
+[CODEX 지시서] 컨텍스트 오염·발적화 방지 및 다중에이전트(데빈·그록CLI·코덱스) 적정 최적화 가이드 — 2026-10-04 23:55 KST
+파일 ID: PASTE_CODEX_CONTEXT_POLLUTION_GUARD_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 소스 임의 변경 0 · git push/pull/commit/add -A 0 · 비밀값/토큰 출력 0 · remote 추가 0 · PROTO_OPEN 위반 0 · 유료 호출 0
+
+0. 한 줄 목표
+Codex를 중심으로 Devin 및 Grok CLI 간의 컨텍스트 오염 타점(대량 덤프, 스핀 대기, 비정제 보고서 복붙, 컴팩션 후 기억상실)을 차단하고 실용적 상한선(출력 캡, 3단 인계, 20줄 state.md)을 준수하는 적정 최적화 지침을 수립·적용한다.
+
+## 1. 사실 (2026-10-04 23:55 KST 기준 관찰)
+- 1) 토큰 및 컴팩션 실측: data/agent-handoff/devin-skill-friction-8eeb784c/baseline.json 실측 결과, 상위 세션 누적 토큰이 66M에 달하고 컴팩션이 최대 6회 발생함.
+- 2) 도구 출력 폭주: baseline.json 기준 도구 출력 절단(truncated)이 686회 발생했으며, 1회 최대 742,754 토큰이 화면에 쏟아져 컨텍스트 윈도우가 급격히 오염됨.
+- 3) 스핀 대기: wait 호출 440회 기록. 무의미한 폴링 루프가 트랜스크립트를 도배하여 시스템 프롬프트 및 핵심 지침이 Lost-in-the-Middle 현상으로 유실됨.
+- 4) 에이전트 간 전달 오염: Devin의 장문 분석(수만 자)과 Grok CLI의 원시 터미널 로그를 여과 없이 Codex에 복사-붙여넣기할 경우, Codex 실행 직전에 이미 컨텍스트의 절반 이상이 오염됨.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 리스·형상: lease 검사 필수, git push/pull/commit/add -A/reset 금지, remote 추가 금지.
+- 보안·권한: .secrets/비밀값/API 토큰 노출 금지, PROTO_OPEN 유지.
+- 실행 검증: 불필요한 gradle 전체 test 금지, 미실행 항목은 NOT_RUN+사유 기록. 실제 외부 유료 호출 금지.
+
+## 3. 항목: 오염 타점별 작업 패키지 (WP)
+
+### WP1 [Codex] 대량 도구 출력 캡 격리 (Hard Clamp ≤ 4,000 토큰)
+- 타점 분석: `Get-Content <file>` 전체 덤프나 빌드 로그 전문 직출력은 컨텍스트를 즉시 폭파시킴.
+- 최소 조치:
+  1) 파일 탐색은 `rg -n "<패턴>" <경로>` 또는 줄 번호 지정(`Get-Content -Skip N -First M`)으로 제한.
+  2) 크기 미상의 파일/로그는 반드시 `python -B scripts/out_peek.py <파일> --max-chars 6000` (최대 ~4000토큰) 사용.
+  3) JSON 출력 명령은 터미널에 뿌리지 말고 `python -B scripts/json_safe_run.py --json-out <f>.json --require-json -- <명령>`으로 파일 저장 후 요약 1줄만 화면 표시.
+- RED 검사: 대용량 파일(1,000줄 이상)을 `out_peek.py` 없이 화면에 직접 덤프하는 행위 탐지.
+- GREEN 검사: `python -B scripts/out_peek.py .agents/skills/demo1-output-budget/SKILL.md --head 10` 정상 실행 확인; "exit=$LASTEXITCODE"
+
+### WP2 [Codex ↔ Devin/Grok CLI] 3단 인계 카드 규격화 (Handoff 3-Pack)
+- 타점 분석: Devin의 장문 리포트나 Grok CLI의 대화형 터미널 원문을 통째로 Codex에 복붙하면 Codex의 추론력이 급격히 저하됨.
+- 최소 조치 (과도한 요약 대신 딱 필요한 3요소만 전달):
+  1) [결론 3줄 이내]: 무엇을 확인했고 무엇이 문제인지 핵심 결론.
+  2) [근거 file:line 목록]: 확인된 실제 소스 위치 (추정치 제외).
+  3) [필수 diff 또는 핵심 에러 10줄 이내]: 수정에 필요한 최소 패치 블록.
+  (그 외 배경 설명, 시행착오 과정, 대화형 핑퐁은 일체 누락시켜 컨텍스트 순도 유지)
+- RED 검사: 50줄 이상의 비정제 원시 로그/대화록을 그대로 지시서나 프롬프트에 투입하는 행위 배제.
+- GREEN 검사: 3단 규격에 맞춘 20줄 이내 인계 텍스트 작성 검증.
+
+### WP3 [Codex] 20줄 상태 외재화 및 세션 분리 (`state.md` Checkpoint)
+- 타점 분석: 누적 토큰이 커져 Compaction이 발생하면 Codex는 이전 기억을 잃고 이미 읽은 파일을 다시 읽는 좀비 루프에 빠짐.
+- 최소 조치:
+  1) 세션 토큰이 비대해지거나 작업 묶음 완료 시 `<taskDir>/state.md`(20줄 이내) 작성.
+  2) 필수 포함 필드: `goal:`, `done:`, `remaining:`, `open leases:`, `next command:`, `blockers:`.
+  3) 컨텍스트가 꼬이거나 오염 조짐(이전 지침 망각)이 보이면 미련 없이 새 세션을 열고 `state.md` 20줄만 주입하여 신선한 컨텍스트로 재개.
+- RED 검사: 3000만 토큰 이상 장기 세션에서 `state.md` 없이 무작정 세션을 이어가다 컴팩션 폭주 유발.
+- GREEN 검사: `C:\AbandonWare\demo-1\demo-1\src\.agents\skills\demo1-session-state-checkpoint\SKILL.md` 지침 준수 확인.
+
+### WP4 [Codex] 3-Strike Fail-Fast (헛돌기 즉시 중단)
+- 타점 분석: 패치 적용 실패(`Failed to find expected lines`)나 `wait` 폴링을 무한 반복하며 컨텍스트를 자폭시키는 현상.
+- 최소 조치:
+  1) 동일 패치 에러 발생 시 즉시 `out_peek.py`나 rg로 대상 라인을 1회 재확인하고 1회만 재적용. 동일 에러 재발 시 즉시 중단.
+  2) wait 대기는 1회 충분한 타임아웃을 주고, 동일 대상 3회 연속 변화 없을 시 즉시 중단.
+  3) 3회 초과 시 컨텍스트를 더럽히지 않고 원인 1줄을 기록한 뒤 정지하고 사용자에게 문의(ASK).
+- RED 검사: 동일 패치 에러/wait 3회 초과 반복 로그 감지.
+- GREEN 검사: 3회 실패 시 즉각 정지 및 에이전트 인계 분기 확인.
+
+## 4. HOLD 조건
+- H-1: 대상 파일이 타 세션의 live lease에 물려 있어 쓰기가 불가능한 경우 (BLOCKED_LEASE).
+- H-2: 컨텍스트 오염 방지 규칙을 어기고 10,000자 이상의 무차별 로그 덤프가 프롬프트에 유입된 경우 즉시 정지 후 요약 요구.
+- H-3: 동일 패치 실패가 3회 누적된 경우 자가 수정 중단 후 HOLD.
+
+## 5. ASK_ONCE 기준 (기본값 포함)
+- Q-1: 장기 작업 중 컨텍스트 컴팩션 발생 시 새 세션 분기 여부:
+  - (a) 권장: state.md(≤20줄) 저장 후 신규 세션에서 깨끗하게 재개.
+  - (b) 기존 세션에서 압축된 상태로 계속 진행.
+
+## 6. 절대 금지
+- 1) git push, git pull, git commit, git add -A, git reset, git clean 등 VCS 조작 절대 금지.
+- 2) .secrets, .env 및 API 토큰, 인증 비밀값 화면 출력 절대 금지.
+- 3) remote 추가 등 원격 저장소 설정 임의 변경 금지.
+- 4) PROTO_OPEN 원칙 위반(불필요한 인증 강제화나 세션 차단) 금지.
+- 5) 과도한 토큰 집착으로 인한 가독성 파괴(변수명 한 글자화, 중요한 룰 파일 무단 삭제 등 과잉 최적화) 금지.
+
+## 7. Acceptance (완료 기준)
+- A1 (WP1): out_peek.py 및 json_safe_run.py를 통한 도구 출력 하드 캡(≤4,000토큰) 격리 규정이 지침에 반영되었는가?
+- A2 (WP2): Devin/Grok CLI → Codex 3단 인계 카드 규격(3줄 결론 + file:line + 10줄 diff)이 확립되었는가?
+- A3 (WP3): 20줄 state.md 외재화 및 세션 분리 기준이 정의되었는가?
+- A4 (WP4): 동일 실패 3회 시 즉각 정지하는 3-Strike Fail-Fast 원칙이 명시되었는가?
+
+## 8. 보고 형식
+보고는 다음 형식으로 작성하여 제출한다:
+```
+외부 API: 호출 없음 ($0 로컬 규칙 준수)
+컨텍스트 제어 결과:
+- [WP1] 도구 출력 캡: out_peek.py 및 json_safe_run.py 적용
+- [WP2] 에이전트 인계 규격: 3단 인계 카드(결론/좌표/diff) 채택
+- [WP3] 상태 외재화: state.md 20줄 규격 준수
+- [WP4] 루프 차단: 3-Strike Fail-Fast 발동 기준 확립
+완료 상태: DONE_OFFLINE
+```
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업을 실제로 수행하고 증거를 남기는 지시서다.

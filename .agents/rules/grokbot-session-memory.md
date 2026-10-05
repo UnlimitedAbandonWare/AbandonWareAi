@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 <!-- BEGIN GROKBOT-SESSION-MEMORY-FOR-AGY -->
 # GrokBot Session Memory Bridge for Antigravity CLI
 <!-- Synced: 2026-10-02 08:17 UTC | Sessions: 44 | Topics: 20 -->

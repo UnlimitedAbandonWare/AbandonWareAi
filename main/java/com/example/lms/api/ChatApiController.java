@@ -213,6 +213,12 @@ public class ChatApiController {
             case OFF -> false;
             case FORCE_LIGHT, FORCE_DEEP -> true;
             case AUTO -> {
+                var requestBudget = com.example.lms.service.rag.SelfAskSearchBudget.current();
+                if (requestBudget != null
+                        && requestBudget.requested() == com.example.lms.domain.enums.ExecutionMode.SELF_ASK) {
+                    TraceStore.put("chat.search.autoDecision.executionMode", "user-self-ask");
+                    yield true;
+                }
                 if (looksLikeDomainEvidenceSearchIntent(query)) {
                     TraceStore.put("chat.search.autoDecision.domainEvidenceProbe", true);
                     yield true;
@@ -1242,7 +1248,7 @@ public class ChatApiController {
         } catch (Exception ignore) {
             logSuppressed("state.sessionLookup");
         }
-        if (session == null || !canAccessSession(session, authentication)) {
+        if (session == null || !(canAccessSession(session, authentication) || isRealAdmin(authentication))) {
             return neutralChatRunState(debug);
         }
         Optional<ChatRunRegistry.RunView> exactRun = Optional.empty();
@@ -1397,15 +1403,26 @@ public class ChatApiController {
         if (dto == null) {
             return ResponseEntity.badRequest().body(new ChatResponseDto("bad_request", null, "bad_request", false));
         }
-        publicRequestBudgetGuard.validateChat(dto);
-        String ownerKey = ownerKeyResolver.ownerKey();
-        captureChatSettings(dto, ownerKey);
-        validateEffectiveBudgetEarly(dto);
-        String username = (principal != null) ? principal.getUsername() : "anonymousUser";
-        ResponseEntity<ChatResponseDto> denied = ChatSessionAccessGuard.authorize(
-                historyService, dto.getSessionId(), username, ownerKey, log);
-        if (denied != null) {
-            return denied;
+        String ownerKey;
+        String username;
+        boolean neverDispatched = false;
+        try {
+            publicRequestBudgetGuard.validateChat(dto);
+            ownerKey = ownerKeyResolver.ownerKey();
+            captureChatSettings(dto, ownerKey);
+            validateEffectiveBudgetEarly(dto);
+            username = (principal != null) ? principal.getUsername() : "anonymousUser";
+            ResponseEntity<ChatResponseDto> denied = ChatSessionAccessGuard.authorize(
+                    historyService, dto.getSessionId(), username, ownerKey, log);
+            if (denied != null) {
+                neverDispatched = true;
+                return denied;
+            }
+        } catch (PublicRequestBudgetGuard.Rejection rejection) {
+            neverDispatched = true;
+            throw rejection;
+        } finally {
+            if (neverDispatched) request.setAttribute("chat.admission.neverDispatched", Boolean.TRUE);
         }
         // /api/chat/sync is a live path (display-core.js). Apply the same
         // request-header plan/guard policies as the reactive and SSE entries.
@@ -1604,17 +1621,25 @@ public class ChatApiController {
                 resolveSelectionReplayRequest(request);
         final SelectionEntropy selectionEntropy = selectionState.entropy();
         final SelectionDecisionLedger selectionDecisionLedger = selectionState.ledger();
-        publicRequestBudgetGuard.validateChatForStream(req, attach);
-        final String preResolvedOwnerKey = ownerKeyResolver.ownerKey();
-        if (!attach) {
-            captureChatSettings(req, preResolvedOwnerKey);
-            validateEffectiveBudgetEarly(req);
-        }
-        final String jamminiMode = resolveJamminiMode(
-                request.getHeader("X-Jammini-Mode"), request.getHeader("X-Brave-Mode"));
-        final String guardLevel = request.getHeader("X-Guard-Level");
-        if (!attach) {
-            validateProjectedBudgetBeforeStream(req, jamminiMode, guardLevel);
+        final String preResolvedOwnerKey;
+        final String jamminiMode;
+        final String guardLevel;
+        try {
+            publicRequestBudgetGuard.validateChatForStream(req, attach);
+            preResolvedOwnerKey = ownerKeyResolver.ownerKey();
+            if (!attach) {
+                captureChatSettings(req, preResolvedOwnerKey);
+                validateEffectiveBudgetEarly(req);
+            }
+            jamminiMode = resolveJamminiMode(
+                    request.getHeader("X-Jammini-Mode"), request.getHeader("X-Brave-Mode"));
+            guardLevel = request.getHeader("X-Guard-Level");
+            if (!attach) {
+                validateProjectedBudgetBeforeStream(req, jamminiMode, guardLevel);
+            }
+        } catch (PublicRequestBudgetGuard.Rejection rejection) {
+            request.setAttribute("chat.admission.neverDispatched", Boolean.TRUE);
+            throw rejection;
         }
         String username = (principal != null) ? principal.getUsername() : "anonymousUser";
         // Capture the client IP early to avoid IllegalStateException when running on
@@ -1843,6 +1868,7 @@ public class ChatApiController {
                         ? null
                         : mergeSessionMetaIntoRequest(priorSession, req);
                 ChatRequestDto dto = mergeWithSettings(req);
+                com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(dto.getExecutionMode());
                 publicRequestBudgetGuard.validateChatEffective(dto);
                 final boolean __hasAttachments = hasAttachments(dto);
                 final boolean __looksLikeAttachmentQ =
@@ -2506,6 +2532,31 @@ public class ChatApiController {
                     sink.tryEmitNext(sse(ChatStreamEvent.evidence(result.evidenceMetadata())));
                 }
 
+                boolean cancelledBeforePersist = false;
+                boolean firstVisibleToken = true;
+                for (String c : chunk(visibleFinalText, 60)) {
+                    if (isStreamRunCancelled(runContextRef.get(), finalSessionId)) {
+                        cancelledBeforePersist = true;
+                        break;
+                    }
+                    Sinks.EmitResult tokenEmitResult = emitTokenStreamEvent(
+                            sink, sse(ChatStreamEvent.token(c)));
+                    if (firstVisibleToken && tokenEmitResult.isSuccess()) {
+                        firstVisibleToken = false;
+                        log.info("[plan9-request-phase] phase=sse_first_token count=1 requestHash={} atEpochMs={}",
+                                SafeRedactor.hashValueOrPreserve(__capturedRequestId), System.currentTimeMillis());
+                    }
+                    if (!tokenEmitResult.isSuccess()) {
+                        TraceStore.put("chat.stream.outcome.tokenEmitFailureReason",
+                                tokenEmitResult.name().toLowerCase(java.util.Locale.ROOT));
+                    }
+                }
+
+                if (!cancelledBeforePersist
+                        && isStreamRunCancelled(runContextRef.get(), finalSessionId)) {
+                    cancelledBeforePersist = true;
+                }
+
                 // (UI) answer.mode for fallback badges
                 String answerModeFinal = null;
 
@@ -2655,30 +2706,6 @@ public class ChatApiController {
                     return;
                 }
 
-                boolean cancelledBeforePersist = false;
-                boolean firstVisibleToken = true;
-                for (String c : chunk(visibleFinalText, 60)) {
-                    if (isStreamRunCancelled(runContextRef.get(), finalSessionId)) {
-                        cancelledBeforePersist = true;
-                        break;
-                    }
-                    Sinks.EmitResult tokenEmitResult = emitTokenStreamEvent(
-                            sink, sse(ChatStreamEvent.token(c)));
-                    if (firstVisibleToken && tokenEmitResult.isSuccess()) {
-                        firstVisibleToken = false;
-                        log.info("[plan9-request-phase] phase=sse_first_token count=1 requestHash={} atEpochMs={}",
-                                SafeRedactor.hashValueOrPreserve(__capturedRequestId), System.currentTimeMillis());
-                    }
-                    if (!tokenEmitResult.isSuccess()) {
-                        TraceStore.put("chat.stream.outcome.tokenEmitFailureReason",
-                                tokenEmitResult.name().toLowerCase(java.util.Locale.ROOT));
-                    }
-                }
-
-                if (!cancelledBeforePersist
-                        && isStreamRunCancelled(runContextRef.get(), finalSessionId)) {
-                    cancelledBeforePersist = true;
-                }
                 ChatRunExecutionContext committingRun = runContextRef.get();
                 var deferredService = understandingCommits == null ? null : understandingCommits.getIfAvailable();
                 var understandingPlan = cancelledBeforePersist || deferredService == null ? null
@@ -2714,6 +2741,7 @@ public class ChatApiController {
                 AtomicReference<Long> traceTurnIdRef = new AtomicReference<>();
                 AtomicReference<ChatStreamEvent.PipelineSnapshot> persistedPipelineSnapshotRef =
                         new AtomicReference<>(pipelineSnapshotBeforePersistence);
+                AtomicReference<Long> persistedAssistantMessageIdRef = new AtomicReference<>();
                 Runnable durablePersistence = () -> {
                     Long assistantMessageId = deferredService == null ? historyService.appendMessageReturningId(
                             persistenceSessionId, "assistant", persistableFinalText)
@@ -2721,12 +2749,7 @@ public class ChatApiController {
                     if (assistantMessageId != null && committingRun != null && !committingRun.markPersisted()) {
                         throw new IllegalStateException("exact transcript persistence outcome rejected");
                     }
-                    captureFinalizedGraph(dtoForCall, persistenceGraphScope, persistedUserMessageId,
-                            assistantMessageId, streamRagControlProjection.held());
-                    if (!streamRagControlProjection.held() && finalAnswerMemorySaveAllowed) {
-                        updateRollingSummaryAndMaybePromote(
-                                persistenceSessionId, assistantMessageId, req);
-                    }
+                    persistedAssistantMessageIdRef.set(assistantMessageId);
 
                     historyService.appendMessage(persistenceSessionId, "system",
                             String.format("%s%s", MODEL_META_PREFIX, modelUsedFinal));
@@ -2845,6 +2868,24 @@ public class ChatApiController {
                         modelUsedFinal);
                 streamOutcomeRef.compareAndSet(null,
                         cancelledAfterFinalEmit ? "cancelled" : "completed");
+                Long postFinalAssistantMessageId = persistedAssistantMessageIdRef.get();
+                Runnable postFinalSessionMemory = () -> {
+                    captureFinalizedGraph(dtoForCall, persistenceGraphScope, persistedUserMessageId,
+                            postFinalAssistantMessageId, streamRagControlProjection.held());
+                    if (!streamRagControlProjection.held() && finalAnswerMemorySaveAllowed) {
+                        updateRollingSummaryAndMaybePromote(
+                                persistenceSessionId, postFinalAssistantMessageId, req);
+                    }
+                };
+                try {
+                    if (committingRun == null) {
+                        postFinalSessionMemory.run();
+                    } else {
+                        committingRun.runTerminalSideEffect(postFinalSessionMemory);
+                    }
+                } catch (Throwable ignore) {
+                    logSuppressed("stream.postFinalSessionMemory");
+                }
             } catch (Exception ex) {
                 if (selectionEntropy.mode() == SelectionEntropyMode.REPLAY
                         && ex instanceof SelectionEntropyException selectionFailure) {
@@ -3219,6 +3260,25 @@ public class ChatApiController {
                 && authentication.getAuthorities() != null
                 && authentication.getAuthorities().stream()
                 .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
+    }
+
+    /** O3a: ambient/synthetic admin principal names never carry the real-admin ownership exception. */
+    private static boolean isAmbientAdminName(String name) {
+        return "proto-open".equals(name) || "prototype".equals(name);
+    }
+
+    private boolean isRealAdmin(Authentication authentication) {
+        return !interviewDemo
+                && isAdmin(authentication)
+                && !isAmbientAdminName(authentication.getName());
+    }
+
+    private boolean isRealAdmin(UserDetails principal) {
+        return !interviewDemo
+                && principal != null
+                && principal.getAuthorities() != null
+                && principal.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()))
+                && !isAmbientAdminName(principal.getUsername());
     }
 
     private static ServerSentEvent<ChatStreamEvent> sse(ChatStreamEvent e) {
@@ -4207,6 +4267,7 @@ public class ChatApiController {
                 ? null
                 : mergeSessionMetaIntoRequest(priorSession, uiReq);
         ChatRequestDto dto = mergeWithSettings(uiReq);
+        com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(dto.getExecutionMode());
         publicRequestBudgetGuard.validateChatEffective(dto);
         final boolean __hasAttachments = hasAttachments(dto);
         final boolean __looksLikeAttachmentQ =
@@ -4925,6 +4986,7 @@ public class ChatApiController {
                                                      String guardLevel) {
         applyStoredSessionMetaForProjection(request);
         ChatRequestDto dto = mergeWithSettings(request);
+        com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(dto.getExecutionMode());
         GuardContext context = GuardContext.defaultContext();
         if (jamminiMode != null && !jamminiMode.isBlank()) {
             context.setHeaderMode(jamminiMode);
@@ -5012,6 +5074,15 @@ public class ChatApiController {
             @AuthenticationPrincipal org.springframework.security.core.userdetails.UserDetails principal,
             @RequestParam(name = "limit", defaultValue = "50") int limit,
             jakarta.servlet.http.HttpServletRequest request) {
+        if (isRealAdmin(principal)) {
+            return historyService.getAllSessionsForAdmin(limit).stream()
+                    .map(s -> new SessionInfo(
+                            s.getId(),
+                            s.getTitle(),
+                            ChatModelMetaSupport.safeTrim(s.getLastAnswerMode()),
+                            s.getLastTraceTurnId()))
+                    .toList();
+        }
         String user = principal != null ? principal.getUsername() : "anonymousUser";
         String clientIp = resolveClientIp(request);
         String currentKey = ownerKeyResolver.ownerKey();
@@ -5134,7 +5205,7 @@ public class ChatApiController {
         boolean traceOwner = owner == null
                 ? session.getOwnerKey() != null && session.getOwnerKey().equals(ownerKeyResolver.ownerKey())
                 : username != null && owner.getUsername().equals(username);
-        if (!traceOwner) {
+        if (!traceOwner && !isRealAdmin(authentication)) {
             if (restoreProbe) {
                 return restoreProbeReset("SESSION_UNAVAILABLE");
             }
@@ -5221,89 +5292,7 @@ public class ChatApiController {
 
     private ResponseEntity<?> sessionTraceBundle(ChatTraceMetaMessageRestorer.SnapshotPointer pointer,
             LocalDateTime capturedAt, TraceSnapshotStore.TraceSnapshot snapshot) {
-        try {
-            Map<String, byte[]> files = new java.util.LinkedHashMap<>();
-            Map<String, Object> sources = new java.util.LinkedHashMap<>();
-            files.put("summary.json", objectMapper.writeValueAsBytes(pointer.projection()));
-            if (!pointer.diagnostics().isEmpty()) files.put("trace.json", objectMapper.writeValueAsBytes(pointer.diagnostics()));
-            sources.put("summary", Map.of("status", "available", "source", "chat_system_pointer"));
-            sources.put("trace", Map.of("status", pointer.diagnostics().isEmpty() ? "unavailable" : "available",
-                    "reason", pointer.diagnostics().isEmpty() ? "legacy_summary_only" : "safe_projection_only",
-                    "retainedFieldCount", pointer.diagnostics().size()));
-            // TraceSnapshotStore already hashes these IDs; hashing again breaks the exact join.
-            String requestHash = snapshot != null && snapshot.requestId() != null
-                    && snapshot.requestId().matches("hash:[0-9a-f]{12}") ? snapshot.requestId() : null;
-            String traceHash = snapshot != null && snapshot.traceId() != null
-                    && snapshot.traceId().matches("hash:[0-9a-f]{12}") ? snapshot.traceId() : null;
-            if (traceBundleEvents != null && requestHash != null) {
-                var page = traceBundleEvents.page(requestHash, traceHash, null, 200);
-                StringBuilder events = new StringBuilder();
-                for (var event : page.items()) {
-                    // One event ID per store event; file mirrors are never collected again.
-                    Map<String, Object> row = new java.util.LinkedHashMap<>();
-                    row.put("id", event.id());
-                    row.put("ts", event.ts().toString());
-                    row.put("level", event.level().name());
-                    row.put("probe", event.probe().name());
-                    row.put("fingerprint", event.fingerprint());
-                    row.put("requestIdHash", event.requestId());
-                    row.put("traceIdHash", event.traceId());
-                    row.put("messageHash", SafeRedactor.hashValue(event.message()));
-                    events.append(objectMapper.writeValueAsString(row)).append('\n');
-                }
-                if (!page.items().isEmpty()) files.put("events.ndjson", events.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                sources.put("events", Map.of("status", page.items().isEmpty() ? "unavailable" : "available",
-                        "reason", page.items().isEmpty() ? "not_in_retained_ring" : "bounded_current_ring",
-                        "count", page.items().size(), "truncated", page.hasMore(), "historyComplete", false));
-            } else {
-                sources.put("events", Map.of("status", "unavailable",
-                        "reason", snapshot == null ? "ring_expired_or_restarted" : "correlation_or_store_unavailable"));
-            }
-            sources.put("logs", Map.of("status", "unavailable",
-                    "reason", "raw_application_logs_not_collected",
-                    "structuredFailurePatterns", "included_in_events_when_retained"));
-            files.put("README.txt", ("This answer only. Summary and typed trace fields use the existing chat store.\n"
-                    + "Events, when present, are bounded correlated ring metadata; they are not durable log history.\n"
-                    + "Missing sources are declared in manifest.json. No raw prompt, query, log, path or secret is exported.\n"
-                    + "Opening or exporting does not run models, retrieval or memory writes.\n")
-                    .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            Map<String, Object> checksums = new java.util.LinkedHashMap<>();
-            for (var file : files.entrySet()) checksums.put(file.getKey(),
-                    java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(file.getValue())));
-            Map<String, Object> manifest = new java.util.LinkedHashMap<>();
-            manifest.put("schema", "awx.answer-trace-bundle.v1");
-            manifest.put("redactionVersion", "typed-pointer-v3");
-            manifest.put("build", Optional.ofNullable(getClass().getPackage().getImplementationVersion()).orElse("not_observed"));
-            manifest.put("snapshotId", pointer.snapshotId());
-            manifest.put("assistantMessageId", pointer.assistantMessageId());
-            manifest.put("capturedAt", capturedAt == null ? "not_observed" : capturedAt.toString());
-            manifest.put("exportedAt", java.time.Instant.now().toString());
-            manifest.put("terminalReason", pointer.projection().getOrDefault("reason", "not_observed"));
-            manifest.put("ringScope", "current_process_only");
-            manifest.put("durableScope", "existing_chat_store");
-            manifest.put("sources", sources);
-            manifest.put("checksumsSha256", checksums);
-            if (requestHash != null) manifest.put("requestIdHash", requestHash);
-            if (traceHash != null) manifest.put("traceIdHash", traceHash);
-            files.put("manifest.json", objectMapper.writeValueAsBytes(manifest));
-            if (files.values().stream().mapToInt(bytes -> bytes.length).sum() > 262_144)
-                return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE).build();
-            var out = new java.io.ByteArrayOutputStream();
-            try (var zip = new java.util.zip.ZipOutputStream(out)) {
-                for (var file : files.entrySet()) {
-                    zip.putNextEntry(new java.util.zip.ZipEntry(file.getKey()));
-                    zip.write(file.getValue());
-                    zip.closeEntry();
-                }
-            }
-            return ResponseEntity.ok().contentType(MediaType.parseMediaType("application/zip"))
-                    .header("Cache-Control", "no-store")
-                    .header("Content-Disposition", "attachment; filename=\"answer-trace-bundle.zip\"")
-                    .body(out.toByteArray());
-        } catch (Exception ignored) {
-            logSuppressed("chat.traceBundle");
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
-        }
+        return ChatTraceBundleResponseBuilder.build(pointer, capturedAt, snapshot, objectMapper, traceBundleEvents, () -> getClass().getPackage().getImplementationVersion(), ChatApiController::logSuppressed);
     }
 
     private static ResponseEntity<Map<String, Object>> restoreProbeReset(String error) {
@@ -5376,7 +5365,16 @@ public class ChatApiController {
     }
 
     // ===== DTO records =====
-    public record MessageDto(Long turnId, String role, String content, LocalDateTime timestamp) {
+    public record MessageDto(Long turnId, String role, String content, LocalDateTime timestamp,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            ChatStreamEvent.ExecutionModeSnapshot executionMode) {
+        public MessageDto(Long turnId, String role, String content, LocalDateTime timestamp) {
+            this(turnId, role, content, timestamp, null);
+        }
+        public MessageDto {
+            if (!"assistant".equals(role) || turnId == null || turnId <= 0L
+                    || executionMode == null || executionMode.requested() == null) executionMode = null;
+        }
     }
 
     static Optional<MessageDto> restoreTraceMetaMessage(Long turnId, String content, LocalDateTime timestamp,

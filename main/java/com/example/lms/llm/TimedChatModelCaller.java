@@ -51,6 +51,31 @@ public final class TimedChatModelCaller {
     private TimedChatModelCaller() {
     }
 
+    /** Stop auxiliary verification on cancellation or terminal results without publishing judge output. */
+    public static void rethrowIfCancelledOrTerminal(Throwable failure) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        Throwable cursor = failure;
+        for (int depth = 0; cursor != null && depth < 16; depth++) {
+            if (cursor instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("verifier interrupted");
+            }
+            if (cursor instanceof CancellationException) {
+                // Do not let a nested auxiliary terminal bypass cancellation upstream.
+                throw new CancellationException("verifier cancelled");
+            }
+            Throwable next = cursor.getCause();
+            if (next == cursor) break;
+            cursor = next;
+        }
+        if (com.example.lms.llm.gateway.LlmResponseTerminalException.find(failure) != null) {
+            // Auxiliary output must never become the public answer or its model receipt.
+            throw new com.example.lms.llm.gateway.LlmResponseTerminalException(
+                    "auxiliary_verification_terminated", com.example.lms.llm.gateway.LlmFailureClass.UNKNOWN,
+                    "", null, "failed", null, null);
+        }
+    }
+
     public static AiMessage chat(
             ChatModel model,
             List<ChatMessage> messages,

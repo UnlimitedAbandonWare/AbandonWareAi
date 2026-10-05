@@ -9,6 +9,7 @@ function setup({type='text/event-stream', wire='', wires=null, run=null, abort=f
     fetchCalls:[],stateCalls:[],cancelRequests:0,dockEvents:[],pendingReads:[],clock:0};
   const assistant={dataset:{},replaceChildren(){}};
   let responseIndex=0;
+  let activeRun=run;
   const context=vm.createContext({
     TextEncoder,TextDecoder,AbortController,MAX_SSE_EVENT_UTF8_BYTES:100000,
     document:{getElementById(){return assistant;},dispatchEvent(event){observed.dockEvents.push(event);}},
@@ -25,11 +26,12 @@ function setup({type='text/event-stream', wire='', wires=null, run=null, abort=f
     withChatCorrelationHeaders:x=>x,generationIdempotencyHeaders:()=>({}),streamServerBudgetHeaders:()=>({}),
     responseHeader:(response,name)=>response.headers.get(name),
     applyChatResponseHeaders(){},
-    activeRunIdentitySnapshot:()=>run,clearActiveRunIdentity(){},clearActiveRunIdentityIfMatch(){},
+    activeRunIdentitySnapshot:()=>activeRun,clearActiveRunIdentity(){activeRun=null;},
+    clearActiveRunIdentityIfMatch(expected){if(activeRun===expected)activeRun=null;},
     isActiveStreamRenderTarget:()=>true,isAssistantStreamStopped:()=>false,
     assistantReasoningStates:new WeakMap(),
-    renderChatEvent:(payload,element,event)=>{
-      observed.rendered.push({event,payload});
+    renderChatEvent:(payload,element,event,finalRun)=>{
+      observed.rendered.push({event,payload,finalRun});
       if(event==='token'||event==='message')
         element.dataset.ariaText=(element.dataset.ariaText||'')+context.filterAssistantReasoningChunk(payload.data,element);
     },
@@ -63,6 +65,14 @@ function setup({type='text/event-stream', wire='', wires=null, run=null, abort=f
   return {context,observed,assistant,send:()=>context.streamChat({model:'synthetic'},'assistant')};
 }
 const event=(name,data)=>'event: '+name+'\ndata: '+JSON.stringify(data)+'\n\n';
+const timeoutRun={sessionId:719,runToken:'synthetic-timeout-run'};
+function assertTransportDetached(s,expectedRun=timeoutRun) {
+  assert.equal(s.observed.cancelRequests,0,'transport loss must not cancel the admitted run');
+  assert.equal(s.context.streamController.signal.aborted,true);
+  assert.equal(s.context.activeRunIdentitySnapshot(),expectedRun,'exact recovery identity must survive');
+  assert.equal(s.observed.acks,0,'a detached transport cannot acknowledge a final answer');
+  assert.equal(s.observed.calls,1,'timeout must not start another generation');
+}
 function setupExactRecovery({sessionId=711,runToken='synthetic-run',replaceDuringState=false,traceSignal=null}={}) {
   const s=setup({wires:[
     event('session',{sessionId,data:runToken,traceSignal}),
@@ -83,6 +93,8 @@ function setupExactRecovery({sessionId=711,runToken='synthetic-run',replaceDurin
   context.updateOrchestrationSignalBar=()=>{};
   context.dispatchBrainStateSignal=()=>{};
   context.sessionTraceLabel=(sid)=>'trace:'+sid;
+  observed.sessionListRefreshes=[];
+  context.refreshSessionList=(reason)=>{observed.sessionListRefreshes.push(reason);return Promise.resolve(true);};
   context.apiCall=async(url,options)=>{
     observed.stateCalls.push({url,options});
     return {json:async()=>{
@@ -132,6 +144,7 @@ test('ordinary session carries exact hashes to dock before generation completes'
   const s=setupExactRecovery({sessionId:713,runToken:'run-713',
     traceSignal:{requestIdHash,traceIdHash}});
   await assert.rejects(s.send(),e=>e.message==='exact_run_transport_eof');
+  assert.deepEqual(s.observed.sessionListRefreshes,['session']);
   assert.deepEqual(s.observed.dockEvents.filter(event=>event.detail.requestIdHash)
     .map(event=>({requestIdHash:event.detail.requestIdHash,traceIdHash:event.detail.traceIdHash})),
     [{requestIdHash,traceIdHash}]);
@@ -142,6 +155,7 @@ test('final is acknowledged once and later events in the chunk are not rendered'
   await s.send();
   assert.equal(s.observed.acks,1);assert.equal(s.observed.rendered.length,1);
   assert.equal(s.observed.rendered[0].event,'final');assert.equal(s.observed.calls,1);
+  assert.equal(s.observed.rendered[0].finalRun.runToken,'synthetic-run');
 });
 test('terminal failure preserves received tokens and blocks blind retry or ACK',async()=>{
   const s=setup({wire:event('token',{data:'partial'})+event('error',{code:'provider_unauthorized'})});
@@ -183,7 +197,7 @@ test('a replaced run cannot attach after an older state response',async()=>{
   assert.equal(vm.runInContext('activeRunIdentitySnapshot().runToken',s.context),'replacement-run');
 });
 
-test('NW ordinary client and server budgets never exceed 30 seconds or a shorter admission',()=>{
+test('NW client idle and HTTP body budgets use the rendered positive policy or legacy fallback',()=>{
   let admitted=240000;
   const context=vm.createContext({document:{querySelector:()=>({getAttribute:()=>String(admitted)})},
     STREAM_SERVER_EVIDENCE_BUDGET_MS:120000,STREAM_SERVER_WEB_BUDGET_MS:30000,
@@ -191,18 +205,22 @@ test('NW ordinary client and server budgets never exceed 30 seconds or a shorter
   vm.runInContext(source.slice(source.indexOf('function streamClientDeadlineMs('),
     source.indexOf('function streamServerBudgetHeaders(')),context);
   for(const payload of [{},{useRag:true},{useWebSearch:true},{searchMode:'FORCE_DEEP'}]) {
-    assert.equal(context.streamClientDeadlineMs(payload),30000);
-    assert.equal(context.streamServerBudgetMs(payload),30000);
+    assert.equal(context.streamClientDeadlineMs(payload),240000);
+    assert.equal(context.streamServerBudgetMs(payload),240000);
   }
   admitted=1500;
   assert.equal(context.streamClientDeadlineMs({}),1500);
   assert.equal(context.streamServerBudgetMs({}),1500);
+  for(admitted of [null,0,-1,1.5,'invalid']) {
+    assert.equal(context.streamClientDeadlineMs({}),600000);
+    assert.equal(context.streamServerBudgetMs({}),600000);
+  }
 });
 
-// WP6 intent change: live SSE status/blank tokens can wait, but never renew the total deadline.
-test('NW live SSE status and blank tokens remain inside the original total deadline',async()=>{
+// The transport has a byte-idle budget; detaching it leaves the server run recoverable.
+test('NW status and blank tokens still detach after the byte-idle budget',async()=>{
   const s=setup({wire:event('status',{code:'working'})+event('token',{data:'   '}),
-    stall:true,deadline:30000});
+    stall:true,deadline:30000,run:timeoutRun});
   const pending=s.send();
   const rejected=assert.rejects(pending,{name:'DeadlineError'});
   await new Promise(setImmediate);
@@ -211,36 +229,33 @@ test('NW live SSE status and blank tokens remain inside the original total deadl
   assert.equal(s.assistant.dataset.streamAnswerSeen,'false');
   assert.equal(s.assistant.dataset.streamFirstAnswerMs,undefined);
   s.observed.clock=30000;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
-  assert.equal(s.context.streamController.signal.aborted,true);
+  assertTransportDetached(s);
   await rejected;
 });
 
-test('NW a real answer delta permits progress only within the original total deadline',async()=>{
-  const s=setup({wire:event('token',{data:'answer delta'}),stall:true,deadline:30000});
+test('NW a real answer delta does not exempt a stalled transport from the idle budget',async()=>{
+  const s=setup({wire:event('token',{data:'answer delta'}),stall:true,deadline:30000,run:timeoutRun});
   const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
   await new Promise(setImmediate);
   s.observed.clock=5000;s.observed.tick();
   assert.equal(s.observed.cancelRequests,0);
   s.observed.clock=30000;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
-  assert.equal(s.context.streamController.signal.aborted,true);
+  assertTransportDetached(s);
   await rejected;
 });
 
-test('NW a stalled fetch before run identity is cancelled at the first answer deadline',async()=>{
+test('NW a stalled fetch before run identity detaches at the first-signal deadline',async()=>{
   const s=setup({fetchStall:true,deadline:30000});
   const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
   await new Promise(setImmediate);
   s.observed.clock=5000;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
-  assert.equal(s.context.streamController.signal.aborted,true);
+  assertTransportDetached(s,null);
   await rejected;
 });
 
-// WP6 intent change: reasoning is not a visible answer, while validated SSE proves liveness.
-test('NW hidden reasoning is not a visible answer and cannot renew the total deadline',async()=>{
-  const s=setup({wire:event('token',{data:'<think>internal reasoning</think>'}),stall:true,deadline:30000});
+// Reasoning is not a visible answer; a subsequent silent transport still detaches.
+test('NW hidden reasoning stays hidden and does not exempt an idle transport',async()=>{
+  const s=setup({wire:event('token',{data:'<think>internal reasoning</think>'}),stall:true,deadline:30000,run:timeoutRun});
   const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
   await new Promise(setImmediate);
   assert.equal(s.assistant.dataset.ariaText,'');
@@ -249,7 +264,7 @@ test('NW hidden reasoning is not a visible answer and cannot renew the total dea
   assert.equal(s.assistant.dataset.streamAnswerSeen,'false');
   assert.equal(s.assistant.dataset.streamFirstAnswerMs,undefined);
   s.observed.clock=30000;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
+  assertTransportDetached(s);
   await rejected;
 });
 
@@ -282,40 +297,90 @@ test('WP6 live SSE progress permits a first visible body at eight seconds',async
   assert.equal(s.observed.cancelRequests,0);
 });
 
-test('WP6 validated SSE headers wait only until the original total deadline',async()=>{
-  const s=setup({stall:true,deadline:30000});
+test('WP6 validated SSE headers detach after the byte-idle budget',async()=>{
+  const s=setup({stall:true,deadline:30000,run:timeoutRun});
   const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
   await new Promise(setImmediate);
   s.observed.clock=5000;s.observed.tick();
   assert.equal(s.observed.cancelRequests,0);
   s.observed.clock=30000;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
+  assertTransportDetached(s);
   assert.equal(s.assistant.dataset.streamFirstAnswerMs,undefined);
   await rejected;
 });
 
 test('WP6 delayed SSE headers cannot retroactively evade the five-second first-signal limit',async()=>{
-  const s=setup({wire:event('token',{data:'late'}),deadline:30000});
+  const s=setup({wire:event('token',{data:'late'}),deadline:30000,run:timeoutRun});
   const originalFetch=s.context.fetch;
   s.context.fetch=async(...args)=>{
     s.observed.clock=6000;
     return originalFetch(...args);
   };
   await assert.rejects(s.send(),{name:'DeadlineError'});
-  assert.equal(s.observed.cancelRequests,1);
+  assertTransportDetached(s);
   assert.equal(s.observed.rendered.length,0);
 });
 
-test('WP6 live progress does not extend a shorter admitted total budget',async()=>{
-  const s=setup({wire:event('status',{code:'working'}),stall:true,deadline:1500});
+test('WP6 a shorter rendered policy also bounds a silent SSE transport',async()=>{
+  const s=setup({wire:event('status',{code:'working'}),stall:true,deadline:1500,run:timeoutRun});
   const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
   await new Promise(setImmediate);
   s.observed.clock=1499;s.observed.tick();
   assert.equal(s.observed.cancelRequests,0);
   s.observed.clock=1500;s.observed.tick();
-  assert.equal(s.observed.cancelRequests,1);
-  assert.equal(s.context.streamController.signal.aborted,true);
+  assertTransportDetached(s);
   await rejected;
+});
+
+test('live status, blank and reasoning bytes renew liveness but silence still detaches without cancel',async()=>{
+  const s=setup({controlledReads:true,deadline:1500,run:timeoutRun});
+  const outcome=s.send().then(()=>({ok:true}),error=>({error}));
+  await new Promise(setImmediate);
+  const wires=[event('status',{code:'working'}),event('token',{data:'   '}),
+    event('token',{data:'<think>internal</think>'})];
+  for(let i=0;i<wires.length;i++) {
+    s.observed.clock=(i+1)*1000;
+    s.observed.pendingReads.shift()({done:false,value:new TextEncoder().encode(wires[i])});
+    await new Promise(setImmediate);
+    s.observed.tick();
+    assert.equal(s.context.streamController.signal.aborted,false);
+    assert.equal(s.assistant.dataset.streamAnswerSeen,'false');
+    assert.equal(s.assistant.dataset.streamFirstAnswerMs,undefined);
+  }
+  s.observed.clock=4500;s.observed.tick();
+  assert.equal((await outcome).error.name,'DeadlineError');
+  assertTransportDetached(s);
+  assert.equal(s.observed.heartbeatCleared,1);
+});
+
+test('explicit concurrent user Stop posts the exact cancel once after transport detach',async()=>{
+  const s=setup({stall:true,deadline:1500,run:timeoutRun});
+  const rejected=assert.rejects(s.send(),{name:'DeadlineError'});
+  await new Promise(setImmediate);
+  s.observed.clock=1500;s.observed.tick();await rejected;
+  assertTransportDetached(s);
+  Object.assign(s.context,{streamCancelInFlight:null,activeSessionId:timeoutRun.sessionId,
+    activeRunToken:timeoutRun.runToken,pendingStopBeforeToken:null,dom:{stopBtn:{}},
+    normalizeRunToken:x=>x,sameActiveRunIdentity:expected=>s.context.activeRunIdentitySnapshot()===expected,
+    apiCall:async(url,options)=>{s.observed.stateCalls.push({url,options});
+      await new Promise(setImmediate);return {json:async()=>({cancelled:true})};},
+    applySuccessfulStreamCancel:(expected,options)=>{s.context.streamCancelRequested=true;
+      s.context.streamRenderSuppressed=true;options.controller.abort();
+      s.context.clearActiveRunIdentityIfMatch(expected);return true;}
+  });
+  vm.runInContext(source.slice(source.indexOf('async function requestServerCancel('),
+    source.indexOf('async function acknowledgeExactRun(')),s.context);
+  s.context.requestServerCancelWithTimeout=(sid,token)=>s.context.requestServerCancel(sid,token);
+  vm.runInContext(source.slice(source.indexOf('async function cancelActiveStream('),
+    source.indexOf('async function waitForPendingStreamCancel(')),s.context);
+  assert.deepEqual(await Promise.all([s.context.cancelActiveStream(),s.context.cancelActiveStream()]),[true,true]);
+  assert.equal(s.observed.stateCalls.length,1);
+  const cancel=s.observed.stateCalls[0];
+  assert.equal(cancel.url,'/api/chat/cancel');assert.equal(cancel.options.method,'POST');
+  assert.deepEqual(JSON.parse(cancel.options.body),timeoutRun);
+  assert.equal(s.context.activeRunIdentitySnapshot(),null);
+  assert.equal(s.context.streamRenderSuppressed,true);
+  assert.equal(s.observed.acks,0);
 });
 
 test('WP6 user cancellation after SSE start blocks a late answer without ACK',async()=>{
@@ -332,4 +397,116 @@ test('WP6 user cancellation after SSE start blocks a late answer without ACK',as
   assert.equal(s.observed.rendered.length,0);
   assert.equal(s.observed.acks,0);
   assert.equal(s.observed.heartbeatCleared,1);
+});
+
+test('WP-U final provenance belongs to its answer and never borrows global evidence',()=>{
+  // Reuse the existing DOM fixture, but execute the complete product renderer.
+  // The transport setup above stubs final rendering and cannot prove this contract.
+  const harness=fs.readFileSync('scripts/chat_ui_stream_contract_tests.js','utf8');
+  const sourceStart=harness.indexOf('const script = fs.readFileSync(');
+  const sourceEnd=harness.indexOf('\n',sourceStart);
+  assert(sourceStart>=0 && sourceEnd>sourceStart,'repository DOM fixture boundary missing');
+  const scenario=`
+    const wrapperA=fakeElement('synthetic-message-A');
+    const assistantA=fakeElement('synthetic-answer-A');
+    wrapperA.appendChild(assistantA);
+    context.__provenanceA=assistantA;
+    vm.runInContext("state.currentSessionId=711; rememberActiveRunIdentity(711,'synthetic-run-A'); " +
+      "state.latestEvidenceRailItems=[{marker:'W9',title:'POISON_GLOBAL_SOURCE',source:'https://poison.example.test/'}]; " +
+      "renderChatEvent({type:'final',sessionId:711,traceTurnId:891701," +
+      "data:'Synthetic answer A [W1]',evidence:[{marker:'W1',title:'OWN_SOURCE_A',source:'https://a.example.test/'}]}," +
+      "globalThis.__provenanceA,'final',activeRunIdentitySnapshot())",context);
+    assert(assistantA.dataset.ariaText.includes('Synthetic answer A'),'final answer body missing');
+    const panelA=wrapperA.querySelector('[data-answer-provenance]');
+    assert(panelA,'WP_U0_MISSING: accepted final with its own evidence has no answer provenance');
+    assert(nodeText(panelA).includes('OWN_SOURCE_A'),'answer A own source missing');
+    assert(!nodeText(panelA).includes('POISON_GLOBAL_SOURCE'),'answer A borrowed global evidence');
+    assert(context.window.ChatEvidenceGraph.view(assistantA).status==='ready','own evidence was not accepted');
+    vm.runInContext('clearActiveRunIdentity()',context);
+    assert(context.window.ChatEvidenceGraph.view(assistantA).status==='ready','ACK cleanup erased final evidence');
+    const wrapperB=fakeElement('synthetic-message-B');
+    const assistantB=fakeElement('synthetic-answer-B');
+    wrapperB.appendChild(assistantB);
+    context.__provenanceB=assistantB;
+    vm.runInContext("rememberActiveRunIdentity(711,'synthetic-run-B'); " +
+      "renderChatEvent({type:'final',sessionId:711,traceTurnId:891702," +
+      "data:'POISON_GLOBAL_SOURCE at poison.example.test is only answer text',evidence:[]}," +
+      "globalThis.__provenanceB,'final',activeRunIdentitySnapshot())",context);
+    assert(assistantB.dataset.ariaText.includes('only answer text'),'answer B body missing');
+    const panelB=wrapperB.querySelector('[data-answer-provenance]');
+    assert(panelB,'answer B empty provenance state missing');
+    assert(!nodeText(panelB).includes('POISON_GLOBAL_SOURCE'),'answer text was promoted to evidence');
+    assert(!nodeText(panelB).includes('OWN_SOURCE_A'),'answer B borrowed answer A evidence');
+    assert(nodeText(panelA).includes('OWN_SOURCE_A'),'answer B replaced answer A snapshot');
+    assert(!nodeText(panelA).includes('synthetic-run-A'),'raw run identity leaked to provenance DOM');
+    const wrapperC=fakeElement('synthetic-message-C');
+    const assistantC=fakeElement('synthetic-answer-C');
+    wrapperC.appendChild(assistantC);
+    context.__provenanceC=assistantC;
+    vm.runInContext("rememberActiveRunIdentity(711,'synthetic-run-C'); state.responseTraceId=891703; "+
+      "renderChatEvent({type:'final',sessionId:711,data:'Answer without terminal trace',evidence:[]},"+
+      "globalThis.__provenanceC,'final',activeRunIdentitySnapshot())",context);
+    assert(assistantC.dataset.ariaText.includes('without terminal trace'),'missing trace suppressed answer');
+    assert(context.window.ChatEvidenceGraph.view(assistantC).status==='unavailable','global trace was borrowed');
+    vm.runInContext("markAssistantStreamStopped(globalThis.__provenanceB); "+
+      "renderChatEvent({type:'final',sessionId:711,traceTurnId:891702,data:'Late cancelled answer',evidence:[]},"+
+      "globalThis.__provenanceB,'final',activeRunIdentitySnapshot())",context);
+    assert(context.window.ChatEvidenceGraph.view(assistantB).status==='unavailable','stop did not revoke evidence');
+    assert(!assistantB.dataset.ariaText.includes('Late cancelled answer'),'late final bypassed stop latch');
+  `;
+  vm.runInNewContext(harness.slice(0,sourceEnd)+
+    '\ncontext.document.addEventListener=()=>{};\ncontext.window.document=context.document;\n'+
+    'vm.runInContext(fs.readFileSync("main/resources/static/js/chat-evidence-graph.js","utf8"),context);\n'+
+    'vm.runInContext(script,context,{filename:"chat.js"});\n'+scenario,
+    {require,console,process,Buffer,TextEncoder,TextDecoder,URL,URLSearchParams,AbortController,
+      setTimeout,clearTimeout,setInterval,clearInterval,__dirname:require('node:path').resolve('scripts')},
+    {filename:'answer-provenance-regression.cjs',timeout:10000});
+});
+
+
+test('terminal observation never promotes requested model and retains legacy modes',()=>{
+  const harness=fs.readFileSync('scripts/chat_ui_stream_contract_tests.js','utf8');
+  const fixtureEnd=harness.indexOf('const script = fs.readFileSync(');
+  assert(fixtureEnd>=0,'repository DOM fixture boundary missing');
+  const cases=[
+    {name:'missing',payload:{modelUsed:'synthetic-requested',observedModel:null,
+      observedReason:'response_model_missing'},rail:'응답 UNKNOWN',mode:'chat'},
+    {name:'actual-alias',payload:{modelUsed:'synthetic-requested',observedModel:'actual/alias:v2'},
+      rail:'응답 actual/alias:v2',mode:'chat'},
+    {name:'snake-alias',payload:{modelUsed:'synthetic-requested',observed_model:'actual/snake:v2'},
+      rail:'응답 actual/snake:v2',mode:'chat'},
+    {name:'legacy',payload:{modelUsed:'synthetic-legacy'},rail:'응답 synthetic-legacy',mode:'chat'},
+    {name:'missing-history',payload:{modelUsed:'history:fallback:recent',observedModel:null,
+      observedReason:'response_model_missing'},rail:'응답 UNKNOWN',mode:'HISTORY_RECENT'},
+    {name:'legacy-history',payload:{modelUsed:'history:fallback:recent'},
+      rail:'응답 recent history',mode:'HISTORY_RECENT'}
+  ];
+  for(const fixture of cases){
+    const program=`
+      context.document.addEventListener=()=>{};
+      vm.runInContext(productSource,context,{filename:'chat.js'});
+      const wrapper=fakeElement('synthetic-observation-wrapper');
+      const assistant=fakeElement('synthetic-observation-answer');
+      wrapper.appendChild(assistant);
+      context.__observationAssistant=assistant;
+      context.__observationPayload={type:'final',data:'synthetic answer body',ragUsed:false,
+        ...fixture.payload};
+      context.__observedModes=[];
+      vm.runInContext("state.currentSessionId=null; state.responseModelUsed='synthetic-header-fallback'; "+
+        "dom.modelSelect.value='synthetic-requested'; "+
+        "const originalPersistMode=persistAnswerModeBadge; "+
+        "persistAnswerModeBadge=(sid,mode)=>{globalThis.__observedModes.push(mode); return originalPersistMode(sid,mode);}; "+
+        "renderChatEvent(globalThis.__observationPayload,globalThis.__observationAssistant,'final')",context);
+      const rail=elements.get('modelStatus').textContent;
+      if(fixture.rail)assert(rail===fixture.rail,fixture.name+': '+rail);
+      assert(context.__observedModes.at(-1)===fixture.mode,fixture.name+': answer mode changed');
+      assert(elements.get('modelSelect').value==='synthetic-requested','selected model changed');
+      assert(assistant.dataset.ariaText==='synthetic answer body','answer body changed');
+    `;
+    vm.runInNewContext(harness.slice(0,fixtureEnd)+program,
+      {require,console,process,Buffer,TextEncoder,TextDecoder,URL,URLSearchParams,AbortController,
+        setTimeout,clearTimeout,setInterval,clearInterval,productSource:source,fixture,
+        __dirname:require('node:path').resolve('scripts')},
+      {filename:'terminal-observation-regression.cjs',timeout:10000});
+  }
 });

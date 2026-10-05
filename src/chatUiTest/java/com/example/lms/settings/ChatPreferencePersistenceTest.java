@@ -25,6 +25,16 @@ class ChatPreferencePersistenceTest {
         ReflectionTestUtils.setField(service, "entityManager", SharedEntityManagerCreator.createSharedEntityManager(emf));
     }
     @AfterEach void close() { emf.close(); }
+    @Test void responsePreferencesReadBackUnsetAndStayOwnerScoped() {
+        var saved = service.patch(owner, Map.of("customInstructions", "synthetic preference", "responseTone", "friendly",
+                "responseLength", "brief", "responseLanguage", "ko", "memoryMode", "ephemeral"), List.of(), 0, null);
+        assertEquals(saved, service.read(owner));
+        assertTrue(service.read("b".repeat(64)).overrides().isEmpty());
+        var reset = service.patch(owner, Map.of(), List.of("customInstructions"), saved.revision(), saved.hash());
+        assertFalse(reset.overrides().containsKey("customInstructions"));
+        assertEquals("ephemeral", reset.overrides().get("memoryMode"));
+        assertThrows(ChatPreferenceService.Conflict.class, () -> service.patch(owner, Map.of("responseTone", "neutral"), List.of(), 0, null));
+    }
     @Test void readsDoNotInsertAndFalseZeroRemainSparse() {
         assertEquals(0, service.read(owner).revision());
         var em = emf.createEntityManager();

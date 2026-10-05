@@ -39,6 +39,9 @@ POINTER_LINES = [
     "- 전체 규칙은 docs/GROKBOT_BOT_RULES.md; 재가져오기 `python -B scripts/grokbot_bot_import.py --src var/grokbot-export-20261003 --apply`.",
 ]
 
+AGY_RULE_FRONTMATTER = "---\ntrigger: always_on\n---\n\n"
+POINTER_TEXT = AGY_RULE_FRONTMATTER + "\n".join(POINTER_LINES) + "\n"
+
 
 def sha12(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:12]
@@ -268,7 +271,7 @@ def main(argv=None, root=None) -> int:
         with open(ep_out, "a", encoding="utf-8", newline="\n") as fh:
             for rec in new_records:
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    write_text(pointer_out, "\n".join(POINTER_LINES) + "\n")
+    write_text(pointer_out, POINTER_TEXT)
     return 0
 
 

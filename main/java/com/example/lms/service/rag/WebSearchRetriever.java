@@ -628,10 +628,21 @@ public class WebSearchRetriever implements ContentRetriever {
                 // SnippetPruner는 (String, String) 시그니처만 존재 → 단일 결과로 처리
                 // 🔵 우리 쪽 간단 딥 스니펫 추출(임베딩 없이 키워드/길이 기반)
                 String picked = pickByHeuristic(query.text(), body, 480);
-                if (picked == null || picked.isBlank()) {
+                if (!preservesQuerySupport(query.text(), picked, s)) {
                     out.add(toWebContent(s, url, providerName));
                 } else {
-                    out.add(toWebContent(picked + "\n\n[출처] " + url, url, providerName));
+                    String evidence = picked;
+                    String[] terms = queryTerms(query.text());
+                    if (queryMatchCount(terms, picked) == queryMatchCount(terms, s)) {
+                        // Equal query overlap does not establish a stronger answer.
+                        // Retain SERP and add only a whole passage that fits the same cap.
+                        if (s.length() + 2 + picked.length() > 480) {
+                            out.add(toWebContent(s, url, providerName));
+                            continue;
+                        }
+                        evidence = s + "\n\n" + picked;
+                    }
+                    out.add(toWebContent(evidence + "\n\n[출처] " + url, url, providerName));
                 }
             } catch (Exception e) {
                 log.debug("[WebSearchRetriever] scrape fail urlPresent={} urlHash12={} urlLength={} → fallback snippet",
@@ -1511,36 +1522,79 @@ public class WebSearchRetriever implements ContentRetriever {
 
     // ── NEW: SnippetPruner 없이도 동작하는 경량 딥 스니펫 추출기
     private static String pickByHeuristic(String q, String body, int maxLen) {
-        if (body == null || body.isBlank())
+        if (body == null || body.isBlank() || maxLen <= 0)
             return "";
-        if (q == null)
-            q = "";
-        String[] toks = q.toLowerCase().split("\\s+");
-        String[] sents = body.split("(?<=[\\.\\?\\!。！？])\\s+");
+        String[] toks = queryTerms(q);
+        String[] sents = body.split("(?<=[\\.\\?\\!。！？])\\s+|[\\r\\n]+");
         String best = "";
-        int bestScore = -1;
+        int bestMatches = -1;
         for (String s : sents) {
-            if (s == null || s.isBlank())
-                continue;
-            String ls = s.toLowerCase();
-            int score = 0;
-            for (String t : toks) {
-                if (t.isBlank())
+            for (int start = 0; start < s.length(); start++) {
+                if (start > 0 && !Character.isWhitespace(s.charAt(start - 1))
+                        && !isPassageBoundary(s.charAt(start - 1)))
                     continue;
-                if (ls.contains(t))
-                    score += 2; // 질의 토큰 포함 가중
+                int end = Math.min(s.length(), start + maxLen);
+                // End at an original clause boundary, never inside a potentially
+                // oversized relation value. A flat body's tail is also a boundary.
+                while (end < s.length() && end > start && !isPassageBoundary(s.charAt(end - 1)))
+                    end--;
+                if (end <= start)
+                    continue;
+                String candidate = s.substring(start, end).trim();
+                int matches = queryMatchCount(toks, candidate);
+                if (matches > bestMatches || (matches == bestMatches && candidate.length() > best.length())) {
+                    bestMatches = matches;
+                    best = candidate;
+                }
             }
-            score += Math.min(s.length(), 300) / 60; // 문장 길이 가중(너무 짧은 문장 패널티)
-            if (score > bestScore) {
-                bestScore = score;
-                best = s.trim();
-            }
-        }
-        if (best.isEmpty()) {
-            best = body.length() > maxLen ? body.substring(0, maxLen) : body;
-        } else if (best.length() > maxLen) {
-            best = best.substring(0, maxLen) + "/* ... *&#47;";
         }
         return best;
+    }
+
+    private static boolean isPassageBoundary(char c) {
+        return ".?!。！？,，;；\n\r".indexOf(c) >= 0;
+    }
+
+    private static String[] queryTerms(String query) {
+        return (query == null ? "" : query).toLowerCase(java.util.Locale.ROOT).split("[^\\p{L}\\p{N}]+");
+    }
+
+    private static int queryTermMatchLength(String lowerText, String term) {
+        if (term.isBlank())
+            return 0;
+        if (lowerText.contains(term))
+            return term.length();
+        // Generic suffix tolerance for inflected words; no subject/answer dictionary.
+        for (int length = term.length() - 1; length >= 2; length--) {
+            if (lowerText.contains(term.substring(0, length)))
+                return length;
+        }
+        return 0;
+    }
+
+    private static int queryMatchCount(String[] terms, String text) {
+        String lowerText = text.toLowerCase(java.util.Locale.ROOT);
+        int count = 0;
+        for (String term : terms) {
+            if (queryTermMatchLength(lowerText, term) > 0)
+                count++;
+        }
+        return count;
+    }
+
+    private static boolean preservesQuerySupport(String query, String picked, String serp) {
+        if (picked == null || picked.isBlank())
+            return false;
+        String[] terms = queryTerms(query);
+        if (queryMatchCount(terms, picked) == 0 || queryMatchCount(terms, picked) < queryMatchCount(terms, serp))
+            return false;
+        String lowerPicked = picked.toLowerCase(java.util.Locale.ROOT);
+        String lowerSerp = serp.toLowerCase(java.util.Locale.ROOT);
+        for (String term : terms) {
+            // A short shared prefix must not replace a stronger subject match.
+            if (queryTermMatchLength(lowerSerp, term) > queryTermMatchLength(lowerPicked, term))
+                return false;
+        }
+        return true;
     }
 }

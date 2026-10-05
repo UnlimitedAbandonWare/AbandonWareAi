@@ -43,6 +43,23 @@ class NovaFocusHistoryTest {
         assertThrows(IllegalArgumentException.class,()->store.settings(owner,"c",0,value));
         assertEquals(1,store.settings(owner,"c").settingsVersion());
     }
+    @Test void unsetDisplayDefaultIsExactOauthAndExplicitChoicesAndOmittedLengthArePreserved() throws Exception {
+        String owner=UUID.randomUUID().toString();var fresh=store.settings(owner,"c");
+        assertEquals("chatgpt-oauth:gpt-5.6-luna",fresh.settings().answerSelection().modelId());
+        assertFalse(fresh.settings().answerSelection().routing().fallbackAllowed());
+        var mapper=new ObjectMapper();var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(fresh.settings());
+        node.put("answerLengthChars",480);node.put("quickAnswerEnabled",true);
+        node.set("answerSelection",mapper.valueToTree(new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"fixture-model-b")));
+        var chosen=mapper.treeToValue(node,NovaFocusSettings.class);store.settings(owner,"c",0,chosen);
+        node.remove(List.of("answerLengthChars","quickAnswerEnabled","answerSelection"));
+        var legacy=mapper.treeToValue(node,NovaFocusSettings.class);var saved=store.settings(owner,"c",1,legacy).settings();
+        assertEquals(480,saved.effectiveAnswerLengthChars());assertTrue(saved.quickAnswer());assertEquals("fixture-model-b",saved.answerSelection().modelId());
+        assertEquals("fixture-model-b",store.settings(owner,"c").settings().answerSelection().modelId());
+        assertEquals(400,store.settings(owner,"other").settings().effectiveAnswerLengthChars());
+        node.set("answerSelection",mapper.valueToTree(NovaFocusSettings.AnswerSelection.defaults()));
+        store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
+        assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,store.settings(owner,"c").settings().answerSelection().mode());
+    }
     @Test void concurrentOpenCreatesOneRoomAndDifferentOwnersStaySeparate() throws Exception {
         String owner=UUID.randomUUID().toString();var pool=Executors.newFixedThreadPool(4);
         try{var jobs=new ArrayList<Callable<Long>>();for(int i=0;i<8;i++)jobs.add(()->store.open(owner,"channel"));

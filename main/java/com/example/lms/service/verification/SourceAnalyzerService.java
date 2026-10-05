@@ -45,7 +45,6 @@ public class SourceAnalyzerService {
     private static final double OFFICIAL_THRESHOLD = 0.90;
     private static final double RELIABLE_THRESHOLD = 0.70;
     private static final double COMMUNITY_THRESHOLD = 0.40;
-    private static final double CONFLICT_MIN_RATIO = 0.25;
 
     /**
      * 질문과 컨텍스트를 기반으로 출처의 신뢰도를 분석합니다.
@@ -71,7 +70,8 @@ public class SourceAnalyzerService {
             try {
                 SourceCredibility judgedByScorer = judgeByWeightDistribution(scorer, urls);
                 // 명확한 판정이 나왔고, 내용에 루머 단서가 없다면 그 결과를 신뢰
-                if (judgedByScorer != SourceCredibility.UNKNOWN && !FAN_CUE.matcher(context).find()) {
+                // UNKNOWN is a valid weighted result; do not promote it via host heuristics.
+                if (!FAN_CUE.matcher(context).find()) {
                     return judgedByScorer;
                 }
             } catch (Exception e) {
@@ -101,8 +101,7 @@ public class SourceAnalyzerService {
         double reliableRatio = (double) reliableCount / total;
         double communityRatio = (double) communityCount / total;
 
-        boolean isConflicting = (officialRatio >= CONFLICT_MIN_RATIO) && (communityRatio >= CONFLICT_MIN_RATIO);
-        if (isConflicting) return SourceCredibility.CONFLICTING;
+        // Mixed authority levels do not establish contradictory claims.
 
         if (officialRatio >= 0.5) return SourceCredibility.OFFICIAL;
         if (reliableRatio >= 0.5 && officialRatio < 0.2) return SourceCredibility.RELIABLE;

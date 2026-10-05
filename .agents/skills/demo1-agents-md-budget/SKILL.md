@@ -16,7 +16,7 @@ Rule text past the cut is invisible to the agent. AGENTS.md is therefore a
 
 ```powershell
 python -B scripts/agents_md_budget.py report [--json]   # bytes, cut lines, blocks beyond each budget
-python -B scripts/agents_md_budget.py check             # exit 1 on: >30,000 B, CRITICAL past 24,000 B,
+python -B scripts/agents_md_budget.py check             # exit 1 on: >30,300 B, CRITICAL past 24,000 B,
                                                         # missing required ## headings, BEGIN/END mismatch
 python -B scripts/agents_md_budget.py split --plan      # dry-run KEEP/MOVE classification -> plan.json
 python -B scripts/agents_md_budget.py split --apply --plan-file plan.json --ledger <dir>
@@ -30,7 +30,7 @@ python -B scripts/agents_md_budget.py restore --from <backup> # full-byte restor
    `__patch_drop__/source_edit_session.ps1 -Action begin -TargetManifest`).
 2. In AGENTS.md add only the stub:
    `<!-- BEGIN NEW-ID -->` + `## Title` + `- <when-to-read summary> — 상세:` + `<!-- END NEW-ID -->`.
-3. Run `check` — it must exit 0. Never let the file pass 30,000 B; the
+3. Run `check` — it must exit 0. Never let the file pass 30,300 B (scripts/agents_md_budget.py HARD_LIMIT); the
    ~24,000 B (agy) and 65,536 B (Codex) cuts are reported by `report`.
 
 Hard invariants: `DEMO1-PROJECT-ROOT`, `DEMO1-PRIMARY-SURFACE`,

@@ -1,5 +1,5 @@
 ---
-name: demo-1 Companion Assist Brief
+name: demo-1-companion-assist-brief
 description: >-
   Use this when a Codex source brief is running or queued and the user asks for
   a Devin/Grok CLI/Clean 서브·조수 brief: pick tool archetypes, keep files disjoint,

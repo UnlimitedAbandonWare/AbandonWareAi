@@ -1,0 +1,98 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-devin-source-orchestrator
+# DEVIN 실행 지시서: 코덱스 사용기록 기반 불변(Evergreen) 표준 규격 문서군 신설 및 SSOT 구축
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+코덱스 세션(RRF 퓨저, SSE 스트리밍, H2 락, 샘플링)에서 확인된 외부 불변 표준을 docs/references/canonical-specs/에 상시 불변(Evergreen, TTL 365일) SSOT로 구축하고 검증한다.
+
+## 1. 사실 (2026-10-05 09:40 KST 기준)
+1. 코덱스 최근 작업(`graph-hybrid-reuse`, `temperature-selfask`, `interview-standard`):
+   - RRF 수식 및 $k=60$ 상수, W3C SSE 스트리밍 프레이밍, H2 Database 2.x `AUTO_SERVER` 동시성, LLM 샘플링 파라미터 표준이 프로젝트 내 정식 문서로 없어 외부 웹 탐색이나 추측에 의존함.
+2. 상시(Evergreen) 문서 정책:
+   - 외부 API 단가/모델은 90일 TTL이나, W3C/WHATWG 표준, Cormack 2009 학술 수식, DB 엔진 스펙은 장기 불변 문서(`cadence: evergreen`, `stability: high`, `decayRate: low`, `ttlDays: 365`, `expiresAt: 2027-10-05`)로 관리함.
+3. 제품 소스 영향:
+   - 본 작업은 순수 문서(`docs/references/canonical-specs/*.md`) 작성 및 검증이며 제품 Java/JS 소스 수정은 0건임.
+
+## 공통 규칙
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 범위 한정: 순수 신규 문서 작성 5건 + 검증. 제품 코드 변경 0.
+- 외부 API: 유료 실호출 0건 ($0 local).
+- NOT_RUN 원칙: 실행 못 한 항목은 NOT_RUN + 이유를 적고 PASS로 바꾸지 않는다.
+
+## 항목 (WP1 ~ WP4)
+
+### WP1. 규격 인덱스 신설 (`docs/references/canonical-specs/README.md`)
+- 경로: `docs/references/canonical-specs/README.md`
+- frontmatter:
+  ```yaml
+  ---
+  title: "Canonical & Evergreen Specifications Reference Index"
+  category: "canonical-spec"
+  cadence: "evergreen"
+  stability: "high"
+  decayRate: "low"
+  ttlDays: 365
+  expiresAt: "2027-10-05"
+  reviewAfterDays: 365
+  stabilityReason: "W3C/WHATWG 표준 및 학술 알고리즘 불변 규격 SSOT"
+  ---
+  ```
+- 내용: 불변 규격 정의, 4대 규격 색인, 에이전트(Codex/Devin/Grok) 참조 원칙.
+
+### WP2. W3C/WHATWG Server-Sent Events (SSE) 불변 규격 (`docs/references/canonical-specs/W3C_SERVER_SENT_EVENTS_SPEC.md`)
+- 경로: `docs/references/canonical-specs/W3C_SERVER_SENT_EVENTS_SPEC.md`
+- frontmatter: `ttlDays: 365`, `cadence: evergreen`, `stability: high`, `canonicalSources: ["https://html.spec.whatwg.org/multipage/server-sent-events.html", "https://www.w3.org/TR/eventsource/"]`
+- 내용:
+  - MIME: `Content-Type: text/event-stream;charset=UTF-8`
+  - 메시지 프레이밍: `\n\n` 더블 개행 종료, `:` 주석(keep-alive), 필드(`data:`, `event:`, `id:`, `retry:`)
+  - 전송 제어: `Transfer-Encoding: chunked`, `Cache-Control: no-cache, no-transform`, `X-Accel-Buffering: no` (Nginx/Reverse Proxy 즉시 플러시).
+
+### WP3. Cormack 2009 Reciprocal Rank Fusion (RRF) 규격 (`docs/references/canonical-specs/RECIPROCAL_RANK_FUSION_RRF_SPEC.md`)
+- 경로: `docs/references/canonical-specs/RECIPROCAL_RANK_FUSION_RRF_SPEC.md`
+- frontmatter: `ttlDays: 365`, `cadence: evergreen`, `stability: high`, `canonicalSources: ["https://doi.org/10.1145/1571941.1572114", "Gordon V. Cormack et al. SIGIR '09"]`
+- 내용:
+  - 표준 공식: $RRFscore(d \in D) = \sum_{r \in R} \frac{1}{k + r(d)}$, 논문 불변 상수 $k = 60$
+  - 가중 공식: $Weighted\_RRFscore(d) = \sum_{r \in R} w_r \times \frac{1}{k + r(d)}$
+  - demo-1 규칙: 1-based 순위, 미등재 랭커 0점 처리, `(sourceId, sourceRevision)` SHA-256 고유키 결합.
+
+### WP4. H2 Concurrency & LLM Sampling 규격 (`H2_DATABASE_LOCKING_SPEC.md`, `LLM_SAMPLING_PARAMETERS_SPEC.md`)
+- 파일 1: `docs/references/canonical-specs/H2_DATABASE_LOCKING_SPEC.md`
+  - `FILE_LOCK` 옵션(FILE 워치독, SOCKET 소켓 락, FS 네이티브 락)
+  - `AUTO_SERVER=TRUE` (Automatic Mixed Mode: 첫 프로세스 임베디드+백그라운드 TCP 서버 구동, 후속 프로세스 자동 TCP 접속)
+  - lmsdb exit code 3 회수 가이드 및 `.lock.db` 정리 절차
+- 파일 2: `docs/references/canonical-specs/LLM_SAMPLING_PARAMETERS_SPEC.md`
+  - Temperature: $P(x_i) = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$, $T=0.0$(Greedy/RAG 표준), 도메인 [0.0, 2.0]
+  - Top-P: Nucleus sampling 누적 확률 질량 (0.0, 1.0]
+  - Seed: 결정론적 생성 보장.
+
+## HOLD 조건
+- 제품 코드(Java, JS, build.gradle.kts) 수정을 요구받는 경우 HOLD.
+
+## ASK_ONCE
+- 없음 (순수 docs 디렉터리 내 마크다운 추가 및 자체 검증).
+
+## 절대 금지
+- push, add -A, commit -a 등 Git 변조 명령 일체 금지.
+- remote 추가 및 수정 금지.
+- API 키, 토큰 등 비밀 정보 출력/기록 금지 (환경변수 이름만 사용).
+- PROTO_OPEN 인증 정책 임의 수정 금지.
+- 제품 소스(Java/JS) 변경 금지.
+
+## Acceptance
+- WP1: `docs/references/canonical-specs/README.md` 생성 및 Evergreen 메타데이터 표기 완료.
+- WP2: `W3C_SERVER_SENT_EVENTS_SPEC.md` 생성, SSE 프레이밍/버퍼링 헤더 명세 완결.
+- WP3: `RECIPROCAL_RANK_FUSION_RRF_SPEC.md` 생성, RRF 표준 공식 및 k=60 상수 완결.
+- WP4: `H2_DATABASE_LOCKING_SPEC.md` 및 `LLM_SAMPLING_PARAMETERS_SPEC.md` 생성 완료.
+- 자체 검증: 5개 문서의 UTF-8 no BOM 인코딩 및 frontmatter 구문 유효성 검사 PASS.
+- NOT_RUN 규칙: 실행 못 한 항목은 NOT_RUN + 이유를 적고 PASS로 바꾸지 않는다.
+
+## 보고 형식
+- 첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+- 보고 시작: `외부 API: 0건 ($0 local)`
+- 신규 생성 파일 5건의 상대 경로, 크기(Length), SHA-12 해시 표 작성.
+- 자체 검증(frontmatter 구문 확인) 스크립트 출력 결과 포함.
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.

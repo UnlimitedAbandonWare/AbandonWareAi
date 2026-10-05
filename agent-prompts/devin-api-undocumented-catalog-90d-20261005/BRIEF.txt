@@ -1,0 +1,87 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-devin-source-orchestrator
+# DEVIN 실행 지시서: 실무 핵심 API 규격 사각지대 발굴 및 90일 로드맵 문서 카탈로그 구축
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 한 줄 목표
+실무에서 널리 쓰이지만 웹에 정보가 거의 없는 4대 핵심 API 규격군(AI Agent, DPoP, 실시간 스트리밍, RateLimit/멱등성)의 비공개 엣지케이스를 집중 발굴하고, 90일(12주차) 마일스톤형 'Living API Spec & Edge-Case Catalog' 문서 체계 및 검증기를 구축한다.
+
+## 사실 (2026-10-05 06:45 KST 기준)
+1. 실무 사각지대: Model Context Protocol(MCP stdio vs SSE 프레이밍/취소), OpenAI Realtime WebRTC(ephemeral token 1~2분 수명 및 사전 로테이션, ICE 재연결 세션 소실), RFC 9449 DPoP(htu URI 쿼리 파라미터 제외, DPoP-Nonce 챌린지 루프, 재시도 시 jti 중복), SSE 프록시 버퍼링(Nginx X-Accel-Buffering, Last-Event-ID 유실) 등은 웹 검색 시 실전 장애 복구 규격서가 전무함.
+2. 90일 문서화 요구: 단발성 메모가 아닌 향후 90일(3개월/12주차 스프린트) 동안 단계적으로 실증·확장할 수 있는 고품질 구조화 기술 문서를 생성해야 함.
+3. 작업 환경: Project Root(`C:\AbandonWare\demo-1\demo-1\src`) 하위 `docs/api-spec-catalog/` 및 검증 스크립트(`scripts/`)만 다루며 제품 코드는 일체 변경하지 않음.
+4. 리스 상태: 소스 리스 점유 없이 독립 마크다운 문서 및 검증 도구로 완결 가능함.
+
+## 공통 규칙
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- 범위 한정: 순수 문서 자산(`docs/api-spec-catalog/`) 및 카탈로그 검증 스크립트(`scripts/validate_api_catalog.py`)만 작성. 코어 제품 Java/Frontend 소스 수정 배제.
+- 외부 API 라이브 호출: 0회 ($0 local). 라이브 유료 API 호출 없이 RFC 명세 및 프로토콜 분석으로 작성.
+- 문서 포맷: GitHub Flavored Markdown, Mermaid 시퀀스/상태 다이어그램, 패킷 프레이밍 및 JSON 페이로드 명세를 충실히 포함.
+
+## 항목 (WP1 ~ WP4)
+
+### WP1. 90일 마일스톤 로드맵 및 The Gap Matrix(사각지대 목록) 수립 (`docs/api-spec-catalog/00_ROADMAP_AND_GAP_MATRIX.md`)
+- 90일(12주차 / Phase 1~4) 단계별 실행 로드맵 수립:
+  * Phase 1 (Day 1~30): 사각지대 인벤토리 확정, 엣지케이스 매트릭스, 모의 재현 환경(Mock Testbed) 설계.
+  * Phase 2 (Day 31~60): 트랙별 심층 실증, 네트워크 패킷 프레이밍 및 시퀀스 다이어그램 작성.
+  * Phase 3 (Day 61~80): 프로덕션 레벨 클라이언트 방어 패턴(State Machine, 재시도/하트비트) 및 프록시 설정 레퍼런스.
+  * Phase 4 (Day 81~90): Living API Spec 통합 패키징, OpenAPI 3.1 / AsyncAPI 3.0 확장 스펙, 최종 발행.
+- The Gap Matrix: 규격명 | 공식 문서 유무 | 웹 검색 가용성 | 위험도(Critical/High) | 실무 엣지케이스 요약.
+
+### WP2. Track 1 & 2: AI Agent/WebRTC 및 DPoP/OAuth 2.1 미문서화 규격서 (`docs/api-spec-catalog/01_AI_AGENT_PROTOCOLS.md`, `02_ZERO_TRUST_AUTH.md`)
+- Track 1 (AI & Agent):
+  * MCP: stdio 파이프 vs Streamable HTTP(SSE) 프레이밍 차이, JSON-RPC 2.0 `$cancellation` 및 구독 라이프사이클, 하트비트 스펙 부재 극복.
+  * OpenAI Realtime (WebRTC): Ephemeral Token 1~2분 수명 사전 갱신(30초 전), ICE 재연결 시 세션 컨텍스트 재주입, Barge-in 시 오디오 버퍼 플러시, STUN/TURN 필수성.
+  * Anthropic Messages Tool Use: 스트리밍 중 Partial JSON 파싱 및 네트워크 단절 시 도구 호출 상태 복구.
+- Track 2 (Zero-Trust Auth):
+  * RFC 9449 DPoP: `htu` claim 검증 시 쿼리/해시 제외 규칙, L7 프록시 `X-Forwarded-*` 불일치 방어.
+  * `DPoP-Nonce` 헤더 챌린지 루프 및 Clock Skew(`iat`) 허용치 설계.
+  * `jti` 유일성: 재시도 시에도 신규 키 서명 및 신규 `jti` 발급 필수성.
+  * RFC 8693 Token Exchange에서의 DPoP 키 바인딩 영속성(Binding Persistence).
+
+### WP3. Track 3 & 4: 스트리밍 전송 및 Rate Limiting/멱등성 장애 대응 규격서 (`docs/api-spec-catalog/03_STREAMING_TRANSPORT.md`, `04_RATELIMIT_IDEMPOTENCY.md`)
+- Track 3 (Streaming & Transport):
+  * SSE: Nginx/Cloudflare 버퍼링 방지(`X-Accel-Buffering: no`), HTTP/2 프록시 유휴 타임아웃 방지용 Comment Ping(`: keepalive\n\n`).
+  * EventSource 자동 재연결 시 `Last-Event-ID` 누락 문제 및 서버 측 링 버퍼(Ring Buffer) 백프레셔 설계.
+  * WebSocket / gRPC-Web: L7 유휴 연결 끊김 감지 하트비트, gRPC-Web `trailers-only` 응답 처리 엣지케이스.
+- Track 4 (Rate Limiting & Idempotency):
+  * 비표준 Rate Limit 헤더: IETF Draft `RateLimit-*` vs `X-RateLimit-*` vs 벤더 헤더 비교 및 정규화 파서.
+  * `Retry-After` 헤더 HTTP-date vs seconds float 혼재 파싱, Full Jitter 지수 백오프 공식.
+  * `Idempotency-Key`: 서버 In-Flight 상태 중복 요청 처리(`409 Conflict`), 캐시 TTL 만료 경쟁 상태 방어.
+
+### WP4. 90일 카탈로그 인덱스 및 자체 유효성 검증기 (`docs/api-spec-catalog/README.md`, `scripts/validate_api_catalog.py`)
+- `docs/api-spec-catalog/README.md`: 전체 90일 문서 세트 내비게이션, 핵심 엣지케이스 치트시트, 역할별 가이드 링크.
+- `scripts/validate_api_catalog.py`: 마크다운 파일(00~04, README) 실존, 필수 섹션, 내부 상호 링크 깨짐 검사, exit code 0 반환.
+
+## HOLD 조건
+- 제품 소스(`main/`, `app/`, `frontend/`, `configs/`) 수정이 요구되는 경우 즉시 HOLD.
+- 유료 외부 API 호출이 요구되거나 외부 결제/토큰 소비가 발생하는 경우 즉시 HOLD.
+- 작업 경로가 `docs/api-spec-catalog/` 또는 `scripts/` 외의 제품 코드로 침범하는 경우 즉시 HOLD.
+
+## ASK_ONCE (자동 결정 및 기본값)
+- 추가 API 규격 후보군(Webhook 서명 RFC 등):
+  - 기본값 (AUTO): 4대 핵심 트랙(AI Agent, DPoP, SSE, RateLimit)을 최우선 완성하고 추가 규격은 부록에 배치.
+
+## 절대 금지
+- `push`, `add -A`, `commit -a`, `git reset`, `git checkout` 등 위험 Git 명령 실행 금지.
+- API 키, 시크릿, 패스워드 등 비밀 정보 노출 및 출력 절대 금지 (환경변수 이름만 표기).
+- 원격 저장소 remote 추가/변경 금지.
+- PROTO_OPEN 보안 완화 정책 임의 수정 금지.
+- 전체 테스트 스위트(`gradle test`) 실행 금지 — 카탈로그 검증기(`scripts/validate_api_catalog.py`)만 실행.
+
+## Acceptance (완료 기준)
+- [ ] **WP1**: `docs/api-spec-catalog/00_ROADMAP_AND_GAP_MATRIX.md` 생성 및 90일 마일스톤·The Gap Matrix 완비.
+- [ ] **WP2**: `01_AI_AGENT_PROTOCOLS.md` 및 `02_ZERO_TRUST_AUTH.md` 생성 및 MCP/WebRTC/DPoP 엣지케이스·시퀀스 완비.
+- [ ] **WP3**: `03_STREAMING_TRANSPORT.md` 및 `04_RATELIMIT_IDEMPOTENCY.md` 생성 및 SSE/RateLimit 백오프 명세 완비.
+- [ ] **WP4**: `docs/api-spec-catalog/README.md` 인덱스 완비 및 `python -B scripts/validate_api_catalog.py` 실행 시 exit=0 통과.
+- [ ] 기존 코어 제품 소스 무변경 확인 (git diff 제품 소스 0건).
+
+## 보고 형식
+외부 API: 라이브 0건, 비용 0원 ($0 local)
+1. 작성된 문서 및 스크립트 목록과 SHA12 해시
+2. `python -B scripts/validate_api_catalog.py` 실행 결과 요약 (exit=0)
+3. 90일 로드맵 및 The Gap Matrix 핵심 요약
+4. 미실행 항목이 있는 경우 사유 명시 (NOT_RUN)
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 완수하고 검증 보고서를 제출해야 완료된다.

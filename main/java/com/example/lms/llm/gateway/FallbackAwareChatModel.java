@@ -221,6 +221,8 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
                     failureClass == LlmFailureClass.AUTH_MISSING ? "provider_auth_invalid"
                     : LlmGatewayFailureClassifier.hasQuotaFailure(ex) ? "provider_quota_exhausted"
                     : failureClass.name().toLowerCase(java.util.Locale.ROOT));
+            else if (failureClass == LlmFailureClass.MODEL_MISSING)
+                TraceStore.put("llm.gateway.fallbackReason", "model_missing");
             TraceStore.put("llm.gateway.fallbackAware.sameRequestRetry",
                     fallbackConfigured && sameRequestRetryAllowed);
             TraceStore.put("llm.gateway.fallbackAware.primarySliceExhausted", primarySliceExhausted);
@@ -419,7 +421,7 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
             return java.util.Set.of(LlmFailureClass.AUTH_MISSING, LlmFailureClass.HEALTH_DOWN,
                     LlmFailureClass.TIMEOUT_SOFT, LlmFailureClass.RATE_LIMIT_COOLDOWN,
                     LlmFailureClass.SOFT_CIRCUIT_OPEN, LlmFailureClass.GPU_DEVICE_LOST,
-                    LlmFailureClass.VRAM_OOM).contains(failureClass);
+                    LlmFailureClass.VRAM_OOM, LlmFailureClass.MODEL_MISSING).contains(failureClass);
         }
         return sameRequestFallbackAllowed(failure, failureClass);
     }
@@ -532,6 +534,7 @@ public final class FallbackAwareChatModel implements com.example.lms.llm.NamedCh
         // Classified device rejection means the runner could not start generation.
         // Generic HTTP errors, timeouts and zero tokens still do not prove non-execution.
         return failureClass == LlmFailureClass.GPU_DEVICE_LOST || failureClass == LlmFailureClass.VRAM_OOM
+                || failureClass == LlmFailureClass.MODEL_MISSING
                 || failureClass == LlmFailureClass.RATE_LIMIT_COOLDOWN && hasGatewayReason(failure,"local_backend_busy");
     }
 

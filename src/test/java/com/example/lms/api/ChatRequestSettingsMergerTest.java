@@ -22,6 +22,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatRequestSettingsMergerTest {
 
+    @Test
+    void responsePreferencesRemainValidatedAndReachTheEffectiveRequest() throws Exception {
+        var values = Map.<String, Object>of("customInstructions", "🙂".repeat(2000),
+                "responseTone", "neutral", "responseLength", "brief", "responseLanguage", "auto", "memoryMode", "hybrid");
+        assertEquals(values, com.example.lms.service.ChatPreferenceService.validate(values));
+        var dto = new ObjectMapper().readValue(new ObjectMapper().writeValueAsString(values), ChatRequestDto.class);
+        var effective = ChatRequestSettingsMerger.merge(dto, Map.of(), true,
+                LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(values.get("customInstructions"), ChatRequestSettingsMerger.requestValues(effective).get("customInstructions"));
+        assertEquals("brief", ChatRequestSettingsMerger.requestValues(effective).get("responseLength"));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () ->
+                com.example.lms.service.ChatPreferenceService.validate(Map.of("customInstructions", "🙂".repeat(2001))));
+        org.junit.jupiter.api.Assertions.assertThrows(IllegalArgumentException.class, () ->
+                com.example.lms.service.ChatPreferenceService.validate(Map.of("reasoningEffort", "high")));
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"gpt-5.1", "gpt-5.2"})
     void supportedSamplingPreferencesSurviveRequestAndSettingsMerge(String model) {

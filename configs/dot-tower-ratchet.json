@@ -1,0 +1,28 @@
+{
+  "schemaVersion": "awx.behavior-ratchet.config.v1",
+  "doc": "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
+  "note": "dot control-tower invariants INV-T1~T5 (user directive 2026-10-05). Same engine as configs/behavior-ratchet.json via --config/--lock. While flags.promoteDateBlockToFail is false, INV-T4 reports WARN_PENDING_DOT_LANE (the dot OAUTH_CONTINUITY_RULES lane still owns the F6 wording); flip it to true once that lane's reflection is confirmed, then run `update` to lock.",
+  "flags": {"promoteDateBlockToFail": false},
+  "entries": [
+    {"id": "INV-T1", "kind": "present", "contract": "devin-dot-control-tower-keep-cd80e87d",
+     "file": ".agents/skills/demo1-orchestra-synergy/SKILL.md",
+     "pattern": "\\|\\s*dot\\s*\\(ChatGPT"},
+    {"id": "INV-T2", "kind": "present", "contract": "devin-dot-control-tower-keep-cd80e87d",
+     "file": "scripts/fixtures/orchestra/route-rules.json",
+     "pattern": "\"controlTower\"\\s*:\\s*\\{[^}]*\"agent\"\\s*:\\s*\"dot\""},
+    {"id": "INV-T3", "kind": "present", "contract": "devin-dot-control-tower-keep-cd80e87d",
+     "file": "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
+     "pattern": "날짜만으로 차단"},
+    {"id": "INV-T4", "kind": "absent", "contract": "PASTE_CODEX_OAUTH_CONTINUITY_RULES_20261005 (dot lane owns F6 wording)",
+     "files": [".agents/skills/**/*.md", "docs/agents-rules/*.md"],
+     "exclude": ["*.bak*", "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
+                 ".agents/skills/demo1-dot-control-tower/SKILL.md"],
+     "pattern": "12월\\s*31일[^\\n]{0,40}(사용 불가|차단|못\\s?씀)|2026-12-3[01](?:[^\\n]|\\n(?!\\n)){0,90}(api_first|레인만 사용|사용 불가|차단|못\\s?씀|강제)",
+     "pendingAs": "WARN_PENDING_DOT_LANE", "promoteFlag": "promoteDateBlockToFail"},
+    {"id": "INV-T5", "kind": "absent", "contract": "PASTE_CODEX_OAUTH_SUBAGENT_BRIDGE_20261005",
+     "files": [".agents/skills/**/*.md", "docs/agents-rules/*.md"],
+     "exclude": ["*.bak*", "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
+                 ".agents/skills/demo1-dot-control-tower/SKILL.md"],
+     "pattern": "(토큰|쿠키|token|cookie)[^\\n]{0,20}(복사|copy)[^\\n]{0,20}(붙이|연동|CLI|cli)|토큰 복사"}
+  ]
+}

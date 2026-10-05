@@ -15,7 +15,7 @@ machinery instead of replacing it:
     region labels, released state).
 
 Git is never required. Path overlap is exact or prefix either direction.
-Feature/region labels are advisory only — enforcement stays at path level.
+Feature/region labels are advisory only - enforcement stays at path level.
 Lease lifecycle is one cycle: claim/begin -> heartbeat while working ->
 done/abort on every exit path (complete, blocked-defer, idle, cancel).
 A foreign live lease never gets forced; a stale lease (TTL/heartbeat expired,
@@ -781,7 +781,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _stdio_replace_errors():
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if not callable(reconfigure):
+            continue
+        try:
+            reconfigure(errors='replace')
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    _stdio_replace_errors()
     parser = build_parser()
     args = parser.parse_args(argv)
     root = Path(args.root).resolve()

@@ -13,7 +13,7 @@ Codex worktree can probe a different checkout without writing to it.
 
 | 단계 | 뽑는다 | 뽑지 않는다 |
 |---|---|---|
-| 착수 | `python -B scripts/baseline_sync_probe.py --root <tree> --expect-head 4150b2822f2c --expect-branch codex/owned-runtime-browser-restart` | GitHub snapshot을 로컬보다 우선 |
+| 착수 | `python -B scripts/baseline_sync_probe.py --root <tree> --expect-head <current-task-baseline-head> --expect-branch <current-task-baseline-branch>` | GitHub snapshot을 로컬보다 우선 |
 | 원인 탐침 | Superpowers systematic-debugging, 원인 1개씩 | 새 서비스·새 계층 |
 | 경로 확인 | `python -B scripts/zip_path_to_sourceset.py --root <tree> --directive <md> --zip %USERPROFILE%\Downloads\mfwasainx.zip` | ZIP 줄번호 그대로 인용 |
 | RED/GREEN | `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\gradle_truth_gate.ps1 -GradleArgs "test --tests <fqcn> --rerun-tasks"` (`--tests` 필수) | 전체 suite, wrapper exit만 보고 |
@@ -24,10 +24,14 @@ Codex worktree can probe a different checkout without writing to it.
 | 1차 수정 후 | GLM 반박 검토 per `$demo1-glm-route-guard` (`docs/codex/glm-rebuttal-review-template.md`; native glm_worker spawn 금지 — ChatGPT 로그인 400; spawn 전 1회 `python -B scripts/spawn_preflight.py <role>`) | glm 동의 = 검증 성공 |
 | Jev/Gateway | Vercel: env 이름 존재·로그인/OIDC 상태·공식 문서만 | 키 값 출력, 배포·설정·DNS 변경, env pull 파일 커밋 |
 
+The expected baseline is the current task's recorded source/test evidence, not the historical 2026-09-30 HEAD. Recheck changed scoped hashes; do not restore product source merely to match an old example.
+
 ## 멈춤 규칙 (그 자리에서 보고, 다음 칼로 넘어가지 않는다)
 
 - `BASELINE_MISMATCH` (baseline_sync_probe) — 어떤 트리를 기준으로 할지 사용자 확인
 - `BASELINE_BLOCKED` (gradle_truth_gate) — 구성/컴파일 실패는 RED로 세지 않음
+- 루트 `:test`가 실제 실행되고 suite 이름이 맞는 새 XML에 테스트가 있으면, 빈 `:app:test NO-SOURCE` 한 줄만으로 RED/BLOCKED로 뒤집지 않는다 (`scripts/test_xml_evidence.py:125–136`).
+- 루트 미실행·XML 없음·0 tests·다른 suite·실패는 계속 PASS가 아니다. 판정기 GREEN ≠ 제품 테스트 GREEN.
 - `SERVER_DOWN` (web_repro_matrix) — 서버를 대신 띄우지 않음
 - Vercel `auth-blocked` — 자격 증명이 없다는 판정이지 대상 결함이 아님
 

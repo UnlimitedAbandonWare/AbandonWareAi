@@ -456,8 +456,35 @@ public record ChatStreamEvent(
                 String planWhenPost,
                 Boolean planLateActivation,
                 List<PlanStageSnapshot> planStages,
-                AgentWebSearchSnapshot agentWebSearch
+                AgentWebSearchSnapshot agentWebSearch,
+                ContextUsageSnapshot contextUsage,
+                ExecutionModeSnapshot executionMode
         ) {
+                public PipelineSnapshot(String planId, String route, String answerMode,
+                                        Long traceTurnId, Integer webCount, Integer vectorCount,
+                                        Integer finalContextCount, Double citationCoverage,
+                                        Double finalSigmoid, String failureClass, String disabledReason,
+                                        String finalContextCountSource, Boolean planWhenPresent,
+                                        String planWhen, String planWhenPost, Boolean planLateActivation,
+                                        List<PlanStageSnapshot> planStages, AgentWebSearchSnapshot agentWebSearch,
+                                        ContextUsageSnapshot contextUsage) {
+                        this(planId, route, answerMode, traceTurnId, webCount, vectorCount,
+                                finalContextCount, citationCoverage, finalSigmoid, failureClass, disabledReason,
+                                finalContextCountSource, planWhenPresent, planWhen, planWhenPost,
+                                planLateActivation, planStages, agentWebSearch, contextUsage, null);
+                }
+                public PipelineSnapshot(String planId, String route, String answerMode,
+                                        Long traceTurnId, Integer webCount, Integer vectorCount,
+                                        Integer finalContextCount, Double citationCoverage,
+                                        Double finalSigmoid, String failureClass, String disabledReason,
+                                        String finalContextCountSource, Boolean planWhenPresent,
+                                        String planWhen, String planWhenPost, Boolean planLateActivation,
+                                        List<PlanStageSnapshot> planStages, AgentWebSearchSnapshot agentWebSearch) {
+                        this(planId, route, answerMode, traceTurnId, webCount, vectorCount,
+                                finalContextCount, citationCoverage, finalSigmoid, failureClass,
+                                disabledReason, finalContextCountSource, planWhenPresent, planWhen,
+                                planWhenPost, planLateActivation, planStages, agentWebSearch, null);
+                }
                 public PipelineSnapshot(String planId, String route, String answerMode,
                                         Long traceTurnId, Integer webCount, Integer vectorCount,
                                         Integer finalContextCount, Double citationCoverage,
@@ -498,6 +525,42 @@ public record ChatStreamEvent(
                         planWhen = cleanPlanWhen(planWhen);
                         planWhenPost = cleanPlanWhen(planWhenPost);
                         planStages = planStages == null ? null : List.copyOf(planStages);
+                }
+        }
+
+        public record ExecutionModeSnapshot(String requested, String effective, String reason,
+                                            Integer queryCount, Integer httpAttempts, Boolean expanded) {
+                public ExecutionModeSnapshot {
+                        requested = java.util.Set.of("AUTO", "STRIKE", "SELF_ASK").contains(requested == null ? "" : requested) ? requested : null;
+                        effective = java.util.Set.of("AUTO", "STRIKE", "SELF_ASK").contains(effective == null ? "" : effective) ? effective : null;
+                        reason = java.util.Set.of("base-retrieval", "user-strike", "user-self-ask", "evidence-gap",
+                                "safety-gate", "search-off", "deadline-or-cancel", "evidence-sufficient",
+                                "simple-query", "global-disabled", "cheap-search-mode", "search-budget")
+                                .contains(reason == null ? "" : reason) ? reason : null;
+                        queryCount = queryCount != null && queryCount >= 0 && queryCount <= 3 ? queryCount : null;
+                        httpAttempts = httpAttempts != null && httpAttempts >= 0 && httpAttempts <= 6 ? httpAttempts : null;
+                }
+        }
+
+        /** Numeric request-local projection; memory text and model metadata remain private. */
+        public record ContextUsageSnapshot(Integer inputTokens, Integer contextLimitTokens,
+                                           String countMethod, String limitSource,
+                                           Integer memoryBeforeChars, Integer memoryAfterChars,
+                                           Boolean memoryCompressionActivated, String memoryCompressionReason,
+                                           Boolean memoryIncluded) {
+                public ContextUsageSnapshot {
+                        inputTokens = inputTokens != null && inputTokens >= 0 ? inputTokens : null;
+                        countMethod = inputTokens != null && "char_estimate".equals(countMethod) ? countMethod : null;
+                        contextLimitTokens = contextLimitTokens != null && contextLimitTokens > 0
+                                && "model_spec_snapshot".equals(limitSource) ? contextLimitTokens : null;
+                        limitSource = contextLimitTokens != null ? "model_spec_snapshot" : null;
+                        memoryBeforeChars = memoryBeforeChars != null && memoryBeforeChars >= 0 ? memoryBeforeChars : null;
+                        memoryAfterChars = memoryAfterChars != null && memoryAfterChars >= 0 ? memoryAfterChars : null;
+                        memoryCompressionReason = java.util.Set.of("disabled", "empty_input", "below_threshold",
+                                "all_lines_dropped", "exception_original_returned", "overflow",
+                                "history_context_contamination", "overflow_and_contamination")
+                                .contains(memoryCompressionReason == null ? "" : memoryCompressionReason)
+                                ? memoryCompressionReason : null;
                 }
         }
 

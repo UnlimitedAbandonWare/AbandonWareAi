@@ -17,12 +17,12 @@ description: "Use when changing the Dynamic RAG Orchestration Platform backend i
 ## Standard Workflow
 
 1. Reconfirm the root: run `Get-Location`, list `settings.gradle*`, `build.gradle*`, and inspect `sourceSets`.
-2. Reconfirm active modules with `.\gradlew.bat projects --no-daemon` when available. If only shell wrappers are present, use the repo-local fallback already in `verify_boot*.sh`.
+2. Read current `settings.gradle` and Gradle sourceSets first; run module/build commands only when the task authorizes execution. `settings.gradle.kts` is a sentinel, not the active settings file.
 3. Map the task to the current runtime owner before editing:
    - root runtime: `main/java`, `main/resources`
-   - app legacy shim: `app/src/main/java_clean`, `app/src/main/resources`
+   - empty module: `:app`; legacy `app/src/main/java_clean` and `app/src/main/resources` are reference-only
    - inactive or reference unless proven otherwise: `project/src/main/java`, `app/src/main/java`, `demo-1`, `lms-core`, backups
-4. Search for an existing seam before adding anything: `rg -n "<ClassOrKey>" main app/src/main/java_clean app/src/main/java`.
+4. Search the relevant root package/files for an existing seam before adding anything. Do not search quarantined app sources as active implementations; use `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md` for verified adoption and pending parallel changes.
 5. Preserve fail-soft behavior. Optional providers may disable themselves with an explicit reason; they should not crash boot unless a strict profile requires it.
 6. Verify with the narrowest command that proves the changed surface, then broaden only if the edit crosses module boundaries.
 

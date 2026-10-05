@@ -247,6 +247,32 @@ public class DynamicChatModelFactory {
         return matches.isEmpty() ? null : matches.get(0);
     }
 
+    public record TemperatureCapability(ModelCapabilities.Support support, String reasonCode) {}
+
+    /** Configuration-only applicability; never constructs a client or observes a wire call. */
+    public TemperatureCapability temperatureCapability(String model) {
+        model = normalizeRegisteredModel(model);
+        if (ChatGptOAuthRegistration.isRoute(model)
+                && ChatGptOAuthRegistration.model(model).matches("[A-Za-z0-9][A-Za-z0-9._/-]{0,127}"))
+            return new TemperatureCapability(ModelCapabilities.Support.NO, "adapter_omits_sampling");
+        var route = registeredRoute(model);
+        if (route == null || !route.isEnabled() || trimToNull(route.getName()) == null
+                || trimToNull(route.getBaseUrl()) == null)
+            return new TemperatureCapability(ModelCapabilities.Support.UNKNOWN, "route_unobserved");
+        String provider = trimToNull(route.getProvider());
+        if ("ollama".equalsIgnoreCase(provider)
+                && !ModelCapabilities.requiresDefaultTemperature(route.getName()))
+            return new TemperatureCapability(ModelCapabilities.Support.YES, "configured_adapter");
+        if ("openai".equalsIgnoreCase(provider)) {
+            var policy = OpenAiSamplingContract.resolve(route.getBaseUrl(), route.getName(), null);
+            if (policy.temperature() == OpenAiSamplingContract.Action.OMIT)
+                return new TemperatureCapability(ModelCapabilities.Support.NO, "model_omits_sampling");
+            if (policy.temperature() == OpenAiSamplingContract.Action.SEND)
+                return new TemperatureCapability(ModelCapabilities.Support.UNKNOWN, "final_reasoning_unobserved");
+        }
+        return new TemperatureCapability(ModelCapabilities.Support.UNKNOWN, "sampling_not_verified");
+    }
+
     private String registeredProvider(String model) {
         model = normalizeRegisteredModel(model);
         if (ChatGptOAuthRegistration.isRoute(model)) return ChatGptOAuthRegistration.PROVIDER;

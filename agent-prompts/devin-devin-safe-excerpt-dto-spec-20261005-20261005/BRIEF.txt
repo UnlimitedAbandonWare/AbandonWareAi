@@ -1,0 +1,109 @@
+[DEVIN 지시서] 코덱스 U6 HOLD 해제를 위한 불변 안전 발췌 DTO 규격(SAFE_EXCERPT_DTO_SPEC) 및 스키마 검증기 구축 — 2026-10-05 12:20 KST
+파일 ID: PASTE_DEVIN_SAFE_EXCERPT_DTO_SPEC_20261005
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 완수할 때까지 멈추지 않는다.
+@demo1-devin-task-fit
+
+금지 (이 작업 전체): 제품 소스 임의 수정 0 · commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+코덱스 최신 그래프 출처 작업(graph-provenance)의 U6 FULL EXCERPT HOLD를 해제하기 위해, 소스 발췌문(snippet)의 내부 경로·원문 질의·시크릿 유출을 차단하는 불변 규격(SAFE_EXCERPT_DTO_SPEC.md)과 스키마 검증기를 구축한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 12:20 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 대상 파일 및 sha12:
+  - main/resources/static/js/chat-evidence-graph.js (15022B, 662B3AA77317)
+  - docs/references/canonical-specs/README.md (3696B, 9BAF40CAD8C4)
+  - data/agent-handoff/codex-autonomy/graph-provenance-resume-bf7b6fea/HANDOFF.md
+- 현황:
+  - 코덱스가 chat-evidence-graph.js 모듈화를 완료했으나 HANDOFF.md U6에서 "FULL EXCERPT HOLD: 승인된 safe excerpt DTO가 없음"으로 인해 발췌 표시가 "제공되지 않음"으로 고정됨.
+  - 내부 로컬 경로(C:\, /app/), 원시 DB sourceId, 세션/사용자 원문 질의, API 키 유출을 방지하는 안전 DTO 스키마 명세 부재.
+  - docs/references/canonical-specs/는 365일 TTL의 불변 표준 규격 SSOT 디렉터리임.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 가드레일: git push / add -A / commit -a / reset / clean 금지, remote 추가 금지, 비밀값 출력 금지, PROTO_OPEN 개방 유지.
+- 도구 범위: docs/references/canonical-specs/ 문서 2건, scripts/test_safe_excerpt_dto_spec.py 1건 한정 (제품 Java/BFF 소스 수정 0).
+- 검증: 유료 실호출 0, focused 검증(python -B scripts/test_safe_excerpt_dto_spec.py) 필수, 미실행 항목은 NOT_RUN 기록.
+
+## DV1 [DEVIN] docs/references/canonical-specs/SAFE_EXCERPT_DTO_SPEC.md 신설
+- 증거: data/agent-handoff/codex-autonomy/graph-provenance-resume-bf7b6fea/HANDOFF.md:55
+- RED: `python -B -c "import os; assert os.path.exists('docs/references/canonical-specs/SAFE_EXCERPT_DTO_SPEC.md')"` (AssertionError)
+- 최소 구현: `docs/references/canonical-specs/SAFE_EXCERPT_DTO_SPEC.md` 생성:
+  1) Frontmatter: title, category: "canonical-spec", capturedAt: "2026-10-05", ttlDays: 365, cadence: "evergreen", status: "ACTIVE"
+  2) DTO 계약 필드:
+     - `excerptId` (String): 결정적 해시 (청크 내용 SHA-256 서브스트링 12자)
+     - `text` (String): 최대 280자 정제 텍스트 (개행/제어문자 공백 정규화, HTML 태그 스트립)
+     - `charCount` (int): 텍스트 실제 글자 수 (<= 280)
+     - `truncated` (boolean): 원문 청크 280자 초과 절단 여부
+     - `redacted` (boolean): 로컬 파일 경로, 민감 파라미터, 토큰 마스킹 여부
+     - `sanitized` (boolean): XSS/HTML 방어 및 textContent 전용 보증 플래그 (항상 true)
+  3) 마스킹/제외 4대 규칙:
+     - 규칙 1 (로컬 경로): 드라이브 문자(`C:\`, `D:\`) 및 절대 경로는 `[local-path]`로 치환.
+     - 규칙 2 (시크릿/토큰): `token|secret|password|api[_-]?key|auth|session` 매칭 값은 `[REDACTED]` 치환.
+     - 규칙 3 (내부 DB ID): 원시 DB PK 노출 금지, 외부 가시용 marker(`[A1]`) 또는 excerptId만 허용.
+     - 규칙 4 (프론트 투영): `chat-evidence-graph.js`에서 sanitized=true SafeExcerptDto 수신 시에만 발췌 노출, 미수신 시 "제공되지 않음" 유지.
+- GREEN: 파일 생성 확인 (exit=0).
+- 완료 조건: SAFE_EXCERPT_DTO_SPEC.md가 canonical-spec 표준에 맞게 신설됨.
+
+## DV2 [DEVIN] docs/references/canonical-specs/README.md 색인 등록
+- 증거: docs/references/canonical-specs/README.md:38-46
+- RED: `powershell -Command "Select-String -Path docs/references/canonical-specs/README.md -Pattern 'SAFE_EXCERPT_DTO_SPEC.md' -SimpleMatch; exit=$LASTEXITCODE"` (exit!=0)
+- 최소 수정: `docs/references/canonical-specs/README.md`의 `## Index` 표에 행 추가:
+  `| SAFE_EXCERPT_DTO_SPEC.md | Sanitized 280-char excerpt DTO, path/secret redaction, frontend projection | main/resources/static/js/chat-evidence-graph.js |`
+  및 인덱스 수치 갱신.
+- GREEN: Select-String 매칭 성공 (exit=0).
+- 완료 조건: canonical-specs 인덱스에 안전 발췌 DTO 규격이 등재됨.
+
+## DV3 [DEVIN] scripts/test_safe_excerpt_dto_spec.py 스키마 검증기 신설
+- 증거: main/resources/static/js/chat-evidence-graph.js:27-35
+- RED: `python -B -c "import os; assert os.path.exists('scripts/test_safe_excerpt_dto_spec.py')"`
+- 최소 구현: `scripts/test_safe_excerpt_dto_spec.py` 작성:
+  1) `SAFE_EXCERPT_DTO_SPEC.md` 필수 섹션(Frontmatter, DTO 필드, 4대 마스킹 규칙) 존재 검사.
+  2) 모의 DTO 샘플 검증: 280자 초과, 로컬 경로 미마스킹, 시크릿 패턴 검출 시 실패 assert.
+  3) unittest 기반으로 구현하여 exit 0/1 반환.
+- GREEN: `python -B scripts/test_safe_excerpt_dto_spec.py` 실행 시 ALL PASS (exit=0).
+- 완료 조건: 안전 발췌 DTO 스키마의 무결성을 검증하는 자동화 도구 완비.
+
+## DV4 [DEVIN] 검증기 실행 및 전체 회귀 검증
+- 증거: scripts/test_safe_excerpt_dto_spec.py
+- RED: 검증 미실행 상태
+- 실행 검증:
+  1) `python -B scripts/test_safe_excerpt_dto_spec.py` 실행 (신규 테스트 PASS 확인)
+  2) `node --check main/resources/static/js/chat-evidence-graph.js` 실행 (문법 이상 없음 확인)
+- GREEN: 모든 검증 스크립트 exit=0 통과.
+- 완료 조건: 기존 프론트엔드 모듈 문법 보존 및 신규 규격 정합성 입증.
+
+## 4. HOLD
+- main/java, main/resources, frontend/src 등 프로덕션 소스 코드 임의 수정 또는 lease 충돌 시 즉시 HOLD.
+- .secrets, 실제 비밀값, API 키가 규격 문서나 테스트 픽스처에 평문으로 노출되는 경우 즉시 HOLD.
+- 외부 유료 API 호출이 발생하거나 네트워크 전송 시도 시 즉시 HOLD.
+
+## 5. ASK_ONCE
+- Q-1: 발췌문 최대 글자 수를 280자(모바일 렌즈 1카드 기준)로 고정할 것인가?
+  - (a) 권장: 예 (모바일 320px 및 메타 레이밴 렌즈 디스플레이 가독성에 부합)
+  - (b) 아니오 (500자로 확장)
+
+## 6. 절대 금지
+- git push, git pull, git add -A, git commit -a, git reset, git clean
+- remote 추가 및 원격 저장소 변조
+- 비밀값(API 키, 토큰, 암호, .secrets, .env 실제 키) 화면/로그 출력 또는 문서 포함
+- PROTO_OPEN 가드라인 훼손 (임의의 권한 차단 추가 금지)
+- 제품 Java/BFF 소스 코드 및 gradle 빌드 설정 변조
+
+## 7. Acceptance
+- [DV1] docs/references/canonical-specs/SAFE_EXCERPT_DTO_SPEC.md 생성 및 필수 4대 규칙 완비.
+- [DV2] docs/references/canonical-specs/README.md 색인 테이블에 공식 등재.
+- [DV3] scripts/test_safe_excerpt_dto_spec.py 신설 및 스키마/마스킹 단위 테스트 PASS (exit=0).
+- [DV4] 신규 검증기 및 chat-evidence-graph.js 문법 검사 모두 PASS (exit=0).
+- [NOT_RUN] 실제 외부 유료 API 호출 및 전체 gradlew :test 빌드는 범위 외로 NOT_RUN.
+
+## 8. 보고 형식
+외부 API: 호출 0건 / $0.00
+진행 결과: DV1~DV4 완료 상태 및 신설/수정 파일 목록
+실행 검증: python -B scripts/test_safe_excerpt_dto_spec.py 실행 결과 및 exit code
+산출물: SAFE_EXCERPT_DTO_SPEC.md 주요 필드 및 코덱스 U6 HOLD 해제 준비 요약
+
+[ANTI-STOP] 모든 DV 항목의 구현과 단위 테스트 검증이 완료되고 Acceptance 기준을 모두 충족할 때까지 작업을 멈추지 않는다.

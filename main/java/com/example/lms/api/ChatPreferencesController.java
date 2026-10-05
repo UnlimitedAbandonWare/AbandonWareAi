@@ -19,6 +19,8 @@ public class ChatPreferencesController {
     private final SettingsService settings;
     private final ChatDefaultsProperties defaults;
     private final ClientOwnerKeyResolver owner;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.llm.DynamicChatModelFactory modelFactory;
     public ChatPreferencesController(ChatPreferenceService service, SettingsService settings,
             ChatDefaultsProperties defaults, ClientOwnerKeyResolver owner) {
         this.service = service; this.settings = settings; this.defaults = defaults; this.owner = owner;
@@ -60,6 +62,16 @@ public class ChatPreferencesController {
         result.put("factoryDefaults", defaults.values()); result.put("sources", resolved.sources());
         result.put("revision", state.revision()); result.put("hash", state.hash());
         result.put("ownerScope", "cookie"); result.put("defaultsVersion", defaults.getDefaultsVersion());
+        String model = (String) resolved.effective().get("model");
+        String selection = (String) resolved.effective().get("modelSelectionMode");
+        var capability = modelFactory == null
+                ? new com.example.lms.llm.DynamicChatModelFactory.TemperatureCapability(
+                        com.example.lms.llm.ModelCapabilities.Support.UNKNOWN, "route_unobserved")
+                : modelFactory.temperatureCapability(model);
+        if ("auto".equals(selection)) capability = new com.example.lms.llm.DynamicChatModelFactory.TemperatureCapability(
+                com.example.lms.llm.ModelCapabilities.Support.UNKNOWN, "automatic_route_unobserved");
+        result.put("sampling", Map.of("temperature", Map.of("model", model, "modelSelectionMode", selection,
+                "support", capability.support().name(), "reasonCode", capability.reasonCode())));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(result);
     }
     private static void checkOrigin(HttpServletRequest request) {

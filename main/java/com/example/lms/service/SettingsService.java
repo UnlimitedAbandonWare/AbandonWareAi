@@ -40,12 +40,14 @@ public class SettingsService {
     public Map<String, Object> getChatAdminOverrides() {
         Map<String, Object> result = new java.util.LinkedHashMap<>();
         Map<String, String> names = Map.of(KEY_OPENAI_MODEL, "model", KEY_TEMPERATURE, "temperature",
-                KEY_TOP_P, "topP", KEY_FREQUENCY_PENALTY, "frequencyPenalty", KEY_PRESENCE_PENALTY, "presencePenalty");
+                KEY_TOP_P, "topP", KEY_FREQUENCY_PENALTY, "frequencyPenalty", KEY_PRESENCE_PENALTY, "presencePenalty",
+                KEY_EXECUTION_MODE, "executionMode");
         for (var row : settingRepo.findAll()) {
             String key = names.get(row.getSettingKey());
             if (key == null || row.getSettingValue() == null) continue;
-            if (!"model".equals(key) && numericValidationError(Map.of(row.getSettingKey(), row.getSettingValue())) != null) continue;
-            Object value = "model".equals(key) ? row.getSettingValue() : Double.valueOf(row.getSettingValue());
+            boolean textSetting = "model".equals(key) || "executionMode".equals(key);
+            if (!textSetting && numericValidationError(Map.of(row.getSettingKey(), row.getSettingValue())) != null) continue;
+            Object value = textSetting ? row.getSettingValue() : Double.valueOf(row.getSettingValue());
             try { result.putAll(ChatPreferenceService.validate(Map.of(key, value))); }
             catch (IllegalArgumentException invalid) { log.warn("Stored chat default invalid key={}; inherited", key); }
         }
@@ -60,6 +62,7 @@ public class SettingsService {
     public static final String KEY_PRESENCE_PENALTY   = "PRESENCE_PENALTY";
     public static final String KEY_OPENAI_MODEL       = "OPENAI_MODEL";
     public static final String KEY_FINE_TUNED_MODEL   = "FINE_TUNED_MODEL";
+    public static final String KEY_EXECUTION_MODE    = "chat.defaults.executionMode";
 
     /* ?????????? 疫꿸퀡??첎?(application.properties ?癒?퐣 雅뚯눘?? ?????????? */
     @Value("${gpt.system.prompt.default:You are a helpful assistant.}")
@@ -146,6 +149,8 @@ public class SettingsService {
     }
 
     private static void validateNumericSettings(Map<String, String> settings) {
+        if (settings != null && settings.containsKey(KEY_EXECUTION_MODE))
+            ChatPreferenceService.validate(java.util.Collections.singletonMap("executionMode", settings.get(KEY_EXECUTION_MODE)));
         InvalidNumericSetting invalid = numericValidationError(settings);
         if (invalid != null) throw new IllegalArgumentException(invalid.key() + ":" + invalid.reason());
     }
@@ -189,6 +194,7 @@ public class SettingsService {
         // 3) 癰귣쵑鍮
         if (chatDefaults != null) {
             defaults.put(KEY_OPENAI_MODEL, chatDefaults.getModel());
+            defaults.put(KEY_EXECUTION_MODE, chatDefaults.getExecutionMode().name());
             defaults.put(KEY_TEMPERATURE, String.valueOf(chatDefaults.getTemperature()));
             defaults.put(KEY_TOP_P, String.valueOf(chatDefaults.getTopP()));
             defaults.put(KEY_FREQUENCY_PENALTY, String.valueOf(chatDefaults.getFrequencyPenalty()));

@@ -13,8 +13,9 @@ Usage:
         [--out var/anchor_map.json]
 
 Output: JSON (schema awx.zip-path-to-sourceset.v1) + a markdown table.
-Source root SSOT: scripts/test_tree_contamination_report.py
-(ACTIVE_MAIN_ROOTS / TEST_ROOT_CANDIDATES).
+Source root SSOT: build.gradle.kts and app/build.gradle.kts sourceSets.
+Current checkout: root main/java + main/resources; :app sourceSets are empty.
+Reconfirm the build sourceSets before changing these mappings.
 """
 from __future__ import annotations
 
@@ -28,8 +29,8 @@ from pathlib import Path
 
 SCHEMA = "awx.zip-path-to-sourceset.v1"
 
-ACTIVE_MAIN_ROOTS = ("main/java", "app/src/main/java_clean")
-ACTIVE_RES_ROOTS = ("main/resources", "app/src/main/resources")
+ACTIVE_MAIN_ROOTS = ("main/java",)
+ACTIVE_RES_ROOTS = ("main/resources",)
 TEST_ROOT_BY_MODULE = {":": "src/test/java", ":app": "app/src/test/java"}
 TEST_TASK_BY_MODULE = {":": "test", ":app": ":app:test"}
 

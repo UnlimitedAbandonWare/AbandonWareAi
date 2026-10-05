@@ -1,0 +1,101 @@
+[ANTI-STOP]
+[DEVIN 지시서] UAW 기반 Self-Ask 질의재작성 및 바이브 코딩 바이패스 파이프라인 구축 — 2026-10-05 02:15 KST
+파일 ID: PASTE_DEVIN_SELFASK_QUERY_REWRITE_BYPASS_20261005
+@demo1-codex-selfask-triad
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스 파괴적 변경 0 · git push / add -A 0 · remote 추가 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+# 한 줄 목표
+UAW.txt의 SelfAskPlanner 및 strong-evidence bypass 기전을 적용하여, dot/Codex 바이브 코딩 시 승인 퀴즈를 바이패스(AUTO)하고 특수 상황(검색 0건, 테스트 RED, 가설 연쇄 실패)에서만 3축 질의재작성을 수행하는 오프라인 툴링 및 스킬 파이프라인을 구축한다.
+
+# 사실 (읽기 전용 확인, 2026-10-05 02:15 KST)
+- UAW 기전 실존: `UAW.txt` L244(`SelfAskPlanner`), L749(`SelfAskWebSearchRetriever`), L1405(`expand.selfAsk.count: 3`), L1413(`analyze.selfAsk`), L1568(`FinalSigmoidGate strong-evidence bypass`), L2282(`SelfAskPlanner 질문 하위 분해`)에 하위 질의 3축 분해와 바이패스 기전 명시.
+- 도구 현황: `scripts/selfask_triad.py` (14,431B, sha12: E96F671A785C)는 `packet`과 `judge`만 제공하며, 특수 상황 감지 및 단일 진입점 질의재작성(`rewrite`) 서브커맨드가 부재함.
+- 테스트 현황: `scripts/test_selfask_triad.py` (7,556B, sha12: E3AD7C13CCA6)는 10건 통과(total=10 failed=0) 상태이나 질의재작성 회귀 검증 부재.
+- 스킬/룰 현황: `skills/demo1-codex-selfask-triad` (3,536B, sha12: 61F1D092208D)와 `docs/agents-rules/DEMO1-CODEX-SELFASK-TRIAD.md` (1,199B, sha12: 5C7AC61D6B84)에 3축 서브에이전트 역할은 있으나 바이브 코딩 바이패스 및 질의재작성 호출 표준 누락.
+- 자원 상태: `python -B scripts/agent_scope_lease.py who` 확인 결과 해당 스크립트 및 문서에 활성 lease 충돌 없음 (깨끗함).
+
+# 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 고정).
+- 문서/스크립트 작업: `scripts/*.py` 및 `.md` 수정은 소스 lease 불필요, `python -B scripts/work_journal.py`에 변경 기록.
+- PROTO_OPEN 및 무과금(0-cost) 오프라인 결정론적 실행 준수.
+
+# 항목 (Work Packages)
+
+- WP1 [DEVIN] `scripts/selfask_triad.py`에 UAW 3축 질의재작성(rewrite) 및 바이패스 게이트 추가
+  - 증거: `UAW.txt:1405`, `UAW.txt:1568`, `scripts/selfask_triad.py:38-56`
+  - 내용:
+    1) 서브커맨드 `rewrite` 추가:
+       `python -B scripts/selfask_triad.py rewrite --question "<질문>" [--trigger <zero_hit|unexpected_red|ambiguous_goal|multi_hop|force>] [--paths "a,b"] [--json]`
+    2) 바이패스 게이트: `--trigger`가 없고 유효한 파일 경로(`paths` 실존)가 주어지면 `bypass: "strong_evidence"`, `rewritten: false`, `verdict: "AUTO"`를 반환하여 바이브 코딩 중단 방지.
+    3) 특수 상황 트리거 게이트:
+       - `zero_hit`: 검색 결과 고갈 시 쿼리 정제 및 확장 질의 3종 생성.
+       - `unexpected_red`: 테스트 RED 또는 가설 2회 연속 실패 시 실패 원인 추적 질의 생성.
+       - `ambiguous_goal` / `multi_hop`: 모호한 짧은 프롬프트나 다중 단계 질문 분해.
+    4) UAW 3축 질의 생성 (`expand.selfAsk.count: 3`):
+       - `definer`: 엄격한 규격/계약/소스 파일 위치 식별 질의.
+       - `aliaser`: 대체 클래스/이전 계통/동의어/설정 키 탐색 질의.
+       - `challenger`: 반례/실패 모드/경계 조건 검증 질의.
+  - GREEN: `python -B scripts/selfask_triad.py rewrite --question "캐시 락 오류" --trigger unexpected_red --json; "exit=$LASTEXITCODE"` exit 0 및 3축 서브쿼리 JSON 확인.
+
+- WP2 [DEVIN] `scripts/test_selfask_triad.py`에 질의재작성/바이패스 단위 테스트 구축
+  - 증거: `scripts/test_selfask_triad.py:27-58`
+  - 내용:
+    1) `test_rewrite_bypass_strong_evidence`: 정상 경로에서 `bypass=strong_evidence`, `rewritten=false` 검증.
+    2) `test_rewrite_trigger_unexpected_red`: `unexpected_red` 트리거 시 Definer, Aliaser, Challenger 3개 질의 생성 및 UAW `count: 3` 일치 검증.
+    3) `test_rewrite_trigger_zero_hit`: `zero_hit` 트리거 시 검색 확장 쿼리 생성 검증.
+    4) 기존 10건 테스트 회귀 없음 확인.
+  - GREEN: `python -B scripts/test_selfask_triad.py; "exit=$LASTEXITCODE"` 실행 시 total=13 failed=0 (exit 0) 통과.
+
+- WP3 [DEVIN] 스킬 및 에이전트 룰에 Self-Ask 질의재작성/바이패스 가이드 동기화
+  - 증거: `docs/agents-rules/DEMO1-CODEX-SELFASK-TRIAD.md`, `.agents/skills/demo1-codex-selfask-triad/`
+  - 내용:
+    1) 스킬 문서(`SKILL.md`)에 `## Rewrite & Bypass (UAW Self-Ask)` 섹션 추가:
+       - 일상 바이브 작업: strong-evidence bypass로 AUTO 진행 (사용자 승인 퀴즈 불필요).
+       - 특수 상황(0-hit, RED 실패 등): `selfask_triad.py rewrite` 호출 후 3축 질의로 탐색하여 자율 해결.
+    2) `docs/agents-rules/DEMO1-CODEX-SELFASK-TRIAD.md`에 rewrite 서브커맨드 1줄 포인터 반영.
+    3) 규칙 예산 검증: `python -B scripts/agents_md_budget.py check` 통과.
+  - GREEN: `python -B scripts/agents_md_budget.py check; "exit=$LASTEXITCODE"` exit 0 확인.
+
+# HOLD 조건
+- `selfask_triad.py` 수정 중 기존 `packet`, `judge` 로직이 손상되어 기존 테스트 10건 중 실패 발생 시.
+- 질의재작성 기능이 오프라인 로컬 파싱 대신 외부 유료 API 네트워크 호출에 의존하도록 변질될 시.
+- `agents_md_budget.py check` 검사에서 바이트 예산 초과가 발생할 시.
+
+# ASK_ONCE (자동 결정 기본값 포함)
+- U-1: 특수 상황 외 일반 질문 시 기본 동작
+  - (a) 권장: 명확한 파일 경로가 있으면 `bypass=strong_evidence`로 질의 분해 생략 (AUTO 적용).
+  - (b) 모든 질문을 무조건 3축 분해.
+- U-2: 하위 질의 분해 시 출력 형태
+  - (a) 권장: 단일 JSON 출력(`subqueries` 배열 포함, AUTO 적용).
+  - (b) 개별 파일 분할 저장.
+
+# 절대 금지
+- `push`, `add -A`, `commit -a`, `git reset`, `remote 추가` 절대 금지.
+- 실제 API Key, Secret 등 `비밀`값 평문 노출 및 저장 절대 금지.
+- `PROTO_OPEN` 정책 훼손 및 관리자 로그인 장벽 신설 금지.
+- 전체 `:test` 스위트 무차별 실행 금지.
+
+# Acceptance (완료 기준)
+- WP1: `scripts/selfask_triad.py rewrite` 서브커맨드가 바이패스(`bypass=strong_evidence`) 및 4대 특수 상황 트리거 분기를 지원하며 JSON 정상 출력.
+- WP2: `scripts/test_selfask_triad.py`에 신규 테스트 3건이 추가되어 총 13건 이상 전건 PASS (exit 0).
+- WP3: 스킬 문서 및 `docs/agents-rules/DEMO1-CODEX-SELFASK-TRIAD.md`에 UAW 기반 질의재작성/바이패스 지침 반영 및 budget check 통과.
+- 미실행 항목이 있을 경우 사유와 함께 `NOT_RUN` 보고.
+
+# 보고 형식
+외부 API: 호출 0회 (로컬 오프라인 Self-Ask 툴링 및 스킬 작업)
+결론: [PASS | PARTIAL | FAIL]
+실행 결과 요약:
+- WP1 (selfask_triad.py rewrite 서브커맨드 구현): [결과 + 바이패스 및 3축 분해 동작 여부]
+- WP2 (test_selfask_triad.py 단위 테스트 확장): [결과 + 통과 테스트 수 및 exit 코드]
+- WP3 (스킬 및 에이전트 룰 동기화): [결과 + budget check exit 코드]
+
+산출물 및 로그:
+- 변경 파일: <경로 및 sha12>
+- 검증 로그: <관측된 exit 코드 및 주요 출력>
+
+미실행 항목: [없음 또는 NOT_RUN 사유]
+한 줄: UAW 기반 Self-Ask 3축 질의재작성 및 바이브 코딩 바이패스 파이프라인 구축 완료.
+
+[ANTI-STOP]

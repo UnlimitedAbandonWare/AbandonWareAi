@@ -1,5 +1,5 @@
 ---
-name: demo-1 GPT Pro ZIP Work Brief
+name: demo-1-gpt-pro-directive-guide
 description: >-
   Use this when the user will hand GPT Pro (or another sandbox model) a
   demo1_*.zip snapshot and wants a brief telling it to unpack the ZIP, actually

@@ -4,11 +4,13 @@ import com.example.lms.entity.ModelEntity;
 import org.jsoup.Jsoup;
 import com.example.lms.harmony.HarmonyDashboardPageController;
 import com.example.lms.web.TraceSnapshotsPageController;
+import com.example.lms.web.AgentPipelineStatusPageController;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.DefaultCsrfToken;
+import org.springframework.web.servlet.view.InternalResourceViewResolver;
 
 import java.util.List;
 import java.util.Locale;
@@ -20,6 +22,56 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.standaloneSetup;
 
 class ChatUiViewConfigTest {
+
+    @Test
+    void pipelineStatusAdminRouteRendersClasspathTemplateBeforeInternalForward() throws Exception {
+        var result = standaloneSetup(new AgentPipelineStatusPageController())
+                .setViewResolvers(new ChatUiViewConfig().chatUiResourceViewResolver(),
+                        new InternalResourceViewResolver())
+                .build()
+                .perform(get("/admin/pipeline-status"))
+                .andReturn();
+
+        assertTrue(result.getResponse().getStatus() == 200);
+        assertTrue(result.getResponse().getForwardedUrl() == null,
+                "pipeline status must render without forwarding back to its controller");
+        assertTrue(result.getResponse().getContentType().startsWith("text/html"));
+        assertTrue(result.getResponse().getContentAsString().contains("<title>Pipeline Status</title>"));
+        assertTrue(result.getResponse().getContentAsString().contains("/agent/db-context/pipeline-health"));
+    }
+
+    @Test
+    void operatorNavigationSubmitsLogoutWithRenderedCsrf() throws Exception {
+        for (String name : List.of("index", "dashboard")) {
+            var view = new ChatUiViewConfig().chatUiResourceViewResolver().resolveViewName(name, Locale.KOREA);
+            var request = new MockHttpServletRequest("GET", "/" + name);
+            CsrfToken csrf = new DefaultCsrfToken("X-CSRF-TOKEN", "_csrf", "synthetic-logout\"<");
+            request.setAttribute(CsrfToken.class.getName(), csrf);
+            var response = new MockHttpServletResponse();
+            view.render(Map.of(), request, response);
+            var document = Jsoup.parse(response.getContentAsString());
+            var form = document.selectFirst("nav form[action='/logout'][method='post']");
+            assertTrue(form != null, name + " must expose the existing POST logout route");
+            assertTrue(form.selectFirst("button[type='submit']") != null);
+            var hidden = form.selectFirst("input[type='hidden'][name='_csrf']");
+            assertTrue(hidden != null, name + " must include the request CSRF token");
+            assertTrue(csrf.getToken().equals(hidden.attr("value")), "CSRF value must survive HTML escaping");
+            assertFalse(response.getContentAsString().contains("CSRF_INPUT"));
+        }
+    }
+
+    @Test
+    void adminDashboardUsesTheExistingHtmlViewInsteadOfForwardingBackToItsController() throws Exception {
+        var view = new ChatUiViewConfig().chatUiResourceViewResolver().resolveViewName("dashboard", Locale.KOREA);
+        assertTrue(view != null, "admin dashboard must resolve before the internal forward resolver");
+        for (String path : List.of("/admin/dashboard", "/admin/rag-ops-cockpit")) {
+            var response = new MockHttpServletResponse();
+            view.render(Map.of(), new MockHttpServletRequest("GET", path), response);
+            assertTrue(response.getStatus() == 200);
+            assertTrue(response.getForwardedUrl() == null);
+            assertTrue(response.getContentAsString().contains("<title>RAG Ops Cockpit</title>"));
+        }
+    }
 
     @Test
     void indexLandingUsesTheExistingHtmlViewInsteadOfForwardingBackToItsController() throws Exception {

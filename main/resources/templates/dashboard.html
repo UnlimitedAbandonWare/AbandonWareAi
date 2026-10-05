@@ -190,6 +190,10 @@
       <a href="#debug-ai">AI Debug Metrics</a>
       <a href="#diagnostics">Diagnostics</a>
       <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
+      <form method="post" action="/logout">
+        <!-- CSRF_INPUT -->
+        <button type="submit">Sign out</button>
+      </form>
     </nav>
   </aside>
 

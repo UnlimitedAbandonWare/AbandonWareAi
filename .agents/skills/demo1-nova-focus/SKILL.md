@@ -18,7 +18,13 @@ Feature contract: existing Fold6 transcription + literal wake token `노바` ope
 
 ## Non-goals
 
-No new mic/ASR/wake-word engine, no always-on listener, no auth/accounts, no second chat engine, no page-number UI for focus answers, no model/provider/key changes, no changes to general hint paging/TTL/`ld-*` settings, no new frameworks. Git follows AGENTS.md's conditional local-commit contract.
+No new mic/ASR/wake-word engine, no always-on listener, no auth/accounts, no second chat engine, no page-number UI for focus answers, no unrequested global model/provider changes or credential provisioning, no changes to general hint paging/TTL/`ld-*` settings, no new frameworks. Git follows AGENTS.md's conditional local-commit contract.
+
+## Explicit Display settings work
+
+For explicitly requested Display answer-length, font, model-selection or quick-display work, reuse `NovaFocusSettings`/`NovaFocusState`/`NovaFocusHistoryService` and the real `NovaFocusAnswerService` -> `ChatConversationContext` -> `StandardPromptBuilder` message seam. Preserve existing user overrides and ordinary `/chat` defaults. The setting must reach generation; display truncation alone does not satisfy answer length. Keep length, page/line budgets and provider tokens separate; existing `LensDisplayPrefs.hintFontPx` is the font setting. Historical defaults/ranges below are baseline evidence, not a ban on authorized settings changes; live validation and source remain authoritative. Snapshot settings per run and preserve cancel/epoch/terminal CAS, final ACK, presentation_done and TTS boundaries. A complete-answer typewriter is not provider delta streaming. Exact model/account/adapter capabilities and existing OAuth search modes remain authoritative; unsupported OAuth fields must be omitted, with paid Fast requiring explicit opt-in.
+
+For synthetic OAuth configuration checks, use `scripts/lint_chatgpt_oauth_contract.py --offline` and its focused `scripts/test_lint_chatgpt_oauth_contract.py` fixture. This mode reads no env, credentials or product source; source proof is SKIP and strict still fails. It does not verify model payload, live account eligibility, deployment, Display generation or device behavior.
 
 ## Resume note (read before opening scope)
 

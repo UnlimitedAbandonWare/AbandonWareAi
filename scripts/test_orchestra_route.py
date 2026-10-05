@@ -81,6 +81,7 @@ def main():
                        "files": ["main/java/com/example/lms/web/X.java"]})
         r = route(s["id"])
         check("narrow product->CODEX_DIRECT", r["lane"] == "CODEX_DIRECT", r["lane"])
+        check("tower=dot on CODEX_DIRECT", r["tower"] == "dot", r.get("tower"))
 
         # GPTPRO_THEN_CODEX: 3 product files (broad-surface) + external-info marker
         s = sig_new(**{"from": "gptpro", "kind": "gptpro-brief",
@@ -96,6 +97,7 @@ def main():
         s = sig_new(**{"from": "grokbot", "kind": "research-question",
                        "summary": "which embedding model is cheapest now"})
         check("research->AGY_RESEARCH", route(s["id"])["lane"] == "AGY_RESEARCH")
+        check("tower=null on AGY_RESEARCH", route(s["id"])["tower"] is None)
 
         # vague idea -> GROKBOT_AMPLIFY; --grokbot-absent -> AGY_AS_GROKBOT
         s = sig_new(**{"from": "user", "kind": "idea", "summary": "아이디어: 해볼까"})

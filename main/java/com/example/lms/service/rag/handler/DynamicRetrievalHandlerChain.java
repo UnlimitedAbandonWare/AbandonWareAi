@@ -431,6 +431,10 @@ boolean forceNoMemory = gctx != null && (gctx.isSensitiveTopic() || gctx.planBoo
             boolean nightmareMode = metaBool(md, "nightmareMode", false);
             boolean auxLlmDown = metaBool(md, "auxLlmDown", false);
             boolean strikeMode = metaBool(md, "strikeMode", false);
+            String executionMode = String.valueOf(md.getOrDefault("executionMode", ""));
+            if ("STRIKE".equals(executionMode)) needSelf = false;
+            else if ("SELF_ASK".equals(executionMode)) needSelf = true;
+            else if ("AUTO".equals(executionMode)) needSelf = com.example.lms.service.rag.SelfAskSearchBudget.needsExpansion(qText, accumulator);
             boolean compressionMode = metaBool(md, "compressionMode", false);
             boolean enableSelfAskHint = metaBool(md, "enableSelfAsk", true);
             if (!enableSelfAskHint || nightmareMode || auxLlmDown || strikeMode || compressionMode) {

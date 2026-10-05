@@ -44,6 +44,15 @@ final class ChatSessionMetaMerger {
         }
 
         // Sampling is conversation state too. Omission restores; explicit zero wins.
+        if (uiReq.getExecutionMode() != null) meta.put("executionMode", uiReq.getExecutionMode().name());
+        else if (meta.get("executionMode") instanceof String value) {
+            try { uiReq.setExecutionMode(com.example.lms.domain.enums.ExecutionMode.valueOf(value)); }
+            catch (IllegalArgumentException invalid) { traceSuppressedMergeSkipped(log, "execution_mode_restore", session, invalid); }
+        }
+        inheritPreference(meta, "customInstructions", uiReq.getCustomInstructions(), uiReq::setCustomInstructions);
+        inheritPreference(meta, "responseTone", uiReq.getResponseTone(), uiReq::setResponseTone);
+        inheritPreference(meta, "responseLength", uiReq.getResponseLength(), uiReq::setResponseLength);
+        inheritPreference(meta, "responseLanguage", uiReq.getResponseLanguage(), uiReq::setResponseLanguage);
         inheritNumber(meta, "temperature", uiReq.getTemperature(), uiReq::setTemperature);
         inheritNumber(meta, "topP", uiReq.getTopP(), uiReq::setTopP);
         inheritNumber(meta, "frequencyPenalty", uiReq.getFrequencyPenalty(), uiReq::setFrequencyPenalty);
@@ -193,5 +202,15 @@ final class ChatSessionMetaMerger {
         }
         String text = String.valueOf(value).trim();
         return text.isEmpty() ? null : text;
+    }
+
+    private static void inheritPreference(Map<String, Object> meta, String key, String value,
+            java.util.function.Consumer<String> restore) {
+        Object candidate = value != null ? value : meta.get(key);
+        if (candidate instanceof String text) {
+            // Validate saved data with the same contract as a current request before restoring it.
+            com.example.lms.service.ChatPreferenceService.validate(Map.of(key, text));
+            if (value != null) meta.put(key, text); else restore.accept(text);
+        }
     }
 }

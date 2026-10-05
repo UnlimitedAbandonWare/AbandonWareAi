@@ -1,5 +1,5 @@
 ---
-name: build_error_miner
+name: build-error-miner
 description: Use when classifying build or boot logs through the demo-1 MCP control tower
 ---
 

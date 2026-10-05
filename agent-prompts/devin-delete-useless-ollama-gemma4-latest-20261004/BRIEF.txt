@@ -1,0 +1,115 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 검증까지 완료한 뒤 보고해야 합니다.
+[DEVIN 지시서] 불필요한 잉여 Ollama 모델(gemma4:latest) 삭제 및 모델 락/SSOT 정렬 — 2026-10-04 23:50 KST
+파일 ID: PASTE_DEVIN_DELETE_USELESS_OLLAMA_GEMMA4_LATEST_20261004
+@demo1-api-routing-inventory
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 Java 소스 수정 0 · git push/add -A/commit 0 · 비밀값 출력 0 · 유료 API 호출 0 · remote 추가 0 · PROTO_OPEN 유지
+
+한 줄 목표
+실제 서비스 및 테스트에서 전혀 사용되지 않고 디스크 9.6GB만 점유하며 UI 카탈로그를 교란하는 비정규 태그 모델 `gemma4:latest`를 `ollama rm`으로 영구 삭제하고, 모델 락(`check-model-lock.ps1`) 및 API 라우팅 SSOT 설정 파일들을 정렬하여 `RESULT=PASS`를 검증한다.
+
+## 1. 사실 (2026-10-04 23:45 KST 기준 라이브 확인)
+1. Live Ollama 인벤토리 (`ollama ls`):
+   - `gemma4:latest` (ID: `c6eb396dbd59`, 크기: 9.6 GB)가 현재 로컬 Ollama에 상주 중임.
+   - 반면 Gemma 4 계열은 이미 파라미터가 명시된 정규 태그 모델 3종이 완비되어 있음:
+     - `gemma4:26b` (17 GB): 서비스 기본 대화 모델 (Spring `chat-model`, `models.manifest.yaml` default SSOT)
+     - `gemma4:12b` (7.6 GB): 경량 fallback / fast 대화 모델
+     - `gemma4:31b` (19 GB): 고품질 대화 및 judge 대체 모델
+2. 코덱스 브라우저 및 테스트 기록 관측:
+   - `data/agent-handoff/codex-plan9-api-first-routing-3da4fc89/EVIDENCE/models.json` 및 `V5-browser-list-check.json`: `/api/chat/models` 카탈로그에 `gemma4:latest`가 노출되어 드롭다운 옵션을 불필요하게 낭비함.
+   - `configs/agent-test-model-policy.yaml`: 에이전트 로컬 테스트 폴백 정책(`local_fallback`)은 `prefer: ["gemma4:26b", "qwen3.5:9b"]`로 명시되어 있으며, `gemma4:latest`는 테스트 대상에서도 제외됨.
+   - `data/agent-handoff/test-model-policy/usage.jsonl`: 브라우저 테스트에서 `gemma4:12b`와 `gemma4:26b`만 호출되었고 `gemma4:latest`는 사용 이력이 전혀 없음.
+3. 프로젝트 지침 위반:
+   - `data/agent-handoff/notebook/ollama-model-intake/README.md`: *"Prefer an explicit tag over an unpinned latest when repeatability matters. Reject unpinned latest tags."* 명시. `gemma4:latest`는 unpinned 태그로 재현성을 저해함.
+4. 모델 락 기준:
+   - `scripts/check-model-lock.ps1`의 `$Allowed` 배열(L33)에 `gemma4:latest`가 포함되어 있어, 단순히 `ollama rm`만 실행하면 모델 락 검사가 FAIL(exit 1)하게 됨. 반드시 스크립트와 YAML SSOT를 함께 정렬해야 함.
+5. 현재 활성 lease: 0건 (모든 대상 파일 수정 가능).
+
+## 2. 공통 규칙
+1. 작업 시작 전 반드시 `Set-Location C:\AbandonWare\demo-1\demo-1\src`를 실행한다.
+2. Git 변경은 자동 커밋하지 않으며, `git push`, `git add -A`, `git commit -a`, `git reset`, `git checkout` 등은 절대 실행하지 않는다.
+3. 제품 Java 소스 코드는 일절 수정하지 않는다. (설정 YAML, 라우팅 문서, PowerShell 검증 스크립트만 수정 대상)
+4. 모든 PowerShell 스크립트 실행 시 실행 정책 우회 옵션을 사용한다: `powershell -NoProfile -ExecutionPolicy Bypass -File <script>`.
+5. 어떠한 API Key나 토큰 값도 콘솔에 출력하거나 파일에 기록하지 않는다 (이름만 사용).
+
+## 3. 항목: DV 작업 분해 (최대 3개 항목)
+
+### DV1 [Devin] Ollama 모델 중지 및 로컬 삭제
+- 대상: Ollama CLI
+- 사전 점검: `ollama ls` 실행하여 `gemma4:latest` (ID: `c6eb396dbd59`) 존재 확인.
+- 모델 언로드: `ollama stop gemma4:latest` (실행 중이 아니어도 무방, fail-soft)
+- 모델 삭제: `ollama rm gemma4:latest`
+- 사후 확인: `ollama ls` 실행하여 `gemma4:latest`가 목록에서 완전히 사라졌는지 확인 (총 모델 수 12 -> 11).
+- 완료 조건: `ollama ls` 출력에 `gemma4:latest`가 존재하지 않음.
+
+### DV2 [Devin] 라우팅 SSOT 및 check-model-lock 허용 목록 정렬
+- 대상 파일:
+  - `configs/api-routing.yaml`
+  - `main/resources/configs/api-routing.yaml`
+  - `scripts/check-model-lock.ps1`
+  - `docs/API_ROUTING_SPEC.md`
+  - `.agents/skills/demo1-api-routing-inventory/references/live-inventory.md`
+- 최소 수정 내용:
+  1. `configs/api-routing.yaml` 및 `main/resources/configs/api-routing.yaml`:
+     - `ollama.installed_models.all` 리스트에서 `- "gemma4:latest"` 항목 제거.
+     - `ollama.installed_models.chat` 리스트에서 `"gemma4:latest"` 제거.
+  2. `scripts/check-model-lock.ps1`:
+     - `$Allowed` 배열에서 `'gemma4:latest',` 라인 제거.
+  3. `docs/API_ROUTING_SPEC.md`:
+     - `| gemma4:latest | 9.6 GB | Chat mid |` 테이블 행 제거.
+  4. `.agents/skills/demo1-api-routing-inventory/references/live-inventory.md`:
+     - `| gemma4:latest | c6eb396dbd59 | 9.6 GB | ... |` 테이블 행 제거.
+- 완료 조건: 대상 5개 파일에서 `gemma4:latest` 문자열이 완전히 제거됨.
+
+### DV3 [Devin] 모델 락 및 E2E 무결성 검증
+- 검증 명령:
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-model-lock.ps1; "exit=$LASTEXITCODE"
+  ```
+- 기대 결과:
+  - `[OK] live model count=11`
+  - `RESULT=PASS`
+  - `exit=0`
+- 완료 조건: `check-model-lock.ps1`이 에러 없이 exit 0으로 종료됨.
+
+## 4. HOLD
+1. `ollama rm gemma4:latest` 실행 시 Ollama 데몬 자체가 죽거나 연결 실패가 발생하는 경우: 데몬 재기동 후 재확인하며, 원인 불명 시 중단하고 원인 보고.
+2. `gemma4:26b`, `gemma4:12b`, `gemma4:31b` 등 다른 정규 태그 모델이 실수로 삭제되거나 영향받은 경우: 즉시 작업을 중단하고 HOLD.
+3. `main/resources/application.yml` 또는 Java 코드에 `gemma4:latest` 의존성이 새로 발견되는 경우: 임의 수정하지 말고 HOLD.
+
+## 5. ASK_ONCE
+- Q-1: 추가 잉여 모델 후보(`qwen3.6:27b` 17GB, `qwen3-embedding:latest` 4.7GB)도 연속으로 삭제할 것인가?
+  - 기본값(권장): 이번 지시서에서는 가장 잉여성이 높고 unpinned 규정 위반인 `gemma4:latest` (9.6GB)만 단독 삭제하여 영향도를 최소화한다. 후속 작업 요청 시 진행.
+
+## 6. 절대 금지
+- `git push`, `git add -A`, `git commit` 금지 (수정 파일 목록만 diff로 보고).
+- `qwen3.5:9b`, `gemma4:26b`, `smtek/Qwen3.8-27B:Q3_K_XL`, `qwen3-vl:8b`, `qwen3-embedding:4b` 등 핵심 필수 모델 삭제 금지.
+- `remote 추가`, 인증 토큰 변경, `PROTO_OPEN` 정책 변경 금지.
+- 비밀값(API 키 값, 개인 토큰 등)을 로그나 보고서에 노출하는 행위 금지.
+
+## 7. Acceptance (완료 기준)
+1. `ollama ls` 실행 시 `gemma4:latest`가 목록에 없어야 함 (PASS).
+2. `E:\models`에서 약 9.6 GB의 스토리지 공간이 반환되어야 함 (PASS).
+3. `configs/api-routing.yaml`, `main/resources/configs/api-routing.yaml`, `scripts/check-model-lock.ps1`, `docs/API_ROUTING_SPEC.md`에 `gemma4:latest` 잔재가 없어야 함 (PASS).
+4. `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check-model-lock.ps1` 실행 결과가 `RESULT=PASS`, `exit=0`이어야 함 (PASS).
+5. 미실행 항목 발생 시 반드시 `NOT_RUN(<사유>)`로 명시해야 함.
+
+## 8. 보고 형식
+Devin은 작업 완료 후 아래 형식으로 보고서를 출력한다:
+```text
+외부 API: 호출 0건 ($0)
+작업 결과: SUCCESS (gemma4:latest 삭제 및 SSOT 정렬 완료)
+회수 용량: 약 9.6 GB
+실행 증거:
+- ollama ls (11개 모델 확인, gemma4:latest 부재)
+- check-model-lock.ps1 exit=0 (RESULT=PASS)
+변경된 파일 목록:
+- configs/api-routing.yaml
+- main/resources/configs/api-routing.yaml
+- scripts/check-model-lock.ps1
+- docs/API_ROUTING_SPEC.md
+- .agents/skills/demo1-api-routing-inventory/references/live-inventory.md
+```
+
+[ANTI-STOP] 이 지시서는 모든 검증 명령이 exit=0으로 완료될 때까지 임의로 멈추지 마십시오.

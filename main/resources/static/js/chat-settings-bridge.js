@@ -1,4 +1,4 @@
-/* Validated browser defaults. Apply through the four existing DOM controls. */
+/* Validated browser defaults applied through the existing chat controls. */
 (function (root, factory) {
   'use strict';
   const api = factory();
@@ -15,11 +15,11 @@
   const STORAGE_KEY = 'awx.settings.v1.preferences';
   const REMEMBER_KEY = 'awx.settings.v1.rememberChatChanges';
   const MAX_BYTES = 16384;
-  const KEYS = Object.freeze(['model', 'modelSelectionMode', 'searchMode', 'useRag']);
+  const KEYS = Object.freeze(['model', 'modelSelectionMode', 'executionMode', 'searchMode', 'useRag']);
   // Explanatory template fallbacks. Never persist this merged object on page load.
-  const DEFAULTS = Object.freeze({ modelSelectionMode: 'preferred', searchMode: 'OFF', useRag: false });
+  const DEFAULTS = Object.freeze({ modelSelectionMode: 'preferred', executionMode: 'AUTO', searchMode: 'AUTO', useRag: true });
   const IDS = Object.freeze({ model: 'modelSelect', modelSelectionMode: 'modelSelectionMode',
-    searchMode: 'searchModeSelect', useRag: 'useRagToggle' });
+    executionMode: 'executionModeSelect', searchMode: 'searchModeSelect', useRag: 'useRagToggle' });
 
   function isRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -39,6 +39,7 @@
       const v = value[key];
       const valid = key === 'model' ? validModelId(v) : key === 'useRag' ? typeof v === 'boolean' :
         key === 'modelSelectionMode' ? ['preferred', 'strict', 'auto'].includes(v) :
+        key === 'executionMode' ? ['AUTO', 'STRIKE', 'SELF_ASK'].includes(v) :
           ['AUTO', 'OFF', 'FORCE_LIGHT', 'FORCE_DEEP'].includes(v);
       if (!valid) throw new Error('설정 값의 형식 또는 범위가 맞지 않습니다.');
       clean[key] = v;
@@ -84,7 +85,8 @@
   }
 
   const PREFERENCE_KEYS = Object.freeze([...KEYS, 'temperature', 'topP', 'frequencyPenalty',
-    'presencePenalty', 'maxTokens', 'useWebSearch', 'ragAnswerPolicy']);
+    'presencePenalty', 'maxTokens', 'useWebSearch', 'ragAnswerPolicy',
+    'customInstructions', 'responseTone', 'responseLength', 'responseLanguage', 'memoryMode']);
   const CACHE_KEY = 'awx.settings.v2.preferences';
   function validatePreferences(value) {
     if (!isRecord(value)) throw new Error('설정은 객체여야 합니다.');
@@ -96,6 +98,11 @@
         const ranges = {temperature:[0,2], topP:[0,1], frequencyPenalty:[-2,2], presencePenalty:[-2,2], maxTokens:[1,2147483647]};
         const valid = key === 'useWebSearch' ? typeof v === 'boolean' :
           key === 'ragAnswerPolicy' ? ['adaptive','evidence_only'].includes(v) :
+          key === 'customInstructions' ? typeof v === 'string' && v.length <= 4000 && Array.from(v).length <= 2000 :
+          key === 'responseTone' ? ['neutral','friendly','formal'].includes(v) :
+          key === 'responseLength' ? ['brief','standard','deep'].includes(v) :
+          key === 'responseLanguage' ? ['auto','ko','en'].includes(v) :
+          key === 'memoryMode' ? ['hybrid','ephemeral','full'].includes(v) :
             typeof v === 'number' && Number.isFinite(v) && v >= ranges[key][0] && v <= ranges[key][1]
               && (key !== 'maxTokens' || Number.isInteger(v));
         if (!valid) throw new Error('설정 값의 형식 또는 범위가 맞지 않습니다.');
@@ -113,9 +120,18 @@
       if (!PREFERENCE_KEYS.includes(key) || !['REQUEST','SESSION','USER','ADMIN_DB','ADMIN_CONFIG','FACTORY'].includes(source)) throw new Error('설정 출처 형식 오류');
       sources[key] = source;
     }
+    const raw = value.sampling?.temperature;
+    const reasons = ['adapter_omits_sampling','model_omits_sampling','configured_adapter','route_unobserved',
+      'automatic_route_unobserved','final_reasoning_unobserved','sampling_not_verified'];
+    const temperature = isRecord(raw) && typeof raw.model === 'string' && raw.model.length <= 200
+      && ['preferred','strict','auto'].includes(raw.modelSelectionMode)
+      && ['YES','NO','UNKNOWN'].includes(raw.support) && reasons.includes(raw.reasonCode)
+      ? {model:raw.model,modelSelectionMode:raw.modelSelectionMode,support:raw.support,reasonCode:raw.reasonCode}
+      : null;
     return {overrides:validatePreferences(value.overrides), effective:validatePreferences(value.effective),
       factoryDefaults:validatePreferences(value.factoryDefaults), sources, revision:value.revision,
-      hash:value.hash, defaultsVersion:value.defaultsVersion, ownerScope:'cookie'};
+      hash:value.hash, defaultsVersion:value.defaultsVersion, ownerScope:'cookie',
+      ...(temperature ? {sampling:{temperature}} : {})};
   }
   async function requestPreferences(win, options) {
     const response = await win.fetch('/api/settings/preferences', Object.assign({
@@ -210,6 +226,14 @@
     }
     async function begin() {
       const ticket = ++generation; pending = {}; edited.clear();
+      try {
+        const settings = JSON.parse(win.sessionStorage.getItem('chat.controlSettings') || 'null');
+        if (settings && settings.source !== 'factory') {
+          for (const key of ['model', 'modelSelectionMode', 'executionMode']) {
+            if (Object.hasOwn(settings, key)) edited.add(key);
+          }
+        }
+      } catch { /* malformed stored controls grant no preference override */ }
       if (!freshSession()) { gate(true); message('session-preserved','현재 대화 설정 유지'); return; }
       gate(false); message('server-loading','서버 개인 설정 확인 중');
       try {

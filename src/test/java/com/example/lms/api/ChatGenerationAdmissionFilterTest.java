@@ -181,4 +181,244 @@ class ChatGenerationAdmissionFilterTest {
             var limited=assertThrows(org.springframework.web.server.ResponseStatusException.class,cost::run);assertEquals(429,limited.getStatusCode().value());assertEquals("2",limited.getHeaders().getFirst("Retry-After"));
         } finally {org.springframework.security.core.context.SecurityContextHolder.clearContext();}
     }
+
+    @Test void syntheticPrincipalsCannotReplayAnotherOwnersCompletedAnswer() throws Exception {
+        var filter = new ChatGenerationAdmissionFilter(redis, ds, owners);
+        var calls = new AtomicInteger();
+        try {
+            for (String name : List.of("proto-open", "admin-token")) {
+                org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                        new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(name, null, List.of()));
+                for (String owner : List.of("owner-a", "owner-b")) {
+                    when(owners.ownerKey()).thenReturn(owner);
+                    var response = new MockHttpServletResponse();
+                    filter.doFilter(request("/api/chat", "shared-" + name, "{}"), response, (rq, rs) -> {
+                        calls.incrementAndGet();
+                        ChatGenerationAdmissionFilter.completion((jakarta.servlet.http.HttpServletRequest) rq).accept(
+                                new com.example.lms.dto.ChatResponseDto("answer-" + owner, 1L, "fixture", false));
+                    });
+                    assertEquals(200, response.getStatus());
+                    assertNull(response.getHeader("X-Idempotent-Replay"));
+                    assertFalse(response.getContentAsString().contains("answer-owner-a"));
+                }
+            }
+            assertEquals(4, calls.get());
+            assertEquals(2, new JdbcTemplate(ds).queryForObject("SELECT COUNT(DISTINCT owner_hash) FROM awx_chat_requests", Integer.class));
+        } finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+    }
+    @Test void syntheticCostHooksCaptureSeparateOwnerIdentityBeforeContextLeaves() {
+        var filter = new ChatGenerationAdmissionFilter(redis, ds, owners);
+        try {
+            for (String name : List.of("proto-open", "admin-token")) {
+                org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                        new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(name, null, List.of()));
+                var captured = new ArrayList<Runnable>();
+                for (String owner : List.of("cost-a", "cost-b")) {
+                    when(owners.ownerKey()).thenReturn(owner);
+                    captured.add(filter.costCheck(request("/api/tasks", null, "{}")));
+                }
+                org.springframework.security.core.context.SecurityContextHolder.clearContext();
+                captured.forEach(Runnable::run);
+            }
+            for (String owner : List.of("cost-a", "cost-b"))
+                verify(redis, times(2)).eval(anyString(), eq(List.of(
+                        "chat:{admission}:user:" + org.apache.commons.codec.digest.DigestUtils.sha256Hex("owner:" + owner),
+                        "chat:{admission}:ip:" + "f".repeat(64), "chat:{admission}:key:unused")), anyList());
+        } finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+    }
+    @Test void authenticatedPrincipalKeepsOneReplayNamespaceAcrossOwnerCookies() throws Exception {
+        var filter = new ChatGenerationAdmissionFilter(redis, ds, owners);
+        try {
+            org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                    new org.springframework.security.authentication.UsernamePasswordAuthenticationToken("real-fixture", null, List.of()));
+            filter.doFilter(request("/api/chat", "same-user", "{}"), new MockHttpServletResponse(), (rq, rs) ->
+                    ChatGenerationAdmissionFilter.completion((jakarta.servlet.http.HttpServletRequest) rq).accept(
+                            new com.example.lms.dto.ChatResponseDto("own-answer", 1L, "fixture", false)));
+            when(owners.ownerKey()).thenReturn("second-device");
+            var replay = new MockHttpServletResponse();
+            filter.doFilter(request("/api/chat", "same-user", "{}"), replay, (rq, rs) -> fail("same authenticated owner must replay"));
+            assertEquals("true", replay.getHeader("X-Idempotent-Replay"));
+            assertTrue(replay.getContentAsString().contains("own-answer"));
+        } finally { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+    }
+
+    @Nested class DemoRollingAdmission {
+        final java.util.concurrent.atomic.AtomicLong clock = new java.util.concurrent.atomic.AtomicLong();
+        ChatGenerationAdmissionFilter filter;
+        int nextKey;
+        @BeforeEach void demo() {
+            filter = new ChatGenerationAdmissionFilter(redis, ds, owners);
+            org.springframework.test.util.ReflectionTestUtils.setField(filter, "demoMode", true);
+            if (org.springframework.util.ReflectionUtils.findField(filter.getClass(), "turnClock") != null)
+                org.springframework.test.util.ReflectionTestUtils.setField(filter, "turnClock", (java.util.function.LongSupplier) clock::get);
+        }
+        @AfterEach void clearAuthentication() { org.springframework.security.core.context.SecurityContextHolder.clearContext(); }
+        MockHttpServletResponse send(String key) throws Exception {
+            var response = new MockHttpServletResponse();
+            filter.doFilter(request("/api/chat/sync", key, "{}"), response, (rq, rs) -> {});
+            return response;
+        }
+        void fill(int count) throws Exception {
+            for (int i = 0; i < count; i++) assertEquals(200, send("q" + nextKey++).getStatus());
+        }
+        void hourly(boolean enabled) {
+            if (org.springframework.util.ReflectionUtils.findField(filter.getClass(), "turnHourlyEnabled") != null)
+                org.springframework.test.util.ReflectionTestUtils.setField(filter, "turnHourlyEnabled", enabled);
+        }
+        void principal(String name) {
+            org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(
+                    new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(name, "synthetic", List.of()));
+        }
+        @Test void T1_eleventhNewQuestionIs429WithNoDownstreamCall() throws Exception {
+            fill(10);
+            var response = new MockHttpServletResponse(); var calls = new AtomicInteger();
+            filter.doFilter(request("/api/chat/sync", "eleven", "{}"), response, (rq, rs) -> calls.incrementAndGet());
+            assertEquals(429, response.getStatus()); assertEquals(0, calls.get());
+            assertTrue(Long.parseLong(response.getHeader("Retry-After")) >= 1);
+            assertEquals("minute", response.getHeader("X-RateLimit-Scope"));
+            assertEquals("{\"error\":\"chat_rate_limited\"}", response.getContentAsString());
+            verifyNoInteractions(redis);
+        }
+        @Test void T2_exactMinuteBoundaryAndBackwardClockRemainSafe() throws Exception {
+            fill(10); clock.set(59_999); assertEquals(429, send("blocked").getStatus());
+            clock.set(60_000); assertEquals(200, send("boundary").getStatus());
+            for (int i = 0; i < 9; i++) assertEquals(200, send("later" + i).getStatus());
+            clock.set(0); assertEquals(429, send("backward").getStatus());
+        }
+        @Test void T3_syntheticPrincipalsUseSeparateOwnersRealPrincipalsAggregate() throws Exception {
+            for (String name : List.of("proto-open", "admin-token")) {
+                principal(name); clock.addAndGet(60_000);
+                when(owners.ownerKey()).thenReturn("owner-a"); fill(10);
+                when(owners.ownerKey()).thenReturn("owner-b"); fill(10);
+                assertEquals(429, send("eleven-b").getStatus());
+            }
+            clock.addAndGet(60_000); principal("fixture-real-user");
+            when(owners.ownerKey()).thenReturn("device-a"); fill(5);
+            when(owners.ownerKey()).thenReturn("device-b");
+            for (int i = 5; i < 10; i++) assertEquals(200, send("q" + i).getStatus());
+            assertEquals(429, send("real-eleven").getStatus());
+        }
+        @Test void T4_idempotentReplayCostsZeroAndExpiresAtOneHour() throws Exception {
+            fill(10);
+            var calls = new AtomicInteger();
+            for (int i = 0; i < 15; i++) {
+                var duplicate = new MockHttpServletResponse();
+                filter.doFilter(request("/api/chat/sync", "q0", "{}"), duplicate,
+                        (rq, rs) -> calls.incrementAndGet());
+                assertEquals(409, duplicate.getStatus());
+                assertTrue(duplicate.getContentAsString().contains("idempotency_duplicate"));
+            }
+            assertEquals(0, calls.get());
+            assertEquals(429, send("new-key").getStatus());
+            clock.set(60_000); fill(10);
+            clock.set(3_599_999); fill(10); clock.set(3_600_000);
+            assertEquals(429, send("q0").getStatus());
+        }
+        @Test void T5_lastSlotCompetitionAcceptsExactlyOneNewKey() throws Exception {
+            fill(9); var ready = new CountDownLatch(2); var go = new CountDownLatch(1);
+            var pool = Executors.newFixedThreadPool(2);
+            try {
+                var futures = new ArrayList<Future<Integer>>();
+                for (int i = 0; i < 2; i++) { final String key = "race" + i;
+                    futures.add(pool.submit(() -> { ready.countDown(); assertTrue(go.await(5, TimeUnit.SECONDS)); return send(key).getStatus(); }));
+                }
+                assertTrue(ready.await(5, TimeUnit.SECONDS)); go.countDown();
+                var statuses = List.of(futures.get(0).get(5, TimeUnit.SECONDS), futures.get(1).get(5, TimeUnit.SECONDS));
+                assertEquals(1, Collections.frequency(statuses, 200)); assertEquals(1, Collections.frequency(statuses, 429));
+            } finally { go.countDown(); pool.shutdownNow(); }
+        }
+        @Test void T6_attachGetAndSettingsDoNotConsumeTurns() throws Exception {
+            for (int i = 0; i < 12; i++) {
+                var attach = request("/api/chat/stream", null, "{}"); attach.setParameter("attach", "true");
+                var get = new MockHttpServletRequest("GET", "/api/chat/sync");
+                var settings = request("/api/settings", null, "{}");
+                for (var req : List.of(attach, get, settings))
+                    filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {});
+            }
+            fill(10); assertEquals(429, send("eleven").getStatus());
+        }
+        @Test void T7_onlyExplicitNeverDispatchedMarkerRefunds() throws Exception {
+            fill(9);
+            var req = request("/api/chat/sync", "not-sent", "{}");
+            filter.doFilter(req, new MockHttpServletResponse(), (rq, rs) -> {
+                rq.setAttribute("chat.admission.neverDispatched", true); ((jakarta.servlet.http.HttpServletResponse) rs).setStatus(400);
+            });
+            assertEquals(200, send("not-sent").getStatus());
+            assertEquals(429, send("eleven").getStatus());
+            for (int status : List.of(400, 500)) {
+                clock.addAndGet(60_000); fill(9);
+                filter.doFilter(request("/api/chat/sync", "http" + status, "{}"), new MockHttpServletResponse(),
+                        (rq, rs) -> ((jakarta.servlet.http.HttpServletResponse) rs).setStatus(status));
+                assertEquals(429, send("after-http" + status).getStatus());
+            }
+            clock.addAndGet(60_000); fill(9);
+            assertThrows(jakarta.servlet.ServletException.class, () -> filter.doFilter(request("/api/chat/sync", "timeout", "{}"),
+                    new MockHttpServletResponse(), (rq, rs) -> { throw new jakarta.servlet.ServletException("synthetic-timeout"); }));
+            assertEquals(429, send("after-timeout").getStatus());
+            clock.addAndGet(60_000); fill(9);
+            var stream = request("/api/chat/stream", "cancel", "{}"); stream.setAsyncSupported(true);
+            filter.doFilter(stream, new MockHttpServletResponse(), (rq, rs) -> rq.startAsync(rq, rs));
+            stream.getAsyncContext().complete();
+            assertEquals(429, send("after-cancel").getStatus());
+        }
+        @Test void T8_hourlyDefaultOffAndToggleUsesRecordedHistory() throws Exception {
+            for (int i = 0; i < 11; i++) { clock.set(i * 60_000L); assertEquals(200, send("hour" + i).getStatus()); }
+            hourly(true); clock.set(660_000);
+            var denied = send("hour-on"); assertEquals(429, denied.getStatus());
+            assertEquals("hour", denied.getHeader("X-RateLimit-Scope"));
+            hourly(false); assertEquals(200, send("hour-off").getStatus());
+            hourly(true); clock.set(720_000); assertEquals(429, send("hour-on-again").getStatus());
+        }
+        @Test void T9_internalCostChecksDoNotConsumeLogicalTurns() throws Exception {
+            for (int i = 0; i < 20; i++) {
+                filter.costCheck(request("/api/tasks", null, "{}")).run(); filter.costCheckCurrentRequest().run();
+            }
+            fill(10); assertEquals(429, send("eleven").getStatus()); verifyNoInteractions(redis);
+        }
+        @Test void T10_sameKeyChangedPayloadRejectsBeforeGenerationOrAnotherTurnCharge() throws Exception {
+            var calls = new AtomicInteger();
+            var first = new MockHttpServletResponse();
+            filter.doFilter(request("/api/chat/sync", "payload-key", "{\"message\":\"first\"}"), first,
+                    (rq, rs) -> calls.incrementAndGet());
+            assertEquals(200, first.getStatus());
+            var changed = new MockHttpServletResponse();
+            filter.doFilter(request("/api/chat/sync", "payload-key", "{\"message\":\"different\"}"), changed,
+                    (rq, rs) -> calls.incrementAndGet());
+            assertEquals(409, changed.getStatus());
+            assertTrue(changed.getContentAsString().contains("idempotency_payload_mismatch"));
+            assertEquals(1, calls.get());
+            fill(9); assertEquals(429, send("eleven-after-mismatch").getStatus());
+            verifyNoInteractions(redis);
+        }
+        @Test void T11_concurrentDuplicateHasOneGenerationAndNoSecondTurnCharge() throws Exception {
+            var ready = new CountDownLatch(2); var go = new CountDownLatch(1);
+            var firstEntered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            var calls = new AtomicInteger(); var pool = Executors.newFixedThreadPool(2);
+            var completed = new ExecutorCompletionService<Integer>(pool);
+            try {
+                for (int i = 0; i < 2; i++) completed.submit(() -> {
+                    ready.countDown(); assertTrue(go.await(5, TimeUnit.SECONDS));
+                    var response = new MockHttpServletResponse();
+                    filter.doFilter(request("/api/chat/sync", "concurrent-key", "{}"), response, (rq, rs) -> {
+                        calls.incrementAndGet(); firstEntered.countDown();
+                        try { assertTrue(release.await(5, TimeUnit.SECONDS)); }
+                        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new RuntimeException(interrupted); }
+                    });
+                    return response.getStatus();
+                });
+                assertTrue(ready.await(5, TimeUnit.SECONDS)); go.countDown();
+                assertTrue(firstEntered.await(5, TimeUnit.SECONDS));
+                var duplicate = completed.poll(2, TimeUnit.SECONDS);
+                assertNotNull(duplicate, "duplicate must reject while the original generation remains in flight");
+                assertEquals(409, duplicate.get(5, TimeUnit.SECONDS));
+                assertEquals(1, calls.get());
+                release.countDown();
+                var original = completed.poll(5, TimeUnit.SECONDS);
+                assertNotNull(original, "released original must finish within the fixture deadline");
+                assertEquals(200, original.get(5, TimeUnit.SECONDS));
+                fill(9); assertEquals(429, send("eleven-after-duplicate").getStatus());
+                verifyNoInteractions(redis);
+            } finally { go.countDown(); release.countDown(); pool.shutdownNow(); }
+        }
+    }
 }

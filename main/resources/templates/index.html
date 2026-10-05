@@ -152,6 +152,10 @@
       <a th:href="@{/admin/learning-data}" href="/admin/learning-data">Development Data Review</a>
       <a th:href="@{/chat-ui}" href="/chat-ui">Chat UI</a>
       <a href="/api/diagnostics/rag/learning-ops/metrics/prometheus">Prometheus Metrics</a>
+      <form method="post" action="/logout">
+        <!-- CSRF_INPUT -->
+        <button type="submit">Sign out</button>
+      </form>
     </nav>
   </aside>
 

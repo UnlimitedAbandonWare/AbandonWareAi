@@ -15,6 +15,8 @@ import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +28,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FactVerifierDetailedOutcomeTest {
@@ -230,17 +233,19 @@ class FactVerifierDetailedOutcomeTest {
         assertTrue(result.acceptedForMemory());
     }
 
-    @Test
-    void failSoftRemainsStickyWhenLaterMetaVerdictRejects() {
+    @ParameterizedTest
+    @CsvSource({"MISMATCH,rejected", "INSUFFICIENT,insufficient"})
+    void earlierInfrastructureFailureDoesNotMaskLaterNegativeMetaVerdict(
+            String metaVerdict, String expectedStatus) {
         ClaimVerifierService claimVerifier = acceptedClaimVerifier("draft");
         SourceAnalyzerService sourceAnalyzer = mock(SourceAnalyzerService.class);
         when(sourceAnalyzer.analyze(anyString(), anyString()))
-                .thenThrow(new IllegalStateException("private source failure"));
+                .thenThrow(new IllegalStateException("synthetic source analysis failure"));
         FactVerifierService service = service(
                 claimVerifier,
                 FactVerificationStatus.PASS,
                 sourceAnalyzer,
-                "MISMATCH");
+                metaVerdict);
 
         FactVerifierService.DetailedVerificationResult result = service.verifyDetailed(
                 "ordinary question",
@@ -250,6 +255,62 @@ class FactVerifierDetailedOutcomeTest {
                 "model",
                 false);
 
+        assertEquals(expectedStatus, result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+    }
+
+    @Test
+    void earlierInfrastructureFailureDoesNotMaskKnownNegativeClaimOutcome() {
+        ClaimVerifierService claimVerifier = mock(ClaimVerifierService.class);
+        when(claimVerifier.verifyClaims(anyString(), anyString(), anyString()))
+                .thenReturn(new ClaimVerifierService.VerificationResult(
+                        "draft", List.of(), true, false));
+        SourceAnalyzerService sourceAnalyzer = mock(SourceAnalyzerService.class);
+        when(sourceAnalyzer.analyze(anyString(), anyString()))
+                .thenThrow(new IllegalStateException("synthetic source analysis failure"));
+        FactVerifierService service = service(
+                claimVerifier,
+                FactVerificationStatus.PASS,
+                sourceAnalyzer,
+                "CONSISTENT");
+
+        FactVerifierService.DetailedVerificationResult result = service.verifyDetailed(
+                "ordinary question",
+                "supporting official context ".repeat(8),
+                "",
+                "draft",
+                "model",
+                false);
+
+        verify(claimVerifier).verifyClaims(anyString(), anyString(), anyString());
+        assertEquals("rejected", result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+    }
+
+    @Test
+    void earlierInfrastructureFailureStillPreventsLaterPositiveMemoryAcceptance() {
+        ClaimVerifierService claimVerifier = acceptedClaimVerifier("draft");
+        SourceAnalyzerService sourceAnalyzer = mock(SourceAnalyzerService.class);
+        when(sourceAnalyzer.analyze(anyString(), anyString()))
+                .thenThrow(new IllegalStateException("synthetic source analysis failure"));
+        FactVerifierService service = service(
+                claimVerifier,
+                FactVerificationStatus.PASS,
+                sourceAnalyzer,
+                "CONSISTENT");
+
+        FactVerifierService.DetailedVerificationResult result = service.verifyDetailed(
+                "ordinary question",
+                "supporting official context ".repeat(8),
+                "",
+                "draft",
+                "model",
+                false);
+
+        verify(claimVerifier).verifyClaims(anyString(), anyString(), anyString());
+        assertEquals("draft", result.answer());
         assertEquals("unknown", result.status());
         assertFalse(result.outcomeKnown());
         assertFalse(result.acceptedForMemory());

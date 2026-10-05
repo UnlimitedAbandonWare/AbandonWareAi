@@ -336,7 +336,8 @@ public class WeightedReciprocalRankFuser {
 
     /**
      * Generate a stable key for de-duplication. Prefer source metadata first
-     * so the same URL across Self-Ask/Web/Vector lanes fuses together, then
+     * so authorized graph sources retain their revision and the same URL
+     * across Self-Ask/Web/Vector lanes fuses together, then
      * fall back to a SHA-256 of normalized text.
      *
      * @param content the content object
@@ -347,6 +348,16 @@ public class WeightedReciprocalRankFuser {
             TextSegment segment = content.textSegment();
             if (segment != null && segment.metadata() != null) {
                 java.util.Map<String, Object> md = segment.metadata().toMap();
+                // Authority rehydrates graph/vector hits to source-level evidence;
+                // its shared source label is a category, not a document/chunk ID.
+                if ("general_graph_evidence".equals(md.get("source"))) {
+                    String sourceId = Objects.toString(md.get("sourceId"), "").trim();
+                    String revision = Objects.toString(md.get("sourceRevision"), "").trim();
+                    if (!sourceId.isBlank() && !revision.isBlank()) {
+                        return "graph_source:" + sha256(sourceId.length() + ":" + sourceId
+                                + ":" + revision.length() + ":" + revision);
+                    }
+                }
                 for (String key : java.util.List.of(
                         "url", "uri", "source_url", "sourceUrl", "link", "href", "canonical", "permalink",
                         "doc_id", "docId", "source")) {
@@ -355,7 +366,8 @@ public class WeightedReciprocalRankFuser {
                         String s = String.valueOf(value).trim();
                         if (!s.isBlank()) {
                             if ("source".equals(key)
-                                    && ("web".equalsIgnoreCase(s) || s.toLowerCase(java.util.Locale.ROOT).startsWith("web:"))) {
+                                    && ("general_graph_evidence".equals(s) || "web".equalsIgnoreCase(s)
+                                    || s.toLowerCase(java.util.Locale.ROOT).startsWith("web:"))) {
                                 continue;
                             }
                             return canonicalMetadataPrefix(key) + ":" + canonicalMetadataValue(key, s);

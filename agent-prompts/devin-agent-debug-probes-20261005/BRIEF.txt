@@ -1,0 +1,112 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 검증 보고서를 제출해야 완료된다.
+@agent-session-watchdog
+
+[DEVIN 지시서] OllyDbg식 에이전트 실패 타점 탐침 및 디버깅 프로브 구축 — 2026-10-05 01:55 KST
+파일 ID: PASTE_DEVIN_AGENT_DEBUG_PROBES_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스 구조변경 0 · git commit/push/add -A 0 · remote 추가 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+0. 한 줄 목표
+OllyDbg 리버싱 탐침(타점 브레이크포인트/출력 검사)을 적용해 최근 1주일간 세션에서 관측된 Codex/Devin 5대 실패 타점(P11 은폐실패, P15 락 1,060개 누적, P1/P8 패치이탈, P7 Goal충돌, Failover 지연)에 가드 트랩 및 관측 프로브를 구축한다.
+
+# 1. 사실 (읽기 전용 라이브 증거, 2026-10-05 01:55 KST)
+- 세션 총괄: 최근 168시간 codex 2,920건, devin 697건, agy 113건 활동 (`python -B scripts/agent_session_watch.py summary --since-hours 168`). 이상치 auto=5, warn=46.
+- [타점 1 - P11 은폐 실패]: 도구 봉투는 성공(exit 0)이지만 출력에 `Cannot find path`, `CreateProcess error` 등이 은폐되어 에이전트가 오판하고 진행하는 오류 다수.
+- [타점 2 - P15 Devin 락 누적]: `%APPDATA%\devin\cli\session_locks\`에 방치된 `.lock` 파일 1,060개 누적 (P15 auto finding).
+- [타점 3 - P1/P8 패치 이탈]: CWD 외부 경로 수정 시도(P8) 및 `apply_patch` 시 프리이미지 드리프트로 `Failed to find expected lines`(P1) 관측.
+- [타점 4 - P7 Goal 충돌]: 열린 Goal 상태에서 새 `create_goal` 호출로 `unfinished goal still open` 거절 반복.
+- [타점 5 - 소스 Failover]: `LlmRouterAspect.java`에서 Ollama 실패 시 사유/시간의 명시적 프로브 로그 부재.
+
+# 2. 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| scripts/agent_session_watch.py | AE5A9D2BEDA2 | - | 읽기/수정 |
+| scripts/agent_work_guard.py | F1AA98216686 | - | 읽기/수정 |
+| scripts/devin_pre_edit_guard.ps1 | C6D246FDAB23 | - | 읽기/수정 |
+| main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java | E4337737EE34 | - | 읽기/수정 (로그만) |
+
+# 3. 입력 판정표
+| 개념 / 요구 | 판정 | 근거 및 구현 매핑 |
+|---|---|---|
+| OllyDbg식 브레이크포인트/탐침 | RIGHT | 복귀값 검사(P11 트랩), 메모리 접근 전 검증(P1/P8 가드) 매핑 |
+| 최근 1주일 세션 확인 | RIGHT | `agent_session_watch.py summary --since-hours 168`로 3,730개 세션 확인 완료 |
+| Devin 세션 락 누적 해소 | RIGHT | P15 지표상 1,060개 락 파일 실존, 회수 프로브 필요 |
+| 소스 런타임 디버깅 타점 | RIGHT | `LlmRouterAspect.java`에 `[PROBE:LLM_FAILOVER]` 로그 계측 |
+
+# 4. 공통 규칙
+- Project Root: `C:\AbandonWare\demo-1\demo-1\src` 고정.
+- 불필요한 제품 소스 리팩토링 배제(STRICT_LEAST_DIFF).
+- JVM 빌드는 multi-session 규칙(`AWX_SPLIT_BUILD_OUTPUTS=1`, `AWX_BUILD_HOST_ID=devin`) 준수 및 타겟 테스트만 실행.
+- PROTO_OPEN 유지. 비밀번호나 토큰 값은 로그/산출물에 노출 금지.
+
+# 5. 항목 (Work Packages)
+
+### WP1 [DEVIN] P11 명령어 은폐 실패 트래퍼 프로브 구축
+- 목적: OllyDbg API 리턴 후킹처럼 `agent_work_guard.py`에 출력 분석 프로브를 장착하여 `Cannot find path`, `CreateProcess error` 등이 포함된 결과를 즉시 P11 실패로 감지.
+- 대상: `scripts/agent_work_guard.py`
+- 수정: PostToolUse 단계에서 출력이 성공으로 포장되어도 에러 패턴 감지 시 가드 차단 레코드에 추가.
+- 검증: `python -B scripts/test_agent_work_guard.py` 통과 확인.
+
+### WP2 [DEVIN] P15 Devin 1,060개 누적 좀비 락 회수 프로브 구축
+- 목적: 핸들 누수 감지처럼 `%APPDATA%\devin\cli\session_locks\*.lock`의 1,060개 좀비 락을 스캔하고 24시간 경과 orphan lock을 안전하게 청소하는 프로브 추가.
+- 대상: `scripts/agent_session_watch.py`
+- 수정: `agent_session_watch.py`에 `--clean-stale-locks` 플래그 추가 (stale-hours 기준 이전 lock 정리).
+- 검증: `python -B scripts/agent_session_watch.py scan --agent devin` 재실행 시 락 파일 카운트 정상화 확인.
+
+### WP3 [DEVIN] P1/P8 패치 사전 프리이미지 메모리 가드
+- 목적: 메모리 쓰기 브레이크포인트처럼 파일 수정 직전 CWD 바운더리 및 실존 여부(`Test-Path`)를 검사해 `P1`/`P8` 사전 차단.
+- 대상: `scripts/devin_pre_edit_guard.ps1`
+- 수정: 타겟 경로 CWD 하위 검증 및 신규 생성/수정 분리 검증 강화.
+- 검증: `powershell -ExecutionPolicy Bypass -File scripts/devin_pre_edit_guard.ps1 -Action check` 통과.
+
+### WP4 [DEVIN] 소스 런타임: LLM Router / Failover 디버깅 타점 삽입
+- 목적: Ollama 실패 및 API OAuth 전환 분기점에 로깅 프로브를 심어 장애 원인(Timeout, 401 등)과 지연 시간 기록.
+- 대상: `main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java`
+- 수정: Failover 분기 시점에 `log.warn("[PROBE:LLM_FAILOVER] provider={}, model={}, reason={}, elapsedMs={}", ...)` 단일 라인 삽입.
+- 검증: `.\gradlew.bat :compileJava --no-daemon --console=plain; "exit=$LASTEXITCODE"` exit 0 확인.
+
+# 6. HOLD
+- 다음 상황 발생 시 즉시 HOLD 전환:
+  1. `%APPDATA%\devin\cli\session_locks` 외 활성 세션 디렉토리 잠김 시.
+  2. `agent_session_watch.py` 기존 P1~P15 감지 스키마 깨짐 시.
+  3. `LlmRouterAspect.java` 수정 후 컴파일 에러 발생 시.
+
+# 7. ASK_ONCE
+- U-1: Devin 좀비 락 청소 주기 — (a) 권장: 24시간 이상 방치된 lock 파일만 안전 회수 (b) 12시간 이상 (c) 수동 실행만.
+- U-2: P11 은폐 실패 트랩 시 동작 — (a) 권장: 가드 로그 경고 기록 및 다음 턴 차단 권고 (b) 즉시 하드 블록(exit 2).
+
+# 8. 절대 금지
+- `git push`, `git checkout`, `git reset`, `git add -A`, `git commit -a` 금지.
+- `git remote` 추가 및 외부 원격지 조작 금지.
+- 비밀번호, API 키, 인증 토큰 평문 출력 금지.
+- PROTO_OPEN 정책을 깨고 추가 로그인 인증 장벽 신설 금지.
+- 전체 `:test` 스위트 무차별 실행 금지.
+
+# 9. Acceptance (완료 수용 기준)
+- [ ] AC-1: `python -B scripts/agent_session_watch.py summary --since-hours 168` 에러 없이 요약 출력.
+- [ ] AC-2: `agent_work_guard.py`가 은폐된 경로 오류(P11) 시그니처 보유 및 테스트 통과.
+- [ ] AC-3: Devin 세션 락(1,060개)에 대한 진단 및 stale 락 회수 루틴 정상 실행.
+- [ ] AC-4: `LlmRouterAspect.java` 프로브 로그 삽입 후 `.\gradlew.bat :compileJava` exit 0 통과.
+- [ ] AC-5: 미실행 항목은 사유와 함께 `NOT_RUN` 보고.
+
+# 10. 보고 형식
+보고는 반드시 `외부 API:` 줄로 시작하며 아래 양식을 따른다:
+
+```markdown
+외부 API: 호출 0회 (로컬 감시 및 소스 프로브 작업)
+결론: [PASS | PARTIAL | FAIL]
+실행 결과 요약:
+- WP1 (P11 은폐 실패 트랩): [결과 + 검증 증거]
+- WP2 (P15 Devin 락 회수): [결과 + 회수된 락 수]
+- WP3 (P1/P8 사전 메모리 가드): [결과 + 검증 증거]
+- WP4 (LLM Failover 런타임 프로브): [결과 + compileJava exit 코드]
+
+산출물 및 로그:
+- 변경 파일: <경로 및 sha12>
+- 검증 로그: <관측된 exit 코드 및 주요 출력>
+
+미실행 항목: [없음 또는 NOT_RUN 사유]
+한 줄: OllyDbg식 디버깅 프로브 4종 장착 및 Devin 세션 락 누적 정리 완료.
+```
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 끝까지 완수하고 검증 보고서를 제출해야 완료된다.

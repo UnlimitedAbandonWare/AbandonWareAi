@@ -9,7 +9,8 @@ param(
     [switch]$CheckOnly,
     [switch]$OpenBrowser,
     [switch]$ForceRestart,
-    [switch]$DevWatch
+    [switch]$DevWatch,
+    [switch]$Preload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -374,7 +375,7 @@ function Start-RagSpring {
 }
 
 function Invoke-RagServices {
-    param([int]$RequestedPort, [int]$OllamaPort, [string]$RunDirectory, [int]$TimeoutSeconds, [switch]$CheckOnly, [switch]$MetaDisplay, [switch]$ForceRestart, [switch]$Wear)
+    param([int]$RequestedPort, [int]$OllamaPort, [string]$RunDirectory, [int]$TimeoutSeconds, [switch]$CheckOnly, [switch]$MetaDisplay, [switch]$ForceRestart, [switch]$Wear, [switch]$Preload)
     Write-RagStage 'PREFLIGHT' 'CHECK' 'Checking existing Spring identity and port ownership.'
     if ($ForceRestart -and -not $CheckOnly) {
         Write-RagStage 'SPRING' 'RESTART' 'ForceRestart requested: stopping existing Spring before relaunch.'
@@ -388,6 +389,22 @@ function Invoke-RagServices {
     } else {
         if ($CheckOnly) { throw 'ollama-not-ready' }
         Start-RagOllama -Port $OllamaPort -RunDirectory $RunDirectory -TimeoutSeconds $TimeoutSeconds
+    }
+    if ($Preload -and -not $CheckOnly) {
+        # Ollama is confirmed ready above (reused or just started). Warm light
+        # models in the background so the first real request skips cold load;
+        # this must never block the boot path.
+        $preloadScript = Join-Path $PSScriptRoot 'ollama-light-preload.ps1'
+        if (Test-Path -LiteralPath $preloadScript) {
+            $preArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$preloadScript,'-Port',"$OllamaPort",'-KeepAlive','60m','-Force')
+            $preChild = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+                -ArgumentList $preArgs -WorkingDirectory $script:RagRoot -WindowStyle Hidden -PassThru `
+                -RedirectStandardOutput (Join-Path $RunDirectory 'ollama-preload.out.log') `
+                -RedirectStandardError (Join-Path $RunDirectory 'ollama-preload.err.log')
+            Write-RagStage 'PRELOAD' 'STARTED' "port=$OllamaPort pid=$($preChild.Id) keepAlive=60m"
+        } else {
+            Write-RagStage 'PRELOAD' 'SKIP' 'ollama-light-preload.ps1 missing'
+        }
     }
     Write-RagStage 'SPRING' 'CHECK' "port=$($spring.port)"
     if ($spring.reuse) {
@@ -779,7 +796,7 @@ function Invoke-RagLauncher {
                 [Environment]::SetEnvironmentVariable($key,$defaults[$key],'Process')
             }
         }
-        $spring = Invoke-RagServices -RequestedPort $chosenPort -OllamaPort $chosenOllamaPort -RunDirectory $runDirectory -TimeoutSeconds $TimeoutSeconds -CheckOnly:$CheckOnly -MetaDisplay:$MetaDisplay -ForceRestart:$ForceRestart -Wear:$Wear
+        $spring = Invoke-RagServices -RequestedPort $chosenPort -OllamaPort $chosenOllamaPort -RunDirectory $runDirectory -TimeoutSeconds $TimeoutSeconds -CheckOnly:$CheckOnly -MetaDisplay:$MetaDisplay -ForceRestart:$ForceRestart -Wear:$Wear -Preload:$Preload
         $base = "http://127.0.0.1:$($spring.port)"
         $managementUrl = ''
         $springProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$($spring.processId)" -ErrorAction SilentlyContinue

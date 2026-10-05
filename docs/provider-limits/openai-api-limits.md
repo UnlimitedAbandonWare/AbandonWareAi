@@ -1,9 +1,13 @@
 # OpenAI API limits (SSOT)
 
 ```yaml
-capturedAt: "2026-09-24"
+capturedAt: "2026-10-05"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-09-24"
+reviewedAt: "2026-10-05"
+ttlDays: 90
+expiresAt: "2027-01-03"
+status: "ACTIVE"
+expiryAction: "archive"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -19,8 +23,24 @@ disclaimer: >
 sourceUrls:
   - "https://developers.openai.com/api/docs/guides/rate-limits"
   - "https://developers.openai.com/api/docs/guides/error-codes"
+  - "https://developers.openai.com/api/docs/guides/prompt-caching"
+  - "https://developers.openai.com/api/docs/models"
   - "https://developers.openai.com/api/docs/models/text-embedding-3-small"
 ```
+
+## 에이전트 빠른 참조
+
+| 항목 | 값 |
+|---|---|
+| Canonical env | `OPENAI_API_KEY` (값 기록·출력 금지; resolver alias는 아래 섹션) |
+| 엔드포인트 | `https://api.openai.com/v1` (Responses API 중심; Chat Completions·Batch·Embeddings 포함) |
+| 주력 모델(2026-10-05 공식 문서) | `gpt-6-astra`(플래그십), `gpt-6.1-sol`(균형), `gpt-6-luna`; 장문 컨텍스트 계열 `gpt-5.5`는 별도 rate limit |
+| 한도 단위 | RPM/RPD/TPM/TPD/IPM(+일부 오디오 분) — **organization·project 레벨**, user 레벨 아님. "shared limit" 그룹은 모델 간 TPM 공유 |
+| 사용량 상한 | org 월 usage limit(tier표 아래)과 별개로 spend limit(alert/hard-429) 설정 가능 |
+| 401 | 인증 실패(auth) |
+| 403 | 권한/지역·플랜 제한 — body 문구로 구분 |
+| 429 | `insufficient_quota.*`(크레딧/spend/usage-limit — 재시도 무의미) vs `rate_limit_error.*`(rate_limit_reached/slow_down — Retry-After 후 재시도) |
+| 5xx | `server_is_overloaded` 등 일시 과부하 — Retry-After 헤더 확인 |
 
 ## What this file is / is not
 
@@ -79,8 +99,23 @@ Exact limits for this account are shown in the account's **Limits** page; they a
 **Pricing**: `$0.02 / 1M tokens` for embeddings.
 
 Free tier limit table does **not** mean the price is $0. `Free tier` is a usage tier name.
-Other OpenAI chat/completion models are not listed here because no specific Free tier
-public quota table was confirmed for them in this review; treat them as `not_published_here / unknown`.
+Other chat/completion models publish per-tier limits on the models/limits pages rather than a
+single public table; treat per-model exact values as `account_exact_unknown` unless the org
+Limits page is separately evidenced.
+
+### Prompt caching (2026-10-05 확인)
+
+- 지원 모델에서 기본 활성. 최소 캐시 가능 prefix 길이는 **1,024 tokens(GPT-5.6 이후 기준,
+  이전 모델은 요청 설정에 따라 다름)**.
+- GPT-5.6+: cache **write 1.25×** uncached input rate, cache **read 0.1×**(GPT-6.1 Sol은 0.05×).
+  구 문서의 "50% 할인" 표현은 폐기 — 현재는 최대 ~95% 할인(0.05~0.1×) + write 가산 구조.
+- prefix가 model·tools·text.format·reasoning.effort·context_management 등 변경 전까지
+  동일해야 cache hit. 캐시는 토큰이 아니라 KV state를 저장한다.
+
+### Spend limits (2026-10-05 확인)
+
+- tier별 월 usage limit과 별개로 org/project **spend limit**을 설정할 수 있다:
+  spend alert(통지만, 트래픽 지속)와 hard spend limit(도달 시 해당 요청 `429`)으로 나뉜다.
 
 ## Error code guidance
 
@@ -102,5 +137,7 @@ Do not treat every 429 as a plan-change or login request.
 ## Agent guidance
 
 - API 관련 작업에서만 이 문서를 읽는다.
-- `capturedAt`이 90일 이내이고 공식 정책 변경 증거가 없으면 재사용한다.
+- `expiresAt` 경과 시 **STALE_DISCARD** — `scripts/provider_limits_janitor.py archive`가
+  `docs/provider-limits/archive/`로 격리한다. 만료 전엔 `capturedAt` 90일 이내 + 공식 정책
+  변경 증거 없으면 재사용한다.
 - 문서 갱신 자체가 API 키 유효성이나 계정 접근 성공을 증명하는 것은 아니다.

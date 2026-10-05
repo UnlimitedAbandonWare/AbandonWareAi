@@ -6,7 +6,8 @@ import java.util.*;
 
 /** Server-selected conversation data. Never deserialized from a public request. */
 public record ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,
-                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript) {
+                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer focusAnswerLengthChars) {
+    public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript){this(recent,summary,relevant,supplied,evidence,transcript,null);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence){this(recent,summary,relevant,supplied,evidence,List.of());}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied){this(recent,summary,relevant,supplied,List.of());}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant){this(recent,summary,relevant,true);}
@@ -20,6 +21,7 @@ public record ChatConversationContext(List<Turn> recent,String summary,List<Turn
         @Override public String toString(){return "Transcript[redacted]";}
     }
     public ChatConversationContext {
+        if(focusAnswerLengthChars!=null&&(focusAnswerLengthChars<80||focusAnswerLengthChars>800))throw new IllegalArgumentException("invalid_focus_answer_length");
         recent=List.copyOf(recent);relevant=List.copyOf(relevant);summary=Objects.requireNonNull(summary);evidence=List.copyOf(evidence);transcript=List.copyOf(transcript);
         if(transcript.size()>12||transcriptTokens(transcript)>2000)throw new IllegalArgumentException("recent_transcript_limit");
         if(evidence.size()>4||evidenceBytes(evidence)>3072)throw new IllegalArgumentException("memory_evidence_limit");

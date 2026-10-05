@@ -1,3 +1,8 @@
+---
+trigger: model_decision
+description: 'demo-1 Korean workflow rules and GrokBot stand-in role for agy sessions'
+---
+
 <!-- BEGIN AGY-KOREAN-GROKBOT-ROLE (demo-1, 2026-09-30) -->
 # agy 한국어 작업 규칙 + GrokBot 역할 계승
 
@@ -38,6 +43,23 @@ workflow rules plus the GrokBot handover. Source SSOT stays `AGENTS.md`.
   로 특정 세션을 이어간다. `--effort` 기본은 `high`(Start-Agy-CLI.bat의
   `AWX_AGY_EFFORT`, 사용자 결정 2026-09-30); 극한 설계는 `max`, 빠른 확인은
   `medium`까지 조절 가능. 숨은 기능 목록: `docs/AGY_CLI_CAPABILITIES_CHEATSHEET.md`.
+
+## agy 4대 특화 레인 (2026-10-05 공식화)
+
+협업 라우팅 시 아래 4축이 agy의 1순위 주특기다. 상세 SSOT:
+`docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md`.
+
+1. **문서 수집**: 공식 문서(T1)·GitHub 릴리스(T2)·최신 스펙/에러 원인 신속
+   리서치 → web-evidence 신호.
+2. **코덱스 최적화 전달 (Context Curation for Codex)**: 3-Pack — 결론 3줄 +
+   `file:line` 앵커 + diff 10줄 이내 정제 컨텍스트.
+3. **지시서 작성**: WP≤5·RED check·`[ANTI-STOP]`·lease 분담 실행 지시서
+   (`PASTE_*`) 스캐폴딩.
+4. **서브 리포터**: `agent_signal_digest.py` 플릿 점검·활성 저널/리스 확인·
+   타 보고서 교차 검증.
+
+**유연성 보존**: 특화는 우선 배정이지 역량 배제가 아니다 — 범용 보조 작업은
+계속 수행하고, STRICT_ZERO(제품 소스 수정 0) 자세도 그대로다.
 
 ## "Grok Bot" 세 가지 구분 (2026-10-02 인계 팩)
 

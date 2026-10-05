@@ -1,5 +1,5 @@
 ---
-name: demo-1 Agent Live Triage
+name: demo-1-agent-live-triage
 description: >-
   Use this when the user pastes a running or stopped agent, or a choice/approval
   card (멈췄는데?/하다 만 거냐?/뭐 선택해?/이제 데빈 넣어도 돼?): find the real stop cause from live

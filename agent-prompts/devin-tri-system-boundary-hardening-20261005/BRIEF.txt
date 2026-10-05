@@ -1,0 +1,141 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 수행하고 검증하는 실행 지시서다.
+@demo1-core-request-router @demo1-evidence-debugging
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+메타레이벤 디스플레이(웨어러블 HUD/Nova Focus)·RAG(검색·임베딩·인용)·LLM 챗봇(메인 /chat 세션) 삼중 시스템의 프롬프트·검색 제어·모델 라우팅·프론트엔드 표면 혼동을 원천 격리하는 아키텍처 규칙·스킬 라우팅 쇄신·전용 검증 스크립트 및 안전 완화 세트를 구현·배치한다.
+
+### 1. 사실 (2026-10-05 19:45 KST 기준 실측 및 코덱스 세션 증거)
+1. 최근 코덱스 세션 실측 결함 분석:
+   - `codex-display-model-state-f1a1a8b1` (19:25 KST): Display Focus 모델 상태(Luna vs 로컬) 및 catalog 메타데이터 처리 중, 일반 채팅 경로의 RAG 정책과 혼선이 발생하여 `EVIDENCE_ONLY/uncited-evidence HOLD` 및 `judge_call_failed` (trace962, FNV32 cac7dd00) 발생. 또한 실물 안경 부재로 인해 3턴 연속 BLOCKED 감사에 빠짐.
+   - `codex-display-font-durability-c07cc1c8` (18:52 KST): `NovaFocusHistoryService.java`와 `DisplayConversateController.java`에서 로컬 DB `profile_db`의 `LENS_SETTINGS`를 분리했으나, 거대 공유 파이프라인인 `ChatWorkflow.java`(13,000+ 줄)와 `StandardPromptBuilder.java`(1,000+ 줄)에서 Display의 `focusAnswerLengthChars`와 Quick 모드가 메인 챗봇 및 RAG 경로에 간섭할 위험이 확인됨.
+   - `codex-display-length-594f7cb9` (18:03 KST): Focus 길이 제약(80~800자, 기본 400자)을 `StandardPromptBuilder`에 이식하면서, `DISPLAY FOCUS OUTPUT` 블록과 RAG `minWords`/`SECTION TEMPLATE`이 상호 배타적으로 처리되도록 패치했으나, `NovaFocusAnswerService`에서 `isUseRag=false`, `isUseWebSearch=false`, `webTopK=0`이 전파되어 RAG 검색이 무단 억제되는 회귀가 상존함.
+   - `codex-main-chat-session-refresh-8eb4cda8` (19:39 KST): 메인 챗봇의 `chat.js`에서 세션 갱신 및 선택 알림을 패치했으나, Display 클라이언트(`display-focus-controls.js`, `receiver.js`)와 동일한 DOM/이벤트 채널을 공유하여 프론트엔드 표면 혼동 위험 상존.
+   - `codex-interview-blocked-audit-3a202610` (16:11 KST): 로컬 디버그용 면접 화면(`assets/interview/*`)의 취소·할당량 테스트 실패를 메인 챗봇 결함으로 오인하여 3턴 연속 BLOCKED 감사 루프 발생 (`DEMO1-PRIMARY-SURFACE.md`의 면접 화면 보조 원칙 미준수).
+   - `devin-ollama-spillover-4e9a9f80` (16:09 KST): 로컬 Ollama 슬롯 포화 시 클라우드 Fast-Spillover를 설계했으나, Display 요청이 로컬 GPU Ollama로 오라우팅될 경우 렌즈 HUD에 치명적인 지연(TTFT > 4s)과 503 에러가 전이됨.
+2. 라이브 트리 핵심 앵커 및 기준선:
+   - `main/java/com/example/lms/prompt/StandardPromptBuilder.java`: L529 `boolean focusOutput = ctx != null && ctx.focusAnswerLengthChars() != null;`, L623-625 `DISPLAY FOCUS OUTPUT` 주입부.
+   - `src/test/java/com/example/lms/assist/NovaFocusDisplayContractTest.java`: L50-66 `lengthReachesServerPromptPolicyAndQuickClosesSearchRetry`, L89-100 `sharedPromptBoundaryHonorsFocusLengthAndLeavesOrdinaryChatAlone`.
+   - `scripts/display_diagnostics_separation_tests.cjs`: 렌즈 HTML에 진단 도구 및 일반 컨트롤 로드 금지 계약.
+   - `scripts/display_receiver_rag_contract_tests.cjs`: 렌즈 수신기와 RAG 스냅샷 간의 페이징 및 수신확인(ACK) 계약.
+   - `docs/agents-rules/DEMO1-PRIMARY-SURFACE.md`: 주 화면 `/chat`과 보조 디버그 화면(`/interview`, `/meta`)의 명확한 경계 규정.
+   - `docs/agents-rules/DEMO1-CORE-REQUEST-ROUTER.md`: 단일 Primary 스킬 라우팅 규정.
+
+### 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 금지: git push/pull/fetch/merge/rebase/reset/clean, add -A / add . / commit -a, remote 추가 또는 변경.
+- 외부 API 유료 실호출 0, 비밀 열람 0 (.secrets, API key, credential 토큰 등 비밀 정보 접근 금지).
+- PROTO_OPEN 프로토타입 라이트 모드 준수: 익명 접근 보장, 추가적인 로그인 폼 강제나 admin role-gate 추가 금지.
+- 역할 분담: Devin은 설계 명세, 스킬 룰 보강, 프론트엔드 정적 격리 테스트, 전용 진단 프로브 스크립트 작성 및 `FOR_CODEX` 청사진 작성을 소유한다. 제품 소스(`main/java/**`)의 직접 diff는 0으로 유지한다.
+
+### 3. 작업 항목
+
+#### DV01: 삼중 시스템 격리 아키텍처 및 SSOT 규칙 명세 (`docs/design/TRI_SYSTEM_ISOLATION_SPEC.md` 및 `docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md`)
+1. 삼중 시스템 경계 정의:
+   - [시스템 1: Meta Ray-Ban Display (웨어러블 HUD / Nova Focus)]
+     * 물리 환경: 600x600 단안 HUD (우측 렌즈), 5,000 nits, 신경 밴드(sEMG) 및 Fold6 컴패니언 제어.
+     * 표면(Surface): `/meta`, `/assets/display/...` (전용 JS: `display-focus-controls.js`, `receiver.js`, `lens.js`).
+     * 프롬프트 제약: 엄격한 글자수 상한(80~800자, 기본 400자), 간결한 줄 단위 출력, 마크다운 표/복잡한 섹션 템플릿 금지, 인용 부호/출처 덤프 금지.
+     * 검색/도구: Quick 모드 기본 활성화 권장 (렌즈 지연 방지를 위해 웹 검색/RAG/Jev 재시도 억제).
+     * 모델 라우팅: `chatgpt-oauth:gpt-5.6-luna` (API/OAuth 고정, 자동 폴백 OFF, 로컬 GPU 배제).
+   - [시스템 2: Dynamic RAG Platform (심층 검색 / 지식 베이스 / 인용 검증)]
+     * 표면: 백엔드 검색 엔진 및 임베딩 파이프라인.
+     * 기능: 하이브리드 검색(BM25 + 벡터 검색), GraphRAG, 다중 홉 근거 수집.
+     * 하드웨어: RTX 3090 GPU 레인 독점 (임베딩 및 로컬 RAG 전용, LLM 챗 서빙과 물리적 분리).
+     * 프롬프트: `SECTION TEMPLATE` (OVERVIEW, DETAILS, REFERENCES), `EVIDENCE_ONLY` 검증 게이트, `SafeExcerptDto` 출처 앵커링.
+   - [시스템 3: LLM Main Chatbot (메인 /chat 웹 및 모바일 UI)]
+     * 표면: `/chat` (전용 JS: `chat.js`, CSS: `chat.css`).
+     * 상태/세션: 영구 대화 세션(`ChatSession`), 세션 목록 동기화(최대 12개), 복수 턴 맥락 보존, 스트리밍 SSE 토큰 렌더링.
+     * 모델 라우팅: API/OAuth 우선 사다리 (ChatGPT OAuth -> 유료 API -> 무료 API -> 로컬 Ollama 슬롯 관리 Fast-Spillover).
+     * 인증: PROTO_OPEN (익명 우선, 관리자 URL 개방, role-gate 불필요).
+2. 교차 오염 방지 5대 불변 철칙 (The 5 Anti-Pollution Invariants):
+   - [Invariant 1: Prompt Invariant] `focusAnswerLengthChars` 설정은 Display 채널에서만 주입되며, 일반 `/chat` 및 RAG 요청의 `minWordCount`/`sectionSpec`을 절대 마스킹하거나 제거하지 않는다.
+   - [Invariant 2: Search Invariant] Display의 Quick 모드(`quickAnswerEnabled`)에 의한 `isUseWebSearch(false)` / `isUseRag(false)`는 `NovaFocusAnswerService` 어댑터 경계 내에 국한되며, 글로벌 `ChatWorkflow`나 RAG 기본값을 오염시키지 않는다.
+   - [Invariant 3: Hardware & Model Invariant] Display 요청은 어떤 상황에서도 로컬 Ollama 큐나 RTX 3090 임베딩 레인에 진입하지 못하며, 슬롯 경합 시 에러를 낼지언정 로컬 서빙으로 넘기지 않는다.
+   - [Invariant 4: Surface Invariant] `chat.js`는 Display 컨트롤러나 렌즈 DOM 셀렉터를 포함하지 않고, `display-focus-controls.js`는 세션 목록 리프레시나 메인 챗봇 DOM을 조작하지 않는다. 로컬 `/interview` 화면의 실패는 메인 서피스 판정에 일절 영향을 주지 않는다.
+   - [Invariant 5: Verification Invariant] 물리 안경 착용(`onGlasses`)이나 실물 OAuth 계정 로그인은 데스크톱 CI/로컬 환경에서 `NOT_RUN_DEVICE` 및 `NOT_RUN_AUTH`로 분리 표기하며, 이를 이유로 작업을 무단 `BLOCKED` 루프에 빠뜨리지 않는다.
+
+#### DV02: 코어 요청 라우터 및 스킬 가드 쇄신
+1. `demo1-core-request-router` 스킬에 삼중 분기 판정 매트릭스(Tri-System Disambiguation Matrix) 추가:
+   - 신호: "Ray-Ban", "안경", "렌즈", "Fold6 caption", "Nova Focus", "Display" -> Primary: `$demo1-meta-display-simple-caption` (보조: `$demo1-evidence-debugging`).
+   - 신호: "RAG", "검색", "임베딩", "GraphRAG", "벡터", "인용" -> Primary: `$demo1-rag-platform` (보조: `$demo1-api-routing-inventory`).
+   - 신호: "챗봇", "/chat", "세션 목록", "스트리밍", "모바일 레이아웃" -> Primary: `$demo1-api-first-routing-assist` (보조: `$demo1-codex-browser-agent`).
+2. 단일 단계당 Primary 스킬 1개 원칙을 강제하고, 세 시스템 간의 다중 seam 작업은 `$demo1-devin-source-orchestrator`를 통한 순차 분할만 허용하도록 명문화.
+
+#### DV03: 자바/백엔드 격리 아키텍처 및 Codex용 패치 청사진 (`data/agent-handoff/for-codex/FOR_CODEX_TRI_SYSTEM_ISOLATION.md`)
+1. 대상 FQCN 및 클래스:
+   - `com.example.lms.domain.enums.SurfaceOrigin` (신규 제안: `MAIN_CHAT`, `META_DISPLAY`, `LOCAL_INTERVIEW`, `SYSTEM_PROBE`)
+   - `com.example.lms.prompt.PromptContext` (surfaceOrigin 필드 바인딩)
+   - `com.example.lms.prompt.StandardPromptBuilder` (surfaceOrigin 기반 엄격 분기)
+   - `com.example.lms.service.ChatWorkflow` (요청 수신 시 DTO deep-copy 및 SurfaceOrigin 확정)
+   - `com.example.lms.assist.NovaFocusAnswerService` (Display DTO 격리 보장)
+2. diff 가이드:
+   - `StandardPromptBuilder`에서 `focusOutput` 판단 시 단순히 `ctx.focusAnswerLengthChars() != null`에만 의존하지 않고 `ctx.surfaceOrigin() == SurfaceOrigin.META_DISPLAY`를 필수 조건으로 결합.
+   - `ChatWorkflow`에서 `NovaFocusAnswerService` 호출 시 전달되는 `ChatRequestDto`를 격리 인스턴스로 복제하여 메인 챗봇 상태 오염 방지.
+3. 포커스 테스트 명세 제안:
+   - `src/test/java/com/example/lms/prompt/TriSystemPromptIsolationTest.java` (신규 제안 테스트)
+   - 실행 명령: `.\gradlew.bat :test --tests com.example.lms.prompt.TriSystemPromptIsolationTest --no-daemon --console=plain`
+
+#### DV04: 프론트엔드 에셋 및 테스트 격리 검증기 (`scripts/test_tri_system_frontend_isolation.cjs`)
+1. Node.js built-in `node:test` 기반 검증 스크립트 작성.
+2. 검증 항목:
+   - `main/resources/static/js/chat.js` 정적 분석: `display-focus`, `lens`, `receiver` 셀렉터 및 전역 변수 침범 0건 확인.
+   - `main/resources/static/assets/display/display-focus-controls.js` 정적 분석: `sessionListRefresh`, `chatAccessState`, `strictBackendSessionId` 침범 0건 확인.
+   - `main/resources/static/assets/interview/*` 정적 분석: 메인 `/chat` 핵심 상태 조작 0건 확인.
+   - 실행: `node --test scripts/test_tri_system_frontend_isolation.cjs; "exit=$LASTEXITCODE"` -> exit 0 보장.
+
+#### DV05: 삼중 시스템 격리 전용 진단 프로브 도구 작성 (`scripts/probe_tri_system_isolation.py`)
+1. Python stdlib 전용 (외부 라이브러리 의존 0) 독립 진단 스크립트 작성.
+2. 핵심 기능:
+   - `--dry-run`: 5대 불변 철칙(Prompt, Search, Hardware, Surface, Verification) 위반 여부 자동 정적 검사 (최소 15개 assertion 검사).
+   - `--scan-sources`: `StandardPromptBuilder.java`, `ChatWorkflow.java`, `chat.js`, `display-focus-controls.js`의 교차 오염 패턴 탐색.
+   - `--simulate-requests`: Display 모드 페이로드와 Main Chat RAG 페이로드를 생성하고 DTO/프롬프트 빌더 변환 시 상호 간섭이 0임을 시뮬레이션.
+   - `--report`: JSON 결과 출력 (`data/agent-handoff/tri-system-isolation/report.json`).
+3. 테스트 스크립트: `scripts/test_probe_tri_system_isolation.py` 작성 및 exit 0 검증.
+
+### 4. HOLD (중단 조건)
+1. foreign live lease가 존재하여 동일 파일을 동시에 수정해야 할 때 (stale은 reclaim, live는 release 대기).
+2. 제품 소스(`main/java/**`)의 직접 수정을 요구받았으나 명시적 소스 수정 권한이 없을 때 -> 즉시 작업을 중단하고 `FOR_CODEX` 청사진 작성으로 전환.
+3. 물리 안경 하드웨어 연결이나 실제 유료 API 크레딧 결제가 필수 전제조건으로 요구될 때 -> 중단하지 않고 `NOT_RUN_DEVICE`, `NOT_RUN_AUTH`로 처리하여 계속 진행.
+
+### 5. ASK_ONCE (결정 필요 사항 및 추천 기본값)
+1. `SurfaceOrigin` enum의 도입 패키지 위치:
+   - (추천) `com.example.lms.domain.enums.SurfaceOrigin` (기존 `ExecutionMode`와 동일 계층에 배치).
+2. Display Quick 모드 발동 시 벡터 스토어 캐시 질의 허용 범위:
+   - (추천) 기 연산된 메모리 캐시 읽기만 허용하고, 신규 실시간 웹 검색 및 원격 벡터 인덱싱은 완전 차단.
+3. Display 전용 프롬프트 빌더의 장기적 분리 방안:
+   - (추천) 현재는 `StandardPromptBuilder` 내 `SurfaceOrigin` 가드로 안전하게 분기하고, 차기 리팩토링 단계에서 `DisplayPromptBuilder`로 물리 분리.
+
+### 6. 절대 금지
+- `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`, `git reset`, `git clean` 절대 금지.
+- `git add -A`, `git add .`, `git commit -a`, `--no-verify` 절대 금지.
+- `.secrets` 또는 API key/토큰/비밀값 열람, 출력, 하드코딩 금지 (비밀 정보 보호).
+- remote 추가 또는 변경 금지.
+- PROTO_OPEN 상태에서 관리자 로그인 차단이나 무단 role-gate 추가 금지.
+- 물리 안경 장비 부재를 이유로 전체 저장소 HOLD 선언 금지.
+- 제품 소스(`main/java/**`) 직접 수정 금지 (Devin은 문서/도구/스크립트/테스트/인계서만 작성).
+
+### 7. Acceptance (완료 기준)
+- DV01 PASS: `docs/design/TRI_SYSTEM_ISOLATION_SPEC.md` 및 `docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md` 작성 완료 (삼중 시스템 정의, 5대 불변 규칙 완비).
+- DV02 PASS: 코어 요청 라우터 스킬 가드 보강 완료 (삼중 격리 판정 매트릭스 탑재).
+- DV03 PASS: `data/agent-handoff/for-codex/FOR_CODEX_TRI_SYSTEM_ISOLATION.md` 인계서 작성 완료 (Java FQCN, diff 가이드, 포커스 테스트 명세 포함).
+- DV04 PASS: `scripts/test_tri_system_frontend_isolation.cjs` 작성 및 `node --test scripts/test_tri_system_frontend_isolation.cjs` exit 0 통과.
+- DV05 PASS: `scripts/probe_tri_system_isolation.py` 및 `scripts/test_probe_tri_system_isolation.py` 작성 및 `python -B scripts/test_probe_tri_system_isolation.py` exit 0 통과.
+- 전체 무결성: 제품 Java 변경 0, Git 커밋 0, 외부 API 유료 호출 0, 종료 시 lease 0.
+- (물리 안경 표시 검증 및 실물 OAuth 로그인은 `NOT_RUN_DEVICE`, `NOT_RUN_AUTH`로 분리 기록).
+
+### 8. 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+
+1. 작업 완료 요약:
+   - [DV01] 삼중 시스템 격리 아키텍처 및 SSOT 규칙 명세 완료
+   - [DV02] 코어 요청 라우터 및 스킬 가드 쇄신 완료
+   - [DV03] 자바/백엔드 격리 아키텍처 및 Codex용 패치 청사진 완료
+   - [DV04] 프론트엔드 에셋 및 테스트 격리 검증기 완료
+   - [DV05] 삼중 시스템 격리 전용 진단 프로브 도구 작성 완료
+2. 산출물 파일 및 sha12 목록
+3. Acceptance 검증 결과 표
+4. 한 줄 요약: 「...」
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업을 실제로 수행하고 검증을 완결해야 종료합니다.

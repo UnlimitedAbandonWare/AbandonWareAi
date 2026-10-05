@@ -2,6 +2,8 @@
 """test_agent_session_watch.py — synthetic-fixture tests for the shared
 agent session watchdog. No real session stores are read; every case builds a
 temp rollout file."""
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -9,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_session_watch as w  # noqa: E402
@@ -272,7 +275,7 @@ class Discovery(unittest.TestCase):
     def test_stores_shape(self):
         stores = w.discover_stores()
         agents = {s["agent"] for s in stores}
-        self.assertEqual(agents, {"codex", "grok", "devin", "cline"})
+        self.assertEqual(agents, {"codex", "grok", "devin", "agy", "cline"})
         for s in stores:
             self.assertIn("present", s)
             self.assertIn("sessionFiles", s)
@@ -385,6 +388,62 @@ class DevinStoreFixes(unittest.TestCase):
             found = w.devin_lock_pileup_finding(w.count_devin_locks(home))
             self.assertEqual(found["severity"], "warn")
             self.assertEqual(found["evidence"]["lockFiles"], 21)
+
+
+class OmniWatch(unittest.TestCase):
+    def test_scan_generic_skips_non_dict_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = write(tmp, "transcript.jsonl",
+                      ['"just a string"',
+                       '{"type":"PLANNER_RESPONSE","tool_calls":'
+                       '[{"name":"view_file"},{"name":"run_command"}]}',
+                       '123',
+                       '[1, 2]'])
+            r = w.scan_generic(p, "agy", 0, 400000)
+            self.assertEqual(r["stats"]["lines"], 4)
+            self.assertEqual(r["findings"], [])
+            self.assertEqual(r["stats"]["toolCalls"], 2)
+            self.assertEqual(r["stats"]["tools"],
+                             {"view_file": 1, "run_command": 1})
+            self.assertEqual(r["stats"]["toolKind"], "tools")
+
+    def test_scan_generic_devin_md_roles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = write(tmp, "history_x.md",
+                      ["=== MESSAGE 0 - System ===", "body",
+                       "=== MESSAGE 1 - User ===", "body",
+                       "=== MESSAGE 2 - Tool ===", "body",
+                       "=== MESSAGE 3 - Tool ===", "body"])
+            r = w.scan_generic(p, "devin", 0, 400000)
+            self.assertEqual(r["findings"], [])
+            self.assertEqual(r["stats"]["tools"]["msg:Tool"], 2)
+            self.assertEqual(r["stats"]["toolKind"], "types")
+
+    def test_discover_stores_includes_agy(self):
+        stores = w.discover_stores()
+        agy = [s for s in stores if s["agent"] == "agy"]
+        self.assertEqual(len(agy), 1)
+        self.assertIn("present", agy[0])
+        self.assertIn("sessionFiles", agy[0])
+        self.assertTrue(any("summaries_db" in n or "history" in n
+                            for n in agy[0]["notes"]))
+
+    def test_omni_summary_contract(self):
+        argv = ["agent_session_watch.py", "summary", "--json",
+                "--since-hours", "24", "--max-files", "2",
+                "--max-file-mb", "1", "--max-lines", "5000"]
+        buf = io.StringIO()
+        with patch.object(sys, "argv", argv):
+            with contextlib.redirect_stdout(buf):
+                rc = w.main()
+        self.assertEqual(rc, 0)
+        report = json.loads(buf.getvalue())
+        for key in ("stores", "topToolsOverall", "toolsByAgent",
+                    "anomalies", "filesScanned"):
+            self.assertIn(key, report)
+        for agent in ("codex", "agy", "devin"):
+            self.assertIn(agent, report["stores"])
+            self.assertIn(agent, report["toolsByAgent"])
 
 
 if __name__ == "__main__":

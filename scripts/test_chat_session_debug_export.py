@@ -564,5 +564,176 @@ class BoundedReaderTest(unittest.TestCase):
             self.assertNotIn("_line", (root / out.getvalue().strip() / "records.json").read_text("utf-8"))
 
 
+class CompactCardTest(unittest.TestCase):
+    """--summary / --compact-json bounded card output (token-light agents)."""
+
+    def test_show_summary_and_compact_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_record(root, "sid-card", "run-card", fallbackCount=0)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(["--root", tmp, "show", "sid-card", "--summary"]))
+            text = out.getvalue()
+            self.assertIn("# card awx.chat-session-trace-card.v1", text)
+            self.assertIn("action=none-needed", text)
+            self.assertIn("src=", text)
+            self.assertNotIn("sid-card", text)
+            self.assertLessEqual(len(text.encode("utf-8")), cli.CARD_MAX_BYTES + 64)
+
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(["--root", tmp, "show", "sid-card", "--compact-json"]))
+            card = json.loads(out.getvalue())
+            self.assertEqual(cli.CARD_SCHEMA, card["schema"])
+            self.assertEqual("none-needed", card["recommendedAction"])
+            self.assertEqual("hash:" + hash12("sid-card"), card["sessionId"])
+            self.assertIn("sha12", card["source"])
+            self.assertNotIn("sid-card", out.getvalue())
+
+    def test_list_summary_and_compact_json(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            now = datetime.now(timezone.utc).isoformat()
+            write_record(root, "l1", "r1", ts=now, fallbackCount=0)
+            write_record(root, "l2", "r2", ts=now, errorClass="error", outcome="failed")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(
+                    ["--root", tmp, "list", "--summary", "--since-hours", "48"]))
+            text = out.getvalue()
+            self.assertIn("session trace card(s)", text)
+            self.assertIn("action=check provider reachability", text)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(
+                    ["--root", tmp, "list", "--compact-json", "--since-hours", "48"]))
+            payload = json.loads(out.getvalue())
+            self.assertEqual(2, len(payload["cards"]))
+            self.assertEqual({"files": 2}, payload["coverage"]["source_cutoffs"])
+            actions = {c["recommendedAction"] for c in payload["cards"]}
+            self.assertIn("none-needed", actions)
+            self.assertTrue(any("provider" in a for a in actions))
+
+    def test_recommended_action_mapping(self):
+        base = {"errorClass": "none", "outcome": "completed", "fallbackCount": 0}
+        self.assertEqual("none-needed", cli.recommended_action(dict(base)))
+        self.assertIn("cancel", cli.recommended_action(dict(base, errorClass="cancelled")))
+        self.assertIn("Ollama", cli.recommended_action(
+            dict(base, errorClass="error", baseUrlClass="local")))
+        self.assertIn("provider", cli.recommended_action(
+            dict(base, errorClass="error", baseUrlClass="remote")))
+        self.assertIn("fallback", cli.recommended_action(dict(base, fallbackCount=2)))
+        self.assertIn("harmony", cli.recommended_action(dict(base, harmonyWarn=True)))
+        self.assertIn("unusual outcome", cli.recommended_action(dict(base, outcome="stalled")))
+
+    def test_compact_modes_never_echo_query(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_record(root, "canary-raw-session-id", "run", fallbackCount=0)
+            for flag in ("--summary", "--compact-json"):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    self.assertEqual(0, cli.main(
+                        ["--root", tmp, "show", "canary-raw-session-id", flag]))
+                self.assertNotIn("canary-raw-session-id", out.getvalue())
+
+
+class TailFastPathTest(unittest.TestCase):
+    """--tail N fast path: bounded back-read of the last N lines per file."""
+
+    def _write_many(self, root: Path, n: int, name: str = "s-tailfeed.json",
+                    pad: int = 0) -> Path:
+        day = root / "var" / "debug" / "chat-session-traces" / "20261005"
+        day.mkdir(parents=True, exist_ok=True)
+        f = day / name
+        with f.open("w", encoding="utf-8") as fh:
+            for i in range(n):
+                rec = {"schema": "awx.chat-session-trace.v1",
+                       "ts": "2026-10-05T00:%02d:00Z" % (i % 60),
+                       "sessionId": "hash:" + hash12("tailfeed"),
+                       "runId": "hash:" + hash12("run-%d" % i),
+                       "recordId": hash12("run-%d" % i),
+                       "surface": "chat", "outcome": "completed",
+                       "errorClass": "none", "fallbackCount": 0}
+                if pad:
+                    rec["pad"] = "x" * pad
+                fh.write(json.dumps(rec) + "\n")
+        return f
+
+    def test_tail_reads_only_last_n_lines(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # ~100KB of JSONL: the 64KB back-read cannot reach offset 0.
+            f = self._write_many(root, 40, pad=2500)
+            stats = {}
+            rows = list(cli.iter_records(root, None, stats=stats, tail_lines=5))
+            self.assertEqual([hash12("run-%d" % i) for i in range(35, 40)],
+                             [r["recordId"] for _, r in rows])
+            self.assertTrue(stats["tail_mode"])
+            self.assertEqual(1, stats["tail_truncated_files"])
+            self.assertFalse(stats["complete"])
+            self.assertEqual(5, stats["rows_scanned"])
+            self.assertEqual([None] * 5, [r["_line"] for _, r in rows])
+            raw = f.read_bytes()
+            for _f, r in rows:
+                off = int(r["_offset"])
+                self.assertEqual(b"{", raw[off:off + 1])
+                nl = raw.index(b"\n", off)
+                self.assertEqual(hashlib.sha256(raw[off:nl + 1]).hexdigest()[:12],
+                                 r["_sha12"])
+            self.assertLess(stats["bytes_read"], len(raw))
+
+    def test_tail_slice_reaching_start_stays_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_record(root, "tiny", "tiny-run", fallbackCount=0)
+            stats = {}
+            rows = list(cli.iter_records(root, None, stats=stats, tail_lines=50))
+            self.assertEqual(1, len(rows))
+            self.assertEqual(0, stats["tail_truncated_files"])
+            self.assertTrue(stats["complete"])
+
+    def test_tail_invalid_and_default_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            write_record(root, "d", "d")
+            for bad in (0, -3, "x"):
+                with self.assertRaises(ValueError):
+                    list(cli.iter_records(root, None, tail_lines=bad))
+            stats = {}
+            list(cli.iter_records(root, None, stats=stats))
+            self.assertFalse(stats["tail_mode"])
+
+    def test_tail_cli_and_final_line_without_newline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            f = self._write_many(root, 10)
+            f.write_bytes(f.read_bytes().rstrip(b"\n"))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(
+                    ["--root", tmp, "list", "--tail", "3", "--since-hours", "100000"]))
+            self.assertIn('"tail_mode": true', out.getvalue())
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(0, cli.main(
+                    ["--root", tmp, "show", "run-9", "--tail", "3", "--compact-json"]))
+            card = json.loads(out.getvalue())
+            self.assertEqual("hash:" + hash12("run-9"), card["runId"])
+
+    def test_tail_corruption_and_unknown_timestamp_stay_visible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            f = self._write_many(root, 3)
+            f.write_bytes(f.read_bytes() + b'{"ts":"bad"}\n' + b'garbage\n')
+            stats = {}
+            rows = list(cli.iter_records(root, None, stats=stats, tail_lines=5))
+            self.assertEqual(3, len(rows))
+            self.assertEqual(1, stats["unknown_timestamp"])
+            self.assertEqual(1, stats["parse_error"])
+            self.assertFalse(stats["complete"])
+
+
 if __name__ == "__main__":
     unittest.main()

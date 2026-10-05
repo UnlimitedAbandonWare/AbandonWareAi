@@ -1,0 +1,129 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 산출물을 생성한 뒤 검증을 완료하고 보고서를 작성하는 실행 지시서다.
+
+@demo1-api-first-routing-assist
+# DEVIN 지시서 — 다중 사용자 동시 접속 시 로컬 모델(Ollama) 병목 방어 및 유연한 API 즉시 폴백(Adaptive Cloud Spillover) 아키텍처 수립
+파일 ID: PASTE_DEVIN_OLLAMA_CONCURRENCY_API_FALLBACK_20261005
+작성 일시: 2026-10-05 15:35 KST
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+대상: Devin (SWE-2 / Runtime Assistant) | 후속 구현: Codex (Java Source Owner)
+금지: 제품 Java 소스 직접 수정 0 · git push/pull/add -A/commit 0 · remote 추가 금지 · 비밀값 출력 0 · 유료 외부 API 실호출 0 · PROTO_OPEN 침범 0 · Gradle 전체 빌드 0
+
+## 0. 한 줄 목표
+다중 사용자 동시 유입 시 로컬 Ollama 모델의 하드웨어 한계(VRAM/연산 병목/FIFO 큐잉 지연)로 인한 서비스 중단을 차단하고, 슬롯 포화·초기 지연(TTFT)·큐 적체 징후 감지 시 큐 대기 없이 즉각 클라우드 API(ChatGPT OAuth → Groq → Gemini → OpenAI)로 유연하게 우회하는 적응형 스필오버(Adaptive Cloud Spillover) 아키텍처와 검증 프로브를 완성하여 Codex 패치 청사진을 인계한다.
+
+## 1. 사실 (2026-10-05 15:30 KST 기준 라이브 확인)
+- [로컬 병목 특성]: 로컬 Ollama(11434, 11435)는 단일 GPU와 OLLAMA_NUM_PARALLEL(기본 1~4 슬롯)에 의존함. 다중 사용자 접속 시 OLLAMA_MAX_QUEUE(512) 큐 적체, 503 Service Unavailable, 극심한 TTFT 지연이 발생함.
+- [클라우드 API 탄력성]: configs/api-routing.yaml 기준 ChatGPT OAuth(구독 포함량 1순위), Groq/Gemini(저비용 2순위), OpenAI/Anthropic(고품질 3순위) 등 클라우드 API는 고동시성 처리와 세션 격리가 보장되어 다중 트래픽을 즉시 소화함.
+- [기존 Admission Seam]: main/java/ai/abandonware/nova/orch/router/LocalModelAdmission.java 에 슬롯 단위 non-blocking 검사(tryAcquire, saturated)가 구비되어 있으나, 포화 감지 시 '로컬 큐 대기' 대신 '클라우드 API 즉각 스필오버'로 전환하는 명확한 워터마크 규칙이 미흡함.
+- [Aspect 경합 Seam]: main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java:870-888 에 LocalAdmissionChatModel 이 tryAcquire 실패 시 local_contended / local_backend_busy 예외를 던지며 nextEligibleSelection(cloudOnly=true) 클라우드 재시도 경로가 존재함.
+- [동시성 가드]: main/java/com/example/lms/api/PublicChatAdmissionGuard.java 는 글로벌 32(또는 64) 세션을 수용하므로, 로컬 슬롯(permits=1) 초과 트래픽을 거절하지 않고 클라우드로 즉시 토스해야 함.
+
+### 기준 해시 표 (인용 파일)
+| 경로 | sha12 | git 상태 | 권한 |
+| --- | --- | --- | --- |
+| main/java/ai/abandonware/nova/orch/router/LocalModelAdmission.java | 2d09332b7433 | - | 읽기 전용 |
+| main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java | c6667ed40cf6 | - | 읽기 전용 |
+| configs/api-routing.yaml | fd32afd2888e | - | 읽기 전용 |
+| main/java/com/example/lms/api/PublicChatAdmissionGuard.java | 24984f0fbd18 | - | 읽기 전용 |
+| main/resources/application-llm.yaml | 90615711adc7 | - | 읽기 전용 |
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 실행하지 못한 항목은 NOT_RUN + 사유 표기하며 PASS 조작 금지.
+- 제품 소스(main/java, main/resources, src/test/java, frontend) 직접 수정 금지 (Devin은 docs/, scripts/, data/agent-handoff/ 만 소유).
+
+## 3. 항목 (WP1~WP4)
+
+### WP1 [Devin] 로컬 동시성 병목 사전 회피 & API 적응형 스필오버(Spillover) 설계서 작성
+- 증거: LocalModelAdmission.java:29-45, LlmRouterAspect.java:784-888, configs/api-routing.yaml:116-163
+- 작업: docs/design/OLLAMA_CONCURRENCY_API_FALLBACK_PLAN.md 신규 작성
+  1) **4대 병목 감지 및 조기 탈출(Fast-Spillover) 트리거**:
+     - 트리거 A (슬롯 포화): `LocalModelAdmission.tryAcquire` 실패 시 큐잉 없이 즉시 클라우드 API 우회 (`local_contended`).
+     - 트리거 B (초기 토큰 지연 워터마크): 로컬 호출 후 TTFT가 2,500ms 초과 시 로컬 Abort 후 즉시 Zero-Token 클라우드 API 백업 모델로 전환.
+     - 트리거 C (HTTP 503 / 큐 적체): Ollama 503 또는 Connection refused 시 로컬 재시도 0회로 클라우드 API 즉각 폴백.
+     - 트리거 D (GPU 상태 이상): `gpu_incident` 플래그 활성화 또는 VRAM 임계치 도달 시 사전(Pre-dispatch) 단계에서 로컬 배제.
+  2) **클라우드 API 폴백 우선순위 사다리(Fallback Ladder)**:
+     - 1순위: ChatGPT OAuth (구독 포함량, 비용 0, 사용자 인증 세션 연동)
+     - 2순위: Groq / Gemini (초저지연/저비용 클라우드 고속 엔진)
+     - 3순위: OpenAI API / Anthropic (고품질 상용 엔진)
+  3) **다중 세션 무결성 및 사용자 알림**:
+     - UI 배너(`[안내: 동시 접속 혼잡으로 클라우드 고속 엔진으로 자동 전환되었습니다]`) 및 TraceStore(`fallbackReason=concurrency_spillover`).
+- RED 검사: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -B -c "import pathlib; p = pathlib.Path('docs/design/OLLAMA_CONCURRENCY_API_FALLBACK_PLAN.md'); assert p.exists() and len(p.read_text(encoding='utf-8')) > 1200 and 'Fast-Spillover' in p.read_text(encoding='utf-8')"; "exit=$LASTEXITCODE" (현재 exit 1)
+- GREEN: 위 명령 실행 시 exit 0 통과
+- 완료 조건: 다이어그램(Mermaid), 트리거별 임계치, API 우선순위, 사용자 안내 흐름 완비.
+
+### WP2 [Devin] 다중 사용자 동시 접속 및 로컬 병목 모의 부하 프로브 제작
+- 증거: PublicChatAdmissionGuard.java:58, LocalModelAdmission.java:34
+- 작업: scripts/probe_ollama_concurrency_spillover.py 신규 작성 (Python 표준 lib threading, queue, time, json 활용, 외부 패키지 0).
+  1) `--simulated`: 1~10명의 가상 사용자 동시 요청 생성.
+  2) 로컬 슬롯(permits=1) 초과 시 나머지 9명이 대기 없이 클라우드 API(mock)로 100ms 이내 스필오버되는지 측정.
+  3) TTFT 지연(2.5초 지연 모의) 주입 시 즉각 클라우드로 전환되어 총 응답 시간 4초 이내 방어 검증.
+  4) `--dry-run`: 실제 서버 없이도 로직 및 분기 시뮬레이션 전건 검증.
+- RED 검사: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -B scripts/probe_ollama_concurrency_spillover.py --dry-run; "exit=$LASTEXITCODE" (현재 exit 1)
+- GREEN: python -B scripts/probe_ollama_concurrency_spillover.py --dry-run (기대 exit=0)
+- 완료 조건: 동시 10세션 모의 결과 JSON 보고서 출력 및 exit 0 달성.
+
+### WP3 [Devin] 설정 프로퍼티 명세서 및 런타임 정합성 가이드 작성
+- 증거: configs/api-routing.yaml:10-18, main/resources/application-llm.yaml:1-50
+- 작업: docs/design/OLLAMA_CONCURRENCY_PROPERTIES_SPEC.md 신규 작성
+  1) `llm.local-admission.permits-per-model`: 기본값 1 (GPU VRAM 폭주 원천 차단)
+  2) `llm.local-admission.eager-cloud-spillover`: true (경합 시 큐잉 대기 없이 즉각 API 전환)
+  3) `llm.local-admission.first-token-timeout-ms`: 2500 (2.5초 이내 첫 토큰 미생성 시 API 폴백)
+  4) `llm.local-admission.fallback-ladder`: [chatgpt_oauth, groq, gemini, openai]
+- RED 검사: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -B -c "import pathlib; p = pathlib.Path('docs/design/OLLAMA_CONCURRENCY_PROPERTIES_SPEC.md'); assert p.exists() and 'eager-cloud-spillover' in p.read_text(encoding='utf-8')"; "exit=$LASTEXITCODE" (현재 exit 1)
+- GREEN: 위 명령 실행 시 exit 0 통과
+- 완료 조건: application-llm.yaml 및 api-routing.yaml 에 반영될 설정 파라미터와 동작 설명 완비.
+
+### WP4 [Devin] Codex용 Java 소스 패치 청사진 및 포커스 테스트 명세 작성
+- 증거: LlmRouterAspect.java:870-888, LocalModelAdmission.java:29-45
+- 작업: data/agent-handoff/for-codex/FOR_CODEX_OLLAMA_BOTTLENECK_FALLBACK.md 신규 작성
+  1) Codex 수정 대상 FQCN:
+     - `ai.abandonware.nova.orch.router.LocalModelAdmission`
+     - `ai.abandonware.nova.orch.aop.LlmRouterAspect`
+     - `com.example.lms.llm.gateway.FallbackAwareChatModel`
+  2) 구체적 diff 가이드:
+     - `LocalAdmissionChatModel` doChat/doChatStream 내 `tryAcquire` 실패 시 `LlmGatewayException(..., "local_concurrency_spillover")` 발생 후 `nextEligibleSelection(cloudOnly=true)` 진입 diff.
+     - 첫 토큰 타임아웃 타이머와 결합된 Zero-Token Abort & Switch 패턴.
+  3) 포커스 검증 명령:
+     - `.\gradlew.bat :test --tests ai.abandonware.nova.orch.aop.LlmRouterLocalContentionTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- RED 검사: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -B -c "import pathlib; p = pathlib.Path('data/agent-handoff/for-codex/FOR_CODEX_OLLAMA_BOTTLENECK_FALLBACK.md'); assert p.exists() and 'LlmRouterLocalContentionTest' in p.read_text(encoding='utf-8')"; "exit=$LASTEXITCODE" (현재 exit 1)
+- GREEN: 위 명령 실행 시 exit 0 통과
+- 완료 조건: Codex가 질의 없이 즉시 Java 구현을 마칠 수 있는 무모순 diff 가이드 완성.
+
+## 4. HOLD 조건
+- 제품 Java 코드(main/java/)를 Devin이 직접 수정하려 하거나 소스 write lease를 잡으려 할 때 즉시 HOLD.
+- 유료 외부 API 실호출이나 외부 패키지 설치 시도 시 즉시 중단.
+- Git 조작(push, pull, commit, reset, stash, remote 추가 등) 시도 시 즉시 중단.
+
+## 5. ASK_ONCE (자동 기본값 포함)
+- U-1 [로컬 슬롯 허용치]: GPU 1장당 동시 로컬 추론 허용 슬롯 수?
+  - (a) 권장: 1개 (다중 접속 시 1명만 로컬 사용, 2번째 요청부터 지체 없이 클라우드 API로 스필오버하여 속도 보장)
+  - (b) 2개 (2명까지 동시 로컬 분할 처리 후 3번째부터 API 폴백)
+  - -> 자동 결정: (a) 1개 채택 (다중 사용자 환경에서 VRAM 경합 및 속도 저하 원천 차단).
+- U-2 [초기 지연 워터마크]: 로컬 첫 토큰 지연 시 API 전환 대기 상한?
+  - (a) 권장: 2,500ms (2.5초 이내 미응답 시 즉시 클라우드 API로 자동 전환)
+  - (b) 4,000ms
+  - -> 자동 결정: (a) 2,500ms 채택.
+
+## 6. 절대 금지
+- main/java/ 제품 소스 파일에 대한 직접 수정 금지 (Devin 권한: docs/, scripts/, data/agent-handoff/).
+- Git 커밋/푸시/히스토리 변경/remote 추가 금지. 비밀값 출력 금지.
+- PROTO_OPEN 계약을 침범하여 로그인 강제나 인증 락을 추가하는 행위 금지.
+- 미실행 항목에 대한 PASS 허위 보고 금지 (반드시 NOT_RUN + 사유 표기).
+
+## 7. Acceptance (완료 기준)
+- WP1: docs/design/OLLAMA_CONCURRENCY_API_FALLBACK_PLAN.md 생성 및 4대 트리거, API 사다리 완비 (RED 통과).
+- WP2: scripts/probe_ollama_concurrency_spillover.py 생성 및 `--dry-run` exit 0 통과.
+- WP3: docs/design/OLLAMA_CONCURRENCY_PROPERTIES_SPEC.md 생성 및 프로퍼티 명세 완비 (RED 통과).
+- WP4: data/agent-handoff/for-codex/FOR_CODEX_OLLAMA_BOTTLENECK_FALLBACK.md 생성 및 FQCN/diff/포커스 테스트 완비 (RED 통과).
+- 공통: 제품 Java 변경 0, Git 변경 0, 비밀 유출 0, 유료 API 실호출 0, 종료 시 lease 0.
+
+## 8. 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+1. 목표 달성 요약: 로컬 Ollama 동시성 병목 방어 및 API 적응형 스필오버 아키텍처 수립 결과
+2. 산출물 파일 목록 및 sha12 해시 표
+3. 모의 부하 프로브 검증 결과 (scripts/probe_ollama_concurrency_spillover.py --dry-run)
+4. Codex 인계 안내 (FOR_CODEX_OLLAMA_BOTTLENECK_FALLBACK.md 전달 상태)
+5. 잔여 상태 및 특이사항 (종료 상태: DONE_OFFLINE)
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라 위 4개 패키지(WP1~WP4) 산출물을 생성하고 dry-run 검증까지 마친 뒤 종료 상태를 보고하는 실행 지시서다. 중간에 멈추지 말고 끝까지 실행하라.

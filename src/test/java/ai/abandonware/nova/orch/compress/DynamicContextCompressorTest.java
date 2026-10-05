@@ -1088,6 +1088,75 @@ class DynamicContextCompressorTest {
         assertFalse(TraceStore.getAll().toString().contains("keepanchor current question"));
     }
 
+    @Test
+    void tightCharacterCapKeepsNewestCorrectionBeforeAnOlderRecentAnchor() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setMemoryMaxLines(2);
+        props.getRagCompressor().setMemoryMaxChars(200);
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        String memory = "User: keepanchor codeword=북극 " + "a".repeat(100) + " SRC-old\n"
+                + "User: correction codeword=바람 limit=2 " + "b".repeat(80) + " SRC-current";
+        String out = local.compressMemoryForPrompt("keepanchor plan", memory);
+        assertTrue(out.contains("codeword=바람"));
+        assertTrue(out.contains("SRC-current"));
+        assertFalse(out.contains("codeword=북극"));
+        assertTrue(out.length() <= 200);
+    }
+
+    @Test
+    void overflowKeepsRecentCorrectionAndSourceBeforeOlderAnchorMatches() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setMemoryMaxLines(2);
+        props.getRagCompressor().setMemoryMaxChars(500);
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        String memory = String.join("\n", "User: 종이배 코드워드는 북극, 제한 3개 [SRC-old]",
+                "Assistant: 종이배의 기존 계획을 확인했습니다 [SRC-old]",
+                "User: 정정합니다. 이제 코드워드는 바람, 제한 2개 [SRC-current]",
+                "Assistant: 최신 정정을 적용합니다 [SRC-current]");
+        String out = local.compressMemoryForPrompt("종이배 계획", memory);
+        assertTrue(out.contains("코드워드는 바람"));
+        assertTrue(out.contains("[SRC-current]"));
+        assertFalse(out.contains("코드워드는 북극"));
+        assertTrue(out.indexOf("User:") < out.indexOf("Assistant:"));
+        assertTrue(out.split("\n").length <= 2);
+    }
+
+    @Test
+    void configuredMemoryCapRetainsCorrectionAcrossInterveningTurns() {
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setMemoryMaxLines(12);
+        props.getRagCompressor().setMemoryMaxChars(1400);
+        DynamicContextCompressor local = new DynamicContextCompressor(props);
+        String memory = String.join("\n",
+                "Conversation summary:",
+                "User: 종이배 최초 계획은 코드워드 북극, 수집→분류→요약, 최대 3개, 짧은 표였습니다.",
+                "Assistant: 최초 설정을 확인했습니다.",
+                "Anchor keywords:",
+                "종이배, 코드워드, 단계, 답변 형식",
+                "Important session memory:",
+                "- 최초 설정 설명: " + "예전 계획을 설명하는 참고 문장. ".repeat(9),
+                "- 이전 작업 메모: " + "수집 결과와 분류 결과를 비교한 기록. ".repeat(9),
+                "- 이전 확인 메모: " + "작업자는 계획을 확인하고 다음 질문을 기다렸습니다. ".repeat(9),
+                "Recent turns:",
+                "User: 정정합니다. 코드워드는 바람, 중간 단계는 검토, 최대 2개입니다. 짧은 표는 유지하세요. [SRC-current]",
+                "Assistant: 최신 정정을 적용합니다.",
+                "User: 현재 코드워드와 단계, 최대 개수, 형식을 알려주세요.",
+                "Assistant: | 코드워드 | 바람 |\n| 중간 단계 | 검토 |\n| 최대 개수 | 2개 |\n| 형식 | 짧은 표 |",
+                "User: Python 공식 문서에서 두 기능의 관계를 찾아주세요.",
+                "User: 종이배 접는 방법을 80줄로 설명해주세요.",
+                "Assistant: 1. 삼각형 날개를 접습니다.",
+                "User: 지금까지 수정된 코드워드, 중간 단계, 최대 개수, 답변 형식만 알려주세요.");
+
+        String out = local.compressMemoryForPrompt("최신 설정 네 가지를 알려주세요", memory);
+
+        assertTrue(out.contains("코드워드는 바람"), "latest user correction must survive compression");
+        assertTrue(out.contains("중간 단계는 검토"));
+        assertTrue(out.contains("최대 2개"));
+        assertTrue(out.contains("[SRC-current]"));
+        assertTrue(out.length() <= 1400);
+        assertTrue(out.split("\n").length <= 12);
+    }
+
     private static Content content(String url, String text) {
         return content(url, text, Map.of());
     }

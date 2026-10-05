@@ -1,0 +1,99 @@
+[DEVIN 지시서] 보고서 정리·백업 및 희소·충돌 문서 격리 보관 — 2026-10-05 01:00 KST
+파일 ID: PASTE_DEVIN_REPORT_ARCHIVE_TRIAGE_20261005
+금지: 제품 소스 수정 0 · git push / commit / add -A 0 · remote 추가 0 · 비밀값 출력 0 · 유료 API 호출 0
+@demo1-copy-residue-cleanup
+[ANTI-STOP] 이 지시서는 읽고 멈추지 않고 아래 스캔, 계획 수립, 격리 보관 및 검증 단계를 끝까지 수행한다.
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+첫 실행 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+인증: PROTO_OPEN (별도 로그인 요구 없이 진행)
+
+# 0. 한 줄 목표
+불필요한 잔여 보고서 및 핸드오프를 안전하게 정리하되, 희소성(근본원인/실측치/SSOT) 및 충돌/이견 문서는 무조건 삭제하지 않고 해시 고정 격리(QUARANTINE) 및 백업 보관 처리한다.
+
+# 1. 사실 (2026-10-05 00:50 KST 기준 라이브 확인)
+- `docs/reports/` (5개), `docs/diagnostics/` (140개 파일), `data/agent-handoff/` (24,776개 파일), `agent-prompts/` (141개) 등 과거 잔여물이 누적됨.
+- `scripts/agent_archive.py` 5축 스코어링(use, rec, rar, con, reu) 및 `test_agent_archive.py` 12개 테스트 PASS 확인.
+- `scripts/copy_residue_cleanup.py` 레일: Plan 해시 고정(`--plan-sha`), 중복 검증 삭제, 모호 잔여물은 `_quarantine/<date>/` 이동 및 `quarantine-manifest.json` + `restore.ps1` 생성.
+- 충돌/모순 문서(`con` >= 1)는 과거 설계 실패 및 에이전트 간 기술 이견 기록이므로 맹목적 삭제 시 동일 오류 재발 위험 존재.
+- 활성 리스 및 72시간 이내 갱신 파일은 가드 보호 대상(SKIP/KEEP-LIVE).
+
+# 2. 공통 규칙
+- Git 조작 금지: Devin은 git push, commit, add -A, checkout, reset 등 로컬/원격 Git 명령 일체 금지.
+- 제품 소스 불변: `main/`, `app/`, `src/test/java`, `configs/` 등 코어 코드는 수정하지 않는다 (`STRICT_ZERO`).
+- 2단계 안전 분리: 1단계 Read-only Plan 생성(`plan.json`, `plan.md`) -> 2단계 SHA-256 고정(`--plan-sha`) Apply. 플랜 외 삭제 금지.
+- 삭제(`DELETE`) 엄격 한정: 바이트 단위 동일 원본(`sha256`)이 존재하는 중복본, 재생성 가능 캐시(`__pycache__` 등), 빈 디렉터리, 죽은 pid 파일만 대상.
+- 격리(`QUARANTINE`) 및 보존 원칙:
+  - 희소성(`rar` >= 2: 근본원인, 사후분석, 실측치, 장애서명, 재현절차, SSOT) 문서는 무조건 보존(`KEEP-LIVE` 또는 `RECYCLE`).
+  - 충돌성(`con` >= 1: conflict, contradict, rebuttal, vs live) 문서는 무조건 DELETE 금지. `COLD`로 판정하여 `_quarantine/<date>/` 백업 이동 후 `restore.ps1` 생성.
+  - 경로 인용 문서(`referenced`)는 `KEEP-LIVE` 유지.
+- 보안: 비밀값(토큰, 키) 출력 금지, 유료 API 호출 0건.
+
+# 3. 항목 (작업 세부 사항)
+## DV1. 5축 스캔 및 카탈로그 갱신
+- 명령: `python -B scripts/agent_archive.py scan --root . --catalog docs/agent-archive/catalog.jsonl`
+- 점검: 출력 JSON의 rows, bins (KEEP-LIVE, RECYCLE, COLD, DELETE, TRACKED, SKIP) 분포 확인.
+
+## DV2. 안전 정리 계획서 수립 (Plan 생성)
+- 명령: `python -B scripts/agent_archive.py plan --root . --plan-json var/debug/report-cleanup-plan.json --plan-md var/debug/report-cleanup-plan.md --downloads-dir "$env:USERPROFILE\Downloads"`
+- 점검: 출력된 `planSha256` 기록. `DELETE` 항목 중 희소(`rar`>=2) 또는 충돌(`con`>=1) 파일이 0건인지 확인.
+
+## DV3. 충돌 문서 격리 분류 검증
+- 명령: 충돌/반박 문서가 `DELETE`에 없음을 스크립트로 확인:
+  ```powershell
+  python -c "import json; p=json.load(open('var/debug/report-cleanup-plan.json', encoding='utf-8')); conflicts=[r for r in p['rows'] if r['class']=='DELETE' and any(k in r['path'].lower() for k in ['conflict','rebuttal','vs.live'])]; assert len(conflicts)==0, f'충돌문서 DELETE 포함: {len(conflicts)}건'"
+  ```
+
+## DV4. 해시 고정 적용 (Apply) 및 복원성 확인
+- 명령:
+  ```powershell
+  $sha = (Get-Content var/debug/report-cleanup-plan.json | ConvertFrom-Json).planSha256
+  python -B scripts/copy_residue_cleanup.py apply --root . --plan var/debug/report-cleanup-plan.json --plan-sha $sha --ledger var/debug/cleanup-ledger --quarantine-root "C:\AbandonWare\demo-1\demo-1\_quarantine\report-triage-$(Get-Date -Format yyyyMMdd)" --only DELETE
+  python -B scripts/copy_residue_cleanup.py apply --root . --plan var/debug/report-cleanup-plan.json --plan-sha $sha --ledger var/debug/cleanup-ledger --quarantine-root "C:\AbandonWare\demo-1\demo-1\_quarantine\report-triage-$(Get-Date -Format yyyyMMdd)" --only QUARANTINE
+  ```
+- 완료 조건: 격리 디렉토리에 `quarantine-manifest.json` 및 `restore.ps1` 생성 확인.
+
+# 4. HOLD (작업 중단 조건)
+- 활성 리스 대상 또는 72시간 이내 변경된 파일이 Plan 대상에 포함된 경우 즉시 중단.
+- Plan 파일 SHA-256 불일치 또는 중복 파일의 원본(`original`) 누락 시 중단.
+- Git 트래킹(`TRACKED`) 파일이 `DELETE` 또는 `QUARANTINE`으로 분류된 경우 중단.
+- 금지 접두사(`FORBIDDEN_PREFIXES`) 영역 파일이 포함된 경우 중단.
+
+# 5. ASK_ONCE (사용자 결정)
+- Q1. 충돌 문서 중 14일 이상 경과 미인용 보고서의 최종 보관 위치:
+  - (a) [권장] `_quarantine/<date>/`에 격리 백업 보존 및 restore.ps1 유지 (리스크 제로)
+  - (b) 현 위치 유지 (`KEEP-LIVE`)
+- Q2. 닫힌 지시서(`agent-prompts/` 14일 이상 경과) 서랍 정리(`demo1_ops_surface_thin.ps1`):
+  - (a) [권장] `agent-prompts/_archive/<yyyyMMdd>/` 이동 및 INDEX.md 갱신
+  - (b) 이번 작업에서는 보고서만 처리
+
+# 6. 절대 금지
+- git push, commit, add -A, branch, checkout, reset, clean 등 Git 변형 명령 일체 금지.
+- 원격 저장소(`remote 추가`) 조작 금지.
+- 비밀값(API 키, 토큰) 노출 금지.
+- 희소 문서(`rar` >= 2) 및 충돌 문서(`con` >= 1)의 무조건적 영구 삭제(`DELETE`) 금지.
+- 활성 작업 영역(`data/agent-handoff` 내 active journal/lease 대상) 훼손 금지.
+- PROTO_OPEN 상태 변경 금지.
+
+# 7. Acceptance (완료 수용 기준)
+- [ ] DV1: `docs/agent-archive/catalog.jsonl`이 최신 스캔 결과를 반영하여 정상 갱신됨.
+- [ ] DV2: `var/debug/report-cleanup-plan.json` 및 `.md` 생성, `planSha256` 출력 완료.
+- [ ] DV3: `DELETE` 대상에 충돌/희소 문서 0건 검증 완료.
+- [ ] DV4: 격리 경로(`_quarantine/...`)에 `quarantine-manifest.json`과 `restore.ps1` 생성 확인.
+- [ ] 회귀: `python -B scripts/test_agent_archive.py` 12개 테스트 PASS 유지.
+- [ ] 소스보존: 코어 소스 git diff 0바이트 확인.
+- [ ] 미실행 규칙: 환경 제약 등으로 실행 못 한 항목은 NOT_RUN + 이유 표기 (PASS로 바꾸지 않는다).
+
+# 8. 보고 형식
+외부 API: 호출 0건 ($0 local verification)
+
+## 실행 요약 보고 표
+| 단계 | 항목 | 대상 건수 / 결과 | 증거 경로 |
+|---|---|---|---|
+| 1 | 아카이브 스캔 (DV1) | rows / bins 통계 | `docs/agent-archive/catalog.jsonl` |
+| 2 | 클린업 플랜 수립 (DV2) | Plan SHA256 확인 | `var/debug/report-cleanup-plan.json` |
+| 3 | 충돌/희소 보호 검증 (DV3) | DELETE 0건 입증 | `var/debug/report-cleanup-plan.md` |
+| 4 | 해시 고정 적용 (DV4) | DELETE / QUARANTINE 완료 | `var/debug/cleanup-ledger/apply.log.jsonl` |
+| 5 | 복원성 확보 | restore.ps1 생성 완료 | `_quarantine/<date>/restore.ps1` |
+| 6 | 회귀 테스트 | 12 tests OK | `scripts/test_agent_archive.py` |
+
+[ANTI-STOP] 모든 작업 단계는 임의 생략 없이 순차적으로 검증되어야 하며, 이상 발생 시 즉시 HOLD 절차에 따라 안전 상태를 유지하고 보고서를 제출해야 한다.

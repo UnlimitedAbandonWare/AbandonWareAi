@@ -41,6 +41,12 @@ powershell -NoProfile -File scripts\rtx3090_health_watch.ps1   # 동일, 인자 
 - alert 중복 억제: 동일 시그니처는 `AlertCooldownMinutes`(기본 60) 내 재생성 안 함
   (latest.json은 매번 갱신). 시그니처 변화 시 새 alert + LATEST.md 갱신.
 
+## 사고 플래그 연동 (2026-10-05)
+
+- anomaly 감지 시 watch는 `python -B scripts/gpu_incident.py probe`를 1회 호출해 `var/incident/gpu.json`(`awx.gpu_incident.v1`)을 갱신한다(실패해도 watch 결과에 영향 없음).
+- `python -B scripts/gpu_incident.py status` exit 3이면 다른 에이전트는 `ollama:11434`를 건너뛰고 llm은 `chatgpt_oauth` 1순위, embed는 3060(`ollama:11435`) 우선 — `$demo1-gpu-power-fallback`.
+- 플래그 해제는 probe가 OK일 때만(`clear`); watch는 원인 단정이나 GPU 조치를 하지 않는다.
+
 ## 보고 규칙
 
 - 가설만 제시, `confidence=low` 유지: `power_peak_or_limit` / `psu_or_wiring` /

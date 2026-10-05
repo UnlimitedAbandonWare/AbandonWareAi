@@ -7,7 +7,10 @@
 # non-blocking — hooks fail open, so enforcement stays in codex_work_checkpoint.py).
 # Reuses __patch_drop__/source_edit_lease_contract.ps1 conflict decision; takes no lease.
 [CmdletBinding()]
-param()
+param(
+    [ValidateSet('guard', 'check')]
+    [string]$Action = 'guard'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -47,6 +50,25 @@ function Resolve-RepoRelative {
     return $null
 }
 
+if ($Action -eq 'check') {
+    $root = Get-ProjectRoot
+    $patchDrop = Join-Path $root '__patch_drop__'
+    $contract = Join-Path $patchDrop 'source_edit_lease_contract.ps1'
+    $status = [ordered]@{
+        schema          = 'awx.devin-pre-edit-guard.v1'
+        action          = 'check'
+        root            = $root
+        contractPresent = (Test-Path -LiteralPath $contract -PathType Leaf)
+        checks          = [ordered]@{
+            cwdBoundary   = 'enforced: outside-root write targets blocked (P8)'
+            preimageExist = 'enforced: modify verbs require an existing target; Add File requires absent (P1)'
+            leaseConflict = 'delegated: Get-AwxSourceEditConflictDecision'
+        }
+    }
+    [Console]::Out.Write(($status | ConvertTo-Json -Compress))
+    exit 0
+}
+
 try {
     $raw = Read-BoundedStdin
     if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
@@ -59,24 +81,60 @@ try {
 
     $root = Get-ProjectRoot
     $targets = [Collections.Generic.List[string]]::new()
+    $outside = [Collections.Generic.List[string]]::new()
+    $verbs = @{}
 
     if ($tool -eq 'apply_patch') {
         $patchText = [string]$toolInput.patch
         if ([string]::IsNullOrEmpty($patchText)) { $patchText = ($toolInput | ConvertTo-Json -Depth 8 -Compress) }
-        foreach ($match in [regex]::Matches($patchText, '(?m)^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$')) {
-            $rel = Resolve-RepoRelative -PathText $match.Groups[1].Value.Trim() -Root $root
-            if ($rel) { $targets.Add($rel) }
+        foreach ($match in [regex]::Matches($patchText, '(?m)^\*\*\* (Add File|Update File|Delete File|Move to): (.+)$')) {
+            $raw = $match.Groups[2].Value.Trim()
+            $rel = Resolve-RepoRelative -PathText $raw -Root $root
+            if ($rel) { $targets.Add($rel); $verbs[$rel] = $match.Groups[1].Value }
+            else { $outside.Add($raw) }
         }
     } else {
         foreach ($prop in @('file_path', 'path', 'notebook_path')) {
             if ($toolInput.PSObject.Properties[$prop]) {
-                $rel = Resolve-RepoRelative -PathText ([string]$toolInput.$prop) -Root $root
-                if ($rel) { $targets.Add($rel) }
+                $raw = [string]$toolInput.$prop
+                $rel = Resolve-RepoRelative -PathText $raw -Root $root
+                if ($rel) { $targets.Add($rel); $verbs[$rel] = $tool }
+                elseif (-not [string]::IsNullOrWhiteSpace($raw)) { $outside.Add($raw) }
             }
         }
     }
 
+    # P8: a write/edit/patch target that resolves outside the project root is
+    # blocked outright — it used to drop out of $targets silently.
+    if ($outside.Count -gt 0) {
+        $paths = ($outside | Select-Object -First 5) -join ', '
+        $reason = "source-edit guard: edit-outside-cwd on [$paths] - write target resolves outside project root; keep edits under $root"
+        [Console]::Error.Write($reason)
+        [Console]::Out.Write((@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress))
+        exit 2
+    }
+
     if ($targets.Count -eq 0) { exit 0 }
+
+    # P1: create-vs-modify preimage check — a modify verb on a missing file (or
+    # Add File on an existing one) can only fail with a context miss.
+    $modifyVerbs = @('edit', 'search_replace', 'notebook_edit', 'Update File', 'Delete File')
+    foreach ($rel in $targets) {
+        $verb = [string]$verbs[$rel]
+        $exists = Test-Path -LiteralPath (Join-Path $root $rel)
+        if ($modifyVerbs -contains $verb -and -not $exists) {
+            $reason = "source-edit guard: preimage-missing - '$verb' targets absent file [$rel]; create it first or list the real path"
+            [Console]::Error.Write($reason)
+            [Console]::Out.Write((@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress))
+            exit 2
+        }
+        if ($verb -eq 'Add File' -and $exists) {
+            $reason = "source-edit guard: create-on-existing - 'Add File' targets existing [$rel]; the patch would fail a context check"
+            [Console]::Error.Write($reason)
+            [Console]::Out.Write((@{ decision = 'block'; reason = $reason } | ConvertTo-Json -Compress))
+            exit 2
+        }
+    }
 
     $patchDrop = Join-Path $root '__patch_drop__'
     $contract = Join-Path $patchDrop 'source_edit_lease_contract.ps1'

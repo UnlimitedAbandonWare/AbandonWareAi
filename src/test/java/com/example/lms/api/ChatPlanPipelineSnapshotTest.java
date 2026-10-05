@@ -17,6 +17,51 @@ class ChatPlanPipelineSnapshotTest {
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Test
+    void contextUsageNamesEstimatesAndPreservesUnknownLimitAndConsumption() {
+        var snapshot = ChatStreamSignalBuilder.buildPipelineSnapshot(Map.of(
+                "llm.call.approxInputTokens", 120,
+                "prompt.memory.compressor.inputLen", 800,
+                "prompt.memory.compressor.outputLen", 300,
+                "prompt.memory.compressor.activated", true,
+                "prompt.memory.compressor.reason", "overflow",
+                "prompt.memory.raw", "private-memory"), null, null, null);
+        assertNotNull(snapshot);
+        JsonNode usage = mapper.valueToTree(snapshot).path("contextUsage");
+        assertEquals(120, usage.path("inputTokens").asInt());
+        assertEquals("char_estimate", usage.path("countMethod").asText());
+        assertTrue(usage.path("contextLimitTokens").isNull());
+        assertEquals(800, usage.path("memoryBeforeChars").asInt());
+        assertEquals(300, usage.path("memoryAfterChars").asInt());
+        assertTrue(usage.path("memoryIncluded").isNull());
+        assertFalse(usage.toString().contains("private-memory"));
+        assertEquals(usage, mapper.valueToTree(ChatStreamSignalBuilder.withTraceTurnId(
+                snapshot, "FACT", 42L)).path("contextUsage"));
+    }
+
+    @Test
+    void contextUsageRejectsMalformedCountsAndRequiresObservedModelLimitSource() {
+        JsonNode usage = mapper.valueToTree(ChatStreamSignalBuilder.buildPipelineSnapshot(Map.of(
+                "llm.call.approxInputTokens", 0,
+                "llm.call.contextLimitTokens", 4096,
+                "llm.call.contextLimitSource", "model_spec_snapshot",
+                "prompt.memory.compressor.inputLen", -1,
+                "prompt.memory.compressor.outputLen", "300",
+                "prompt.memory.compressor.reason", "private-unapproved-reason",
+                "llm.call.memoryIncluded", false), null, null, null)).path("contextUsage");
+        assertEquals(0, usage.path("inputTokens").asInt());
+        assertEquals(4096, usage.path("contextLimitTokens").asInt());
+        assertEquals("model_spec_snapshot", usage.path("limitSource").asText());
+        assertTrue(usage.path("memoryBeforeChars").isNull());
+        assertTrue(usage.path("memoryAfterChars").isNull());
+        assertTrue(usage.path("memoryCompressionReason").isNull());
+        assertFalse(usage.path("memoryIncluded").asBoolean());
+        JsonNode unverified = mapper.valueToTree(ChatStreamSignalBuilder.buildPipelineSnapshot(
+                Map.of("llm.call.approxInputTokens", 100, "llm.call.contextLimitTokens", 4096),
+                null, null, null)).path("contextUsage");
+        assertTrue(unverified.path("contextLimitTokens").isNull());
+    }
+
+    @Test
     void projectsOnlyTypedPlanStatesAndKnownStageRows() {
         Map<String, Object> meta = Map.of(
                 "plan.when", "unknown",

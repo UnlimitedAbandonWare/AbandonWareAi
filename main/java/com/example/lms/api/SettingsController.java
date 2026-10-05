@@ -71,6 +71,13 @@ public class SettingsController {
                     "rejected", String.join(",", rejected)));
         }
 
+        if (settings.containsKey(SettingsService.KEY_EXECUTION_MODE)) {
+            try { com.example.lms.service.ChatPreferenceService.validate(
+                    java.util.Collections.singletonMap("executionMode", settings.get(SettingsService.KEY_EXECUTION_MODE))); }
+            catch (IllegalArgumentException invalidMode) {
+                return ResponseEntity.badRequest().body(Map.of("code", "invalid_execution_mode"));
+            }
+        }
         SettingsService.InvalidNumericSetting invalid = SettingsService.numericValidationError(settings);
         if (invalid != null) {
             return ResponseEntity.badRequest().body(Map.of("message", "invalid numeric setting",

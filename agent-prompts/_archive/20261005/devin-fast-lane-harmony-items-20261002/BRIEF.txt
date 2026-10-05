@@ -1,0 +1,80 @@
+[ANTI-STOP]
+# DEVIN DIRECTIVE — 멀티세션 종합 분석 기반 최우선 고효율 장착 아이템 3종(Fast-Lane API 핫스왑 · RAG Zero-Evidence 즉시 릴리스 · 초경량 스모크 브리지) 런타임 장착 및 코덱스 인계 명세서
+@demo1-agent-api-spend-guard
+
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+코덱스(Codex)와 데빈(Devin)의 최신 세션 분석과 웹 라우팅 베스트 프랙티스를 종합하여, 현재 시스템에 가장 쉽고 빠르게 장착 가능한 최우선 고효율 3대 아이템(ChatGPT OAuth Fast-Lane 핫스왑, RAG 제로 근거 즉시 릴리스, 3초 초경량 스모크 브리지)을 런타임에 장착하고 코덱스 인계 명세서(FOR_CODEX.md)를 작성한다.
+
+### 1. 사실 (2026-10-02 18:35 KST 기준)
+- Project Root는 `C:\AbandonWare\demo-1\demo-1\src`이다.
+- 현재 코덱스 세션(`codex-chat-rag-browser-selfcheck-63b0c67a`)은 로컬 RAG 근거 검증(`LOCAL_DOC as RAG evidence`) 및 브라우저 테스트 중 모델 지연과 근거 판정 불일치로 검증 실패(exit=1) 및 롤백을 반복하고 있다.
+- 데빈 세션(`devin-test-model-api-policy-e575d169`)은 `catalog-20261002-182855.json`을 통해 ChatGPT OAuth 62,500 크레딧 모델(`chatgpt-oauth:gpt-5.5`, `chatgpt-oauth:gpt-5.6-luna`, `chatgpt-oauth:gpt-6-astra` 등)이 정상 구성(status=configured, selectable=true)되어 있음을 확인하였다.
+- 웹서치 최신 멀티 LLM 라우팅 아키텍처 베스트 프랙티스 조사 결과:
+  1) **Small-to-Large / Fast Tiering**: 무거운 모델 대기 대신 저지연 경량 API 모델을 1차 챗 라우팅에 즉시 배치하여 체감 지연(TTFT)을 극소화하는 것이 최우선 권장된다.
+  2) **Zero-Evidence Safe Release**: RAG 검색에서 참조 근거가 0건이더라도 60초 대기/보류(HOLD)하지 않고 즉시 일반 응답을 릴리스하는 것이 표준 Resilience 패턴이다 (`AGENTS.md`의 `DEMO1-EVIDENCE-ZERO-RELEASE`).
+  3) **Role Separation Harmony**: 로컬 GPU(RTX 3090/3060)는 가벼운 임베딩(`qwen3-embedding:4b`)에 집중하고, 대화 생성은 승인된 62,500 크레딧 API 모델이 분담할 때 가장 조화롭고 높은 처리 효율을 달성한다.
+- `scripts/brief_save.py` 및 `scripts/agent_signal_digest.py` 등 공통 도구가 준비되어 있다.
+
+### 2. 공통 규칙
+- 데빈(Devin)은 런타임 분석, 설정 명세, 스모크 스크립트 작성자로서 동작하며, 프로덕션 Java 소스(`main/java/**`)를 임의로 직접 수정하거나 빌드하지 않는다.
+- 모든 분석 결과와 소스 수정안은 `data/agent-handoff/fast-lane-harmony/FOR_CODEX.md`에 파일별 diff 형태로 명확히 정리하여 코덱스(Codex)가 적용하도록 인계한다.
+- 형상 관리 변경 엄격 통제: git commit, git push, git add -A, git commit -a는 일체 실행하지 않는다.
+- 비밀값 보호: API 키, OAuth 토큰 등 민감 비밀값은 콘솔에 출력하거나 파일에 평문 저장하지 않으며, 환경 변수 이름(`OPENAI_API_KEY` 등)이나 마스킹된 식별자만 사용한다.
+- 금지 목록 핵심어 준수: push 금지, add -A 금지, 비밀 노출 금지, AbandonWare3 및 PROTO_OPEN 레거시 규칙 임의 적용 배제.
+
+### 3. 작업 항목 (DV1~DV4)
+#### DV1. [아이템 1] ChatGPT OAuth Fast-Lane 핫스왑 매핑 장착
+- `catalog-20261002-182855.json`의 초고속 모델(`chatgpt-oauth:gpt-5.6-luna`, `gpt-5.5`)을 `configs/api-routing.yaml` 및 `configs/agent-test-model-policy.yaml`의 fast/chat 1차 우선순위로 장착하는 설정안 도출.
+- 환경변수 원라이너(`$env:AWX_TEST_MODEL='chatgpt-oauth:gpt-5.6-luna'`)를 통해 브라우저 RAG 및 메인 챗 테스트 시 로컬 GPU 대기 없이 1~2초 내 즉각 응답을 수신하도록 라우팅 연결.
+
+#### DV2. [아이템 2] RAG 제로 근거 보류(HOLD) 해제 및 즉시 릴리스 정책 점검
+- 현재 코덱스가 겪고 있는 `Evidence: 0` 시 60초 대기 후 `응답 본문을 보류했습니다` 증상을 해제하는 정책 검증.
+- `AGENTS.md`의 `DEMO1-EVIDENCE-ZERO-RELEASE` 지침에 따라 `evidenceReleaseRequired: false` 적용 상태를 점검하고, 인용 근거가 없어도 일반 대화 및 개념 질의에 대해 본문이 즉시 릴리스되도록 설정 매핑 완성.
+
+#### DV3. [아이템 3] 3초 초경량 스모크 브리지 스크립트 작성
+- 코덱스가 복잡한 통합 테스트 대신 3초 안에 Fast-Lane 정상 작동을 확인할 수 있는 초경량 스모크 스크립트(`scripts/smoke_fast_lane_rag.py`) 작성.
+- 주요 검증 로직:
+  1) HTTP 엔드포인트 `/api/chat/sync` 또는 `/chat` 대상 요청 발송.
+  2) 응답 상태 HTTP 200 및 응답 본문 정상 반환 확인.
+  3) `backend_unavailable` 또는 60초 타임아웃 없이 3초 이내 응답 완료 확인.
+  4) 로컬 GPU VRAM 무부하 상태 확인.
+
+#### DV4. 코덱스 소스 수정 및 런타임 장착 인계서(FOR_CODEX.md) 작성
+- 저장 경로: `data/agent-handoff/fast-lane-harmony/FOR_CODEX.md`
+- 코덱스가 즉시 적용할 수 있도록 파일별 변경 명세 및 YAML diff 작성:
+  1) `configs/api-routing.yaml`: ChatGPT OAuth Fast-Lane 프리셋 등록
+  2) `main/resources/application-llm.yaml`: Zero-Evidence Release 기본값 확인 및 타임아웃 현실화
+  3) `scripts/chat_rag_golden_browser.js`: Fast-Lane 환경변수 자동 감지 옵션
+  4) 코덱스 실행을 위한 1줄 실행 명령: `python -B scripts/smoke_fast_lane_rag.py`
+
+### 4. HOLD 조건
+- ChatGPT OAuth 62,500 승인 크레딧 외에 추가 유료 결제 수단 등록이나 크레딧 추가 구매가 요구되는 경우 즉시 HOLD.
+- 실행 중인 프로덕션 포트(18180 등)를 임의로 강제 종료하거나 재기동해야 하는 상황 발생 시 HOLD.
+- ChatGPT OAuth 토큰이나 비밀값이 로그에 노출될 위험이 감지되는 경우 즉시 HOLD.
+
+### 5. ASK_ONCE (기본값 포함)
+- Q1. Fast-Lane 1순위 모델 선택: 가장 지연시간이 짧은 경량 모델(`gpt-5.6-luna`)을 기본으로 할 것인가, 높은 추론 품질의 `gpt-5.5`를 기본으로 할 것인가? (권장값: 응답 속도 극대화와 크레딧 효율을 위해 `gpt-5.6-luna`를 Fast-Lane 기본으로 장착하고 `gpt-5.5`를 예비로 둠)
+- Q2. 스모크 테스트 실행 방식: 독립 Python HTTP 스크립트로 3초 만에 검증할 것인가, 브라우저 자동화 스크립트로 검증할 것인가? (권장값: 코덱스가 즉시 가볍게 실행할 수 있도록 독립 Python HTTP 스크립트 `scripts/smoke_fast_lane_rag.py` 우선 제공)
+
+### 6. 절대 금지
+- git push, git commit, git add -A, git commit -a 실행 금지.
+- API 키, OAuth 토큰 등 비밀값의 평문 노출 및 커밋 금지.
+- 데빈이 프로덕션 Java 소스(`main/java/**`)를 임의로 직접 수정하거나 단독 컴파일/빌드하는 행위 금지 (코덱스 인계 원칙).
+- AbandonWare3 및 PROTO_OPEN 레거시 규칙 임의 적용 금지.
+
+### 7. Acceptance (완료 수용 기준)
+- `data/agent-handoff/fast-lane-harmony/FOR_CODEX.md` 인계서가 누락 없이 작성되었는가?
+- [아이템 1] ChatGPT OAuth Fast-Lane 매핑 스펙이 `catalog-20261002-182855.json`의 실측 모델 기준으로 정의되었는가?
+- [아이템 2] RAG 제로 근거 보류(HOLD) 방지 정책이 명시되었는가?
+- [아이템 3] 3초 초경량 스모크 브리지 스크립트(`scripts/smoke_fast_lane_rag.py`)가 오류 없이 실행 가능한 형태로 작성되었는가?
+- 미실행 항목이 있는 경우 NOT_RUN 및 구체적 사유가 명확히 기록되었는가?
+
+### 8. 보고 형식
+- 첫 줄: `외부 API: 없음` (또는 사용한 API 명시)
+- 3대 우선 장착 아이템 분석 결과 요약 (3줄)
+- 작성된 스모크 스크립트 및 인계 문서 경로 요약
+- 코덱스(Codex) 전달을 위한 다음 권장 단계
+
+[ANTI-STOP]

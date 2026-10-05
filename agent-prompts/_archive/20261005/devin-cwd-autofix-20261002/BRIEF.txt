@@ -1,0 +1,136 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @demo1-work-ledger @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-codex-auto-decide
+
+# DEVIN 지시서: 시작 경로가 C:\Users\nninn으로 초기화되는 버그 자동 교정
+작성: Grok Bot, 2026-10-02 KST
+Project Root: C:\AbandonWare\demo-1\demo-1\src (git root, 규칙 파일은 소문자 agents.md)
+역할: Devin은 설정·규칙·스크립트·검증을 돕는다. main\ 제품 소스는 한 줄도 고치지 않는다.
+첫 명령: Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'   (이 지시서의 모든 명령 앞에 둔다)
+
+## 0. 한 줄 목표
+Devin Local 세션이 C:\Users\nninn에서 시작하거나 거기서 명령을 실행하면 자동으로 src로 바뀌게 한다.
+설정이 다시 초기화돼도 진단 도구 한 번으로 복구되게 한다.
+완료 조건은 Acceptance 전부 PASS다. 읽거나 계획만 하고 끝내면 완료가 아니다.
+
+## 1. 확인한 사실 (Grok 실측, 2026-10-02 10:1x KST, 읽기 전용)
+- 셸: Windows PowerShell 5.1.19041. pwsh 7은 없다. 그래서 `&&`, `||`, bash 문법, shell_flavor=bash가 실패한다.
+  (방금 Devin 로그: "'&&' 토큰이 올바른 문 구분 기호가 아닙니다", "Shell 'bash' is not available")
+- PowerShell 프로필은 없다. 5.1(Documents\WindowsPowerShell\...)과 7(Documents\PowerShell\...) 둘 다 없다.
+- Devin 앱: %LOCALAPPDATA%\Programs\Devin, 사용자 설정은 %APPDATA%\devin\User\settings.json(838B, 09-24).
+  설정 키 중 terminal과 관련된 건 `terminal.integrated.showCommandHint`뿐이다. `terminal.integrated.cwd`는 없다.
+- ★ 근본 원인 후보: 가장 최근 workspaceStorage(10-02 10:11)가 가리키는 이름 없는 작업공간은
+  %APPDATA%\Devin\Workspaces\1790732690335\workspace.json 이고,
+  내용은 `"folders":[{"path":"../../../../.."}]`, `"workbenchMode":"windsurf-agent-window"` 이다.
+  이 상대경로를 위로 5단계 올라가면 C:\Users\nninn 이 된다. 그래서 작업공간 루트가 홈 폴더로 잡힌다.
+  화면 하단의 "nninn +1"도 이것과 맞는다.
+  다른 작업공간 1790248028020(09-30)은 src를 가리킨다. 10-01에 만든 prewarm 작업공간 두 개 중
+  하나는 folders가 비어 있다([]), 다른 하나는 src다. 앱이 미리 만들어 두는(prewarm) 작업공간을 다시 생성하면서
+  사용자가 고친 설정이 "초기화"되는 것으로 보인다.
+- ★ 그래서 저장소 규칙이 안 먹는다: .windsurf\rules\demo1-hard-constraints.md(always_on)와
+  demo1-project-root 스킬에 "실행 위치에서 루트를 다시 정하지 말 것"이 이미 있다. 하지만 루트가 nninn이면
+  src\.windsurf\rules 자체가 로드되지 않는다. 그래서 저장소 바깥에 있는 장치가 필요하다.
+- 전역 규칙 파일 C:\Users\nninn\.codeium\windsurf\memories\global_rules.md 는 0B(09-18)로 비어 있다.
+  Devin Local이 이 파일을 읽는지는 아직 확인되지 않았다(evidence_needed).
+- C:\AbandonWare\demo-1\demo-1\ (git root 바깥)에는 .code-workspace 파일이 없다. src\.vscode\settings.json 도 없다.
+
+## 공통 규칙
+- 시작할 때 preflight와 lease를 확인한다. 자기 lease: devin-cwd-autofix-<8hex>
+  대상: scripts/devin_cwd_doctor.ps1, scripts/test_devin_cwd_doctor.py, .windsurf/rules/demo1-cwd-powershell51.md,
+  docs/operations/devin-cwd-autofix.md, docs/diagnostics/devin-cwd-autofix-20261002/**
+  (저장소 바깥 파일은 lease 대신 백업으로 보호한다)
+- 저장소 바깥 파일을 고치기 전에는 항상 같은 폴더에 <이름>.bak-20261002-<hhmm> 백업을 만든다.
+  고치기 전후의 sha256 앞 12자를 기록하고, JSON 파일은 고친 뒤 ConvertFrom-Json으로 파싱되는지 확인한다.
+- 되돌릴 수 있는 결정은 Self-Ask(긍정, 부정, 반례를 본 뒤 중립 판정)로 AUTO 처리하고 `AUTO_DECISION:` 줄로 남긴다.
+- 키, 토큰, 쿠키 값은 읽지도 출력하지도 않는다. 설정 파일은 필요한 키 이름과 값만 다룬다.
+
+## WP1: 진단 도구 scripts\devin_cwd_doctor.ps1 (PowerShell 5.1 호환)
+- `-Check`(기본): 아래 항목을 표로 출력하고, 문제가 있으면 exit 2, 정상이면 exit 0이다.
+  C1 %APPDATA%\Devin\Workspaces\*\workspace.json의 각 folders 경로를 절대경로로 풀었을 때
+     C:\Users\nninn(=$HOME)이거나 비어 있는가. id, 수정 시각, 풀린 경로를 출력한다.
+  C2 %APPDATA%\devin\User\settings.json에 `terminal.integrated.cwd`가 src로 설정돼 있는가.
+  C3 global_rules.md에 아래 WP3 블록 표식(DEMO1-CWD-GUARD)이 있는가.
+  C4 C:\AbandonWare\demo-1\demo-1\demo1-src.code-workspace가 있고 folders가 src인가.
+  C5 현재 프로세스의 위치($PWD)와 PS 버전.
+- `-Fix`: C1~C4를 백업한 뒤 고친다. 여러 번 실행해도 결과가 같아야 한다.
+  C1 수정 대상: 수정 시각이 최근 2분 이내인 작업공간(=지금 열려 있을 수 있는 창)은 제외하고 "STAGED"로만 보고한다.
+     열린 창의 작업공간 파일을 바꾸면 창이 다시 로드돼 실행 중인 세션이 끊길 수 있기 때문이다.
+     나머지는 folders를 `[{"name":"src","path":"C:/AbandonWare/demo-1/demo-1/src"}]`로 바꾼다. 다른 키는 그대로 둔다.
+  `-Fix -IncludeActive`를 주면 열린 창도 고친다. 사용자가 세션을 닫은 뒤 실행하는 용도다.
+- `-Restore <bak 경로>`: 백업에서 되돌린다.
+- 출력에 키나 토큰 같은 값은 넣지 않는다. 문법은 PS 5.1 기준이다(`&&`, `??`, 3항 연산자 금지).
+
+## WP2: 이름 있는 작업공간과 앱 설정 (근본 교정)
+- C:\AbandonWare\demo-1\demo-1\demo1-src.code-workspace 를 새로 만든다(git root 바깥이라 커밋 대상이 아니다):
+  folders는 src 하나만 둔다. settings에는 terminal.integrated.cwd = src 절대경로,
+  terminal.integrated.defaultProfile.windows = "Windows PowerShell"을 넣는다.
+- 같은 폴더에 Open-Devin-demo1.bat를 만든다. Devin 실행 파일 이름은 %LOCALAPPDATA%\Programs\Devin에서 실제로
+  확인한 이름을 쓴다. 이 bat은 doctor `-Fix`를 실행한 다음 Devin으로 위 .code-workspace를 연다.
+  CLI 인자로 작업공간을 여는 방식이 안 되면 그 사실을 기록하고 bat은 doctor만 실행하게 한다.
+- %APPDATA%\devin\User\settings.json에 `"terminal.integrated.cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src"` 한 키만
+  추가한다. 백업과 JSON 파싱 확인을 거치고, 기존 키는 그대로 보존한다.
+
+## WP3: 저장소 규칙이 안 먹을 때를 위한 전역 안전장치
+- global_rules.md(0B)에 12줄 이하 블록 하나를 추가한다:
+  `<!-- DEMO1-CWD-GUARD -->` … `<!-- /DEMO1-CWD-GUARD -->`
+  내용: (1) demo-1/AbandonWare 작업이거나 루트가 지정되지 않았고 현재 위치가 C:\Users\nninn이면,
+  첫 명령으로 `Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'`를 실행하고
+  이후 모든 명령 앞에도 같은 접두어를 붙인다. (2) 셸은 Windows PowerShell 5.1이다. `&&`, `||` 대신 `;`와
+  `if ($LASTEXITCODE -eq 0) { }`를 쓰고, shell_flavor=bash는 금지한다. (3) 상세 규칙은 src\.windsurf\rules를 따른다.
+- Devin Local이 global_rules.md를 실제로 읽는지 확인할 방법을 찾는다(문서, 설정 화면, 앱 리소스의 경로 문자열 검색 등).
+  확인이 안 되면 C3는 "적용했으나 로드 미확인(evidence_needed)"으로 보고한다.
+
+## WP4: 저장소 쪽 규칙과 문서
+- .windsurf\rules\demo1-cwd-powershell51.md(trigger: always_on, 1.5KB 이하): PS 5.1 문법 규칙, 첫 명령 Set-Location,
+  `C:\Users\nninn`에서 git이나 python 실행 금지, 막혔을 때 doctor `-Check`를 실행하라는 안내.
+  demo1-hard-constraints.md의 기존 문구와 중복되지 않게 "링크 1줄 + 새 내용"만 쓴다(그 파일 자체는 수정 금지).
+- docs\operations\devin-cwd-autofix.md: 원인, 고친 곳 4개, 되돌리는 법, 사용자가 확인할 방법.
+- scripts\test_devin_cwd_doctor.py는 최소 8개 테스트다. 임시 폴더에 가짜 APPDATA와 HOME을 만들어
+  `powershell -NoProfile -File`로 doctor를 실행한다. 다룰 경우: ../../../../.. 경로 탐지, 빈 folders, 정상 src,
+  `-Fix`를 두 번 실행해도 결과가 같음, 최근 2분 이내 작업공간은 STAGED, 백업 생성, `-Restore`, JSON 파싱 유지.
+  실제 %APPDATA%는 테스트에서 건드리지 않는다.
+
+## WP5: 실제 적용과 검증
+- 실제 PC에서 doctor `-Check`를 실행해 결과를 저장한다(전) → `-Fix` → `-Check`(후).
+- `terminal.integrated.cwd`가 효과 있는지 확인한다. 가능하면 새 터미널을 하나 열어 경로를 보고, 안 되면 NOT_RUN으로 둔다.
+- 새 Devin 세션의 첫 명령 위치를 확인하는 것은 이 세션이 할 수 없으면 NOT_RUN으로 두고, 사용자가 할 확인 절차를 적는다.
+- 지금 실행 중인 세션의 작업공간(1790732690335)은 STAGED로 남기고, 사용자가 세션을 닫은 뒤 실행할 명령 한 줄을 보고한다.
+
+## HOLD
+- PowerShell 프로필 생성. 프로필은 Codex, Grok 같은 모든 PowerShell 세션에 영향을 준다.
+  대신 Devin의 명령 실행 셸이 프로필을 로드하는지(-NoProfile 여부)만 확인해서 보고한다.
+- Devin 앱 설치 폴더나 바이너리 수정, 레지스트리 변경, 바로가기 덮어쓰기.
+- %APPDATA%\Code, Cursor 같은 다른 앱의 설정.
+
+## ASK_ONCE
+- 없음. 모든 변경은 백업이 있어서 되돌릴 수 있다. 열린 창을 고치는 일은 STAGED로 남기는 것으로 대신한다.
+
+## 절대 금지
+- push / pull / commit / git add -A / reset --hard / checkout / restore / stash / force-push
+- main\ 수정, chat.js 수정, 전체 테스트 suite, 전역 clean
+- .secrets / .env 읽기, 비밀값 출력, AbandonWare3 remote 재추가
+- admin/PROTO_OPEN 강화, DB 스키마 변경, 데이터셋 삭제
+- 다른 세션의 lease, hunk, staging 건드리기, demo1-hard-constraints.md 수정
+- 백업 없이 저장소 바깥 파일 수정, 작업공간 폴더나 workspaceStorage 삭제
+- __patch_drop__ / data / agent-handoff / agent-prompts 대량 검색
+
+## Acceptance (전부 PASS여야 완료, 실행하지 못한 항목은 NOT_RUN)
+A1 doctor `-Check`(전)가 1790732690335 → C:\Users\nninn을 탐지하고 exit 2
+A2 테스트 8개 이상 exit 0, 실제 %APPDATA%는 바뀌지 않음
+A3 `-Fix` 뒤 `-Check`: C2, C3, C4 OK, 열린 작업공간을 뺀 C1 OK, 열린 작업공간은 STAGED로 표시
+A4 바꾼 저장소 바깥 파일마다 백업 경로와 전후 sha가 기록되고, JSON이 파싱됨
+A5 `-Fix`를 두 번 실행해도 diff 0
+A6 global_rules.md 블록 12줄 이하, 로드 여부를 확인된 상태 또는 evidence_needed로 정직하게 표시
+A7 main\ 변경 0, chat.js sha256 시작=끝, 다른 lease 경로 변경 0
+A8 docs와 rules 작성, PROJECT_STATUS에 1행 추가, 자기 lease 정상 해제
+A9 사용자 확인 절차(새 세션에서 `Get-Location` 결과가 src인지) 기록. 이 세션에서 확인할 수 없으면 NOT_RUN
+
+## 보고 형식
+1) 결론 한 줄 (DONE / PARTIAL / BLOCKED)
+2) 원인 확정 여부(작업공간 상대경로, prewarm 재생성)와 증거
+3) 바꾼 파일 목록 + 백업 경로 + sha 앞 12자
+4) Acceptance A1~A9 표
+5) `AUTO_DECISION:` 줄들
+6) 사용자가 세션을 닫은 뒤 실행할 명령 한 줄과 확인 방법
+
+[ANTI-STOP]
+이 문서를 읽은 것으로 끝내지 말 것. preflight → WP1 → WP2 → WP3 → WP4 → WP5를 이어서 실행하고,
+Acceptance 표를 채운 뒤에만 멈춘다. 명령이 PowerShell 문법 오류로 실패하면 PS 5.1 문법으로 고쳐서 계속 간다.

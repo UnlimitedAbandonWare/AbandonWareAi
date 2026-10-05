@@ -1,0 +1,112 @@
+[ANTI-STOP]
+읽고 계획만 세우고 멈추지 마세요. D0부터 D7까지 실제로 파일을 만들고, 실행하고, 결과를 ledger에 남긴 뒤에만 끝냅니다. 막힌 단계만 HOLD로 적고 나머지는 계속 진행합니다. Acceptance 전부를 PASS/FAIL/NOT_RUN으로 판정하기 전에는 끝내지 마세요.
+
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(`&&` 대신 `;`), git = F:\git\cmd\git.exe, Python 3 표준 라이브러리만 사용, 한글 콘솔 출력은 깨질 수 있으니 결과는 UTF-8 파일로 저장합니다.
+
+## 0. 한 줄 목표
+Codex가 "설정 기본값 지시서(codex-settings-defaults)"로 제품 소스를 고치는 동안, 데빈은 제품 소스를 건드리지 않고 그 작업을 검증할 도구(DB 부작용 스냅샷, SSE 실제 모델 추출기, 질문 묶음+채점기, 예산 감사기, 정적 우선순위 검사기)를 새 파일로만 만들고, Codex 보고 뒤에 한 번 돌려 REVIEW.md를 채웁니다.
+
+## 1. 확인된 사실 (2026-10-03 08:41 KST, 사용자 PC 직접 확인)
+- HEAD 4150b282(dirty). chat.js SHA256 앞 12자리 = 4225D9447524 (변경 금지, 끝날 때 같아야 함).
+- main\java\com\example\lms\domain\UserPreferenceProfile.java 엔티티만 있고, 이를 쓰는 Repository/Service는 없음. `/api/settings/preferences` 경로는 아직 소스에 없음(Codex가 새로 만들 예정).
+- scripts\db_agent.py: `status / tables / schema / get-user / verify-admin / query --sql "..." --max-rows N`(읽기 전용 SELECT 게이트), 기본 대상 http://127.0.0.1:18180. 단, 201행 근처에 H2 파일을 직접 여는 runscript 경로도 있음 → 서버가 돌고 있을 때 이 경로는 쓰면 안 됨.
+- scripts\api_first_live_check.ps1: `-Scenario V1..V5|All`, `-DryRun` 지원. V2 = "auto + RAG canary 질문"(Codex 지시서의 QR이 이것과 같은 첨부·질문·canary를 쓰라고 함).
+- Plan9 ledger: data\agent-handoff\codex-plan9-api-first-routing-3da4fc89\ (REPORT.md에 V2 FAIL, verification_outcome_unknown 기록, 결과 파일 output\playwright\chat-rag-golden\2026-10-02T15-26-42-576Z\result.json).
+- observedModel을 이미 다루는 기존 스크립트: scripts\chat_rag_golden_browser.js, browser_model_select.js, chat_practice_browser.js, phase2_full_app_browser_tests.js, test_model_policy.py.
+- 이전 Codex 자율 ledger: data\agent-handoff\codex-autonomy\codex-settings-defaults-94ab752a\ (presence/session/launcher 체크포인트, ChatSettingsOmissionRegressionTest green). 새 Codex 세션은 data\agent-handoff\codex-settings-defaults-<8hex>\ 를 새로 만들 수 있음 → 둘 다 glob으로 찾고 읽기만 합니다.
+- scripts\start_rag_stack.ps1:423-424 = AWX_OPTIONAL_HTTPS_ENABLED를 프로세스 → User 순서로 읽음(Codex가 읽는 순서를 고치는 중).
+- 다른 방의 데빈 설정 UX 지시서가 scripts\settings_ux_* 를 씀 → 이번 데빈은 scripts\settings_defaults_* 접두어만 씁니다(겹치지 않음).
+
+## 공통 규칙
+- ledger: data\agent-handoff\devin-settings-defaults-assist-<8hex>\ (manifest, journal, 실행 로그, REVIEW.md). 산출물: var\settings-defaults-assist\.
+- 새 파일을 만들기 전에 __patch_drop__\source_edit_session.ps1 로 자기 파일만 lease하고, 끝나면 반드시 반납합니다. 작업 기록은 scripts\work_journal.py로 남깁니다.
+- 수정 허용(새 파일만): scripts\settings_defaults_db_snapshot.py, scripts\settings_defaults_sse_observe.py, scripts\settings_defaults_answer_grade.py, scripts\settings_defaults_budget_meter.py, scripts\settings_defaults_static_check.py, scripts\settings_defaults_assist.ps1, 각 test_settings_defaults_*.py, 자기 ledger, var\settings-defaults-assist\ 아래.
+- 변경 금지: main\ 아래 모든 제품 소스(Java/JS/HTML/YAML/properties), chat.js, Codex 지시서의 수정 허용 목록 파일 전부(ChatRequestSettingsMerger, ChatRequestDto, SettingsService, ChatSessionMetaMerger, ChatApiController, PageController, ChatModelCatalogService, chat-settings-bridge.js, settings-page.js, chat-model-picker.js, model-strategy.js, settings.html, chat-ui.html, application-llm.yaml, application.yml, start_rag_stack.ps1), 기존 scripts\*(db_agent.py, api_first_live_check.ps1, chat_rag_golden_browser.js 등은 감싸서 호출만, 복사·수정 금지), Codex/Plan9/다른 데빈 ledger(읽기만), docs\PROJECT_STATUS.md, agents.md.
+- 하지 않는 것: Gradle 실행, 서버 시작·재시작, /chat 채팅 전송, 유료 API 호출, 브라우저로 설정 저장. 채팅 25회·재시작 2회 예산은 Codex 것이며 데빈은 1회도 쓰지 않습니다.
+
+## 작업 단계
+
+D0. 기준선 (지금 바로)
+- HEAD, `git status --short`(대상 파일만), Codex 수정 허용 목록 파일 각각의 존재 여부·크기·SHA256 앞 12자리, chat.js 해시를 var\settings-defaults-assist\baseline.json에 저장합니다.
+- Codex ledger를 glob(data\agent-handoff\codex-settings-defaults-*, data\agent-handoff\codex-autonomy\codex-settings-defaults-*)으로 찾아 경로·최종 수정 시각만 기록합니다.
+
+D1. DB 부작용 스냅샷 — scripts\settings_defaults_db_snapshot.py
+- 하위 명령 `snapshot --label <이름>`, `diff <A> <B>`.
+- db_agent.py를 subprocess로 감싸 HTTP 읽기 전용 query 경로만 씁니다. 먼저 `python scripts\db_agent.py --help`와 `query --help`를 읽고, 18180 서버가 떠 있는데 파일 직접 열기(runscript)로 떨어지는 경우가 있으면 그 경로는 막고(오류로 종료) HOLD로 적습니다.
+- 대상: user_preference_profile(행 수, owner_key는 sha256 앞 8자리로만, profile_meta는 정규화 JSON 해시와 최상위 키 목록), configuration_setting(키 목록과 값 해시만, 값 원문 출력 금지), current_model(행 수, id=1 행 해시). 테이블이 없으면 `UPP_TABLE_MISSING`처럼 표시하고 계속합니다(Codex G0.5 HOLD 근거가 됨).
+- 지금 `snapshot --label pre-codex`를 1회 찍습니다. 서버가 안 떠 있으면 NOT_RUN으로 적고 서버를 띄우지 않습니다.
+
+D2. SSE 실제 모델 추출기 — scripts\settings_defaults_sse_observe.py
+- 먼저 chat_rag_golden_browser.js의 observedModel 추출 로직과 result.json 형식을 읽습니다. 이미 다 처리하면 그 result.json을 읽는 얇은 래퍼만 만들고 로직을 중복하지 않습니다.
+- 입력: 저장된 SSE 원문 또는 result.json. 출력 필드: sentModel, observedModel(실제 공급자 응답의 모델 필드에서만), finalAnswerModel과 judge/보조 모델 구분, fallbackCount, 첫 토큰 시간(heartbeat/ACK/metadata 제외), terminal 상태, HTTP200 안의 SSE error.
+- requestedModel/resolvedModel/defaultChoice로 observedModel을 채우지 않습니다. 없으면 `observedModel=MISSING`.
+- test_settings_defaults_sse_observe.py: 여러 줄 data, 청크 분할, UTF-8 바이트 분할, 마지막 metadata, MISSING 경우를 고정 fixture로 검사합니다.
+
+D3. 질문 묶음과 채점기 — var\settings-defaults-assist\question-pack.json + scripts\settings_defaults_answer_grade.py
+- QG: Codex 지시서 원문 그대로(Java 17, [3,1,3,2] 원본 보존 중복 제거·오름차순, 정답 [1,2,3], 8문장 이내).
+- QR: api_first_live_check.ps1 V2와 Plan9 기록에서 첨부 경로·질문·canary를 찾아 경로와 SHA만 적습니다. canary 값은 question-pack에 넣지 말고 별도 파일 var\settings-defaults-assist\qr-canary.sha 에 해시만 둡니다. 원본 V2 fixture를 못 찾으면 `V2_FIXTURE_MISSING`으로 적고 다른 질문으로 대체하지 않습니다.
+- QW: 공식 출처가 있는 최신 사실 하나(예: 어떤 공식 릴리스 버전·발표일)를 웹에서 직접 확인해 질문·정답·출처 URL·확인 시각(KST)을 고정합니다.
+- QS: "안녕, 오늘 작업 시작하려고 해. 한 문장으로 응원해줘."
+- 채점기는 LLM 없이 규칙만: QG 정답 포함·코드 블록·문장 수, QR canary 해시 일치 여부, QW 정답 문자열, QS 한 문장. 결과는 PASS/FAIL/UNKNOWN. test_settings_defaults_answer_grade.py로 맞는 답·틀린 답 예시를 검사합니다.
+- 이 묶음은 Codex가 실험 전에 쓸 수 있게 경로만 알려 주는 참고 자료입니다. Codex에게 강제하지 않습니다.
+
+D4. 예산 감사기 — scripts\settings_defaults_budget_meter.py
+- Codex ledger의 experiment-results/API_CALLS/journal을 읽기만 해서 채팅 n/25, 외부 API n/cap, 재시작 n/2, 같은 실패 수정 n/2, 공개 앱 전송 수, 401/403/429/400 뒤 재시도 수를 표로 냅니다.
+- 읽을 파일이 없거나 형식을 모르면 UNKNOWN으로 쓰고 0으로 쓰지 않습니다. Codex용 카운터나 runner를 새로 만들지 않고, Codex ledger에 쓰지 않습니다(감사 전용).
+
+D5. 정적 우선순위 검사기 — scripts\settings_defaults_static_check.py
+- 라이브 트리를 읽기만 해서 S1~S12를 PASS/FAIL/PENDING/HEURISTIC으로 냅니다.
+  S1 공장 기본값 literal(temperature 0.2/0.3, topP 1.0, maxTokens 2048, 로컬 모델 fallback)이 application-llm.yaml의 chat.defaults 한 곳 밖(Merger, DTO 초기값, SettingsService @Value fallback, HTML, JS)에 남아 있는지
+  S2 ChatRequestDto의 topP/두 penalty/maxTokens 선행 기본값 제거(누락 표현 가능), isSearchModeExplicit 보존
+  S3 병합 경로에서 save/saveAllSettings/changeCurrentModel 호출 0
+  S4 PATCH /api/settings/preferences가 owner를 요청 body가 아니라 서버 쿠키/principal에서만 얻는지
+  S5 새 DDL·ddl-auto 변경·schema/migration 파일 변경 0 (D0 기준선과 비교)
+  S6 chat.js 해시 = 4225D9447524
+  S7 localStorage v2 키 awx.settings.v2.preferences 존재, v1 키는 ACK 전 삭제 코드 없음(HEURISTIC)
+  S8 llmrouter.auto가 논리 라우트로 구분되고 OAuth가 auto 후보에서 빠지는지(HEURISTIC)
+  S9 searchMode → useWebSearch 파생(OFF=false, 나머지 true) 한 곳에서만
+  S10 start_rag_stack.ps1이 자식 프로세스에 AWX_OPTIONAL_HTTPS_ENABLED=false를 명시하는지
+  S11 Codex 수정 허용 목록 밖 파일 변경이 D0 이후 생겼는지(다른 세션 변경일 수 있으니 FAIL이 아니라 FOREIGN으로 표시)
+  S12 집중 테스트 파일이 새로 생겼고 test 무필터/check 실행 흔적이 없는지
+- 지금 1회 돌려 "Codex 작업 전" 결과를 저장합니다(대부분 FAIL/PENDING이 정상). test_settings_defaults_static_check.py는 작은 가짜 트리 fixture로 검사합니다.
+
+D6. 묶음 실행기 — scripts\settings_defaults_assist.ps1
+- `-Mode baseline|snapshot|static|grade|budget|post`. post = snapshot post-codex → diff pre-codex post-codex → static → budget → (Codex ledger에 응답 원문이 있으면) grade. 기존 scripts\check_settings_routing_invariants.py는 읽기 전용으로 호출만 할 수 있습니다.
+- 각 실행의 명령·exit code·출력 파일을 ledger에 남깁니다.
+
+D7. REVIEW.md
+- 지금은 `STATUS: PENDING — Codex 보고 대기`로 둡니다.
+- Codex 최종 보고(REPORT.md)가 생긴 뒤에만 `settings_defaults_assist.ps1 -Mode post`를 1회 돌리고, Codex Acceptance A04(저장 0회), A05(단일 출처), A09/A12(예산), A13(chat.js·DDL)을 도구 결과와 대조해 일치/불일치/확인 불가를 적습니다. Codex 판정을 대신 PASS로 바꾸지 않습니다.
+- 보고가 아직 없으면 D7 후반은 NOT_RUN으로 두고 끝냅니다.
+
+## HOLD
+- db_agent가 HTTP 읽기 경로 없이 H2 파일 직접 열기만 가능할 때 → D1 HOLD(파일을 열지 않음).
+- V2 원본 fixture를 못 찾을 때 → QR만 V2_FIXTURE_MISSING, 나머지 계속.
+- Codex ledger가 아직 없을 때 → D4/D7은 PENDING, 도구 단위 테스트까지는 진행.
+- 다른 세션 lease가 내 새 파일 경로와 겹칠 때 → 그 파일만 HOLD.
+
+## ASK_ONCE
+없음. 이번 작업은 전부 되돌릴 수 있는 새 파일이라 AUTO(Self-Ask: 긍정 근거/부정 근거/반례 → 중립 판정)로 진행합니다.
+
+## 절대 금지
+push/pull/commit, git add -A, reset/checkout/restore/stash/clean, git remote 추가·변경, 전체 테스트 스위트·Gradle 실행, .env/.secrets/토큰 열람·출력(configuration_setting 값 원문 출력 포함), PROTO_OPEN·admin·CSRF 강화, DB 스키마 변경·데이터 쓰기·데이터셋 삭제, chat.js 수정, 제품 소스 수정, 다른 세션 lease·hunk·ledger 수정, 전역 Codex/에이전트 설정 수정, skip-permissions/full-access 모드 권장, 서버 재시작, /chat 채팅 전송, 유료 API 호출, native glm_worker 사용, mock 결과를 라이브 PASS로 보고.
+
+## Acceptance (실행 안 한 것은 NOT_RUN)
+- B01 baseline.json에 대상 파일 해시·chat.js 4225D9447524·HEAD 기록.
+- B02 db_snapshot pre-codex 1회(또는 서버 미기동 NOT_RUN), 값 원문·owner 원문 0.
+- B03 sse_observe 단위 테스트 PASS(여러 줄/청크/UTF-8/metadata/MISSING), 기존 로직 중복 없음.
+- B04 question-pack.json에 QG/QR(경로·SHA 또는 V2_FIXTURE_MISSING)/QW(출처 URL·KST)/QS, canary 원문 미노출, 채점기 단위 테스트 PASS.
+- B05 budget_meter가 Codex ledger를 읽기만 하고 UNKNOWN을 0으로 쓰지 않음.
+- B06 static_check S1~S12 "Codex 작업 전" 결과 저장, 단위 테스트 PASS.
+- B07 settings_defaults_assist.ps1 각 모드 exit code 기록.
+- B08 REVIEW.md 존재(PENDING 또는 post 결과), Codex 판정을 대신 고치지 않음.
+- B09 변경 파일이 수정 허용 목록 안의 새 파일뿐, chat.js 해시 불변, 제품 소스 변경 0, lease 반납 영수증.
+- B10 채팅 전송 0, 서버 재시작 0, 유료 API 0, Gradle 0.
+
+## 보고 형식
+첫 줄: `외부 API: 0회(유료), 웹 확인 n회(QW 출처), 로컬 HTTP 읽기 n회, 채팅 전송 0, 재시작 0`
+이어서: 만든 파일 목록(크기·SHA 앞 12자리) / 단위 테스트 명령과 exit code / D1 pre-codex 결과 요약(테이블 존재 여부, 행 수) / QR fixture 상태 / static_check 작업 전 결과표 / HOLD·NOT_RUN과 이유 / Codex에게 넘길 한 줄(도구 경로와 쓰는 법) / lease 반납 영수증.
+
+[ANTI-STOP]
+읽고 멈추지 마세요. D0~D6은 Codex를 기다리지 않고 지금 끝낼 수 있습니다. D7 후반만 Codex 보고를 기다립니다. 막힌 것은 HOLD·NOT_RUN으로 정직하게 적고, 없는 결과를 지어내지 마세요.

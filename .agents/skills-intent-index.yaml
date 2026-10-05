@@ -1492,6 +1492,27 @@ intents:
     forbid_families: []
     notes: 미지 에러→지문 정제→4대 탐침 플레이트(T1공식/T2이슈/T3재현/T4교차) 쿼리+3KB 골든 컨텍스트; 도구 scripts/web_search_probe_optimizer.py
 
+  - intent: behavior-ratchet
+    match:
+      - 래칫
+      - ratchet
+      - 원복 못
+      - 원복 금지
+      - 원복 방지
+      - 되돌리기 금지
+      - 되돌리기 못
+      - 회귀 잠금
+      - 회귀 방지
+      - 잠금 검사
+      - REVERTED
+      - behavior-ratchet
+      - behavior_ratchet
+      - 동작 되돌림
+    primary_skill: demo1-behavior-ratchet
+    optional_skill: null
+    forbid_families: []
+    notes: 랜딩된 동작/룰의 한쪽 방향 잠금(check→update, unlock은 사용자 ADR); REVERTED=잠긴 동작 소실
+
 fallback:
   primary_skill: demo1-vibe-max-agency
   development_signals:

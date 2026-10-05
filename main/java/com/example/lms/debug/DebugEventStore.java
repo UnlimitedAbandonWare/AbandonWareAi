@@ -75,6 +75,10 @@ public class DebugEventStore {
     private final NdjsonLineWriter ndjsonLineWriter;
     private final ThreadFactory ndjsonThreadFactory;
     private final AtomicLong ndjsonDropped = new AtomicLong();
+    private final AtomicLong ndjsonAccepted = new AtomicLong();
+    private final AtomicLong ndjsonWriteSuccess = new AtomicLong();
+    private final AtomicLong ndjsonWriteFailure = new AtomicLong();
+    private final AtomicLong ndjsonAbandoned = new AtomicLong();
     private long aggregateTouchOrder;
     private volatile ThreadPoolExecutor ndjsonExecutor;
     private volatile boolean ndjsonWriterClosed;
@@ -549,6 +553,7 @@ public class DebugEventStore {
 
         try {
             executor.execute(() -> writeNdjson(directory, fileName, jsonLine));
+            ndjsonAccepted.incrementAndGet();
         } catch (RejectedExecutionException rejected) {
             recordNdjsonDrop(executor.isShutdown() ? "writer_closed" : "queue_saturated");
         }
@@ -557,11 +562,14 @@ public class DebugEventStore {
     private void writeNdjson(String directory, String fileName, String jsonLine) {
         try {
             ndjsonLineWriter.write(directory, fileName, jsonLine);
+            ndjsonWriteSuccess.incrementAndGet();
         } catch (InterruptedException interrupted) {
+            ndjsonWriteFailure.incrementAndGet();
             Thread.currentThread().interrupt();
             LOG.debug("Failed to mirror DebugEvent NDJSON. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(interrupted)), messageLength(interrupted));
         } catch (Exception e) {
+            ndjsonWriteFailure.incrementAndGet();
             LOG.debug("Failed to mirror DebugEvent NDJSON. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
@@ -614,11 +622,11 @@ public class DebugEventStore {
         current.shutdown();
         try {
             if (!current.awaitTermination(NDJSON_SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS)) {
-                current.shutdownNow();
+                ndjsonAbandoned.addAndGet(current.shutdownNow().size());
                 current.awaitTermination(NDJSON_SHUTDOWN_WAIT_SECONDS, TimeUnit.SECONDS);
             }
         } catch (InterruptedException interrupted) {
-            current.shutdownNow();
+            ndjsonAbandoned.addAndGet(current.shutdownNow().size());
             Thread.currentThread().interrupt();
         }
     }
@@ -626,6 +634,19 @@ public class DebugEventStore {
     int ndjsonQueueSize() {
         ThreadPoolExecutor current = ndjsonExecutor;
         return current == null ? 0 : current.getQueue().size();
+    }
+
+    /** Count-only process-lifetime facts; independent counters form a non-atomic snapshot. */
+    public Map<String, Object> ndjsonMirrorStats() {
+        return Map.of(
+                "counterScope", "process_lifetime",
+                "enabled", ndjsonEnabled,
+                "acceptedCount", ndjsonAccepted.get(),
+                "writeSuccessCount", ndjsonWriteSuccess.get(),
+                "writeFailureCount", ndjsonWriteFailure.get(),
+                "abandonedCount", ndjsonAbandoned.get(),
+                "droppedCount", ndjsonDropped.get(),
+                "queueDepth", ndjsonQueueSize());
     }
 
     long ndjsonDroppedCount() {

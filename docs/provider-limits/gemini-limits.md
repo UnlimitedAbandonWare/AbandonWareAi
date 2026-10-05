@@ -1,9 +1,13 @@
 # Gemini limits (SSOT)
 
 ```yaml
-capturedAt: "2026-09-24"
+capturedAt: "2026-10-05"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-10-01"
+reviewedAt: "2026-10-05"
+ttlDays: 90
+expiresAt: "2027-01-03"
+status: "ACTIVE"
+expiryAction: "archive"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -19,6 +23,20 @@ sourceUrls:
   - "https://ai.google.dev/gemini-api/docs/rate-limits"
   - "https://ai.google.dev/gemini-api/docs/billing"
 ```
+
+## 에이전트 빠른 참조
+
+| 항목 | 값 |
+|---|---|
+| Canonical env | `GEMINI_API_KEY` (값 기록·출력 금지). 이 repo resolver는 `gemini.api-key`/`gemini.api.key` 프로퍼티도 읽는다. `GOOGLE_API_KEY`는 업스트림 관례 이름일 뿐 이 repo resolver가 읽지 않는다 |
+| 엔드포인트 | Gemini API (`generativelanguage.googleapis.com` 계열, SDK가 추상화) |
+| 주력 모델(2026-10-05 공식 표 기준) | Gemini 3.x 계열(3.1 Pro Preview, 3.8/3.7/3.6/3.5 Flash, 3.5 Flash-Lite, 3.1 Flash Lite) + 2.5 Pro/Flash/Flash-Lite + 2.0 Flash — 페이지 상단 배너 "Gemini 3.8 Flash is now available" |
+| 한도 단위 | RPM / input TPM / RPD — **project 레벨**(키 아님), RPD는 Pacific 자정 리셋. experimental/preview 모델은 더 타이트 |
+| Spend cap | rolling 10분 창: Free N/A / Tier1 $10 / Tier2 $50 / Tier3 $200 |
+| Priority inference | 소비는 전체 interactive 한도에 합산되지만 자체 한도 = 표준의 **0.3×** |
+| Batch | 동시 batch 100건, 입력 파일 2GB, 저장 20GB, 모델별 enqueued-token 상한 별도 표 |
+| 429 | `RESOURCE_EXHAUSTED` — spend cap이면 wait+retry·요청 축소·한도 상향 신청 순 |
+| 401/403 | 키·권한·지역 문제 — 모두를 "플랜 변경 필요"로 단정 금지 |
 
 ## What this file is / is not
 
@@ -74,8 +92,11 @@ billing account. The exact current tier for this project is not known (`unknown`
 ## Model-specific limits
 
 Current public docs do not publish a fixed per-model RPM/RPD/TPM table for the Free tier
-or for individual accounts. Active model-specific limits are shown in **Google AI Studio**.
-The AI Studio reference is a location description, not a login instruction.
+or for individual accounts — 모델별 interactive 한도는 **Google AI Studio**에만 표시된다
+(위치 설명이지 로그인 지시가 아니다). 다만 2026-10-05 기준 공개 페이지는 **Batch API의
+모델별 enqueued-token 상한 표**와 현재 모델 라인업(Gemini 3.x/2.5/2.0 계열)은 싣고 있다.
+구 `gemini-1.5-*`/`gemini-2.0-flash` 이전 세대 모델명을 주력으로 단정하지 마라 — 최신
+모델명은 SSOT 재확인(`$demo1-mutable-spec-policy`) 대상이다.
 
 ```yaml
 perModelAccountLimits: "not_published_here / account_exact_unknown"
@@ -89,6 +110,8 @@ perModelAccountLimits: "not_published_here / account_exact_unknown"
 ## Agent guidance
 
 - API 관련 작업에서만 이 문서를 읽는다.
-- 90일 이내이고 공식 정책 변경 증거가 없으면 재사용한다.
+- `expiresAt`(2027-01-03) 경과 시 **STALE_DISCARD** — `scripts/provider_limits_janitor.py
+  archive`가 `docs/provider-limits/archive/`로 격리한다. 만료 전엔 `capturedAt` 90일 이내 +
+  공식 정책 변경 증거 없으면 재사용한다.
 - 429 `RESOURCE_EXHAUSTED`가 발생하면 error 세부 코드·헤더·Retry-After를 먼저 확인하고,
   모델/프로젝트 범위로 기록한다. 모든 429를 "요금제 변경"으로 단정하지 마라.

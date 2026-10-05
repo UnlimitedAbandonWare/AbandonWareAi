@@ -178,6 +178,14 @@ def lease_lifecycle(lease, now=None):
     return "unknown"
 
 
+def lease_owned_by_task(lease, task_id):
+    """True when lease.taskIdHash is sha256(task_id). An empty task matches nothing."""
+    if not task_id or not isinstance(lease, dict):
+        return False
+    task_hash = hashlib.sha256(str(task_id).encode("utf-8")).hexdigest()
+    return lease.get("taskIdHash") == task_hash
+
+
 def journal_last_activity(root, journal):
     """Most recent of updatedAtUtc, task-dir mtime, newest scope file mtime."""
     stamps = [parse_iso(journal.get("updatedAtUtc"))]
@@ -367,6 +375,8 @@ def role_decision(root, key, scope, exclude_task=None, live_minutes=LIVE_MINUTES
             partial_free -= set(hits)
     for lease in iter_source_leases(root):
         if lease_lifecycle(lease) != "live":
+            continue
+        if lease_owned_by_task(lease, exclude_task):
             continue
         hits = overlapping(mine, [canon(t) for t in lease.get("targetPaths") or []])
         if hits:

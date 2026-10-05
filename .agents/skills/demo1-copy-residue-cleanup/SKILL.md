@@ -1,3 +1,8 @@
+---
+name: demo1-copy-residue-cleanup
+description: 'Use when the demo-1 root accumulates copy residue — duplicated directive/report copies, model or cache copies inside data/agent-handoff, stale __patch_drop__ patch/log residue, untracked agent-prompts brief copies, extra .gradle-* homes, or unreferenced empty dirs — and the goal is to delete only what is provably redundant, quarantine what is ambiguous, and index the rest.'
+---
+
 # demo1-copy-residue-cleanup
 
 Use when the demo-1 root accumulates copy residue — duplicated directive/report

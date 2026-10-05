@@ -263,6 +263,82 @@ class ChatTraceSnapshotPointerPersisterTest {
         TraceStore.clear();
     }
 
+    @Test
+    void executionReceiptSurvivesHistoryRestoreWithoutExposingDebugOrAnotherAnswer() {
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        when(history.appendMessageReturningId(eq(7L), eq("system"), any())).thenReturn(91L);
+        var metadata = new LinkedHashMap<String, Object>();
+        metadata.put("executionMode.requested", "SELF_ASK");
+        metadata.put("executionMode.effective", "AUTO");
+        metadata.put("executionMode.reason", "safety-gate");
+        metadata.put("executionMode.queryCount", 1);
+        metadata.put("executionMode.httpAttempts", 2);
+        metadata.put("executionMode.expanded", false);
+        metadata.put("prompt", "private synthetic prompt");
+        ChatTraceSnapshotPointerPersister.persist(7L, 66L, "receipt", "SSE", "/api/chat/stream",
+                metadata, "<p>private debug</p>", enabledStore(1), history,
+                LoggerFactory.getLogger(getClass()));
+        var captured = ArgumentCaptor.forClass(String.class);
+        verify(history).appendMessageReturningId(eq(7L), eq("system"), captured.capture());
+        var now = LocalDateTime.of(2026, 10, 5, 12, 0);
+        var session = com.example.lms.domain.ChatSession.builder().id(7L).messages(java.util.List.of(
+                com.example.lms.domain.ChatMessage.builder().id(66L).role("assistant").content("first").createdAt(now).build(),
+                com.example.lms.domain.ChatMessage.builder().id(91L).role("system").content(captured.getValue()).createdAt(now.plusSeconds(1)).build(),
+                com.example.lms.domain.ChatMessage.builder().id(67L).role("assistant").content("second").createdAt(now.plusSeconds(2)).build())).build();
+        var detail = ChatSessionDetailResponseBuilder.build(session, "fixture", new com.fasterxml.jackson.databind.ObjectMapper(),
+                Map.of(), false, LoggerFactory.getLogger(getClass())).getBody();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().valueToTree(detail);
+        var receipt = json.path("messages").get(0).path("executionMode");
+        assertEquals("SELF_ASK", receipt.path("requested").asText());
+        assertEquals("AUTO", receipt.path("effective").asText());
+        assertEquals("safety-gate", receipt.path("reason").asText());
+        assertEquals(1, receipt.path("queryCount").asInt());
+        assertEquals(2, receipt.path("httpAttempts").asInt());
+        assertFalse(receipt.path("expanded").asBoolean());
+        assertTrue(json.path("messages").get(1).path("executionMode").isNull()
+                || json.path("messages").get(1).path("executionMode").isMissingNode());
+        assertEquals(0, detail.turnTraces().size());
+        assertFalse(json.toString().contains("private"));
+    }
+
+    @Test
+    void durableReceiptProjectionRejectsUnknownModesAndUnboundedCounts() {
+        var invalid = ChatTraceMetaMessageRestorer.projectDiagnostics(Map.of(
+                "executionMode.requested", "BYPASS", "executionMode.effective", "SELF_ASK"));
+        assertTrue(invalid.isEmpty());
+        var projected = ChatTraceMetaMessageRestorer.projectDiagnostics(Map.of(
+                "executionMode.requested", "AUTO", "executionMode.effective", "PRIVATE_VALUE",
+                "executionMode.reason", "private text", "executionMode.queryCount", 99,
+                "executionMode.httpAttempts", -1, "executionMode.expanded", "private flag"));
+        assertEquals(Map.of("diag.executionMode.requested", "s:AUTO"), projected);
+    }
+
+    @Test
+    void ambiguousAnswerPointersCannotChooseAnActualModeFromTheSessionSetting() {
+        String fields = "storageMode=durable_fallback\nreason=fixture\nmethod=POST\npathHash=none\n"
+                + "assistantMessageId=66\ndiag.executionMode.requested=s:SELF_ASK\n"
+                + "diag.executionMode.effective=s:AUTO\ndiag.executionMode.reason=s:safety-gate\n";
+        String encoded = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(fields.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var now = LocalDateTime.of(2026, 10, 5, 12, 0);
+        var session = com.example.lms.domain.ChatSession.builder().id(7L).sessionMeta("{\"executionMode\":\"STRIKE\"}")
+                .messages(java.util.List.of(
+                        com.example.lms.domain.ChatMessage.builder().id(66L).role("assistant").content("answer").createdAt(now).build(),
+                        com.example.lms.domain.ChatMessage.builder().id(91L).role("system").content("?TRACESNAP?receipt-a|v3|"+encoded).createdAt(now.plusSeconds(1)).build(),
+                        com.example.lms.domain.ChatMessage.builder().id(92L).role("system").content("?TRACESNAP?receipt-b|v3|"+encoded).createdAt(now.plusSeconds(2)).build())).build();
+        var detail = ChatSessionDetailResponseBuilder.build(session, "fixture", new com.fasterxml.jackson.databind.ObjectMapper(),
+                Map.of(), false, LoggerFactory.getLogger(getClass())).getBody();
+        var json = new com.fasterxml.jackson.databind.ObjectMapper().findAndRegisterModules().valueToTree(detail);
+        for (int index : new int[]{1, 2}) {
+            var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(session.getMessages().get(index).getContent(), 91L).orElseThrow();
+            assertEquals(66L, pointer.assistantMessageId());
+            assertEquals("SELF_ASK", pointer.diagnostics().get("executionMode.requested"));
+        }
+        assertTrue(json.path("messages").get(0).path("executionMode").isNull()
+                || json.path("messages").get(0).path("executionMode").isMissingNode());
+        assertEquals(0, detail.turnTraces().size());
+    }
+
     private static TraceSnapshotStore enabledStore(int maxSize) {
         DefaultListableBeanFactory factory = new DefaultListableBeanFactory();
         ObjectProvider<TraceHtmlBuilder> htmlProvider = factory.getBeanProvider(TraceHtmlBuilder.class);

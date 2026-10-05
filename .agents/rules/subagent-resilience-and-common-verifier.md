@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 <!-- BEGIN SUBAGENT-RESILIENCE-AND-COMMON-VERIFIER (demo-1, 2026-10-01) -->
 # P6 복원력·검증·데이터 정합성 5대 지침 (SSOT)
 

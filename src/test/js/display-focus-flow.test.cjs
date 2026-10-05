@@ -31,6 +31,11 @@ test('close disposes callbacks; old answer cannot reopen and older state cannot 
 test('sequential OFF uses automatic lines without manual paging',()=>{
  const f=fixture();f.flow.accept(snapshot('가'.repeat(70),{presentation:{sequentialTextEnabled:false}}));f.run(22000);assert.equal(f.flow.state().index,70);assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
 });
+test('nonsequential completed answer begins displaying within two frames',()=>{
+ const f=fixture();f.flow.accept(snapshot('간결한 합성 답변',{presentation:{sequentialTextEnabled:false}}));
+ f.step(20);f.step(20);assert.ok(f.flow.state().index>0);f.step(20);
+ assert.equal(f.events.filter(e=>e.name==='first_visible').length,1);
+});
 test('no auto fade still completes and idles without animation work',()=>{
  const f=fixture();f.flow.accept(snapshot('마지막은 5mg가 아닙니다.',{presentation:{autoFadeEnabled:false}}));f.run(6000);assert.equal(f.flow.state().done,true);assert.equal(f.paints.at(-1).opacity,1);assert.equal(f.pending.size,0);
 });

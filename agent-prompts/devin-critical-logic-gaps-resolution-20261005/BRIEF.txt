@@ -1,0 +1,120 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 끝까지 수행하고 각 WP의 통과 기준을 충족한 뒤 최종 보고서를 작성하는 실행 지시서다.
+[DEVIN 지시서] 공식 문서 기반 로직 결정적 빈 공란(Front Router 일관성·리액티브 스트림 생명주기·내구성 영수증) 해소 및 픽스처 정상화 — 2026-10-05 15:35 KST
+파일 ID: PASTE_DEVIN_CRITICAL_LOGIC_GAPS_RESOLUTION_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 Java 소스 직접 수정 0 · git push/pull/add -A/commit 0 · 비밀값 출력 0 · 유료 외부 API 실호출 0 · PROTO_OPEN 침범 0
+
+@demo1-devin-task-fit
+
+0. 한 줄 목표
+공식 스펙(Spring Framework DI, LangChain4j StreamingResponseHandler, Reactive Streams, P6 복원력 5대 지침)에 근거하여 코드베이스 내 결정적 빈 공란 3개(Front Router 이원화·토큰캡 단독 승격, 비동기 스트리밍 리액티브 생명주기/Zero-Token Fallback, 벡터 수집 내구성 영수증 픽스처 결측)를 해소하고, 픽스처 테스트 및 Codex 구현 청사진을 완비한다.
+
+# 1. 사실 (2026-10-05 15:35 KST 기준 라이브 확인)
+- 기준 Project Root: C:\AbandonWare\demo-1\demo-1\src (PowerShell 콘솔).
+- 사실 1 (Front Router 복잡도 이원화 및 토큰캡 승격 결측):
+  `python -B scripts/probe_front_router_consistency.py` 실행 시 3건 결측 발견(violations=3).
+  1) `RouterPolicy.java:23-24`에서 스프링 주입 빈 대신 `new QueryComplexityGate()`를 독자 생성(`FALLBACK_GATE`)하여 호출 경로별로 다른 규칙이 평가됨(`R-GATE-DIVERGENCE`).
+  2) `RouterPolicy.java:133`에서 작업 난이도 5대 축(성격·복잡도·컨텍스트·증거·실현성) 평가 없이 출력 토큰 크기(`maxTokens >= tokensThreshold`) 단독으로 고비용 모델로 승격시키는 결함(`R-TOKEN-CAP-PROMO`).
+  3) `ModelBasedQueryComplexityClassifier.java:22`에서 모델 파일 물리 존재 유무(`modelUnavailable`)로 판정이 뒤집히는 취약점(`R-MODEL-FILE-FLIP`).
+  * 공식 근거: Spring Framework 의존성 주입 Core 원칙 & P6 복원력 원칙 4(1차 분류 및 역할 분리).
+- 사실 2 (비동기 스트리밍 리액티브 생명주기 및 Zero-Token Fallback 결측):
+  `FOR_CODEX_RESILIENCE_PATCH.md:70-86`의 동기 try/finally 패턴은 WebFlux 논블로킹 Flux 반환 시 즉시 Bulkhead 세마포어 슬롯을 누수시키며, 스트리밍 도중 에러 시 이미 나간 토큰 뒤에 백업 모델이 붙는 텍스트 파편화 모순 존재.
+  또한 `node src/test/js/chat-stream-boundaries.test.cjs` 21개 중 8개가 실패 상태임(Timeout Detach vs CancelExact 7건, 30초 cap 가정 불일치 1건).
+  * 공식 근거: LangChain4j `StreamingResponseHandler` 3대 수명주기(`onPartialResponse`, `onError`, `onComplete`) 및 Project Reactor 스트림 종료 연산자(`doFinally`, `doOnError`).
+- 사실 3 (서브에이전트 데드라인 상속 및 비동기 타임아웃 처리 공란):
+  P6 원칙 2에 명시된 부모 데드라인 잔여 예산 상속(Parent deadline inheritance) 및 `CompletableFuture.orTimeout` 부재 시 태스크가 무한 행(hang)에 빠져 스레드 풀 고갈 위험.
+  * 공식 근거: Spring Boot `ThreadPoolTaskExecutor` graceful shutdown (`waitForTasksToCompleteOnShutdown`) 및 Java 17 `CompletableFuture.orTimeout`.
+- 사실 4 (Vector Ingest 데이터 내구성 영수증 픽스처 결측):
+  `python -B scripts/check_vector_checkpoint_receipt.py`가 요구하는 checkpoint state, jsonl, flush-receipts 파일 체계가 오프라인 검증 스위트로 체계화되지 않아 `VectorFlushOutcome.durable()` 계약 검증이 결측되어 있음.
+  * 공식 근거: P6 복원력 원칙 3(데이터 영수증 없는 Checkpoint 전진 금지).
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- 제품 Java 소스(main/java/) 직접 수정 0 — Devin은 청사진 문서, 검증 스크립트, 픽스처/테스트를 소유함.
+
+# WP1 [DEVIN] Front Router 일관성 해소 청사진(FOR_CODEX_ROUTER_CONSISTENCY.md) 수립 및 진단기 검증
+- 증거: scripts/probe_front_router_consistency.py & main/java/com/example/lms/service/routing/RouterPolicy.java
+- RED 검사: python -B scripts/probe_front_router_consistency.py; "exit=$LASTEXITCODE" (현재 3건 위반, exit 2 관측)
+- 최소 수정:
+  1) `data/agent-handoff/for-codex/FOR_CODEX_ROUTER_CONSISTENCY.md` 신설:
+     - `FALLBACK_GATE` 독자 new 생성을 제거하고 주입된 `@Autowired QueryComplexityGate` 단일 의존성 주입 명시.
+     - `shouldPromote(RouteSignal s)`에서 `maxTokens >= tokensThreshold` 단독 승격 제거, 5대 축 복합 지표 기반 승격 구조 명시.
+     - `ModelBasedQueryComplexityClassifier.java`에서 파일 물리 존재 여부로 판정이 흔들리지 않는 불변 규칙 세트 명문화.
+  2) 오프라인 픽스처 트리(`var/diagnostics/router-consistency-fixture/`) 구축 및 검증 스위트 연동:
+     - 픽스처 트리에 정정된 자바 클래스 모의본을 배치하여 `python -B scripts/probe_front_router_consistency.py --root var/diagnostics/router-consistency-fixture` 실행 시 0 violations 달성.
+- GREEN: python -B scripts/probe_front_router_consistency.py --root var/diagnostics/router-consistency-fixture; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: Front Router의 3대 정적 결함이 제거된 청사진 및 오프라인 검증 픽스처 exit 0 완료.
+
+# WP2 [DEVIN] 리액티브 스트리밍 수명주기 및 Zero-Token Fallback 청사진 완전 동기화
+- 증거: data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md & docs/design/CONCURRENCY_RESILIENCE_PLAN.md
+- RED 검사: python -B -c "import sys; f=open('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md', encoding='utf-8').read(); sys.exit(1 if 'finally' in f and 'llmBulkhead.onComplete()' in f else 0)"; "exit=$LASTEXITCODE" (현재 exit 1 관측)
+- 최소 수정:
+  1) `data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md`에서 논블로킹 Flux 즉시 누수를 유발하는 동기 `try/finally` 의사코드 완전 삭제.
+  2) LangChain4j `StreamingResponseHandler` 수명주기 계약에 따른 비동기 이벤트 핸들러 명시:
+     - `onPartialResponse(String token)`: 최초 진입 시 토큰 전송 시작 플래그(`hasEmittedToken = true`) 설정.
+     - `onError(Throwable error)`: `hasEmittedToken == false`일 때만 백업 모델로 투명 전환(Zero-Token Fallback). 이미 토큰이 나간 경우(Mid-Stream Failure) 새 모델 재시작을 금지하고 에러 안내 후 세마포어 반납(`llmBulkhead.release()`).
+     - `onComplete(Response response)`: 정상 완료 시 세마포어 슬롯 반납(`llmBulkhead.release()`).
+  3) `docs/design/CONCURRENCY_RESILIENCE_PLAN.md`에 Reactive Subscription Boundary 및 Zero-Token Fallback 다이어그램/명세 반영.
+- GREEN: python -B -c "import sys; f=open('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md', encoding='utf-8').read(); sys.exit(0 if 'onPartialResponse' in f and 'Zero-Token' in f and 'llmBulkhead.release()' in f else 1)"; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: 리액티브 슬롯 누수 및 텍스트 중복을 원천 차단하는 완전한 청사진 동기화.
+
+# WP3 [DEVIN] chat-stream-boundaries.test.cjs 픽스처 계약 분리 및 21 PASS 정합성 확보
+- 증거: src/test/js/chat-stream-boundaries.test.cjs & data/agent-handoff/codex-autonomy/interview-stream-cancel-fba86c49/PAUSE_HANDOFF_20261005.md
+- RED 검사: node src/test/js/chat-stream-boundaries.test.cjs; "exit=$LASTEXITCODE" (현재 8 FAIL, exit 1 관측)
+- 최소 수정:
+  1) 1개 실패(30초 cap 불일치): 서버의 실제 page admission budget(600,000ms 또는 양수 설정) 계약에 맞게 픽스처 타임아웃 상수를 정규화.
+  2) 7개 실패(Timeout Detach vs CancelExact 혼동):
+     - 클라이언트 연결 단절(Transport Abort / Client Inactive) 시 서버 실행을 보존하는 'Run Detach' 시나리오와 사용자 명시적 'CancelExact' 시나리오를 픽스처에서 명확히 분리.
+     - 서버 ChatRunRegistry 계약과 모순되는 단일 Cancel 가정 단언문(assert)을 정정.
+- GREEN: node src/test/js/chat-stream-boundaries.test.cjs; "exit=$LASTEXITCODE" (21 passed, 0 failed, exit 0 기대)
+- 완료 조건: 스트리밍 경계 픽스처 21개 전건 PASS.
+
+# WP4 [DEVIN] Vector Ingest 내구성 영수증(Durable Receipts) 오프라인 검증 픽스처 구축
+- 증거: scripts/check_vector_checkpoint_receipt.py & docs/agents-rules/DEMO1-P6-RESILIENCE-RULES.md
+- RED 검사: python -B scripts/check_vector_checkpoint_receipt.py --checkpoint var/diagnostics/receipt-fixture/state.json --jsonl var/diagnostics/receipt-fixture/samples.jsonl --receipts var/diagnostics/receipt-fixture/receipts.jsonl; "exit=$LASTEXITCODE" (현재 파일 부재로 exit 1 관측)
+- 최소 수정:
+  1) `var/diagnostics/receipt-fixture/` 내에 P6 T02/T03 규격에 부합하는 골든 픽스처 3종 생성:
+     - `state.json`: `{"committedOffset": 1024, "schemaVersion": "awx.vector-checkpoint.v1"}`
+     - `samples.jsonl`: 정확히 1024 오프셋에서 개행(LF)으로 종결된 유효 JSONL 레코드.
+     - `receipts.jsonl`: 0~1024 구간의 모든 배치가 `durable: true`, `reasonCode: null`로 기록된 영수증.
+  2) R1(nondurable 전진), R2(atomic-move 잔재), R3(미종결 tail) 검증 스크립트 작성.
+- GREEN: python -B scripts/check_vector_checkpoint_receipt.py --checkpoint var/diagnostics/receipt-fixture/state.json --jsonl var/diagnostics/receipt-fixture/samples.jsonl --receipts var/diagnostics/receipt-fixture/receipts.jsonl; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: P6 원칙 3 내구성 영수증 계약이 오프라인 진단기에서 exit 0으로 무결성 검증됨.
+
+# HOLD 조건
+- 제품 Java 코드(main/java/)에 대한 직접 파일 수정 시도 시 HOLD하고 FOR_CODEX로 위임한다.
+- Start-RAG 런타임에 대한 임의 프로세스 kill이나 포트 강제 점유 시도 시 즉시 중단한다.
+- .git 디렉터리 접근, 브랜치 조작, stash 시도 시 즉시 HOLD한다.
+
+# ASK_ONCE (자동 기본값 포함)
+- U-1: Bulkhead 포화 시 클라이언트 알림 방식 — (a) 권장: SSE status 이벤트('동시 요청이 많아 대기 중') 후 1회 재시도 (b) 즉시 HTTP 429 연결 거절 (c) 무응답 대기. -> 자동 결정: (a) 채택.
+- U-2: chat-stream-boundaries 타임아웃 픽스처 정규화 기준 — (a) 권장: 서버의 600,000ms admission budget에 맞춰 픽스처 타임아웃 정규화 (b) 30초 강제 단축. -> 자동 결정: (a) 채택.
+- U-3: RouterPolicy 5대 축 복합 판정 시 가중치 기본값 — (a) 권장: 코드 분석 및 복잡도(0.70) > 단순 대화(0.40), threshold 0.55 유지 (b) 동적 변경. -> 자동 결정: (a) 채택.
+
+# 절대 금지
+- git push, git commit -a, git add -A, git reset --hard, remote 추가 금지.
+- PROTO_OPEN을 무단 해제하고 로그인/역할 강제 게이트를 추가하는 행위 금지.
+- main/java/com/example/lms/ 아래의 프로덕션 Java 소스 파일 직접 수정 금지.
+- .secrets/ 및 환경변수 비밀값 출력 금지.
+- 유료 외부 API 실호출 0 (모든 검증은 오프라인 및 로컬 테스트베드 기준).
+
+# Acceptance (수용 기준)
+- WP1: `FOR_CODEX_ROUTER_CONSISTENCY.md` 수립 및 오프라인 픽스처 트리에서 `probe_front_router_consistency.py` 0 violations (exit 0) 통과.
+- WP2: `FOR_CODEX_RESILIENCE_PATCH.md`에서 동기 try/finally 제거 및 `StreamingResponseHandler` 수명주기/`Zero-Token Fallback` 청사진 명문화 (RED 검사 통과).
+- WP3: `node src/test/js/chat-stream-boundaries.test.cjs` 실행 시 21 tests ALL PASS (0 failures, exit 0 관측).
+- WP4: `check_vector_checkpoint_receipt.py`가 오프라인 픽스처에서 exit 0으로 통과.
+- 공통: 제품 Java 소스 변경 0, Git 변경 0, 비밀 유출 0, 종료 시 lease 0.
+
+# 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+1. 목표 달성 요약: 로직 결정적 빈 공란 3개(Front Router·리액티브 스트림·내구성 영수증) 해소 및 픽스처 정상화 결과
+2. 산출 파일 목록 및 sha12 해시 표
+3. 테스트 실행 결과:
+   - probe_front_router_consistency: exit 0 (0 violations)
+   - chat-stream-boundaries: 21 passed, 0 failed, exit 0
+   - check_vector_checkpoint_receipt: exit 0 (0 violations)
+4. Codex 인계 안내 (FOR_CODEX_ROUTER_CONSISTENCY 및 FOR_CODEX_RESILIENCE_PATCH 최신화 상태)
+5. 잔여 상태 및 특이사항 (종료 상태: DONE_OFFLINE)
+
+[ANTI-STOP] 지시서 수행 중 임의 판단으로 중단하지 말고 모든 WP의 통과 기준을 차례대로 충족한 후 최종 보고 형식을 출력하고 종료하라.

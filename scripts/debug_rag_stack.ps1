@@ -23,11 +23,13 @@
              reported as run-state, not passes), 3 not-running,
              6 one or more checks failed (JSON/report names failedChecks +
              firstFailure + evidence + verdict), 1 diag error
+    digest : child exit passthrough (server_trace_digest.py):
+             0 clean|warn, 3 no_data, 4 error/unexpected_exit, 1 tool-error
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('dev','wear')][string]$Role = 'dev',
-    [ValidateSet('status','start','restart','tail','threads','jfr','verify','trail','help')][string]$Action = 'status',
+    [ValidateSet('status','start','restart','tail','threads','jfr','verify','trail','digest','help')][string]$Action = 'status',
     [ValidateRange(5,600)][int]$TailSeconds = 30,
     [ValidateRange(10,1800)][int]$TimeoutSeconds = 600,
     [ValidateRange(10,300)][int]$JfrSeconds = 60,
@@ -1262,6 +1264,9 @@ function Show-DebugHelp {
         '           failedChecks/warnChecks/notRun/firstFailure/hint, and verdict{tool,scope,'
         '           build,tests,target,fullVerification=false} - tool ran vs target verified vs'
         '           build/test coverage stay separate; unit tests are not wired.'
+        '  digest   unified server-trace digest (scripts\server_trace_digest.py): launcher'
+        '           runs + structured logs -> var\agent-trace\latest.{json,md}; exit is the'
+        '           child code (0 clean|warn, 3 no_data, 4 error/unexpected_exit)'
         ''
         'OPTIONS:'
         '  -Loggers "pkg=LEVEL;pkg2=LEVEL"   override default verbose set (<=8, name=LEVEL only)'
@@ -1282,6 +1287,7 @@ function Show-DebugHelp {
         '  tail/threads/jfr : 0 ok | 3 not-running | 1 failed'
         '  verify : 0 all executed checks pass (warn/notRun stay visible) | 3 not-running |'
         '           6 checks failed (see failedChecks+hint) | 1 error'
+        '  digest : 0 clean|warn | 3 no_data | 4 error/unexpected_exit | 1 tool-error'
         ''
         'EXAMPLES:'
         '  Debug-RAG.bat                                    status only'
@@ -1291,6 +1297,7 @@ function Show-DebugHelp {
         '  Debug-Meta-Display.bat -Action start -Loggers "com.example.lms.assist=DEBUG;com.example.lms.search=DEBUG"'
         '  Debug-RAG.bat -Action verify -Json               post-edit judgement: runtime/ports/http/logs/config/freshness'
         '  Debug-RAG.bat -Action verify -WithCompile        same, Gradle compileJava+processResources first'
+        '  Debug-RAG.bat -Action digest                     one-shot trace digest -> var\agent-trace\'
         ''
         'NOTES: a running JVM keeps its original flags - verbose applies only to a JVM this'
         'action launches. Verbose state is proven from the live JVM cmdline, not assumed from'
@@ -1316,6 +1323,29 @@ function Invoke-DebugTrail {
     return $trailCode
 }
 
+function Invoke-DebugDigest {
+    # Unified server-trace digest; the child script owns parsing, redaction and
+    # var\agent-trace\latest.* writes. Under -JsonStdout the child's single JSON
+    # doc IS the stdout contract, so Invoke-DebugEntry skips its own report
+    # write for this action (the report file is still written under -Json).
+    $digestScript = Join-Path $script:RagRoot 'scripts\server_trace_digest.py'
+    if (-not (Test-Path -LiteralPath $digestScript -PathType Leaf)) { Write-DebugStage 'INIT' 'FAILED' 'digest-script-missing'; return 1 }
+    $python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+    if (-not $python) { $python = 'python' }
+    $digestArgs = @('-B', $digestScript, '--root', $script:RagRoot)
+    if ($script:DbgJsonStdout) { $digestArgs += '--json' }
+    $digestOut = & $python @digestArgs
+    $digestCode = [int]$LASTEXITCODE
+    foreach ($line in @($digestOut)) { [Console]::Out.WriteLine([string]$line) }
+    $script:Report.status = 'digest-done'
+    $script:Report.ok = ($digestCode -eq 0)
+    if ($script:DbgJsonStdout -and $digestOut) {
+        try { $script:Report.digest = (@($digestOut) -join "`n" | ConvertFrom-Json) } catch { }
+    }
+    Write-DebugStage 'DIGEST' 'DONE' "childExit=$digestCode script=server_trace_digest.py"
+    return $digestCode
+}
+
 function Invoke-DebugEntry {
     try {
         if ($script:DbgHelp -or $script:DbgAction -eq 'help') { Show-DebugHelp; return 0 }
@@ -1330,6 +1360,7 @@ function Invoke-DebugEntry {
             'jfr'     { $code = Invoke-DebugJfr }
             'verify'  { $code = Invoke-DebugVerify }
             'trail'   { $code = Invoke-DebugTrail }
+            'digest'  { $code = Invoke-DebugDigest }
             default   { Write-DebugStage 'INIT' 'FAILED' "unknown action $($script:DbgAction)"; $code = 1 }
         }
         if ($script:DbgJson) {
@@ -1338,8 +1369,9 @@ function Invoke-DebugEntry {
             Write-AwxJsonAtomic -Path $jsonPath -Data $script:Report
             Write-DebugStage 'RESULT' 'JSON' $jsonPath
         }
-        if ($script:DbgJsonStdout) {
+        if ($script:DbgJsonStdout -and $script:DbgAction -ne 'digest') {
             # stdout contract: exactly one JSON document, no stage lines mixed in.
+            # digest: the child's awx.server_trace_digest.v1 doc is already that doc.
             $script:Report.exitCode = $code
             [Console]::Out.Write(($script:Report | ConvertTo-Json -Depth 12 -Compress))
             [Console]::Out.Write([Environment]::NewLine)

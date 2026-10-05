@@ -14,6 +14,10 @@ Session stores discovered (no writes, ever):
                                      + session_search.sqlite, active_sessions.json
   devin : %APPDATA%/devin             cli/transcripts, summaries/, cli/summaries/,
                                      cli/sessions.db (root sessions.db still accepted)
+  agy   : $AGY_HOME or ~/.gemini/antigravity-cli
+                                     history.jsonl (session index),
+                                     conversations/*.json,
+                                     brain/**/transcript.jsonl
   cline : ~/Documents/Cline           rules-only; no local session store expected
 
 Patterns (severity auto = safe to auto-diagnose; warn/info = report only):
@@ -55,13 +59,21 @@ Actions:
   stores                     list discovered session stores
   patterns                   list the pattern table
   scan [--file F|--dir D|--agent A|--since-hours H|--max-files N|
-        --max-file-mb M|--stale-hours H|--out DIR]
+        --max-file-mb M|--stale-hours H|--out DIR|
+        --clean-stale-locks [--lock-stale-hours H] [--dry-run]]
                              e.g. scan --agent grok --since-hours 72
-                             (Grok store; default agent is codex)
+                             (Grok store; default agent is codex).
+                             --clean-stale-locks reclaims devin
+                             cli/session_locks *.lock older than
+                             --lock-stale-hours (default 24h).
   diagnose                   run the bounded diagnostic bundle (read-only)
   watch                      scan, then on 'auto' findings run diagnostics
                              PLUS agent_work_guard advise (records missing /
                              retry paths so the next exec PreToolUse blocks)
+  summary [--since-hours H|--json]
+                             cross-agent roll-up for codex / agy / devin:
+                             per-store session counts + last activity, top-10
+                             tools overall, top-5 per agent, recent anomalies
 
 Exit codes: 0 clean, 3 warnings only, 4 auto-severity findings, 2 usage, 1 error.
 Raw prompts/messages are never copied into output — counts, paths, hashes and
@@ -100,6 +112,7 @@ FILE_IN_CMD_RE = re.compile(
 NF_PATH_RE = re.compile(
     r"(?i)Cannot find path '([^']+)'|Could not find a part of the path '([^']+)'"
 )
+MSG_HDR_RE = re.compile(r"^=== MESSAGE \d+ - (\w+) ===\s*$")
 
 FAIL_MARKERS = ("Script failed", "Script error", "Exit code: 1", "Exit code: 2",
                 "Exit code: 3", "ParserError")
@@ -186,6 +199,8 @@ def agent_homes() -> dict:
         "codex": Path(os.environ.get("CODEX_HOME", str(USER_HOME / ".codex"))),
         "grok": Path(os.environ.get("GROK_HOME", str(USER_HOME / ".grok"))),
         "devin": Path(os.environ.get("DEVIN_HOME", str(Path(appdata) / "devin"))),
+        "agy": Path(os.environ.get(
+            "AGY_HOME", str(USER_HOME / ".gemini" / "antigravity-cli"))),
         "cline": Path(os.environ.get("CLINE_HOME",
                                      str(USER_HOME / "Documents" / "Cline"))),
     }
@@ -233,6 +248,46 @@ def devin_lock_pileup_finding(count: int):
     }
 
 
+def clean_devin_locks(home: Path, stale_hours: float,
+                      dry_run: bool = False) -> dict:
+    """Reclaim .lock files under devin cli/session_locks older than
+    stale_hours (mtime basis). Flat dir only, .lock suffix only; lock file
+    contents are never read or printed. Counts and names are the report."""
+    directory = devin_lock_dir(home)
+    out = {"requested": True, "dryRun": bool(dry_run),
+           "thresholdHours": stale_hours, "dirPresent": directory.is_dir(),
+           "before": 0, "stale": 0, "removed": 0, "remaining": None,
+           "removedNames": [], "errors": []}
+    if not directory.is_dir():
+        return out
+    cutoff = time.time() - stale_hours * 3600
+    try:
+        entries = [p for p in directory.iterdir()
+                   if p.is_file() and p.suffix.lower() == ".lock"]
+    except OSError as e:
+        out["errors"].append(type(e).__name__)
+        return out
+    out["before"] = len(entries)
+    for p in entries:
+        try:
+            if p.stat().st_mtime >= cutoff:
+                continue
+        except OSError:
+            continue
+        out["stale"] += 1
+        if len(out["removedNames"]) < 20:
+            out["removedNames"].append(p.name[:80])
+        if dry_run:
+            continue
+        try:
+            p.unlink()
+            out["removed"] += 1
+        except OSError as e:
+            out["errors"].append("%s:%s" % (p.name[:60], type(e).__name__))
+    out["remaining"] = count_devin_locks(home) if not dry_run else None
+    return out
+
+
 def discover_stores() -> list:
     out = []
     for agent, home in agent_homes().items():
@@ -259,6 +314,14 @@ def discover_stores() -> list:
                         "cli/summaries/*.md"]
                 row["notes"].append(
                     "sessions_db=%s" % devin_sessions_db_present(home))
+            elif agent == "agy":
+                pats = ["history.jsonl", "conversations/*.json",
+                        "brain/**/transcript.jsonl"]
+                row["notes"].append(
+                    "history=%s" % (home / "history.jsonl").exists())
+                row["notes"].append(
+                    "summaries_db=%s"
+                    % (home / "conversation_summaries.db").exists())
             else:  # cline
                 pats = ["**/*.json", "**/*.jsonl", "tasks/**/*"]
                 row["notes"].append("rules-only store expected")
@@ -300,6 +363,12 @@ def iter_generic_files(home: Path, agent: str):
         for pat in ("cli/transcripts/**/*.jsonl", "cli/transcripts/**/*.json",
                     "summaries/*.md", "cli/summaries/*.md"):
             yield from sorted(home.glob(pat))
+    elif agent == "agy":
+        hist = home / "history.jsonl"
+        if hist.is_file():
+            yield hist
+        yield from sorted(home.glob("conversations/*.json"))
+        yield from sorted(home.glob("brain/**/transcript.jsonl"))
     elif agent == "cline":
         for pat in ("**/tasks/**/*.jsonl", "**/tasks/**/*.json"):
             yield from sorted(home.glob(pat))
@@ -571,6 +640,7 @@ def scan_generic(path: Path, agent: str, stale_ms: int, max_lines: int) -> dict:
     stats = empty_stats()
     error_hits = 0
     types = {}
+    tool_names = {}
     first_ts = last_ts = None
     try:
         stats["mtimeUtc"] = time.strftime(
@@ -587,10 +657,20 @@ def scan_generic(path: Path, agent: str, stale_ms: int, max_lines: int) -> dict:
             try:
                 rec = json.loads(line)
             except Exception:
+                m = MSG_HDR_RE.match(line.strip())
+                if m:
+                    types["msg:" + m.group(1)] = \
+                        types.get("msg:" + m.group(1), 0) + 1
+                continue
+            if not isinstance(rec, dict):
                 continue
             t = rec.get("type") or rec.get("role") or "?"
             types[t] = types.get(t, 0) + 1
-            ts = rec.get("ts") or rec.get("timestamp")
+            for tc in rec.get("tool_calls") or []:
+                if isinstance(tc, dict) and tc.get("name"):
+                    tool_names[tc["name"]] = tool_names.get(tc["name"], 0) + 1
+                    stats["toolCalls"] += 1
+            ts = rec.get("ts") or rec.get("timestamp") or rec.get("created_at")
             if ts:
                 if first_ts is None:
                     first_ts = ts
@@ -610,7 +690,10 @@ def scan_generic(path: Path, agent: str, stale_ms: int, max_lines: int) -> dict:
             "evidence": {"errorMarkers": error_hits}})
     if stats["lines"] and first_ts and last_ts:
         stats["firstTs"], stats["lastTs"] = first_ts, last_ts
-    stats["tools"] = dict(sorted(types.items(), key=lambda x: -x[1])[:10])
+    # tool_calls names win over the type histogram when the format exposes them
+    merged = tool_names if tool_names else types
+    stats["toolKind"] = "tools" if tool_names else "types"
+    stats["tools"] = dict(sorted(merged.items(), key=lambda x: -x[1])[:10])
     return {"file": str(path), "agent": agent, "meta": {},
             "stats": stats, "findings": findings}
 
@@ -718,11 +801,21 @@ def cmd_scan(a) -> int:
             counts[f_["severity"]] = counts.get(f_["severity"], 0) + 1
         sessions.append(row)
     scanned_files = len(sessions)
+    lock_cleanup = None
     if a.agent in ("devin", "all"):
         home = homes.get("devin")
+        if a.clean_stale_locks and home is not None:
+            lock_cleanup = clean_devin_locks(home, a.lock_stale_hours,
+                                             dry_run=a.dry_run)
         lock_finding = devin_lock_pileup_finding(
             count_devin_locks(home) if home is not None else 0)
         if lock_finding:
+            if lock_cleanup:
+                lock_finding["evidence"]["cleanup"] = {
+                    "before": lock_cleanup["before"],
+                    "stale": lock_cleanup["stale"],
+                    "removed": lock_cleanup["removed"],
+                    "dryRun": lock_cleanup["dryRun"]}
             sessions.append({
                 "file": None, "agent": "devin", "meta": {},
                 "stats": empty_stats(), "findings": [lock_finding]})
@@ -747,6 +840,8 @@ def cmd_scan(a) -> int:
               "filesScanned": scanned_files,
               "severityCounts": counts,
               "sessions": sessions}
+    if lock_cleanup is not None:
+        report["lockCleanup"] = lock_cleanup
     if a.out:
         outdir = Path(a.out)
         outdir.mkdir(parents=True, exist_ok=True)
@@ -778,13 +873,119 @@ def advise_auto_findings(report) -> dict:
         return {"status": "unavailable", "reason": type(exc).__name__}
 
 
+SUMMARY_AGENTS = ("codex", "agy", "devin")
+
+
+def omni_summary(a) -> dict:
+    """Bounded cross-agent roll-up for the three active session stores."""
+    homes = agent_homes()
+    agents = [x for x in SUMMARY_AGENTS if x in homes]
+    since_ms = time.time() * 1000 - a.since_hours * 3600_000
+    stale_ms = time.time() * 1000 - a.stale_hours * 3600_000
+    since_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                              time.gmtime(since_ms / 1000))
+    stores = {}
+    for row in discover_stores():
+        if row["agent"] not in agents:
+            continue
+        stores[row["agent"]] = {
+            "present": row["present"],
+            "sessionFiles": row["sessionFiles"],
+            "newestUtc": row["newestUtc"],
+            "active": bool(row["newestUtc"] and row["newestUtc"] >= since_utc),
+            "notes": row["notes"][:4]}
+    tools_by_agent = {}
+    overall = {}
+    anomalies = []
+    files_scanned = 0
+    for agent in agents:
+        per = {}
+        files, _bounded, _skipped = gather_files(
+            agent, homes, since_ms, a.max_files, a.max_file_mb)
+        for ag, p in files:
+            try:
+                row = scan_codex(p, stale_ms, a.max_lines) if ag == "codex" \
+                    else scan_generic(p, ag, stale_ms, a.max_lines)
+            except OSError:
+                continue
+            files_scanned += 1
+            for name, n in (row["stats"].get("tools") or {}).items():
+                per[name] = per.get(name, 0) + n
+                overall[name] = overall.get(name, 0) + n
+            for f in row["findings"]:
+                anomalies.append({"agent": ag, "file": str(p),
+                                  "pattern": f["pattern"],
+                                  "severity": f["severity"],
+                                  "summary": f["summary"]})
+        tools_by_agent[agent] = dict(
+            sorted(per.items(), key=lambda x: -x[1])[:5])
+    sev_rank = {"auto": 0, "warn": 1, "info": 2}
+    anomalies.sort(key=lambda x: sev_rank.get(x["severity"], 3))
+    return {"schemaVersion": "awx.agent-session-omni.v1",
+            "generatedAt": utcnow(),
+            "bounds": {"sinceHours": a.since_hours,
+                       "maxFilesPerAgent": a.max_files,
+                       "maxFileMB": a.max_file_mb,
+                       "agents": agents},
+            "filesScanned": files_scanned,
+            "stores": stores,
+            "topToolsOverall": dict(
+                sorted(overall.items(), key=lambda x: -x[1])[:10]),
+            "toolsByAgent": tools_by_agent,
+            "anomalies": anomalies[:30],
+            "anomalyCounts": {sev: sum(1 for x in anomalies
+                                      if x["severity"] == sev)
+                              for sev in ("auto", "warn", "info")}}
+
+
+def cmd_summary(a) -> int:
+    report = omni_summary(a)
+    if a.json:
+        print(json.dumps(report, ensure_ascii=False, indent=1))
+        return 0
+    lines = ["# Agent session omni summary",
+             "generated %s - window last %sh" % (report["generatedAt"],
+                                                report["bounds"]["sinceHours"]),
+             "",
+             "| agent | present | sessions | last activity (UTC) | active |",
+             "|---|---|---|---|---|"]
+    for agent in SUMMARY_AGENTS:
+        s = report["stores"].get(agent) or {}
+        lines.append("| %s | %s | %s | %s | %s |" % (
+            agent, s.get("present"), s.get("sessionFiles", 0),
+            s.get("newestUtc") or "-", s.get("active")))
+    lines += ["", "## Top tools (all agents, top 10)", ""]
+    if report["topToolsOverall"]:
+        for name, n in report["topToolsOverall"].items():
+            lines.append("- `%s` x%d" % (name, n))
+    else:
+        lines.append("- (none observed)")
+    lines += ["", "## Top tools by agent (top 5)", ""]
+    for agent in SUMMARY_AGENTS:
+        tools = report["toolsByAgent"].get(agent) or {}
+        body = ", ".join("`%s`x%d" % (k, v) for k, v in tools.items()) or "-"
+        lines.append("- **%s**: %s" % (agent, body))
+    lines += ["", "## Anomalies", ""]
+    counts = report["anomalyCounts"]
+    lines.append("auto=%d warn=%d info=%d" % (counts["auto"], counts["warn"],
+                                              counts["info"]))
+    if report["anomalies"]:
+        for x in report["anomalies"][:15]:
+            lines.append("- `%s` [%s/%s] %s" % (x["pattern"], x["agent"],
+                                                x["severity"], x["summary"]))
+    else:
+        lines.append("- none")
+    print("\n".join(lines))
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("action", choices=("stores", "patterns", "scan", "diagnose",
-                                      "watch"))
+                                      "watch", "summary"))
     p.add_argument("--agent", default="codex",
-                   choices=("codex", "grok", "devin", "cline", "all"))
+                   choices=("codex", "grok", "devin", "cline", "agy", "all"))
     p.add_argument("--file")
     p.add_argument("--dir")
     p.add_argument("--since-hours", type=float, default=72)
@@ -794,7 +995,17 @@ def main() -> int:
     p.add_argument("--max-lines", type=int, default=400000)
     p.add_argument("--with-server", action="store_true",
                    help="diagnose/watch: include debug_rag_stack status")
+    p.add_argument("--json", action="store_true",
+                   help="summary: emit JSON instead of the markdown table")
     p.add_argument("--out", help="write full report JSON into this directory")
+    p.add_argument("--clean-stale-locks", action="store_true",
+                   help="scan/watch on devin|all: unlink cli/session_locks "
+                        "*.lock older than --lock-stale-hours (U-1: 24h)")
+    p.add_argument("--lock-stale-hours", type=float, default=24.0,
+                   help="age threshold for --clean-stale-locks")
+    p.add_argument("--dry-run", action="store_true",
+                   help="with --clean-stale-locks: count stale locks, "
+                        "unlink nothing")
     a = p.parse_args()
 
     if a.action == "patterns":
@@ -807,6 +1018,8 @@ def main() -> int:
                           "stores": discover_stores()},
                          ensure_ascii=False, indent=1))
         return 0
+    if a.action == "summary":
+        return cmd_summary(a)
     if a.action == "diagnose":
         print(json.dumps({"schemaVersion": SCHEMA, "generatedAt": utcnow(),
                           "diagnostics": diagnostic_bundle(a.with_server)},

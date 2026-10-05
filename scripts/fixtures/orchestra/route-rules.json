@@ -5,6 +5,7 @@
     "liveCalls": 0,
     "restarts": 0
   },
+  "controlTower": {"agent": "dot", "role": "plan+brief+dispatch+ratchet", "delivery": "chatgpt-file-card", "appliesTo": ["CODEX_DIRECT", "GPTPRO_THEN_CODEX", "DEVIN"], "note": "lane은 기존 규칙으로 결정, tower는 누가 지휘하는지 표시만"},
   "roundtripLimit": 2,
   "costOrder": ["codex-credit", "external-paid", "free", "ollama-local"],
   "lanes": {
@@ -31,8 +32,11 @@
       ]
     },
     "AGY_RESEARCH": {
-      "for": "사실 확인·최신 정보·비교 조사가 먼저 필요한 질문. 결과는 web-evidence 신호로 회수.",
-      "nextAgent": "agy"
+      "for": "사실 확인·최신 정보·비교 조사가 먼저 필요한 질문. 공식 문서 수집 및 코덱스용 컨텍스트 정제 전달(Context Curation for Codex)·지시서 작성·서브 리포터 포함 — agy 4대 특화 우선. 결과는 web-evidence 신호로 회수.",
+      "nextAgent": "agy",
+      "fallback": "DEVIN_AUTONOMOUS_OR_CACHED_SEED",
+      "fallbackWhen": "data/agent-handoff/agy-presence.json effectiveStatus!=ONLINE 또는 agy 응답 타임아웃",
+      "fallbackAction": "데빈 자율 레인으로 계속 진행하거나 var/agy-seed/latest.md 캐시 시드를 즉시 활용 — agy 부재를 무한 대기하지 않는다"
     },
     "GROKBOT_AMPLIFY": {
       "for": "아이디어가 아직 흐릿함 → Grok Bot이 연타로 키움.",

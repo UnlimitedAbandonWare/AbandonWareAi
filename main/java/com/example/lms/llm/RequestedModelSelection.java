@@ -14,11 +14,20 @@ public final class RequestedModelSelection {
         TraceStore.putInternal(KEY + ".outputLimit", null);
         TraceStore.putInternal(KEY + ".mainDecision", null);
         TraceStore.putInternal(KEY + ".mainRole", null);
+        TraceStore.putInternal(KEY + ".mainConstruction", null);
         TraceStore.putInternal(KEY + ".owner", ownerHash);
     }
     public static String ownerHash() {
         Object value=TraceStore.get(KEY + ".owner");
         return value instanceof String hash && hash.matches("[0-9a-f]{64}") ? hash : null;
+    }
+    /** Current main construction only; the final decision is bound after the factory returns. */
+    public static String mainConstructionModel() {
+        Object value = TraceStore.get(KEY + ".mainConstruction");
+        return value instanceof String model ? model : null;
+    }
+    public static void mainConstructionModel(String model) {
+        TraceStore.putInternal(KEY + ".mainConstruction", model);
     }
     public static void rememberOutputLimit(String model, int limit) {
         if (matches(model) && limit > 0) TraceStore.putInternal(KEY + ".outputLimit", limit);

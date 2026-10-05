@@ -1,0 +1,102 @@
+@demo1-conditional-local-git
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라, 정의된 구현 항목(DV1~DV5)을 차례대로 수행하고 테스트 통과 증거를 남겨야 완료된다.
+
+# 한 줄 목표
+패치 생성 및 소스 수정 시 "백업 부재 불안감"과 "이전 본 대비 정밀 비교 곤란"을 해결하기 위해, Git Plumbing(임시 index, tree/commit)을 활용해 Working Tree와 메인 인덱스 오염 없는 격리 스냅샷(Shadow Pre-image), 정밀 Diff 비교, 핀포인트 롤백(Restore), 안심 패치 생성 연계 도구 `scripts/agent_git_snapshot.py`를 구현하고 단위 테스트로 완벽히 검증한다.
+
+### 1. 사실 (Facts)
+- **일시**: 2026-10-05 00:35 KST
+- **Project Root**: `C:\AbandonWare\demo-1\demo-1\src` (첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`)
+- **현재 Git 상태**: dirty 125건 존재(head=8420b8977c25). 메인 인덱스를 건드리는 `git add -A`나 `git reset --hard`는 허용되지 않음.
+- **기존 인프라**: 로컬 안전 커밋 `scripts/agent_git_vibe_commit.py` 및 패치 검증기 `scripts/patch_preflight.py`.
+- **사용자 핵심 페인포인트**: 패치 생성/수정 시 원본(Pre-image) 백업이 없어 롤백 시 불안하고 이전 본과의 Diff 비교가 어려움. 소스 옆 `.bak` 없이 Git ODB를 활용한 순수 로컬 무오염 백업이 필요함.
+
+### 2. 공통 규칙 (Common Rules)
+- **Git 안전 가드레일**: `push`, `pull`, `fetch`, `merge`, `rebase`, `reset`, `clean`, `add -A`, `add .`, `commit -a`, `remote 추가` 행위는 엄격 차단한다.
+- **인증 정책**: 시스템 인증은 `PROTO_OPEN` 상태를 유지하며 추가 인증 장벽을 신설하지 않는다.
+- **비밀값 보호**: API 키, 토큰, 패스워드 등 비밀 정보 노출 및 기록을 엄격 차단한다.
+- **무간섭(Concurrency-Safe)**:
+  - 메인 `.git/index` 락(`index.lock`)이나 스테이징 오염 방지를 위해 반드시 임시 인덱스 환경변수(`GIT_INDEX_FILE=<temp_index>`)로 Git Plumbing을 실행한다.
+  - 스냅샷 참조는 메인 브랜치나 HEAD를 이동시키지 않고 격리된 로컬 ref(`refs/agent-snapshots/<agent>/<task-id>/<stage>`)로만 기록한다.
+- **선택적 롤백**: 복구(Restore) 시 세션이 지정한 대상 파일만 선별 복원하며, 타 파일은 일절 건드리지 않는다.
+
+### 3. 작업 항목 (DV1~DV5)
+
+#### DV1: Git Plumbing 기반 무오염 Shadow 스냅샷 (`take`)
+- **파일**: `scripts/agent_git_snapshot.py`
+- **CLI**: `python -B scripts/agent_git_snapshot.py take --task-id <ID> --agent <AGENT> --path <PATH>... [--stage pre|post]`
+- **구현**:
+  1. `tempfile.NamedTemporaryFile`로 임시 `GIT_INDEX_FILE` 격리 생성.
+  2. 대상 경로들을 `git hash-object -w <path>`로 Git ODB에 안전 기록.
+  3. `git update-index --add --cacheinfo 100644 <blob> <relpath>`로 임시 인덱스 등록.
+  4. `git write-tree`로 격리 트리 생성 후 `git commit-tree <tree> -p HEAD -m "..."` 커밋 생성.
+  5. `git update-ref refs/agent-snapshots/<agent>/<task-id>/<stage> <commit>`로 shadow ref 갱신.
+  6. 결과 JSON: `{"outcome":"snapshotted", "taskId":"...", "commit":"<sha>", "files":["..."]}`
+
+#### DV2: 이전 본 vs 현재 본 정밀 Diff 대조 (`diff`)
+- **파일**: `scripts/agent_git_snapshot.py`
+- **CLI**: `python -B scripts/agent_git_snapshot.py diff --task-id <ID> [--agent <AGENT>] [--stage pre] [--path <PATH>...] [--stat]`
+- **구현**:
+  1. 스냅샷 커밋과 Working Tree 간 `git diff <commit> -- <paths>` 실행.
+  2. `--stat` 시 파일별 변경 라인 수(+/-) 요약 출력.
+  3. JSON 요약 제공 (`filesChanged`, `insertions`, `deletions`).
+  4. 패치 대조(`--verify-patch <patch_file>`): 생성 패치가 pre 스냅샷 상태에 적용 가능한지 `scripts/patch_preflight.py` 연계 사전 검증.
+
+#### DV3: 세션 소유 파일 핀포인트 안전 복구 (`restore`)
+- **파일**: `scripts/agent_git_snapshot.py`
+- **CLI**: `python -B scripts/agent_git_snapshot.py restore --task-id <ID> [--agent <AGENT>] [--stage pre] [--path <PATH>...] [--force]`
+- **구현**:
+  1. 스냅샷 커밋에 등록된 파일만 추출.
+  2. 전역 리셋 없이 지정 파일만 `git checkout <commit> -- <path>` 또는 `git cat-file blob`으로 핀포인트 복원.
+  3. 미저장 변경이 있고 `--force`가 없으면 중단 및 안전 경고.
+  4. 복구 성공 시 복구 파일 목록 및 바이트 해시 반환.
+
+#### DV4: 안심 패치 생성 및 커밋 연계 (`make-patch`)
+- **파일**: `scripts/agent_git_snapshot.py`
+- **CLI**: `python -B scripts/agent_git_snapshot.py make-patch --task-id <ID> --out <PATCH_FILE> [--agent <AGENT>]`
+- **구현**:
+  1. pre 스냅샷과 현재 작업 상태 간 정밀 unified diff를 생성해 파일 저장.
+  2. 헤더 메타데이터 삽입: `# AWX-PATCH: task_id=<id>, base_commit=<sha>, created_at=<iso_time>`
+  3. `python -B scripts/patch_preflight.py <PATCH_FILE>` 자동 실행으로 무결성 검증.
+  4. 패치 검증 완료 후 사용자가 로컬 커밋을 원할 경우 실행할 `agent_git_vibe_commit.py` 가이드 안내.
+
+#### DV5: 단위 테스트 스위트 구현
+- **파일**: `scripts/test_agent_git_snapshot.py`
+- **구현**:
+  1. 임시 디렉터리에 로컬 Git repo fixture를 초기화하여 테스트 실행.
+  2. Case 1: `take` 실행 시 메인 `.git/index` 파일 불변 검증 (격리 인덱스 증명).
+  3. Case 2: 파일 수정 후 `diff`가 정확한 변경 내역을 보고하는지 검증.
+  4. Case 3: 임의 변조 후 `restore` 시 원본 100% 바이트 일치 복원 검증.
+  5. Case 4: `make-patch` 패치가 `patch_preflight.py` 통과 검증.
+  6. 실행 명령: `python -B scripts/test_agent_git_snapshot.py`
+
+### 4. HOLD 조건
+- `.git` 디렉터리가 손상되어 git 명령이 동작하지 않을 때.
+- 대상 파일이 타 에이전트의 유효한 잠금(`source_edit_lease`) 대상일 때.
+
+### 5. ASK_ONCE (질문 및 안전 기본값)
+- **Q1. 스냅샷 ref 정리(Prune)**: 기본값은 14일 경과한 `refs/agent-snapshots/*`를 정리하는 `prune --days 14` 제공. (기본값 구현)
+- **Q2. restore 시 미저장 변경 처리**: 기본값은 `--force` 플래그 없을 시 복구를 거부하고 `deferred: uncommitted-changes-detected` 반환. (기본값 구현)
+
+### 6. 절대 금지 (Strictly Forbidden)
+- `git push`, `git pull`, `git fetch`, `git merge`, `git rebase`, `git reset --hard`, `git checkout .`, `remote 추가` 금지.
+- `git add -A`, `git add .`, `git commit -a` 등 비선택적/전역 Git 변경 금지.
+- `PROTO_OPEN` 보안 정책을 우회하거나 로그인 장벽을 추가하는 행위 금지.
+- 소스 옆에 `.bak`, `_backup` 임시 파일을 생성해 방치하는 행위 금지.
+- API 키, 토큰 등 비밀 값을 코드/테스트에 하드코딩하는 행위 금지.
+
+### 7. Acceptance (완료 및 수용 기준)
+1. **단위 테스트 통과**: `python -B scripts/test_agent_git_snapshot.py` 실행 시 100% PASS (종료 코드 0). 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+2. **무오염 격리 증명**: `take` 명령 실행 전후 메인 `.git/index` 해시 및 작업 트리가 불변임을 증명.
+3. **복구 무결성 증명**: `take` -> 변조 -> `restore` 후 원본 해시와 100% 일치 증명.
+4. **패치 무결성 증명**: `make-patch` 패치가 `scripts/patch_preflight.py`를 오류 없이 통과함을 증명.
+
+### 8. 보고 형식
+보고는 반드시 아래 한 줄로 시작한다:
+`외부 API: 없음 (100% 로컬 Git Plumbing 및 Python stdlib)`
+- 구현 파일 목록 및 변경 요약 (`scripts/agent_git_snapshot.py`, `scripts/test_agent_git_snapshot.py`)
+- `python -B scripts/test_agent_git_snapshot.py` 실행 결과 전문
+- CLI 예시 4종 (`take`, `diff`, `restore`, `make-patch`) 실행 로그
+- 남은 주의사항 및 다음 연계 방안
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라, 정의된 구현 항목(DV1~DV5)을 차례대로 수행하고 테스트 통과 증거를 남겨야 완료된다.

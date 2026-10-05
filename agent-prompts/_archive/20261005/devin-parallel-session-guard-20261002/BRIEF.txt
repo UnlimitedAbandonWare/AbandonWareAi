@@ -1,0 +1,142 @@
+@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate @awx-cooperative-verification @agent-session-watchdog
+
+# Devin — 병렬 세션 조정 로직 고도화 (같은 목표 중복 실행·claim 없는 수정 차단)
+[Contract: DEMO1-DEVIN-PARALLEL-SESSION-GUARD-20261002]
+
+[ANTI-STOP] 이 파일을 읽은 것은 intake일 뿐이다. 완료 = DV0~DV9 산출물이 있고 Acceptance가 PASS인 상태다. 계획만 쓰고 멈추지 말고 DV0부터 바로 실행한다. 되돌릴 수 있는 로컬 결정은 Self-Ask(긍정·부정·반례 → 중립 판정)로 정하고 `AUTO_DECISION:` 줄로 남긴다. 질문은 ASK_ONCE 항목만 한다.
+
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+환경: Windows PowerShell 5.1(`&&` 금지, `;` 사용). PATH `python`은 stdlib 스크립트용으로 충분하다. 장부 파일은 `[IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))`로 쓴다.
+
+## 0) 한 줄 목표
+여러 에이전트·여러 Codex 채팅이 같은 checkout(`src`)을 동시에 쓸 때, **같은 목표의 중복 실행**과 **claim 없이 같은 파일을 고치는 일**을 첫 수정 전에 자동으로 잡아내고, 역할(OWNER / VERIFIER / WAIT / TAKEOVER)을 판정해 주는 단일 preflight를 기존 도구 위에 덧붙인다. 새 잠금 체계를 만들지 않는다.
+
+## 1) 오늘 실제로 난 사고 (Grok Bot이 13:4x~13:5x KST PC에서 확인)
+- 13:25와 13:28에 Codex 채팅 두 개(목표 파일 `...\attachments\2f413229-...` / `...\attachments\01c5f146-...`)에 같은 지시서 `[Contract: DEMO1-CODEX-CHAT-TIMEOUT-FAILOVER-V2-20261002]`가 들어갔다.
+- 각자 장부를 따로 열었다: `data/agent-handoff/codex-autonomy/codex-chat-timeout-failover-v2-26e76ed3/`(agent `codex-chat-timeout-v2`)와 `...-d542bf32/`(agent `codex-timeout-v2-root`). plannedScope는 FallbackAwareChatModel·LocalLlmProcessManager·OllamaNativeChatModel·TimedChatModelCaller·ChatWorkflow·src/test/java·PROJECT_STATUS로 거의 같다.
+- d542bf32의 WP0 기록: "Existing same-goal journal 26e76ed3 treated as foreign; own new journal". **중복을 알아챘는데도 그대로 소유자로 진행했다.**
+- 두 채팅 모두 WP0에서 "no overlapping live lease"라고 적었다. 실제로 `python -B scripts\agent_scope_lease.py who`에는 두 taskId의 claim이 **하나도 없다**. `coop_verify.py status`에도 오늘 이 작업의 writer 기록이 없다. 즉 도구는 있었지만 아무도 claim·writer-begin을 하지 않아서 충돌이 감지되지 않았다.
+- 결과: 13:36~13:44에 두 채팅이 같은 파일을 번갈아 고쳤다. 사용자가 13:48에 한쪽을 수동으로 종료했다. 결국 Codex의 채팅 간 메시지 기능으로 인계됐다.
+- 덤: `who`에 claim이 112건 쌓여 있고, 그중 상당수가 오래됐다(예: 09-24~09-29 Devin claim). 오래된 claim이 실제 충돌 판정을 흐릴 수 있다.
+
+## 2) 기존 도구 (재사용 대상, 대체 금지)
+- `scripts/agent_scope_lease.py`: who/check/claim/heartbeat/done/abort/reclaim/recover/show/verify. 테스트 `scripts/test_agent_scope_lease.py`.
+- `scripts/lease_conflict_autoflow.py`: scan/plan/reclaim/request-release/heartbeat. 테스트 `scripts/test_lease_conflict_autoflow.py`.
+- `scripts/work_journal.py`: open/add_note/close/handoff/list. 테스트 `scripts/test_work_journal.py`.
+- `scripts/coop_verify.py`: writer-begin/heartbeat/checkpoint/end, request/run-once/watch/status. 테스트 `scripts/test_coop_verify.py`.
+- `scripts/demo1_goal_switch_barrier.py`: check/switch/reject-complete. 테스트 `scripts/test_demo1_goal_switch_barrier.py`.
+- `scripts/agent_session_watch.py`(세션 상태 감시), `scripts/foreign_hunk_preserve_check.py`(다른 세션 hunk 보존).
+- `scripts/agent_preflight.py`가 있으면(테스트 `test_agent_preflight.py`가 있음) 새 기능은 **그 안의 additive 서브체크**로 넣는 것을 먼저 검토한다. 없거나 구조가 안 맞으면 새 파일 `scripts/agent_parallel_preflight.py`를 만든다(AUTO_DECISION으로 기록).
+- 스킬: `.agents/skills/agent-scope-lease`, `demo1-lease-conflict-autoflow`, `demo1-work-ledger`, `awx-cooperative-verification`, `agent-session-watchdog`.
+
+## 공통 규칙
+- 장부: `data/agent-handoff/devin-parallel-guard-<8hex>/`. 순서는 journal → checkpoint(preimage) → verify다. 각 파일은 수정 전에 `agent_scope_lease.py claim`으로 claim하고 끝나면 done한다(이 작업이 그 규칙의 첫 사용 예다).
+- 수정 범위: `scripts/`(새 파일 또는 위 도구에 additive), `scripts/test_*`, `.agents/skills/` 위 5개 SKILL.md, `docs/agent-tooling/`, `agents.md`(additive 최대 6줄), `docs/PROJECT_STATUS.md` 1줄.
+- **제품 Java 소스, Gradle, properties, chat.js는 수정 금지.** 지금 Codex 채팅 9bf79d57(장부 26e76ed3)이 timeout 파일을 고치는 중이다. 그 파일들과 그 장부, 그리고 d542bf32 장부는 **읽기만** 한다.
+- 기존 도구의 기존 CLI 인자·출력 스키마는 깨지 않는다. 새 필드·새 서브커맨드만 추가한다.
+- 테스트는 해당 `scripts/test_*.py`만 돌린다(`python -B -m pytest <파일들> -q` 또는 각 파일의 기존 실행 방식). 전체 suite, Gradle, Verify-RAG는 돌리지 않는다.
+- 외부 API 0회.
+
+## DV0 — Preflight
+- HEAD, 대상 스크립트·SKILL.md sha12와 dirty 상태, `agent_scope_lease.py who` 요약(claim 수, live lease 수), `coop_verify.py status` 요약, in_progress journal 수를 기록한다.
+- 대상 파일을 다른 세션이 live claim으로 잡고 있으면 그 파일만 HOLD하고 나머지는 계속 진행한다.
+
+## DV1 — 사고 재구성과 fixture
+- 위 1)을 `docs/agent-tooling/parallel-session-incident-20261002.md`에 정리한다. 타임라인, 두 장부의 plannedScope 비교, 왜 감지가 안 됐는지(claim 0, writer 0, 중복 감지 후 계속 진행)를 적는다.
+- 두 journal.json의 구조를 본뜬 **익명화 fixture**를 `scripts/fixtures/parallel_session/`에 만든다. 원본 장부는 복사만 하고 수정하지 않는다.
+
+## DV2 — 같은 목표 중복 감지 (핵심)
+- journal을 열 때(또는 preflight에서) in_progress journal 중 다음을 모두 만족하는 것이 있으면 `DUPLICATE_GOAL_LIVE`로 판정한다:
+  - 같은 목표 키: purpose나 지시서의 `[Contract: ...]` 값이 같거나, goal 이름 정규화(접미 8hex 제거)가 같다.
+  - plannedScope가 1개 이상 겹친다(경로 정규화, 대소문자 무시).
+  - 상대가 살아 있다: journal updatedAt, 장부 폴더 안 최신 파일 mtime, 대상 파일 mtime 중 가장 최근 값이 N분 이내다(기본 20분, 인자로 조정).
+- 판정 결과에 따른 권장 역할:
+  - 살아 있는 상대가 있으면 → `VERIFIER`(읽기 전용 검증만). 소스 수정 금지.
+  - 상대가 N분 넘게 조용하거나 상대 장부에 handoff 기록이 있으면 → `TAKEOVER`. 상대 taskId와 마지막 checkpoint postimage를 baseline으로 넘긴다.
+  - 겹치는 상대가 없으면 → `OWNER`.
+- `work_journal.py` open에 이 검사를 **경고+종료코드**로 붙일지, preflight에만 둘지는 Self-Ask로 정한다. 기존 호출자를 깨지 않는 쪽이 기본이다(예: 새 플래그 `--dup-guard` 기본 off + preflight는 항상 검사).
+
+## DV3 — claim 없는 수정 감지
+- 최근 M분(기본 30분) 안에 바뀐 추적 대상 파일(git status의 M/??, 제품 소스 경로 위주) 중, 그 시점에 live claim이나 coop writer가 없는 파일을 `UNCLAIMED_EDIT`로 보고한다.
+- 어느 장부가 고쳤을 가능성이 높은지 plannedScope와 장부 checkpoint의 postimage sha로 추정해 함께 적는다.
+- 읽기 전용이다. 아무것도 되돌리거나 막지 않는다.
+
+## DV4 — 단일 preflight 명령
+- 한 줄 실행: `python -B scripts\<preflight> --root . --goal-key "<Contract 또는 goal>" --scope <경로들> --agent <이름> --json`
+- 출력 JSON에 들어갈 것: `role`(OWNER|VERIFIER|WAIT|TAKEOVER), `duplicates[]`, `liveWriters[]`, `unclaimedEdits[]`, `staleClaims` 요약, `overlappingClaims[]`, `nextCommands[]`(예: claim 명령, writer-begin 명령, 검증 전용이면 coop request 명령), 그리고 사람이 읽는 `summaryKo` 한 줄.
+- `WAIT`: 다른 목표의 live claim이 내 범위 일부와 겹칠 때. 겹치지 않는 부분 목록과 함께 준다. 기존 `lease_conflict_autoflow plan` 결과를 재사용한다.
+- PowerShell 래퍼 `scripts\agent_parallel_preflight.ps1`(기존 `.ps1` 래퍼들과 같은 형식)을 둔다.
+
+## DV5 — 오래된 claim 정리 보고 (dry-run)
+- `who` 결과에서 released=false인데 leaseStatus가 absent이고, 장부가 closed이거나 N시간 넘게 갱신이 없는 claim을 `STALE_CLAIM` 후보로 분류한다.
+- 기본은 **보고만** 한다(`--dry-run` 기본). 실제 회수는 기존 `agent_scope_lease.py reclaim`/`lease_conflict_autoflow reclaim` 경로로만 가능하게 하고, 이번 작업에서는 실행하지 않는다.
+
+## DV6 — 인계(handoff) 규약
+- `work_journal.py`의 기존 handoff 기능을 확인한다. 세션이 멈추거나 사용자가 종료할 때 남길 최소 필드를 정한다: `fromTask`, `toTask|null`, `lastCheckpoint`, `openItems`, `askOnceAnswers`, `atUtc`.
+- DV2의 TAKEOVER 판정이 이 기록을 인정하게 한다. 문서 `docs/agent-tooling/parallel-session-handoff.md`를 쓴다.
+
+## DV7 — 규칙·스킬 반영
+- 위 5개 SKILL.md에 `Use when` 트리거와 단계를 additive로 넣는다. 핵심 규칙은 하나다: "첫 소스 수정 전에 preflight 실행 → VERIFIER면 수정 금지, OWNER/TAKEOVER면 claim + coop writer-begin 후 수정".
+- `agents.md`에는 위 규칙을 가리키는 additive 포인터만 최대 6줄 넣는다. 기존 문장은 고치지 않는다. 수정 전 preimage를 장부에 남긴다.
+- Codex용 `$demo1-work-ledger` 스킬 본문에도 같은 한 단락을 넣는다(Codex가 실제로 읽는 경로인지 확인하고 기록).
+
+## DV8 — 테스트 (RED → GREEN)
+새 테스트 파일 `scripts/test_agent_parallel_preflight.py`(또는 agent_preflight 쪽 추가분)에 최소 다음 골든 시나리오를 넣는다:
+1. 오늘 사고 fixture: 같은 Contract, scope 겹침, 상대 3분 전 갱신 → `DUPLICATE_GOAL_LIVE` + `VERIFIER`.
+2. 같은 상황인데 상대 40분 무활동 → `TAKEOVER` + baseline 포함.
+3. 상대 장부에 handoff 기록 있음 → `TAKEOVER`.
+4. 다른 Contract, scope 겹침 없음 → `OWNER`.
+5. 다른 Contract인데 live claim이 일부 겹침 → `WAIT` + 비겹침 목록.
+6. claim·writer 없이 최근 바뀐 파일 → `UNCLAIMED_EDIT`에 잡힘.
+7. 오래된 claim → `STALE_CLAIM` 후보, 그리고 dry-run이라 상태 불변.
+8. 경로 대소문자·역슬래시 차이를 같은 경로로 인식(오늘 who 출력이 소문자 정규화돼 있음).
+- 기존 테스트 회귀: `test_agent_scope_lease.py`, `test_lease_conflict_autoflow.py`, `test_work_journal.py`, `test_coop_verify.py`, `test_demo1_goal_switch_barrier.py`, (있으면) `test_agent_preflight.py` 모두 GREEN.
+
+## DV9 — 실제 트리에서 읽기 전용 리허설
+- 지금 트리에서 preflight를 timeout v2 목표 키로 한 번 돌린다. 기대: 26e76ed3이 살아 있으면 다른 에이전트에게 `VERIFIER`, d542bf32는 paused/closed로 인식, 오늘 timeout 파일들이 `UNCLAIMED_EDIT`로 잡힘(Codex가 그 사이 claim했다면 잡히지 않는 것이 정상).
+- 출력 JSON을 장부에 저장하고, 결과를 보고서에 요약한다. 이 단계는 아무 상태도 바꾸지 않는다.
+
+## HOLD
+- 새 잠금/VCS/데몬 도입, 실시간 파일 감시 서비스 상주
+- 다른 에이전트 프로세스 종료, Codex 채팅에 메시지 보내기
+- 오래된 claim 실제 회수, 다른 세션 장부 수정
+- 제품 Java 소스·Gradle·properties·chat.js 수정
+
+## ASK_ONCE (답이 없어도 해당 부분만 멈추고 나머지는 계속한다)
+1. `work_journal.py open`에서 `DUPLICATE_GOAL_LIVE`일 때 **기본으로 실패(종료코드 ≠0)**하게 바꿀지(강제), 경고만 할지(권장 기본). 답이 없으면 경고 + preflight 강제로 둔다.
+
+## 절대 금지
+- push / pull / commit, `git add -A`, reset --hard / checkout / restore / stash / clean / force-push
+- 전체 suite, 전역 clean, Gradle, Verify-RAG
+- `.secrets` / `.env` / credentials 읽기·출력
+- AbandonWare3 재추가, PROTO_OPEN / admin 강화
+- 다른 세션 lease·hunk·장부 훼손, timeout 작업 대상 파일 수정
+- DB 스키마 변경, 데이터셋 삭제, 외부 유료 API
+
+## Acceptance (실행하지 않은 항목은 NOT_RUN + 사유)
+- [ ] AC1 사고 문서와 익명화 fixture 생성, 원본 장부 sha 불변.
+- [ ] AC2 DUPLICATE_GOAL_LIVE 판정과 역할(OWNER/VERIFIER/WAIT/TAKEOVER) 구현, 시나리오 1~5 GREEN.
+- [ ] AC3 UNCLAIMED_EDIT 감지, 시나리오 6 GREEN.
+- [ ] AC4 STALE_CLAIM dry-run, 시나리오 7 GREEN, 실제 claim 상태 불변(전후 `who` 해시 비교).
+- [ ] AC5 경로 정규화 시나리오 8 GREEN.
+- [ ] AC6 단일 preflight 명령 + `.ps1` 래퍼, JSON에 `summaryKo` 포함.
+- [ ] AC7 기존 테스트 5~6개 파일 GREEN, 기존 CLI 인자·출력 스키마 호환(기존 테스트가 증거).
+- [ ] AC8 SKILL.md 5개 + `$demo1-work-ledger` + `agents.md`(≤6줄) additive 반영, preimage 장부 보존.
+- [ ] AC9 실제 트리 읽기 전용 리허설 JSON 저장, 결과 요약.
+- [ ] AC10 timeout 작업 파일·Codex 장부 26e76ed3/d542bf32 sha 불변.
+
+## 보고 형식
+```
+외부 API: 없음 (유료 0회)
+DEVIN-PARALLEL-SESSION-GUARD: DONE | PARTIAL | HOLD
+ROOT_CAUSE(오늘 사고): <한 줄>
+AUTO_DECISION: …
+FILES_TOUCHED: <파일:줄범위>
+NEW_COMMAND: <preflight 한 줄 사용 예>
+RED→GREEN: <테스트 파일 n/m → m/m>
+REHEARSAL: role=<…> duplicates=<n> unclaimedEdits=<n> staleClaims=<n>
+AC1~AC10: PASS | FAIL | NOT_RUN(사유)
+HOLD / ASK_ONCE / NEXT
+```
+
+[ANTI-STOP] 읽기 = intake. DV0부터 바로 시작한다. 완료의 증거는 오늘 사고 fixture에서 두 번째 세션이 VERIFIER로 판정되는 테스트 GREEN과, 실제 트리 리허설 JSON이다.

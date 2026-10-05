@@ -22,6 +22,26 @@ class ChatApiControllerAutoSearchDecisionTest {
     private final SearchDecisionService decisions = new SearchDecisionService();
 
     @Test
+    void explicitSelfAskOverridesAutoHeuristicWhileHardWebGatesRemain() {
+        String query = "Spring Security 6.3에서 POST 로그아웃과 CSRF 토큰 처리의 관계를 "
+                + "docs.spring.io 공식 자료로 확인하고 핵심 두 가지를 짧게 알려 주세요.";
+        TraceStore.clear();
+        try {
+            assertFalse(decisions.decide(query, SearchMode.AUTO, null, 8).shouldSearch());
+            com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(
+                    com.example.lms.domain.enums.ExecutionMode.SELF_ASK);
+            assertTrue(ChatApiController.shouldUseWebForSearchMode(
+                    query, SearchMode.AUTO, true, true, decisions, 8));
+            assertFalse(ChatApiController.shouldUseWebForSearchMode(
+                    query, SearchMode.AUTO, false, true, decisions, 8));
+            assertFalse(ChatApiController.shouldUseWebForSearchMode(
+                    query, SearchMode.OFF, true, true, decisions, 8));
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
     void autoModeSkipsWebForPlainLocalChatWhenRagIsOff() {
         boolean useWeb = ChatApiController.shouldUseWebForSearchMode(
                 "Local smoke check. Answer in one sentence.",

@@ -8,6 +8,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class VerbosityDetectorTest {
 
+    @Test
+    void currentLengthInstructionWinsOverSavedPreferenceIncludingStandard() throws Exception {
+        VerbosityDetector detector = new VerbosityDetector();
+        var detect = java.util.Arrays.stream(VerbosityDetector.class.getMethods())
+                .filter(method -> method.getName().equals("detect") && method.getParameterCount() == 2)
+                .findFirst().orElseThrow(() -> new AssertionError("saved preference precedence boundary missing"));
+        for (String query : new String[]{"표준 길이로 설명해 주세요.", "Answer at standard length.", "standard"}) {
+            assertEquals("standard", ((VerbosityProfile) detect.invoke(detector, query, "deep")).hint());
+        }
+        assertEquals("brief", ((VerbosityProfile) detect.invoke(detector, "한 문장으로만 답해 주세요.", "deep")).hint());
+        assertEquals("deep", ((VerbosityProfile) detect.invoke(detector, "자세히 설명해 주세요.", "brief")).hint());
+        assertEquals("deep", ((VerbosityProfile) detect.invoke(detector, "캐시의 원리는 무엇인가요?", "deep")).hint());
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {
             "대한민국의 수도는 어디인가요? 도시 이름만 답해주세요.",

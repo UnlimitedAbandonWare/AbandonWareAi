@@ -262,6 +262,9 @@ public class PolicyBasedModelRouter implements ModelRouter {
     @Override
     public ChatModel routeMain(String intent, String riskLevel, String verbosityHint,
             Integer targetMaxTokens, String requestedModel, String query, boolean toolsRequired) {
+        String priorConstruction = com.example.lms.llm.RequestedModelSelection.mainConstructionModel();
+        com.example.lms.llm.RequestedModelSelection.mainConstructionModel(requestedModel);
+        try {
         ChatModel selected;
         String selectedKey;
         String reason = "existing_main";
@@ -319,6 +322,9 @@ public class PolicyBasedModelRouter implements ModelRouter {
                         null, null, false, reason, targetMaxTokens == null || targetMaxTokens <= 0 ? 1024 : targetMaxTokens));
         if (loadoutEnabled) com.example.lms.llm.RequestedModelSelection.rememberMainRole(mainRole);
         return selected;
+        } finally {
+            com.example.lms.llm.RequestedModelSelection.mainConstructionModel(priorConstruction);
+        }
     }
 
     @Override
@@ -576,6 +582,9 @@ public class PolicyBasedModelRouter implements ModelRouter {
         };
 
         String key = String.format(java.util.Locale.ROOT, "%s|%s|%d|%d|%.3f", req, tier.name(), maxTok, timeout, temp);
+        String owner = com.example.lms.llm.RequestedModelSelection.mainConstructionModel() == null
+                ? null : com.example.lms.llm.RequestedModelSelection.ownerHash();
+        if (owner != null) key += "|main-owner:" + owner;
         ChatModel cached = requestedCache.getIfPresent(key);
         if (cached != null) {
             return cached;
@@ -584,6 +593,9 @@ public class PolicyBasedModelRouter implements ModelRouter {
         try {
             ChatModel built = requestedCache.get(key, ignored -> java.util.Objects.requireNonNull(
                     factory.lcWithTimeout(req, temp, null, maxTok, timeout)));
+            // A refused local request must re-evaluate local availability on its next construction.
+            if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(DynamicChatModelFactory.configuredModelId(built))
+                    && !com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req)) requestedCache.invalidate(key);
             try {
                 TraceStore.put("ml.router.requestedModelHash", SafeRedactor.hashValue(req));
                 TraceStore.put("ml.router.requestedModelLength", lengthOf(req));

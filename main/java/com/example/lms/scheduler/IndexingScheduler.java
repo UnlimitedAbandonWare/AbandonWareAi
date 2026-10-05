@@ -69,10 +69,10 @@ public class IndexingScheduler {
         java.util.Set<String> dedup = new java.util.HashSet<>();
 
         for (Document d : newDocs) {
-            Metadata meta = Metadata.from(Map.of(
-                    "source", "CRAWLER",
-                    "fetchedAt", LocalDateTime.now().toString()
-            ));
+            Map<String, Object> originalMeta = d.metadata().toMap();
+            originalMeta.putIfAbsent("source", "CRAWLER");
+            originalMeta.putIfAbsent("fetchedAt", LocalDateTime.now().toString());
+            Metadata meta = Metadata.from(originalMeta);
             Document withMeta = Document.from(d.text(), meta);
             for (TextSegment ts : splitter.split(withMeta)) {
                 if (dedup.add(ts.text())) segments.add(ts);
@@ -91,13 +91,27 @@ public class IndexingScheduler {
             for (TextSegment seg : segments) {
                 // Attach standard vector-store metadata for contamination tracking.
                 // NOTE: Do not use Map.of() here because future meta fields might be nullable.
-                java.util.Map<String, Object> extra = new java.util.HashMap<>();
-                extra.put(VectorMetaKeys.META_SOURCE_TAG, "WEB");
-                extra.put(VectorMetaKeys.META_ORIGIN, "WEB");
-                extra.put(VectorMetaKeys.META_VERIFIED, "true");
-                extra.put("source", "CRAWLER");
-                extra.put("fetchedAt", LocalDateTime.now().toString());
-                vectorStoreService.enqueue("0", seg.text(), extra);
+                Map<String, Object> extra = seg.metadata().toMap();
+                extra.putIfAbsent(VectorMetaKeys.META_SOURCE_TAG, "WEB");
+                extra.putIfAbsent(VectorMetaKeys.META_ORIGIN, "WEB");
+                extra.put(VectorMetaKeys.META_VERIFIED, "false");
+                extra.put(VectorMetaKeys.META_VERIFICATION_NEEDED, "true");
+                extra.remove(VectorMetaKeys.META_SHADOW_BYPASS);
+                String sourceId = null;
+                for (String key : List.of("url", "source_id", "sourceId")) {
+                    Object value = extra.get(key);
+                    if (value != null && !value.toString().isBlank()) {
+                        sourceId = value.toString();
+                        break;
+                    }
+                }
+                if (sourceId == null) {
+                    vectorStoreService.enqueue("0", seg.text(), extra);
+                } else {
+                    String id = "indexing:" + org.apache.commons.codec.digest.DigestUtils.sha256Hex(
+                            sourceId + "|" + org.apache.commons.codec.digest.DigestUtils.sha256Hex(seg.text()));
+                    vectorStoreService.enqueue(id, "0", seg.text(), extra);
+                }
             }
             // Trigger flush explicitly to upload immediately
             outcome = vectorStoreService.flush();

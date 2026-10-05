@@ -1,0 +1,105 @@
+[DEVIN 지시서] Pack-GPTPro 9할 백업본에 대한 불변 복원 런북(PACK_GPTPRO_RESTORE_RUNBOOK) 및 무결성 검증기 구축 — 2026-10-05 12:15 KST
+파일 ID: PASTE_DEVIN_PACK_GPTPRO_RESTORE_RUNBOOK_20261005
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 완수할 때까지 멈추지 않는다.
+@demo1-devin-task-fit
+
+금지 (이 작업 전체): 제품 소스 임의 수정 0 · commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+Pack-GPTPro.bat의 backup 프로필로 생성된 90% 소스 압축본에 대해, 제외된 10%(비밀값, DB, 빌드산출물)를 안전하게 복구·재구성하고 컴파일/테스트 무결성을 검증하는 불변 런북(PACK_GPTPRO_RESTORE_RUNBOOK.md)과 검증기를 구축한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 12:15 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 대상 파일 및 sha12:
+  - Pack-GPTPro.bat (1787B, 698950007035)
+  - scripts/gptpro_pack.py (44426B, 47CB8D0F7E67)
+  - configs/gptpro-pack.json (3568B, 141A519310C9)
+  - docs/references/canonical-specs/README.md (3696B, 9BAF40CAD8C4)
+- 현황:
+  - 데빈 세션(devin-20faec15)으로 backup 기본 프로필(5879개 파일, ~59.5MB) 구축 완료.
+  - 압축 해제 후 제외된 10%(.secrets/, 로컬 h2-database, build/ 산출물, node_modules)를 주입하고 복원하는 표준 런북 부재.
+  - docs/references/canonical-specs/는 365일 TTL의 불변 표준 규격 SSOT 디렉터리임.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 가드레일: git push / add -A / commit -a / reset / clean 금지, remote 추가 금지, 비밀값 출력 금지, PROTO_OPEN 개방 유지.
+- 도구 범위: docs/references/canonical-specs/ 문서 2건, scripts/test_pack_gptpro_restore_runbook.py 1건 한정 (제품 Java/BFF 소스 수정 0).
+- 검증: 유료 실호출 0, focused 검증(python -B scripts/test_pack_gptpro_restore_runbook.py) 필수, 미실행 항목은 NOT_RUN 기록.
+
+## DV1 [DEVIN] docs/references/canonical-specs/PACK_GPTPRO_RESTORE_RUNBOOK.md 신설
+- 증거: docs/references/canonical-specs/README.md
+- RED: `python -B -c "import os; assert os.path.exists('docs/references/canonical-specs/PACK_GPTPRO_RESTORE_RUNBOOK.md')"` (AssertionError)
+- 최소 구현: `docs/references/canonical-specs/PACK_GPTPRO_RESTORE_RUNBOOK.md` 생성:
+  1) Frontmatter: title, category: "canonical-spec", capturedAt: "2026-10-05", ttlDays: 365, cadence: "evergreen", status: "ACTIVE"
+  2) 90% 포함 자산: Gradle wrapper, main/java, main/resources, src/test, configs, frontend, scripts, docs, .agents, 루트 런처 BAT 7종.
+  3) 제외된 10% 복구 프로토콜:
+     - 비밀값: `.secrets/` 및 `.env` 파일은 `.env.example` 복사 후 환경변수로 주입.
+     - 로컬 데이터베이스: `lmsdb.mv.db` 부재 시 Spring Boot 기동 중 DDL 자동 생성 또는 `scripts/db_agent.py` 초기화.
+     - 빌드 캐시: `build/` 및 `node_modules/`는 `gradlew.bat compileJava` 및 `npm install`로 로컬 재구성.
+  4) 5단계 복원 절차: Unzip -> 환경변수 점검 -> Gradle wrapper 확인 -> 컴파일/단위테스트 -> 런처 BAT DryRun 스모크.
+- GREEN: 해당 파일 존재 확인 (exit=0).
+- 완료 조건: PACK_GPTPRO_RESTORE_RUNBOOK.md 파일이 표준 규격에 맞게 신설됨.
+
+## DV2 [DEVIN] docs/references/canonical-specs/README.md 색인 테이블에 등록
+- 증거: docs/references/canonical-specs/README.md:38-46
+- RED: `powershell -Command "Select-String -Path docs/references/canonical-specs/README.md -Pattern 'PACK_GPTPRO_RESTORE_RUNBOOK.md' -SimpleMatch; exit=$LASTEXITCODE"` (exit!=0)
+- 최소 수정: `docs/references/canonical-specs/README.md`의 `## Index` 표에 행 추가:
+  `| PACK_GPTPRO_RESTORE_RUNBOOK.md | 90% restore-ready zip unpack, missing 10% secrets/DB injection, 5-stage verification | scripts/gptpro_pack.py, Pack-GPTPro.bat |`
+  및 카운트 4 specs -> 5 specs 갱신.
+- GREEN: Select-String 매칭 성공 (exit=0).
+- 완료 조건: canonical-specs 인덱스에 복원 런북이 공식 등재됨.
+
+## DV3 [DEVIN] scripts/test_pack_gptpro_restore_runbook.py 복원 무결성 검증기 신설
+- 증거: scripts/test_gptpro_pack.py
+- RED: `python -B -c "import os; assert os.path.exists('scripts/test_pack_gptpro_restore_runbook.py')"`
+- 최소 구현: `scripts/test_pack_gptpro_restore_runbook.py` 작성:
+  1) `PACK_GPTPRO_RESTORE_RUNBOOK.md`의 필수 섹션(Frontmatter, 90% 포함분, 10% 복구, 5단계 절차) 검사.
+  2) `configs/gptpro-pack.json`의 backup 프로필 필수 경로(gradlew.bat, gradle-wrapper.jar, Start-RAG.bat 등)가 레포에 존재하는지 검증.
+  3) 모의 복원 시뮬레이션: 제외 대상(.secrets, build)이 include에 없는지 역검증.
+  4) unittest 기반으로 작성하여 exit 0/1 반환.
+- GREEN: `python -B scripts/test_pack_gptpro_restore_runbook.py` 실행 시 ALL PASS (exit=0).
+- 완료 조건: 신설 런북의 무결성을 지속적으로 보증하는 테스트 스크립트 완비.
+
+## DV4 [DEVIN] 기존 test_gptpro_pack.py 및 신규 검증기 통합 확인
+- 증거: scripts/test_gptpro_pack.py
+- RED: 검증 미실행 상태
+- 실행 검증:
+  1) `python -B scripts/test_gptpro_pack.py` 실행 (기존 32/32 tests PASS 확인)
+  2) `python -B scripts/test_pack_gptpro_restore_runbook.py` 실행 (신규 테스트 PASS 확인)
+- GREEN: 두 검증기 모두 exit=0으로 통과.
+- 완료 조건: 기존 백업 도구와의 100% 무충돌 및 상호 정합성 확인.
+
+## 4. HOLD
+- main/java, main/resources, frontend/src 등 프로덕션 소스 코드 임의 수정 또는 lease 충돌 시 즉시 HOLD.
+- .secrets, 실제 비밀값, API 키가 런북 문서 또는 스크립트에 노출되는 경우 즉시 HOLD.
+- 유료 API 호출이 발생하거나 외부 네트워크 전송 시도 시 즉시 HOLD.
+
+## 5. ASK_ONCE
+- Q-1: 복원 런북에 Docker 컨테이너 복원 가이드를 추가할 것인가?
+  - (a) 권장: 아니오 (로컬 Windows/PowerShell + JDK 17 환경에 집중하여 불필요한 스택 확장 방지)
+  - (b) 예 (추후 별도 작업으로 Docker 가이드 추가)
+
+## 6. 절대 금지
+- git push, git pull, git add -A, git commit -a, git reset, git clean
+- remote 추가 및 원격 저장소 변조
+- 비밀값(API 키, 토큰, 암호, .secrets, .env 실제 키) 화면/로그 출력 또는 문서 포함
+- PROTO_OPEN 가드라인 훼손 (임의의 권한 차단 추가 금지)
+- 제품 Java/BFF 소스 코드 및 gradle 빌드 설정 변조
+
+## 7. Acceptance
+- [DV1] docs/references/canonical-specs/PACK_GPTPRO_RESTORE_RUNBOOK.md 생성 및 필수 항목 완비.
+- [DV2] docs/references/canonical-specs/README.md 색인 테이블에 복원 런북 공식 등재 (5 specs).
+- [DV3] scripts/test_pack_gptpro_restore_runbook.py 신설 및 단위 테스트 PASS (exit=0).
+- [DV4] python -B scripts/test_gptpro_pack.py 및 신규 검증기 모두 PASS (exit=0).
+- [NOT_RUN] 실제 외부 유료 API 호출 및 전체 gradlew :test 빌드는 범위 외로 NOT_RUN.
+
+## 8. 보고 형식
+외부 API: 호출 0건 / $0.00
+진행 결과: DV1~DV4 완료 상태 및 신설/수정 파일 목록
+실행 검증: python -B scripts/test_pack_gptpro_restore_runbook.py 실행 결과 및 test_gptpro_pack.py 결과
+산출물: PACK_GPTPRO_RESTORE_RUNBOOK.md 주요 목차 및 5단계 복원 파이프라인 요약
+
+[ANTI-STOP] 모든 DV 항목의 구현과 단위 테스트 검증이 완료되고 Acceptance 기준을 모두 충족할 때까지 작업을 멈추지 않는다.

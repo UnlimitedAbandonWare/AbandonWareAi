@@ -1,6 +1,6 @@
 ---
 name: demo1-path-registry
-description: Use when a demo-1 task finds, adds, changes, or moves shared paths (lease, journal, var, handoff, worktrees, tools). Resolve by registry key; register before use; moves keep a 14-day alias + moved.jsonl line; FROZEN keys never move. Detail: references/registry-fields.md.
+description: 'Use when a demo-1 task finds, adds, changes, or moves shared paths (lease, journal, var, handoff, worktrees, tools). Resolve by registry key; register before use; moves keep a 14-day alias + moved.jsonl line; FROZEN keys never move. Detail: references/registry-fields.md.'
 ---
 
 # demo1-path-registry

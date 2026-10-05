@@ -14,8 +14,9 @@ import java.util.*;
 /** Sparse, owner-scoped chat defaults in the existing profile document. Reads never create rows. */
 @Service
 public class ChatPreferenceService {
-    public static final Set<String> KEYS = Set.of("model", "modelSelectionMode", "temperature", "topP",
-            "frequencyPenalty", "presencePenalty", "maxTokens", "useRag", "useWebSearch", "searchMode", "ragAnswerPolicy");
+    public static final Set<String> KEYS = Set.of("model", "modelSelectionMode", "executionMode", "temperature", "topP",
+            "frequencyPenalty", "presencePenalty", "maxTokens", "useRag", "useWebSearch", "searchMode", "ragAnswerPolicy",
+            "customInstructions", "responseTone", "responseLength", "responseLanguage", "memoryMode");
     public record State(Map<String, Object> overrides, long revision, String hash) {}
     public static final class Conflict extends RuntimeException {
         public Conflict() { super("revision_conflict"); }
@@ -101,8 +102,16 @@ public class ChatPreferenceService {
                 case "model" -> valid = value instanceof String text && text.length() <= 180
                         && text.matches("[a-zA-Z0-9][a-zA-Z0-9._/:+\\-]*") && !text.matches("^(sk-|AIza|eyJ).*");
                 case "modelSelectionMode" -> valid = Set.of("preferred", "strict", "auto").contains(value);
+                case "executionMode" -> valid = value instanceof String text && java.util.Arrays.stream(
+                        com.example.lms.domain.enums.ExecutionMode.values()).anyMatch(mode -> mode.name().equals(text));
                 case "searchMode" -> valid = Set.of("AUTO", "OFF", "FORCE_LIGHT", "FORCE_DEEP").contains(value);
                 case "ragAnswerPolicy" -> valid = Set.of("adaptive", "evidence_only").contains(value);
+                case "customInstructions" -> valid = value instanceof String text
+                        && text.codePointCount(0, text.length()) <= 2000;
+                case "responseTone" -> valid = Set.of("neutral", "friendly", "formal").contains(value);
+                case "responseLength" -> valid = Set.of("brief", "standard", "deep").contains(value);
+                case "responseLanguage" -> valid = Set.of("auto", "ko", "en").contains(value);
+                case "memoryMode" -> valid = Set.of("hybrid", "ephemeral", "full").contains(value);
                 case "useRag", "useWebSearch" -> valid = value instanceof Boolean;
                 default -> {
                     if (value instanceof Number number && Double.isFinite(number.doubleValue())) {

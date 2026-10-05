@@ -1,0 +1,121 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 수행하고 검증 증거를 산출하는 실행 지시서다.
+@demo1-devin-task-fit
+
+[DEVIN 지시서] agy-cli 계정 전환·일시 부재 시 자율 폴백 및 세션 연속성 확립 — 2026-10-05 18:30 KST
+파일 ID: PASTE_DEVIN_AGY_ACCOUNT_SWITCH_RESILIENCE_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스(main/java) 수정 0 · git push/pull 0 · git add -A/. 0 · remote 추가 0 · 비밀값 출력 0 · PROTO_OPEN 유지
+첫 실행 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+# 0. 한 줄 목표
+agy-cli가 계정 교체(A↔B, /logout, /login)로 일시 부재하더라도, 데빈 및 오케스트라가 무한 대기 없이 자율 폴백하고 재진입 시 세션 맥락이 매끄럽게 복원되도록 프레즌스·폴백 레일·세션 스냅샷을 구축한다.
+
+# 1. 사실 (2026-10-05 18:30 KST)
+- 배경: agy-cli 모델 OAuth(Google AI Pro)와 MCP(로컬 stdio, 원격 OAuth)는 분리 관리되므로 계정을 바꿔도 MCP 연결 자체는 유지된다.
+- 문제: 단일 자격 증명 슬롯으로 인해 계정 전환(`Agy-Auth.bat use` 또는 `/logout`→`/login`) 시 `agy.exe`를 종료해야 하며, 이 동안 agy가 부재하여 플릿 신호 대기 정체나 작업 맥락 단절이 발생할 수 있다.
+- 원칙: agy의 부재를 `OFFLINE`/`SWITCHING` 프레즌스로 감지하여 데빈이 자율 진행하고, agy 복귀 시 직전 작업 스냅샷을 즉시 이어받는다.
+
+## 기준 해시 표
+| 경로 | sha12 | 권한 |
+| :--- | :--- | :--- |
+| `data/agent-handoff/agy-presence.json` | (신규) | 생성 |
+| `scripts/agy_presence.py` | (신규) | 생성 |
+| `scripts/test_agy_presence.py` | (신규) | 생성 |
+| `docs/agents-rules/DEMO1-AGY-ACCOUNT-SWITCH-RESILIENCE.md` | (신규) | 생성 |
+| `Agy-Auth.bat` | `D9D924496E38` | 수정 |
+| `Start-Agy-CLI.bat` | `4A8D126336B6` | 수정 |
+| `scripts/agy_auth_switch.ps1` | `6D8A720E6508` | 수정 |
+| `scripts/agy_session_seed.py` | `FE7638D8D199` | 수정 |
+| `scripts/fixtures/orchestra/route-rules.json` | `56D96B29E9B8` | 수정 |
+
+# 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`, `chat.js`) 수정 0 (FOR_CODEX).
+- Git 금지: push, pull, fetch, merge, rebase, add -A, add ., commit -a, remote 추가/변경 금지.
+- 비밀값(토큰, 암호, OAuth 키) 평문 파일 기록 및 출력 금지. 실호출 0원칙 준수.
+
+# 3. 작업 항목 (D1~D4)
+
+### D1 [Devin] agy 프레즌스 상태 SSOT (`data/agent-handoff/agy-presence.json`) 및 CLI 연동
+- 1) `scripts/agy_presence.py` 신규 생성 (파이썬 표준 라이브러리 전용):
+  - CLI 인자: `set --status <ONLINE|SWITCHING|OFFLINE> [--account <name>]`, `get`, `is-available`
+  - 스키마: `{"status": "ONLINE|SWITCHING|OFFLINE", "account": "A|B|UNSAVED", "updatedAtKst": "..."}`
+  - 비밀값/토큰/이메일 평문 저장 0 (계정명은 마스킹/별칭만 허용).
+- 2) `scripts/agy_auth_switch.ps1`: `use <name>` 시작 시 status=SWITCHING, 완료 시 status=OFFLINE 기록.
+- 3) `Start-Agy-CLI.bat`: agy 기동 시 status=ONLINE, 종료 시 status=OFFLINE 호출.
+- RED: `python -B scripts/agy_presence.py get` 실행 시 파일 부재 오류.
+- GREEN: `python -B scripts/agy_presence.py set --status ONLINE --account A` exit 0 && `get` 확인.
+
+### D2 [Devin] 오케스트라 라우팅의 agy 부재 시 자율 폴백 레일 구축
+- 1) `scripts/fixtures/orchestra/route-rules.json` 갱신:
+  - `lanes.AGY_RESEARCH`에 `fallback`: `"DEVIN_AUTONOMOUS_OR_CACHED_SEED"` 추가.
+  - agy가 OFFLINE/SWITCHING이거나 타임아웃 시 데빈 자율 레인 또는 `var/agy-seed/latest.md` 캐시 즉시 활용.
+- RED: `route-rules.json` 내 `AGY_RESEARCH`에 `fallback` 속성 부재.
+- GREEN: `python -B -c "import json; d=json.load(open('scripts/fixtures/orchestra/route-rules.json', encoding='utf-8')); assert 'fallback' in d['lanes']['AGY_RESEARCH']"` exit 0.
+
+### D3 [Devin] 세션 종료 스냅샷 저장 및 재진입 세션 복원 (--on-exit / --resume)
+- 1) `scripts/agy_session_seed.py`에 `--on-exit` 플래그 추가:
+  - agy 세션 종료 시 최근 작업/신호/인계 경로를 `var/agy-seed/last_exit_context.json`에 비동기 스냅샷 저장.
+  - `--launcher` 실행 시 해당 파일이 있으면 `[Start-Agy-CLI] resume: <직전 작업 1줄>` 출력 (non-blocking).
+- 2) `Start-Agy-CLI.bat` 종료 직전 `python -B scripts/agy_session_seed.py --on-exit 2>nul` 연동.
+- RED: `python -B scripts/agy_session_seed.py --on-exit` 시 오류 발생.
+- GREEN: `--on-exit` 실행 후 `var/agy-seed/last_exit_context.json` 생성 및 `--launcher` 출력 확인.
+
+### D4 [Devin] 계정 전환 회복 탄력성 SSOT 규칙 등록 및 오프라인 검증 스위트 신설
+- 1) `docs/agents-rules/DEMO1-AGY-ACCOUNT-SWITCH-RESILIENCE.md` 신규 생성:
+  - 계정 전환 수명주기, MCP 격리 보장 원칙, 플릿 자율 폴백 계약 문서화.
+- 2) `scripts/test_agy_presence.py` 신규 생성 및 전체 검증:
+  - 상태 전이(ONLINE->SWITCHING->OFFLINE) 및 비밀값 0건, 스냅샷 저장/복원 검증.
+- RED: `scripts/test_agy_presence.py` 부재.
+- GREEN: `python -B scripts/test_agy_presence.py` 실행 시 ALL PASS (exit 0).
+
+# 4. HOLD
+- 자바 백엔드/프로덕트 소스(`main/java/**`, `src/test/**`, `frontend/**`) 수정 요구 시 -> HOLD.
+- Git push/pull/merge 또는 remote 브랜치 조작 요구 시 -> HOLD.
+- MCP 토큰 파일(`~/.gemini/mcp-oauth-tokens.json` 등) 직접 수정/삭제 요구 시 -> HOLD.
+
+# 5. ASK_ONCE
+- A-1: 프레즌스 타임아웃 기본값: (a) 권장: 30초 (30초 동안 갱신 없으면 OFFLINE 간주) (b) 60초 (권장: (a)).
+- A-2: 재진입 힌트 출력 방식: (a) 권장: Start-Agy-CLI 런처 1줄 안내 (b) 별도 status 파일 (권장: (a)).
+
+# 6. 절대 금지
+- `git push`, `git pull`, `git fetch`, `git merge`, `git rebase` 금지.
+- `git add -A`, `git add .`, `git commit -a`, remote 추가/변경 금지.
+- 실제 API 키, 토큰, 비밀값 평문 파일 기록 및 콘솔 출력 금지.
+- PROTO_OPEN 인증 완화 또는 관리자 권한 강제 금지.
+- 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`) 수정 금지.
+
+# 7. Acceptance (완료 기준)
+- A1 [D1,D4]: `python -B scripts/test_agy_presence.py` 실행 시 ALL PASS (exit 0).
+- A2 [D1,D3]: `data/agent-handoff/agy-presence.json` 및 `last_exit_context.json`에 비밀값·토큰·이메일 평문 0건.
+- A3 [D1,D3]: `Agy-Auth.bat` 및 `Start-Agy-CLI.bat` 프레즌스·스냅샷 연동 정상 반영 (기존 구동 회귀 0).
+- A4 [D2]: `scripts/fixtures/orchestra/route-rules.json` fallback 속성 확인.
+- A5 [D1,D2,D3,D4]: 제품 소스 diff 0, 외부 유료 API 실호출 0회, Gradle 빌드 0회, 종료 시 잔류 리스 0개.
+- (미실행 항목 발생 시 NOT_RUN + 사유 명시)
+
+# 8. 보고 형식
+외부 API: 0회
+상태: DONE (또는 DONE_OFFLINE)
+
+- A1 PASS [D1,D4] — `python -B scripts/test_agy_presence.py` exit 0
+- A2 PASS [D1,D3] — 누출 검사: agy-presence.json 및 last_exit_context.json 비밀값 0건
+- A3 PASS [D1,D3] — Agy-Auth / Start-Agy-CLI 연동 정상 확인
+- A4 PASS [D2] — route-rules.json fallback 검증 통과
+- A5 PASS [D1,D2,D3,D4] — 제품 소스 diff 0, 외부 호출 0, 잔류 리스 0
+
+FILES_TOUCHED:
+- data/agent-handoff/agy-presence.json (new)
+- scripts/agy_presence.py (new)
+- scripts/test_agy_presence.py (new)
+- docs/agents-rules/DEMO1-AGY-ACCOUNT-SWITCH-RESILIENCE.md (new)
+- Agy-Auth.bat (modified)
+- Start-Agy-CLI.bat (modified)
+- scripts/agy_auth_switch.ps1 (modified)
+- scripts/agy_session_seed.py (modified)
+- scripts/fixtures/orchestra/route-rules.json (modified)
+
+SCOPE_EXPAND: 없음
+EXTERNAL_DRIFT: 없음
+NEXT: 사용자는 `Agy-Auth.bat save <name>` / `use <name>`으로 계정을 안전하게 전환 가능.
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 위 작업을 실제로 수행하고 검증 증거를 산출하는 실행 지시서다.

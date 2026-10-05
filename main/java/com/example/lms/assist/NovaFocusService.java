@@ -280,7 +280,7 @@ public class NovaFocusService implements AutoCloseable {
                     var sourceIds=accepted.sourceIds();
                     s.preparedContext=new NovaFocusHistoryService.Context(List.copyOf(s.recent),"",List.of(),
                         s.finalized.values().stream().filter(t->!sourceIds.contains(t.sourceId())).toList(),
-                        accepted.answerSelection(),accepted.settingsVersion());
+                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled());
                     s.preparedRequestId=accepted.requestId();
                 }
                 if(request!=null){

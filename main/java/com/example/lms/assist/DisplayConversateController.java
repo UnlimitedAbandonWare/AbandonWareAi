@@ -34,8 +34,9 @@ public class DisplayConversateController {
     // Existing cookie owners, transient codes and explicit receiver approval only.
     private final Map<String,String> phoneLinks=new HashMap<>();
     private final Map<String,LensGrant> lensGrants=new HashMap<>();
-    /** Per-owner lens presentation settings; volatile like the rest of this controller. */
-    private final Map<String,LensDisplayPrefs> lensPrefs=new HashMap<>();
+    /** Cache of the owner's durable presentation document and independent revision. */
+    private final Map<String,NovaFocusHistoryService.LensSettings> lensSettingsCache=new java.util.concurrent.ConcurrentHashMap<>();
+    @Autowired(required=false) private NovaFocusHistoryService focusHistory;
     @org.springframework.beans.factory.annotation.Value("${conversate.cue.hint-target-chars:540}") private int defaultHintTargetChars=540;
     @org.springframework.beans.factory.annotation.Value("${conversate.display.sticky-lens:${AWX_DISPLAY_STICKY_LENS:${CONVERSATE_DISPLAY_STICKY_LENS:false}}}") private boolean stickyLensEnabled;
     @org.springframework.beans.factory.annotation.Value("${conversate.display.lens-conversation-chars:${CONVERSATE_LENS_CONVERSATION_CHARS:280}}") private int lensConversationChars=280;
@@ -51,7 +52,9 @@ public class DisplayConversateController {
     @org.springframework.beans.factory.annotation.Value("${conversate.display.segment-seconds:0}") private int defaultSegmentSeconds=0;
     @Autowired public DisplayConversateController(ConversateSessionService sessions,ClientOwnerKeyResolver owners,InterviewDemoPublicAddress address){this(sessions,owners,address,Clock.systemUTC());}
     DisplayConversateController(ConversateSessionService sessions,ClientOwnerKeyResolver owners,InterviewDemoPublicAddress address,Clock clock){this.sessions=sessions;this.owners=owners;this.address=address;this.clock=clock;this.relay=new DisplayRelay(clock);sessions.displayPrefs(this::prefsFor);}
-    private LensDisplayPrefs prefsFor(String owner){var prefs=lensPrefs.get(owner);return prefs==null?LensDisplayPrefs.defaults(defaultHintTargetChars):prefs;}
+    private NovaFocusHistoryService.LensSettings lensSettingsFor(String owner){return lensSettingsCache.computeIfAbsent(owner,key->focusHistory==null?
+        new NovaFocusHistoryService.LensSettings(0,LensDisplayPrefs.defaults(defaultHintTargetChars)):focusHistory.lensSettings(key,defaultHintTargetChars));}
+    private LensDisplayPrefs prefsFor(String owner){return lensSettingsFor(owner).display();}
     public record Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation,ConversateCloudStt.StreamPolicy sttPolicy){
         public Connection(String assistId,long epoch,String clientId){this(assistId,epoch,clientId,false,false,null);}
         public Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation){this(assistId,epoch,clientId,activate,continuation,null);}
@@ -175,7 +178,9 @@ public class DisplayConversateController {
     public record LensRead(String token,Boolean preview){public LensRead(String token){this(token,null);}@Override public String toString(){return "LensRead[redacted]";}}
     public record LensLink(String token,long expiresAt,boolean sticky){@Override public String toString(){return "LensLink[redacted]";}}
     public record LensText(String conversation,String hint,String hintId,long hintExpiresAt,long conversationExpiresAt,LensDisplayPrefs display,NovaFocusState.View focus){}
-    public record LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults){}
+    public record LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults,Long expectedSettingsVersion){
+        public LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults){this(assistId,epoch,clientId,display,restoreDefaults,null);}
+    }
     record LensGrant(String owner,String assistId,long expiresAt){@Override public String toString(){return "LensGrant[redacted]";}}
     public record PairJoin(String clientId,String code,String requestId){@Override public String toString(){return "PairJoin[redacted]";}}
     public record Background(String assistId,long epoch,String clientId,String text){@Override public String toString(){return "DisplayBackground[redacted]";}}
@@ -388,9 +393,20 @@ public class DisplayConversateController {
     @PostMapping("/api/assist/display/relay/lens-settings")
     public synchronized ResponseEntity<View> lensSettings(@RequestBody LensSettings request,HttpServletRequest http){
         String caller=owner(http);validateClient(request.clientId());Binding b=bound(caller,request.assistId());requireProducer(b,request.clientId());limited(caller,1);
-        LensDisplayPrefs applied=Boolean.TRUE.equals(request.restoreDefaults())?LensDisplayPrefs.defaults(defaultHintTargetChars):prefsFor(b.owner).patch(request.display());
-        lensPrefs.put(b.owner,applied);
-        LOG.info("display.lensSettings applied={}",applied.describe());
+        if(sessions.status(b.owner,b.id).epoch()!=request.epoch())throw error(HttpStatus.CONFLICT,"focus_session_stale");
+        NovaFocusHistoryService.LensSettings updated;
+        if(focusHistory==null){
+            var current=lensSettingsFor(b.owner);
+            if(request.expectedSettingsVersion()!=null&&request.expectedSettingsVersion()!=current.settingsVersion())throw error(HttpStatus.CONFLICT,"lens_settings_conflict");
+            var applied=Boolean.TRUE.equals(request.restoreDefaults())?LensDisplayPrefs.defaults(defaultHintTargetChars):current.display().patch(request.display());
+            updated=new NovaFocusHistoryService.LensSettings(current.settingsVersion()+1,applied);
+        }else try{updated=focusHistory.lensSettings(b.owner,request.expectedSettingsVersion(),request.display(),Boolean.TRUE.equals(request.restoreDefaults()),defaultHintTargetChars);}
+        catch(IllegalArgumentException failure){
+            if(!"lens_settings_conflict".equals(failure.getMessage()))throw failure;
+            lensSettingsCache.remove(b.owner);throw error(HttpStatus.CONFLICT,"lens_settings_conflict");
+        }
+        lensSettingsCache.put(b.owner,updated);
+        LOG.info("display.lensSettings applied={}",updated.display().describe());
         return result(b,sessions.status(b.owner,b.id),caller);
     }
     @PostMapping("/api/assist/display/relay/test")
@@ -653,6 +669,9 @@ public class DisplayConversateController {
         status.put("lastTranscriptReceivedAt",b.lastTranscriptAt);status.put("lastAudioReceivedAt",b.lastAudioAt);
         if(b.relayChannel!=null)status.put("relay",relay.debug(b.relayChannel,new DisplayRelay.Producer(b.owner,client==null?b.producerClient:client,b.id)));
         status.put("lensDisplay",prefsFor(b.owner).describe());
+        status.put("lensSettingsVersion",lensSettingsFor(b.owner).settingsVersion());
+        status.put("lensSettingsPersistence",focusHistory==null?"server_memory":"profile_db");
+        status.put("lensSettingsScope",NovaFocusHistoryService.digest(b.owner+"\nLENS_SETTINGS"));
         status.put("processing",s.metrics().inFlight()>0||s.metrics().queueLength()>0);
         status.put("processingMs",s.metrics().lastProcessingMs());
         status.put("asr",asr==null?Map.of():safeFields(asr.displayDiagnostics(s.audio()),List.of("provider","transport","model","configuredProvider","configuredCloudModel","requestedEngine","fallbackAllowed","fallbackCount","fallbackReason","modelEvidence","firstPartialMs","finalAfterStopMs","stopReason","failureReason","renewAfterMs")));

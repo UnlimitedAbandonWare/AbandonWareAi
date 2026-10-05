@@ -494,6 +494,14 @@ def secret_free(data, source_path=""):
         if source_path == "src/test/java/com/example/lms/boot/RuntimeConfigShadowGuardTest.java":
             # Fixed env-name binding assertion; the placeholder has no value bytes.
             text = text.replace("api-" + "key=${GEMINI_API_KEY:}", "<credential-contract-fixture>")
+    if source_path == "tools/test_build_error_secret_mask.py":
+        # Exact synthetic redaction inputs only; changed or adjacent values and
+        # every other path still pass through the credential scan below.
+        for fixture in (
+                '("header", "Author' + 'ization: " + "D" * 24, "<secret>"),',
+                '("cookie", "Coo' + 'kie: session=" + "E" * 24, "<secret>"),',
+                '("multiline header", "Coo' + 'kie: value\\nBUILD SUCCESSFUL", "<secret>\\nBUILD SUCCESSFUL"),'):
+            text = text.replace(fixture, '"<synthetic-build-log-fixture>"')
     # Unresolved Spring/environment bindings name settings; they contain no values.
     # Accept only identifiers, the fixed __MISSING__ sentinel (코드베이스 결측
     # 센티널 — 자격 증명 바이트를 가질 수 없음), and empty/nested fallbacks;
@@ -550,6 +558,13 @@ def secret_free(data, source_path=""):
         for match in cookie_reference.finditer(text):
             if not any(a < match.end() and match.start() < b for a, b in protected):
                 chars[match.start(1):match.end(1)] = " " * len(match.group(1))
+        # A null comparison has no cookie value. Mask only the identifier in
+        # executable Java; literals, comments, Unicode escapes and adjacent
+        # assignments remain under the existing credential scan.
+        cookie_null_comparison = re.compile(r"\b(cookie)\s*(?:==|!=)\s*null\b")
+        for match in cookie_null_comparison.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
         # Non-ASCII escapes cannot introduce Java quotes, comments or operators.
         # Redaction predicates search for a field label ending at '='; there is
         # no credential value in that exact Java string argument. Only exempt
@@ -565,6 +580,12 @@ def secret_free(data, source_path=""):
         # ASCII/control escapes remain strict because Java processes them before lexing.
         names = r"(?:password|passwd|pwd|clientSecret|apiKey|token)"
         ident = r"[A-Za-z_$][A-Za-z0-9_$]*"
+        # A same-named constructor argument copy contains no literal credential.
+        # Keep RHS bytes, comments, strings and neighbouring literals scanned.
+        member_copy = re.compile(r"\bthis\.(token)\s*=\s*\1\s*;")
+        for match in member_copy.finditer(text):
+            if not any(a < match.end() and match.start() < b for a, b in protected):
+                chars[match.start(1):match.end(1)] = " " * len(match.group(1))
         # A JSON-node accessor copies a runtime run identifier, not a literal
         # credential. Mask only the assignment label; retain every RHS byte.
         json_run_reference = re.compile(r'\bString\s+(token)\s*=\s*' + ident

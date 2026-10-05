@@ -58,3 +58,4 @@ description: >-
   `dot_brief_save.py`를 통한 **명시 요청 시에만**.
 - 상세 계약·테스트: `scripts/dot_brief_save.py` docstring, `scripts/test_dot_brief_save.py`.
 - 사용자 카드: `docs/codex/DOT_BRIEF_SAVE_KO.md`.
+- 컨트롤 타워 위계: `.agents/skills/demo1-dot-control-tower/SKILL.md`.

@@ -267,6 +267,49 @@ class LlmGatewayFailureClassifierTest {
         }
     }
 
+    @Test
+    void providerModelRemovalErrorsAreModelMissingAcrossHttpStatuses() {
+        String deprecatedCode = "{\"error\":{\"code\":\"model_deprecated\","
+                + "\"message\":\"The model 'gpt-4.1' has been deprecated\"}}";
+        String retired = "{\"error\":{\"message\":\"The model 'gemini-2.5-pro' has been retired\"}}";
+        String decommissioned = "{\"error\":{\"code\":\"model_decommissioned\"}}";
+        String unsupported = "{\"error\":{\"message\":\"The model 'gpt-4o-mini' is no longer supported\"}}";
+        String apiVersion = "{\"error\":{\"message\":\"models/gemini-2.0-flash "
+                + "is not supported for api version v1beta\"}}";
+        for (int status : List.of(400, 404, 410)) {
+            for (String body : List.of(deprecatedCode, retired, decommissioned, unsupported, apiVersion)) {
+                Throwable http = new dev.langchain4j.exception.HttpException(status, body);
+                Throwable web = WebClientResponseException.create(status, "synthetic",
+                        HttpHeaders.EMPTY, body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+                for (Throwable failure : List.of(http, web, new RuntimeException("outer", http))) {
+                    assertEquals(LlmFailureClass.MODEL_MISSING, classifier.classify(failure),
+                            status + " " + body);
+                    assertFalse(LlmGatewayFailureClassifier.hasNonReplayableReason(failure),
+                            "model removal stays replayable so a fallback route can serve the request");
+                }
+            }
+        }
+        assertEquals(LlmFailureClass.MODEL_MISSING,
+                classifier.classify(new RuntimeException("The model 'gpt-5.6-sol' has been deprecated")));
+    }
+
+    @Test
+    void nonModelDeprecationWordingKeepsBadRequestAndQuotaStillWins() {
+        for (String body : List.of(
+                "{\"error\":{\"message\":\"The parameter 'temperature' is deprecated\"}}",
+                "{\"error\":{\"message\":\"invalid json payload\"}}")) {
+            Throwable http = new dev.langchain4j.exception.HttpException(400, body);
+            Throwable web = WebClientResponseException.create(400, "Bad Request",
+                    HttpHeaders.EMPTY, body.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+            for (Throwable failure : List.of(http, web)) {
+                assertEquals(LlmFailureClass.BAD_REQUEST, classifier.classify(failure), body);
+            }
+        }
+        String quota = "{\"error\":{\"code\":\"insufficient_quota\",\"message\":\"model has been retired\"}}";
+        assertEquals(LlmFailureClass.RATE_LIMIT_COOLDOWN,
+                classifier.classify(new dev.langchain4j.exception.HttpException(400, quota)));
+    }
+
     private static WebClientResponseException serverError(String body) {
         return WebClientResponseException.create(
                 500,

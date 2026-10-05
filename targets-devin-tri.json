@@ -1,0 +1,40 @@
+{
+    "targets":  [
+                    {
+                        "sha256":  null,
+                        "path":  "docs/design/TRI_SYSTEM_ISOLATION_SPEC.md"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md"
+                    },
+                    {
+                        "sha256":  "2bd69bbad281b5729a2b4bedfcaee0325a2d9ecb6503daf80ed757193461656d",
+                        "path":  ".agents/skills/demo1-core-request-router/SKILL.md"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "data/agent-handoff/for-codex/FOR_CODEX_TRI_SYSTEM_ISOLATION.md"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/test_tri_system_frontend_isolation.cjs"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/probe_tri_system_isolation.py"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/test_probe_tri_system_isolation.py"
+                    },
+                    {
+                        "sha256":  "2ae970acf0a188a9ea2d61a6c6a072c72c3639867130f45eb7c6b52e6e180206",
+                        "path":  "docs/PROJECT_STATUS.md"
+                    },
+                    {
+                        "sha256":  "4716291c1b8826db5ee6f2ad9f75b6c321e5d9de1f9b97d0bbc729fd22b771a9",
+                        "path":  "AGENTS.md"
+                    }
+                ]
+}

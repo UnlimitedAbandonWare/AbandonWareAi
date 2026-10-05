@@ -1,0 +1,116 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-devin-source-orchestrator
+# DEVIN 실행 지시서: 변동성 낮은 상시(Evergreen) 문서 추정 및 TTL 기간 연장·안정성 표기 개편
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 한 줄 목표
+docs/ 내 90일 TTL 문서 중 아키텍처 규약 및 장기 불변 정책에 해당하는 '상시(Evergreen)' 문서를 선별하여, 유효 기간을 90일에서 365일로 연장하고 불변성 메타데이터(cadence: evergreen, stability: high, decayRate: low)를 기존 문서에 표기한 뒤 검증기로 정합성을 입증한다.
+
+## 1. 사실 (2026-10-05 09:00 KST 기준)
+1. 90일 TTL 도입 현황: 2026-10-05 `docs/provider-limits/` 및 `docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md`에 일괄 90일 만료(`ttlDays: 90`, `expiresAt: 2027-01-03`, `reviewAfterDays: 90`)가 적용됨.
+2. 문서 감쇠율(Decay Rate) 차이:
+   - OpenAI/Gemini/Groq/Vercel: 모델명/가격/RPM 등 외부 스펙이 수시 변동하므로 90일 주기(Fast Decay) 유지 필수.
+   - 런타임 하드 락(`CODEX_OAUTH_AND_RUNTIME_SPECS.md`), Desktop 라우팅 역할(`openrouter-desktop-routing.md`), 장기 불변 공공 쿼터(`naver-search-limits.md`), 상위 거버넌스(`README.md`): 외부 변동과 무관한 상시(Evergreen) 성격.
+3. Best Practice: 업계 RAGOps/문서 수명주기 표준에 따라 상시성 문서에 연 단위 검토 주기(`reviewAfterDays: 365`, `cadence: evergreen`)를 부여해 불필요한 stale 경고를 방지.
+4. 도구 호환성: `verify_provider_limits_freshness.py`와 `provider_limits_janitor.py`는 `reviewAfterDays`, `ttlDays`, `expiresAt` 파싱을 지원하므로 365일 연장 및 추가 메타데이터 표기 시 ACTIVE(365일 남음)로 완벽 호환.
+
+## 공통 규칙
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- 범위 한정: 순수 문서 표기 수정 4건(`docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md`, `docs/provider-limits/openrouter-desktop-routing.md`, `docs/provider-limits/naver-search-limits.md`, `docs/provider-limits/README.md`). 제품 코드(Java/JS) 수정 0.
+- 외부 유료 API 라이브 호출: 0건 ($0 local). 순수 로컬 문서 수정.
+- Git 및 시크릿: `push`, `add -A`, `commit -a`, `git reset`, `git checkout` 등 Git 변조 명령 일체 금지.
+- 비밀 정보: API 키, 토큰 등 비밀값 출력/기록 배제 (환경변수 이름만 사용).
+- 원격 저장소: remote 추가/변경 금지.
+- PROTO_OPEN: 보안 완화 정책 임의 수정 금지.
+
+## 항목 (WP1 ~ WP4)
+
+### WP1. `docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md` Evergreen 표기 개편
+- 성격: LangChain4j 1.0.1 하드 락, 로컬 Ollama 모델 락, Meta Display 규격 등 내부 런타임 불변 계약.
+- frontmatter 수정:
+  ```yaml
+  ttlDays: 365
+  expiresAt: "2027-10-05"
+  reviewAfterDays: 365
+  cadence: "evergreen"
+  stability: "high"
+  decayRate: "low"
+  stabilityReason: "내부 런타임 하드 락(LangChain4j 1.0.1 등) 및 아키텍처 계약으로 외부 API 변동에 독립적인 상시 문서"
+  ```
+
+### WP2. `docs/provider-limits/openrouter-desktop-routing.md` 상시 데스크톱 정책 표기
+- 성격: OpenRouter Desktop 앱 내부 라우팅 역할(Space Bunny = secondary pre-screen 전용, 주력 코딩 대체 금지, CLI 도구 미설치 등 보안 원칙).
+- frontmatter 수정:
+  ```yaml
+  ttlDays: 365
+  expiresAt: "2027-09-24"
+  reviewAfterDays: 365
+  cadence: "evergreen"
+  stability: "high"
+  decayRate: "low"
+  stabilityReason: "Desktop 앱 전용 라우팅 역할 및 보안 가이드라인(Space Bunny 격리)으로 외부 API 단가와 무관한 상시 정책"
+  ```
+
+### WP3. `docs/provider-limits/naver-search-limits.md` 장기 불변 쿼터 표기
+- 성격: 네이버 검색 오픈 API 1일 25,000건 무료 쿼터 (수년간 지속된 장기 불변 공공 쿼터).
+- frontmatter 수정:
+  ```yaml
+  ttlDays: 365
+  expiresAt: "2027-10-05"
+  reviewAfterDays: 365
+  cadence: "semi_permanent"
+  stability: "high"
+  decayRate: "low"
+  stabilityReason: "네이버 개발자 센터 검색 오픈 API의 1일 25,000건 무료 쿼터는 수년간 지속된 장기 불변 정책"
+  ```
+
+### WP4. `docs/provider-limits/README.md` 메타 거버넌스 및 상시 문서 분류 규정 반영
+- 성격: Provider limits 관리 규약 및 증거 등급을 정의하는 상위 거버넌스 문서.
+- frontmatter 수정:
+  ```yaml
+  ttlDays: 365
+  expiresAt: "2027-10-05"
+  reviewAfterDays: 365
+  cadence: "evergreen"
+  stability: "high"
+  decayRate: "low"
+  stabilityReason: "공급자 한도 체계의 메타 거버넌스 규약으로 개별 API 변경과 무관한 아키텍처 SSOT"
+  ```
+- 본문 보강: `## TTL / 90일 만료 계약 (2026-10-05 도입)` 섹션 하단에 아래 단락 추가:
+  * "상시/준영구(Evergreen/Stable) 문서 주기 완화 규정": 외부 벤더의 가격·한도 변동성이 높은 문서(OpenAI/Gemini/Groq/Vercel/Brave)는 기본 90일 TTL을 유지하되, 내부 런타임 규약(`CODEX_OAUTH_AND_RUNTIME_SPECS.md`), 데스크톱 라우팅(`openrouter-desktop-routing.md`), 장기 불변 쿼터(`naver-search-limits.md`), 상위 거버넌스(`README.md`)는 `cadence: evergreen`/`semi_permanent` 및 365일 연장 주기를 적용하여 불필요한 stale 경고를 방지한다.
+
+## HOLD 조건
+- 제품 소스(`main/`, `app/`, `frontend/`, `configs/`) 수정 요구 시 즉시 HOLD.
+- 유료 외부 API 호출 요구 시 즉시 HOLD.
+- 동적 API 문서(OpenAI/Gemini/Groq/Vercel/Brave)의 90일 TTL을 임의 완화 시 즉시 HOLD.
+
+## ASK_ONCE (자동 결정 및 기본값)
+- U-1 상시 문서 연장 주기: 기본값 (AUTO) 365일 (1년). 웹 표준 및 거버넌스 기준 부합.
+- U-2 동적 문서군 취급: 기본값 (AUTO) 현행 90일(`ttlDays: 90`, `expiresAt: 2027-01-03`) 엄격 유지.
+- U-3 메타데이터 필드: 기본값 (AUTO) `cadence`, `stability`, `decayRate`, `stabilityReason` 도입 (기존 파서 호환).
+
+## 절대 금지
+- `push`, `add -A`, `commit -a`, `git reset`, `git checkout` 등 위험 Git 명령 실행 금지.
+- API 키, 토큰 등 비밀 정보 노출 및 출력 금지 (환경변수 이름만 표기).
+- 원격 저장소 remote 추가/변경 금지.
+- PROTO_OPEN 보안 완화 정책 임의 수정 금지.
+- 전체 테스트 스위트(`gradle test`) 실행 금지 — 문서 신선도 검사기만 실행.
+
+## Acceptance (완료 기준)
+- [ ] **WP1**: `docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md`에 365일 연장 및 evergreen 메타데이터 반영.
+- [ ] **WP2**: `docs/provider-limits/openrouter-desktop-routing.md`에 365일 연장 및 evergreen 메타데이터 반영.
+- [ ] **WP3**: `docs/provider-limits/naver-search-limits.md`에 365일 연장 및 semi_permanent 메타데이터 반영.
+- [ ] **WP4**: `docs/provider-limits/README.md`에 365일 연장 및 상시 문서 분류 원칙 서브섹션 반영.
+- [ ] `python -B scripts/verify_provider_limits_freshness.py --check` exit=0 통과 및 대상 문서 ACTIVE(365일/354일 잔여) 확인.
+- [ ] `python -B scripts/provider_limits_janitor.py status` exit=0 통과 및 EXPIRED 0건 확인.
+- [ ] 코어 제품 소스 무변경 확인 (git diff 제품 소스 0건).
+
+## 보고 형식
+외부 API: 라이브 0건, 비용 0원 ($0 local)
+1. 수정된 4개 문서 목록 및 변경 전/후 YAML frontmatter diff
+2. `python -B scripts/verify_provider_limits_freshness.py --check` 실행 결과 요약
+3. `python -B scripts/provider_limits_janitor.py status` 실행 결과 요약
+4. 미실행 항목이 있는 경우 사유 명시 (NOT_RUN)
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 완수하고 검증 보고서를 제출해야 완료된다.

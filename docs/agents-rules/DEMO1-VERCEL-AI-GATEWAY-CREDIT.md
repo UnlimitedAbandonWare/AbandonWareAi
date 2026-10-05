@@ -7,4 +7,5 @@
 - 프로모 Free는 2026-09-25까지(시각/TZ 미확정). 이후 종량. demo.jev.free-only=true / allow-paid=false면 무료 확인 만료·가격 불명확 시 호출 스킵+기존 경로 유지. 자동 유료 전환 금지.
 - Pro 플랜은 해지/미유지 전제. Hobby+카드+AI Credit만 가정. 에이전트가 Pro 업그레이드·Auto-reload·Buy Credit를 유도하지 마라.
 - 401=auth_invalid, 403+plan/Pro/ZDR 문구=plan_gate, 기타 403=permission_denied, 429=rate_limited, 5xx=upstream_error. 잔액≠키 유효. 키값 출력 금지. smoke PASS 전 제품 배선 금지. ZDR 규칙 SSOT: `docs/API_ROUTING_SPEC.md` "Vercel AI Gateway — Jev" (기본 OFF; Hobby라 ON이면 403 plan_gate).
+- 한도·엔드포인트·모델ID·budget 상세 SSOT: `docs/provider-limits/vercel-ai-gateway-limits.md` (90일 TTL: `expiresAt` 경과 시 STALE_DISCARD → `scripts/provider_limits_janitor.py archive` 격리).
 <!-- END DEMO1-VERCEL-AI-GATEWAY-CREDIT -->

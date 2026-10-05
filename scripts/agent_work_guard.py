@@ -175,13 +175,31 @@ def cause_from_output(text: str) -> str:
     if "ParserError" in s:
         return "parser"
     if "Cannot find path" in s or "Could not find a part of the path" in s \
-            or "No such file" in s or "ItemNotFoundException" in s:
+            or "No such file" in s or "ItemNotFoundException" in s \
+            or "The system cannot find the path" in s \
+            or "The system cannot find the file" in s:
         return "missing"
-    if "exec_command failed: CreateProcess" in s:
+    if "exec_command failed: CreateProcess" in s \
+            or re.search(r"(?i)CreateProcess[^\n]{0,40}(reject|error|fail)", s):
         return "createprocess"
     if re.search(r"Exit code:\s*[1-9]", s):
         return "nonzero"
     return ""
+
+
+def envelope_claims_success(event: dict) -> bool:
+    """True when the tool envelope reports no failure. A cause found in the
+    output of such a call is a hidden (P11-class) failure: the wrapper said
+    completed while the text carries an error signature."""
+    tr = event_get(event, "toolResult", "tool_result", "tool_response",
+                   "toolResponse")
+    if isinstance(tr, dict):
+        if tr.get("success") is False:
+            return False
+        code = tr.get("exit_code", tr.get("exitCode"))
+        if code not in (None, 0, "0"):
+            return False
+    return True
 
 
 def trace_path(root: Path) -> Path:
@@ -563,6 +581,7 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
             out = extract_output(event)
             cause = cause_from_output(out)
             failed = bool(cause)
+            hidden = failed and envelope_claims_success(event)
             recorded = []
             # Count only read-intent failures so create/search/tests do not
             # poison the retry ledger.
@@ -576,11 +595,29 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
                     else:
                         recorded.append(record(root, rel, "ok", cause or "ok",
                                                ledger, agent, actor, call_id))
+            elif hidden:
+                # P11 trap: envelope says completed but the output carries an
+                # error signature on a non-read command. No per-path streak is
+                # written (the failed path may be unrelated to later reads);
+                # a marker row lands in the guard record so the signature is
+                # not invisible to the next turn.
+                recorded.append(record(root, "__p11__", "fail",
+                                       "p11-hidden:" + cause, ledger,
+                                       agent, actor, call_id))
             payload = emit_payload(agent, False, "", "")
             if payload is not None:
                 payload["recorded"] = recorded
                 payload["result"] = "fail" if failed else "ok"
-            write_trace(root, {"phase": "exit", "event": hook_event,
+                if hidden:
+                    payload["hiddenFailure"] = {
+                        "cause": cause,
+                        "advisory": "envelope completed but output has an "
+                                    "error signature; verify the target "
+                                    "before retrying (next-turn block "
+                                    "advisory)"}
+            write_trace(root, {"phase": "exit",
+                               "event": hook_event + (":hidden-fail"
+                                                      if hidden else ""),
                                "toolName": tool_name, "toolUseId": call_id,
                                "decision": "allow", "exit": 0,
                                "elapsedMs": int((time.time() - started) * 1000)})

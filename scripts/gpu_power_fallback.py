@@ -23,9 +23,18 @@ LOCAL_RETRY_BUDGET = 1  # AGENTS.md DEMO1-RTX3090-WATCH / $demo1-gpu-power-fallb
 PAID_GATE_ENV = "AWX_AGENT_ALLOW_PAID_MODELS"  # configs/agent-api-spend-guard.yaml
 TIER_ORDER = ("free_local", "low_cost", "paid_quality")
 PURPOSES = ("search", "asr", "embed", "llm")
+INCIDENT_FLAG_REL = ("var", "incident", "gpu.json")  # scripts/gpu_incident.py
+INCIDENT_STATES = ("GPU3090_LOST", "GPU3090_DEGRADED")
+# 사고 시 3090 레인 건너뛰기 대상의 보조 GPU 레인 (3060 = fast/embed, 11435)
+AUX_3060_LANE_ID = "ollama:11435"
 
 # Reason codes. Patterns also accept scripts/rtx3090_health_watch.ps1 anomaly ids.
 REASON_PATTERNS = (
+    # gpu_lost는 driver_reset의 gpu.*(lost|..)보다 먼저 — 소실 문구 전용
+    ("gpu_lost", (
+        r"gpu is lost", r"unable to determine the device handle",
+        r"has fallen off", r"gpu3090_lost", r"\bgpu_lost\b",
+        r"\bgpu\s+lost\b")),
     ("power_limit_suspect", (
         r"hw_power_brake", r"hw_slowdown", r"sw_power_cap", r"power[_ ]?limit",
         r"power[_ ]?brake", r"power[_ ]?peak", r"throttl", r"전력", r"위이잉",
@@ -50,7 +59,8 @@ REASON_PATTERNS = (
 )
 
 # Reasons where another local attempt can re-trigger the spike or cannot help.
-NO_LOCAL_RETRY = frozenset({"power_limit_suspect", "driver_reset", "oom_suspect"})
+NO_LOCAL_RETRY = frozenset({"power_limit_suspect", "driver_reset",
+                            "oom_suspect", "gpu_lost"})
 TRANSIENT = frozenset({"timeout", "no_response"})
 
 
@@ -143,9 +153,57 @@ def suggest_fallback_route(purpose, config, allow_paid=False, failed_route_ids=(
     return candidates
 
 
-def decide(purpose, text, attempts=0, allow_paid=False, root="."):
+def read_incident_flag(root):
+    """var/incident/gpu.json 읽기 (없으면 not_observed — 스냅샷만, 라우팅 영향 없음)."""
+    try:
+        data = json.loads(
+            (Path(root).joinpath(*INCIDENT_FLAG_REL))
+            .read_text(encoding="utf-8"))
+    except Exception:
+        return {"state": "not_observed", "since_kst": None, "active": False}
+    state = data.get("state") or "unknown"
+    return {"state": state, "since_kst": data.get("since_kst"),
+            "active": state in INCIDENT_STATES}
+
+
+def _oauth_candidate(config):
+    """chatgpt_oauth 라우트가 SSOT에 있고 enabledProp 기본값이 true면 후보 반환."""
+    for route in (config or {}).get("routes", {}).get("llm", []) or []:
+        if route.get("id") != "chatgpt_oauth":
+            continue
+        prop = route.get("enabledProp")
+        enabled = True
+        if prop:
+            val = os.environ.get(prop)
+            # ${CHATGPT_OAUTH_ENABLED:true} 의미와 동일 — 미설정은 켜짐
+            enabled = val is None or val.strip().lower() not in (
+                "0", "false", "no", "off")
+        if enabled:
+            return {"id": "chatgpt_oauth", "tier": "subscription",
+                    "env": [], "allowed": True,
+                    "note": "subscription quota first; incident llm fallback #1"}
+    return None
+
+
+def _aux_3060_candidate():
+    return {"id": AUX_3060_LANE_ID, "tier": "free_local_aux",
+            "env": ["LLM_FAST_BASE_URL", "EMBED_BASE_URL", "OLLAMA_HOST"],
+            "allowed": True, "lane": "rtx3060",
+            "note": "same-PC second GPU lane switch (not a 3090 retry)"}
+
+
+def decide(purpose, text, attempts=0, allow_paid=False, root=".",
+           from_incident=False):
     """Full decision: reason + local-retry budget + fallback route + report line."""
+    incident = read_incident_flag(root)
     reason = classify_local_inference_failure(text)
+    if incident["active"] and (
+            not (text or "").strip()
+            or reason in TRANSIENT or reason == "unknown"):
+        # 활성 사고 플래그가 서 있는데 텍스트가 없거나 순간신호뿐 → 소실로 대표.
+        # 플래그는 공유 사고 SSOT라 --from-incident 없이도 자동 감지한다.
+        reason = "gpu_lost"
+    incident_active = (reason == "gpu_lost" or incident["active"])
     attempts = max(0, int(attempts))
     budget = LOCAL_RETRY_BUDGET if (reason in TRANSIENT and attempts == 0) else 0
     if reason in NO_LOCAL_RETRY:
@@ -154,9 +212,19 @@ def decide(purpose, text, attempts=0, allow_paid=False, root="."):
     candidates = suggest_fallback_route(
         purpose, config, allow_paid=allow_paid,
         failed_route_ids=[r for r in _local_route_ids(config, purpose)])
+    if incident_active:
+        # 3090 레인 건너뛰기: llm은 구독 OAuth 1순위, embed는 3060 레인 선행
+        if purpose == "llm":
+            oauth = _oauth_candidate(config)
+            if oauth:
+                candidates = [oauth] + candidates
+        elif purpose == "embed":
+            candidates = [_aux_3060_candidate()] + candidates
     allowed = [c for c in candidates if c["allowed"]]
     if allowed:
-        action, nxt = "fallback_to_api", allowed[0]
+        nxt = allowed[0]
+        action = ("lane_switch_then_api" if nxt["id"] == AUX_3060_LANE_ID
+                  else "fallback_to_api")
     elif candidates:
         action, nxt = "stop_paid_not_authorized", candidates[0]
     else:
@@ -170,6 +238,9 @@ def decide(purpose, text, attempts=0, allow_paid=False, root="."):
         "auto": True,  # first classified failure falls back without a question card
         "action": action,
         "nextRoute": nxt,
+        "incident": {"state": incident["state"],
+                     "since_kst": incident["since_kst"],
+                     "active": incident_active},
         "candidates": candidates,
         "apiSpend": {
             "logPrefix": "[AWX][api-spend]",
@@ -196,6 +267,9 @@ def _local_route_ids(config, purpose):
 
 
 def _report_line(reason, action, nxt):
+    if action == "lane_switch_then_api":
+        return (f"로컬 GPU 사고(reason={reason}) -> 3060 레인"
+                f"({AUX_3060_LANE_ID}) 우선, 이후 API 순서")
     if action == "fallback_to_api":
         return (f"로컬 GPU 불안정(reason={reason}) -> API 폴백: "
                 f"{nxt['id']} ({nxt['tier']})")
@@ -220,10 +294,14 @@ def main(argv=None):
 
     p_dec = sub.add_parser("decide", help="reason + retry budget + next route")
     p_dec.add_argument("--purpose", required=True, choices=PURPOSES)
-    p_dec.add_argument("--text", required=True)
+    p_dec.add_argument("--text", default="",
+                       help="error text or watch signal id (optional with "
+                            "--from-incident)")
     p_dec.add_argument("--attempts", type=int, default=0,
                        help="local attempts already made this incident")
     p_dec.add_argument("--allow-paid", action="store_true")
+    p_dec.add_argument("--from-incident", action="store_true",
+                       help="활성 플래그는 자동 반영 — 명시 호환용 옵션")
 
     args = parser.parse_args(argv)
     allow_paid = getattr(args, "allow_paid", False) or bool(
@@ -238,7 +316,8 @@ def main(argv=None):
                        args.purpose, load_routing(args.root), allow_paid)}
         else:
             out = decide(args.purpose, args.text, args.attempts,
-                         allow_paid, root=args.root)
+                         allow_paid, root=args.root,
+                         from_incident=args.from_incident)
     except ValueError:
         print(json.dumps({"schema": SCHEMA, "ok": False,
                           "reason": "invalid-input"}))

@@ -29,6 +29,55 @@ class NovaFocusRestartPersistenceTest {
         ReflectionTestUtils.setField(store,"em",SharedEntityManagerCreator.createSharedEntityManager(factory.getObject()));
         return new Database(factory,store);
     }
+    DisplayConversateController display(NovaFocusHistoryService history,ConversateSessionService sessions,com.example.lms.web.ClientOwnerKeyResolver owners){
+        var controller=new DisplayConversateController(sessions,owners,new InterviewDemoPublicAddress());
+        var beans=new org.springframework.beans.factory.support.DefaultListableBeanFactory();beans.registerSingleton("focusHistory",history);
+        var injection=new org.springframework.beans.factory.annotation.AutowiredAnnotationBeanPostProcessor();
+        injection.setAutowiredAnnotationType(org.springframework.beans.factory.annotation.Autowired.class);injection.setBeanFactory(beans);injection.processInjection(controller);
+        ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);return controller;
+    }
+    org.springframework.mock.web.MockHttpServletRequest displayRequest(String channel){
+        var request=new org.springframework.mock.web.MockHttpServletRequest();request.setScheme("https");request.setServerName("example.test");request.setServerPort(443);
+        request.addHeader("Origin","https://example.test");request.addHeader("X-Display-Client","1");request.addHeader("X-Display-Test-Channel",channel);return request;
+    }
+    @Test void lensFontAndRevisionSurviveDatabaseReopenWithoutCrossingFocusOwnerOrChannel() throws Exception {
+        String url="jdbc:h2:file:"+temporary.resolve("lens").toAbsolutePath().toString().replace('\\','/')+";MODE=MariaDB;DATABASE_TO_UPPER=false";
+        String channel="test-1234567812345678",client="12345678123442348234123456789abc";
+        var owners=mock(com.example.lms.web.ClientOwnerKeyResolver.class);when(owners.ownerKey()).thenReturn("synthetic-lens-owner");
+        var mapper=new ObjectMapper();String focusOwner=org.apache.commons.codec.digest.DigestUtils.sha256Hex("public-display:synthetic-lens-owner:"+channel);
+        try(var first=open(url);var sessions=new ConversateSessionService()){
+            var focusJson=mapper.valueToTree(NovaFocusSettings.defaults());((com.fasterxml.jackson.databind.node.ObjectNode)focusJson).put("answerLengthChars",480);
+            first.history().settings(focusOwner,channel,0,mapper.treeToValue(focusJson,NovaFocusSettings.class));
+            var controller=display(first.history(),sessions,owners);var http=displayRequest(channel);
+            var view=controller.phoneTest(new DisplayConversateController.Connection(null,0,client),http).getBody();
+            var json=mapper.valueToTree(Map.of("assistId",view.assistId(),"epoch",view.epoch(),"clientId",client,"display",Map.of("hintFontPx",36),"expectedSettingsVersion",0));
+            var saved=controller.lensSettings(mapper.treeToValue(json,DisplayConversateController.LensSettings.class),http).getBody();
+            assertEquals(36,((Map<?,?>)saved.testStatus().get("lensDisplay")).get("hintFontPx"));
+        }
+        try(var second=open(url);var sessions=new ConversateSessionService()){
+            var controller=display(second.history(),sessions,owners);var http=displayRequest(channel);
+            var view=controller.phoneTest(new DisplayConversateController.Connection(null,0,client),http).getBody();
+            assertEquals(36,((Map<?,?>)view.testStatus().get("lensDisplay")).get("hintFontPx"));
+            assertEquals(1L,((Number)view.testStatus().get("lensSettingsVersion")).longValue());
+            assertEquals(480,second.history().settings(focusOwner,channel).settings().effectiveAnswerLengthChars());
+            assertEquals(1L,second.history().settings(focusOwner,channel).settingsVersion());
+            var reset=mapper.valueToTree(Map.of("assistId",view.assistId(),"epoch",view.epoch(),"clientId",client,"restoreDefaults",true,"expectedSettingsVersion",1));
+            controller.lensSettings(mapper.treeToValue(reset,DisplayConversateController.LensSettings.class),http);
+            var otherChannel=controller.phoneTest(new DisplayConversateController.Connection(null,0,client),displayRequest("test-8765432187654321")).getBody();
+            assertEquals(26,((Map<?,?>)otherChannel.testStatus().get("lensDisplay")).get("hintFontPx"));
+            when(owners.ownerKey()).thenReturn("other-lens-owner");
+            var otherOwner=controller.phoneTest(new DisplayConversateController.Connection(null,0,client),http).getBody();
+            assertEquals(26,((Map<?,?>)otherOwner.testStatus().get("lensDisplay")).get("hintFontPx"));
+            when(owners.ownerKey()).thenReturn("synthetic-lens-owner");
+        }
+        try(var third=open(url);var sessions=new ConversateSessionService()){
+            var controller=display(third.history(),sessions,owners);
+            var view=controller.phoneTest(new DisplayConversateController.Connection(null,0,client),displayRequest(channel)).getBody();
+            assertEquals(26,((Map<?,?>)view.testStatus().get("lensDisplay")).get("hintFontPx"));
+            assertEquals(2L,((Number)view.testStatus().get("lensSettingsVersion")).longValue());
+            assertEquals(1L,third.history().settings(focusOwner,channel).settingsVersion());
+        }
+    }
     @Test void completedHistorySettingsAndRequestIdentitySurviveDatabaseReopen(){
         String url="jdbc:h2:file:"+temporary.resolve("nova").toAbsolutePath().toString().replace('\\','/')+";MODE=MariaDB;DATABASE_TO_UPPER=false";
         String owner="synthetic-owner";Long room;String turn;

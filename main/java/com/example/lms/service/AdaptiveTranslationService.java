@@ -131,22 +131,15 @@ public class AdaptiveTranslationService {
     /* ═════════════ PRIVATE HELPERS ═════════════ */
 
     /* 2-A TM 후보 검색 */
+    @SuppressWarnings("deprecation")
     private Optional<TranslationMemory> findMemoryCandidate(String text, String hash) {
 
-        /* ① 정확 일치 먼저 */
+        /* ① 정확 일치 먼저 — 해시 히트는 전수 스캔 없이 즉시 반환 */
         Optional<TranslationMemory> exact = memoryRepo.findBySourceHash(hash);
         if (exact.isPresent()) return exact;
 
-        /* ② 전체 TM → 유사도 계산 */
-        List<TranslationMemory> top = memoryRepo.findAll().stream()
-                .peek(tm -> tm.setCosineSimilarity(
-                        similarityUtil.calculateSimilarity(
-                                text,
-                                Optional.ofNullable(tm.getCorrected()).orElse(""))))
-                .filter(tm -> tm.getCosineSimilarity() >= similarityThreshold)
-                .sorted(Comparator.comparingDouble(TranslationMemory::getCosineSimilarity).reversed())
-                .limit(topK)
-                .toList();
+        /* ② 전체 TM → 유사도 계산 (격리된 레거시 인메모리 레일) */
+        List<TranslationMemory> top = legacyMemoryScanTopK(text);
 
         if (top.isEmpty()) return Optional.empty();
 
@@ -157,6 +150,29 @@ public class AdaptiveTranslationService {
         int idx = softmaxSample(logits);
 
         return Optional.of(top.get(idx));
+    }
+
+    /**
+     * 레거시 전수 메모리 스캔 레일 — 테이블 전체를 JVM 메모리로 퍼올려 코사인
+     * 유사도를 계산한다. DB-side 후보 선별 쿼리로 완전 이관되기 전까지 유지되는
+     * 안전 Fallback이며, 이 경계 밖으로 확장하지 않는다.
+     *
+     * @deprecated legacy in-memory fallback — 쿼리 기반 후보 선별로 대체 예정
+     */
+    @Deprecated /* legacy in-memory fallback */
+    private List<TranslationMemory> legacyMemoryScanTopK(String text) {
+        List<TranslationMemory> all = memoryRepo.findAll();
+        if (all == null || all.isEmpty()) return List.of();
+
+        return all.stream()
+                .peek(tm -> tm.setCosineSimilarity(
+                        similarityUtil.calculateSimilarity(
+                                text,
+                                Optional.ofNullable(tm.getCorrected()).orElse(""))))
+                .filter(tm -> tm.getCosineSimilarity() >= similarityThreshold)
+                .sorted(Comparator.comparingDouble(TranslationMemory::getCosineSimilarity).reversed())
+                .limit(topK)
+                .toList();
     }
 
     /* 2-B TM 사용 경로 */

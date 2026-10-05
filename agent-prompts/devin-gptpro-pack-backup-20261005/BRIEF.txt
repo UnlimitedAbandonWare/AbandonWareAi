@@ -1,0 +1,98 @@
+[DEVIN 지시서] Pack-GPTPro.bat 소스 복원용 9할 백업 프로필(backup) 신설 및 자동 실행 지침 — 2026-10-05 11:35 KST
+파일 ID: PASTE_DEVIN_GPTPRO_PACK_BACKUP_20261005
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 완수할 때까지 멈추지 않는다.
+@demo1-devin-task-fit
+
+금지 (이 작업 전체): 제품 소스 임의 수정 0 · commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+Pack-GPTPro.bat 인자 부재 시 C:\Users\nninn\OneDrive\Desktop\zipHome에 프로젝트 복원 소스 약 90%(백엔드, 프론트, 테스트, 래퍼, 스크립트, 규칙)를 압축하되 빌드산출물·임시데이터·비밀값은 제외하는 backup 프로필을 구축하고 기본 실행으로 연동한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 11:35 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 대상 파일 및 sha12: Pack-GPTPro.bat (1787B, 891dabfb2010), scripts/gptpro_pack.py (44219B, 0f3a73e14357), configs/gptpro-pack.json (2635B, da7c2152e872), scripts/test_gptpro_pack.py (31074B, cbbe8e378f1a)
+- 현황: Pack-GPTPro.bat 인자 부재 시 "core"(2457개, 17MB) 동작. "full"(5559개, 57.1MB)은 gradlew/bat, .agents 규칙 누락 및 BAN_EXTS(".jar")로 gradle-wrapper.jar 제외되어 복원 불가. out_dir/defaultOut은 C:\Users\nninn\OneDrive\Desktop\zipHome 정렬됨.
+- 범위:
+  - 10% 제외: build/, .gradle/, node_modules/, .next/, .git/, data/, logs/, uploads/, var/, scratch/, __patch_drop__/, .secrets/, 실제 .env* 키 파일, 민감 파일/바이너리.
+  - 90% 포함: main/java, main/resources, src/test, configs, frontend(src, scripts, public, package.json, 설정류), scripts, 루트 스크립트(*.bat, *.ps1, gradlew, gradlew.bat), .agents(skills, rules), 문서(AGENTS.md, GEMINI.md, README.md, docs), allowFiles(gradle-wrapper.jar).
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 가드레일: git push / add -A / commit -a / reset / clean 금지, remote 추가 금지, 비밀값 출력 금지, PROTO_OPEN 개방 유지.
+- 도구 범위: gptpro_pack.py, configs/gptpro-pack.json, Pack-GPTPro.bat, test_gptpro_pack.py 4개 파일 한정 (제품 Java/BFF 수정 0).
+- 검증: 유료 실호출 0, focused 검증(python -B scripts/test_gptpro_pack.py) 필수, 미실행 항목은 NOT_RUN 기록.
+
+## DV1 [DEVIN] configs/gptpro-pack.json에 backup 프로필 및 defaultProfile 추가
+- 증거: configs/gptpro-pack.json:26-87
+- RED: `python -B -c "import json; c=json.load(open('configs/gptpro-pack.json', encoding='utf-8')); assert 'backup' in c.get('profiles', {}) and c.get('defaultProfile') == 'backup'"` (AssertionError)
+- 최소 수정: `configs/gptpro-pack.json`:
+  1) 최상위: `"defaultProfile": "backup"`, `"maxZipMb": 128` 추가.
+  2) `"allowFiles": ["gradle/wrapper/gradle-wrapper.jar"]` 추가.
+  3) `"profiles.backup"` 신설 (extends: "full"):
+     - include: `["gradlew", "gradlew.bat", "Start-RAG.bat", "Close-RAG.bat", "Verify-RAG.bat", "DevWatch.bat", "Pack-GPTPro.bat", "Git-Ship.bat", "Start-Agy-CLI.bat", "frontend/public", "frontend/tailwind.config.js", "frontend/postcss.config.js", "frontend/tsconfig.json", ".agents/skills", ".agents/rules", "GEMINI.md", ".gitignore", "gradle/wrapper/gradle-wrapper.jar"]`
+- GREEN: 위의 RED 파이썬 검사 통과 (exit=0).
+- 완료 조건: configs/gptpro-pack.json에 backup 프로필, 기본 프로필, allowFiles 구성 완료.
+
+## DV2 [DEVIN] scripts/gptpro_pack.py 수집·예외 허용·기본프로필 엔진 보강
+- 증거: scripts/gptpro_pack.py:548, 595-618
+- RED: `python -B -c "import gptpro_pack as g; c=g.load_config(g.DEFAULT_ROOT); assert c.get('defaultProfile') == 'backup'"`
+- 최소 수정: `scripts/gptpro_pack.py`:
+  1) `cmd_pack(args)` (line 548): `profile = args.profile_opt or args.profile or cfg.get("defaultProfile") or "core"`
+  2) `allow_files` 화이트리스트(line 595~600): `if rel_l in allow_files: reason = None` 적용하여 allowFiles 파일(gradle-wrapper.jar)이 BAN_EXTS(".jar")로 차단되지 않도록 보강.
+  3) 바이너리 안전성: allowFiles 파일은 `read_text(path)`가 None을 반환하므로 시크릿 스캔 없이 원본 바이너리로 패킹됨.
+- GREEN: `python -B scripts/gptpro_pack.py backup --dry-run` 실행 시 `gradle/wrapper/gradle-wrapper.jar` 및 `gradlew.bat`이 included에 포함되고 exit 0.
+- 완료 조건: gptpro_pack.py가 allowFiles를 존중하고 인자 부재 시 defaultProfile="backup"으로 자동 동작함.
+
+## DV3 [DEVIN] Pack-GPTPro.bat 안내 및 백업 기능 명시
+- 증거: Pack-GPTPro.bat:2-7
+- RED: `powershell -Command "Select-String -Path Pack-GPTPro.bat -Pattern 'backup' -SimpleMatch; exit=$LASTEXITCODE"`
+- 최소 수정: `Pack-GPTPro.bat` 주석 및 안내 갱신:
+  - `REM Packs demo-1 source into zipHome for backup (90% restore-ready) & GPT Pro upload.`
+  - `REM Usage: Pack-GPTPro.bat [backup|main|core|full|ctx|brief|evidence] ...`
+  - `REM   backup = 90% source restore-ready backup (default)`
+- GREEN: `Select-String -Path Pack-GPTPro.bat -Pattern 'backup'` 매칭 성공 (exit=0).
+- 완료 조건: 배치 파일 상단 안내에 backup 기본 프로필이 명확히 안내됨.
+
+## DV4 [DEVIN] scripts/test_gptpro_pack.py 단위 테스트 추가 및 전체 회귀 검증
+- 증거: scripts/test_gptpro_pack.py:500-595
+- RED: `python -B -c "import unittest, test_gptpro_pack as t; suite=unittest.defaultTestLoader.loadTestsFromModule(t); assert any('backup' in m._testMethodName for m in suite._tests)"`
+- 최소 수정: `scripts/test_gptpro_pack.py`에 테스트 2개 추가:
+  1) `test_23_backup_profile_contains_build_essentials`: backup 패킹 시 gradlew.bat, gradle-wrapper.jar, src/test, scripts, rules 포함 및 build/, .git/, .env 제외 검증.
+  2) `test_24_default_profile_from_config`: defaultProfile: "backup" 지정 시 프로필 인자 부재 호출 때 backup 적용 검증.
+- GREEN: `python -B scripts/test_gptpro_pack.py` 실행 시 32개 테스트 전체 OK 통과 (exit=0).
+- 완료 조건: 기존 기능 100% 회귀 방지 및 신규 backup 프로필 검증 완비.
+
+## 4. HOLD
+- main/java, main/resources, frontend/src 등 프로덕션 코드 임의 수정 또는 lease 충돌 시 즉시 HOLD.
+- zip 압축 대상에 .secrets, .env(키 포함), credentials 등 실제 비밀값 유입 시 즉시 HOLD.
+- 외부 유료 API 결제/크레딧 발생 상황 시 HOLD.
+
+## 5. ASK_ONCE
+- Q-1: 백업 zip 파일명의 접두사를 기존 `demo1_pack_backup_*.zip`으로 유지할 것인가?
+  - (a) 권장: 예 (기존 네이밍 유지하여 기존 도구 호환)
+  - (b) 아니오 (별도 네이밍 적용)
+
+## 6. 절대 금지
+- git push, git pull, git add -A, git commit -a, git reset, git clean
+- remote 추가 및 원격 저장소 변조
+- 비밀값(API 키, 토큰, 암호, .secrets, .env 실제 키) 화면/로그 출력 또는 zip 포함
+- PROTO_OPEN 가드라인 훼손 (임의의 권한 차단 추가 금지)
+- 불필요한 빌드 산출물(build/, .gradle/, node_modules/, .next/)을 zip에 포함하여 비대화시키는 행위
+
+## 7. Acceptance
+- [DV1] configs/gptpro-pack.json에 backup 프로필, allowFiles, defaultProfile: "backup", maxZipMb: 128 구성 완료.
+- [DV2] scripts/gptpro_pack.py가 allowFiles 바이너리 예외 허용 및 defaultProfile 기본값 정상 인식.
+- [DV3] Pack-GPTPro.bat 안내 문구에 backup 기본 모드 반영.
+- [DV4] python -B scripts/test_gptpro_pack.py 단위 테스트 전체 PASS (32/32 tests OK, exit=0).
+- [NOT_RUN] 실제 외부 API 실호출 및 프로덕션 전체 Gradle 빌드는 범위 외로 NOT_RUN.
+
+## 8. 보고 형식
+외부 API: 호출 0건 / $0.00
+진행 결과: DV1~DV4 완료 상태 및 수정된 4개 파일 요약
+실행 검증: python -B scripts/test_gptpro_pack.py 실행 결과 (테스트 개수 및 exit code)
+산출물: backup 프로필 dry-run 파일 개수 및 용량 통계
+
+[ANTI-STOP] 모든 DV 항목의 구현과 단위 테스트 검증이 완료되고 Acceptance 기준을 모두 충족할 때까지 작업을 멈추지 않는다.

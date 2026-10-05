@@ -10,13 +10,22 @@ stem. Prompt/response bodies and secret values are never present in traces.
 Usage:
   chat_session_debug_export.py status [--root DIR]
   chat_session_debug_export.py list [--since-hours N] [--root DIR]
+                                  [--json | --summary | --compact-json] [--tail N]
   chat_session_debug_export.py show <sessionId|runId> [--root DIR]
+                                  [--summary | --compact-json] [--tail N]
   chat_session_debug_export.py export <id> [--root DIR]
 
 ``export`` writes ``var/debug/chat-session-traces/export/export-<16hex>/`` with
 ``records.json`` + ``manifest.json`` and refreshes ``export/latest.json``.
 Display DB context stays a related link to the existing
 meta_display_db_export lane (no live JDBC to H2).
+
+``--summary`` prints a bounded text card and ``--compact-json`` a bounded JSON
+card (schema ``awx.chat-session-trace-card.v1``) per record — cause, one-line
+error, and a deterministic recommended action for token-limited agents. Default
+output is unchanged. ``--tail N`` scans only the last N lines of each trace file
+(fast path); coverage ``complete`` stays true only when every file's tail slice
+reached offset 0.
 """
 from __future__ import annotations
 
@@ -39,6 +48,9 @@ MAX_TOTAL_BYTES = 256 * 1024 * 1024
 MAX_LINE_BYTES = 1024 * 1024
 MAX_ROWS = 200000
 MAX_PATHS = MAX_FILES * 2
+CARD_SCHEMA = "awx.chat-session-trace-card.v1"
+CARD_MAX_BYTES = 3072
+TAIL_CHUNK_BYTES = 65536
 
 
 class NonStandardJson(ValueError):
@@ -125,8 +137,66 @@ def _file_signature(info):
     return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
-def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None):
-    """Yield bounded JSONL rows; coverage is final when the iterator is exhausted."""
+def _tail_slice(fh, size: int, tail_lines: int, stats: dict, limits: dict):
+    """Read at most ``tail_lines`` trailing lines; returns ``[(abs_offset, bytes)]``.
+
+    Line bytes keep their trailing newline when present, so downstream parsing
+    and ``_sha12`` match the sequential path. A partial first line is dropped
+    unless the slice reached offset 0. The final line keeps working without a
+    trailing newline (same rule as the sequential reader). When no complete
+    line boundary exists inside the bounded back-read the file contributes no
+    rows and ``scan_limit_hit`` marks the bounded loss.
+    """
+    pos = size
+    buf = b""
+    # Bound the back-read: enough room for tail_lines oversized lines + slack.
+    max_back = (tail_lines + 1) * limits["max_line_bytes"] + TAIL_CHUNK_BYTES
+    while pos > 0:
+        step = min(TAIL_CHUNK_BYTES, pos,
+                   max(0, limits["max_total_bytes"] - stats["bytes_read"]))
+        if step <= 0:
+            break
+        pos -= step
+        fh.seek(pos)
+        buf = fh.read(step) + buf
+        stats["bytes_read"] += step
+        if buf.count(b"\n") > tail_lines or len(buf) >= max_back:
+            break
+    start = pos
+    if start > 0:
+        stats["tail_truncated_files"] += 1
+        nl = buf.find(b"\n")
+        if nl < 0:
+            stats["scan_limit_hit"] = True
+            return []
+        start += nl + 1
+        buf = buf[nl + 1:]
+    parts = buf.split(b"\n")
+    terminated = bool(parts) and parts[-1] == b""
+    if terminated:
+        parts.pop()
+    if len(parts) > tail_lines:
+        dropped = parts[:-tail_lines]
+        start += sum(len(d) + 1 for d in dropped)
+        parts = parts[-tail_lines:]
+    rows = []
+    off = start
+    last = len(parts) - 1
+    for i, part in enumerate(parts):
+        line = part if (i == last and not terminated) else part + b"\n"
+        rows.append((off, line))
+        off += len(part) + 1
+    return rows
+
+
+def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None,
+                 tail_lines: int | None = None):
+    """Yield bounded JSONL rows; coverage is final when the iterator is exhausted.
+
+    ``tail_lines`` (optional fast path) reads only the last N lines of each
+    file; absolute ``_offset`` stays exact, ``_line`` is None (unknown), and
+    ``complete`` is reported only when every slice reached offset 0.
+    """
     limits = dict(max_files=MAX_FILES, max_total_bytes=MAX_TOTAL_BYTES,
                   max_line_bytes=MAX_LINE_BYTES, max_rows=MAX_ROWS, max_paths=MAX_PATHS)
     if caps is not None:
@@ -134,6 +204,8 @@ def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None
             if key not in limits or type(value) is not int or value <= 0:
                 raise ValueError("invalid-scan-cap")
             limits[key] = value
+    if tail_lines is not None and (type(tail_lines) is not int or tail_lines <= 0):
+        raise ValueError("invalid-tail-lines")
     stats = stats if stats is not None else {}
     stats.clear()
     stats.update({k: 0 for k in ("files_scanned", "bytes_read", "rows_scanned",
@@ -143,6 +215,8 @@ def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None
     stats["non_standard_json"] = 0
     stats["paths_visited"] = 0
     stats["source_cutoffs"] = {}
+    stats["tail_mode"] = bool(tail_lines)
+    stats["tail_truncated_files"] = 0
     stats.update(scan_limit_hit=False, complete=False)
     base = trace_dir(root)
     trace_available = base.is_dir()
@@ -177,62 +251,106 @@ def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None
                         stats["bytes_read"] += len(chunk)
                         return chunk
                     try:
-                        while position < before.st_size:
-                            if (stats["rows_scanned"] >= limits["max_rows"]
-                                    or stats["bytes_read"] >= limits["max_total_bytes"]):
-                                stats["scan_limit_hit"] = True
-                                break
-                            line_offset = position
-                            line = read_chunk()
-                            if not line:
-                                break
-                            line_number += 1
-                            stats["rows_scanned"] += 1
-                            if len(line) > limits["max_line_bytes"]:
-                                stats["oversized_line"] += 1
-                                stats["scan_limit_hit"] = True
-                                # Drain a single oversized line in bounded pieces.
-                                while not line.endswith(b"\n") and position < before.st_size:
-                                    line = read_chunk()
-                                    if not line:
-                                        break
-                                continue
-                            if not line.endswith(b"\n") and position < before.st_size:
-                                stats["scan_limit_hit"] = True
-                                break
-                            if not line.strip():
-                                continue
-                            try:
-                                rec = STRICT_JSON.decode(line.decode("utf-8", errors="strict"))
-                            except NonStandardJson:
-                                stats["non_standard_json"] += 1
-                                continue
-                            except UnicodeDecodeError:
-                                stats["parse_error"] += 1
-                                continue
-                            except (ValueError, RecursionError):
-                                stats["parse_error" if line.endswith(b"\n") else "partial_tail"] += 1
-                                continue
-                            if not isinstance(rec, dict):
-                                stats["parse_error"] += 1
-                                continue
-                            timestamp = event_time(rec.get("ts"))
-                            if timestamp is None:
-                                stats["unknown_timestamp"] += 1
-                                continue
-                            if cutoff is not None and timestamp < cutoff:
-                                continue
-                            rec["_file"] = relative_file
-                            rec["_line"] = line_number
-                            rec["_offset"] = str(line_offset)
-                            rec["_sha12"] = hashlib.sha256(line).hexdigest()[:12]
-                            stats["rows_selected"] += 1
-                            yield file, rec
+                        if tail_lines:
+                            # Fast path: only the last N lines of each file.
+                            # Absolute offsets stay exact; _line is None.
+                            for line_offset, line in _tail_slice(
+                                    fh, before.st_size, tail_lines, stats, limits):
+                                if (stats["rows_scanned"] >= limits["max_rows"]
+                                        or stats["bytes_read"] >= limits["max_total_bytes"]):
+                                    stats["scan_limit_hit"] = True
+                                    break
+                                stats["rows_scanned"] += 1
+                                if len(line) > limits["max_line_bytes"]:
+                                    stats["oversized_line"] += 1
+                                    stats["scan_limit_hit"] = True
+                                    continue
+                                if not line.strip():
+                                    continue
+                                try:
+                                    rec = STRICT_JSON.decode(line.decode("utf-8", errors="strict"))
+                                except NonStandardJson:
+                                    stats["non_standard_json"] += 1
+                                    continue
+                                except UnicodeDecodeError:
+                                    stats["parse_error"] += 1
+                                    continue
+                                except (ValueError, RecursionError):
+                                    stats["parse_error" if line.endswith(b"\n") else "partial_tail"] += 1
+                                    continue
+                                if not isinstance(rec, dict):
+                                    stats["parse_error"] += 1
+                                    continue
+                                timestamp = event_time(rec.get("ts"))
+                                if timestamp is None:
+                                    stats["unknown_timestamp"] += 1
+                                    continue
+                                if cutoff is not None and timestamp < cutoff:
+                                    continue
+                                rec["_file"] = relative_file
+                                rec["_line"] = None
+                                rec["_offset"] = str(line_offset)
+                                rec["_sha12"] = hashlib.sha256(line).hexdigest()[:12]
+                                stats["rows_selected"] += 1
+                                yield file, rec
+                        else:
+                            while position < before.st_size:
+                                if (stats["rows_scanned"] >= limits["max_rows"]
+                                        or stats["bytes_read"] >= limits["max_total_bytes"]):
+                                    stats["scan_limit_hit"] = True
+                                    break
+                                line_offset = position
+                                line = read_chunk()
+                                if not line:
+                                    break
+                                line_number += 1
+                                stats["rows_scanned"] += 1
+                                if len(line) > limits["max_line_bytes"]:
+                                    stats["oversized_line"] += 1
+                                    stats["scan_limit_hit"] = True
+                                    # Drain a single oversized line in bounded pieces.
+                                    while not line.endswith(b"\n") and position < before.st_size:
+                                        line = read_chunk()
+                                        if not line:
+                                            break
+                                    continue
+                                if not line.endswith(b"\n") and position < before.st_size:
+                                    stats["scan_limit_hit"] = True
+                                    break
+                                if not line.strip():
+                                    continue
+                                try:
+                                    rec = STRICT_JSON.decode(line.decode("utf-8", errors="strict"))
+                                except NonStandardJson:
+                                    stats["non_standard_json"] += 1
+                                    continue
+                                except UnicodeDecodeError:
+                                    stats["parse_error"] += 1
+                                    continue
+                                except (ValueError, RecursionError):
+                                    stats["parse_error" if line.endswith(b"\n") else "partial_tail"] += 1
+                                    continue
+                                if not isinstance(rec, dict):
+                                    stats["parse_error"] += 1
+                                    continue
+                                timestamp = event_time(rec.get("ts"))
+                                if timestamp is None:
+                                    stats["unknown_timestamp"] += 1
+                                    continue
+                                if cutoff is not None and timestamp < cutoff:
+                                    continue
+                                rec["_file"] = relative_file
+                                rec["_line"] = line_number
+                                rec["_offset"] = str(line_offset)
+                                rec["_sha12"] = hashlib.sha256(line).hexdigest()[:12]
+                                stats["rows_selected"] += 1
+                                yield file, rec
                     finally:
                         handle_after, path_after = os.fstat(fh.fileno()), file.stat()
                         if (_file_signature(before) != _file_signature(handle_after)
                                 or _file_signature(before) != _file_signature(path_after)
-                                or (position != before.st_size and not stats["scan_limit_hit"])):
+                                or (position != before.st_size and not stats["scan_limit_hit"]
+                                    and not tail_lines)):
                             stats["changed_files"] += 1
             except (OSError, RuntimeError):
                 stats["unreadable_files"] += 1
@@ -241,7 +359,7 @@ def iter_records(root: Path, since_hours: float | None, *, caps=None, stats=None
     finally:
         trace_exists = base.is_dir()
         stats["complete"] = exhausted and trace_available and trace_exists and not (
-            stats["scan_limit_hit"] or any(stats[k] for k in (
+            stats["scan_limit_hit"] or stats["tail_truncated_files"] or any(stats[k] for k in (
                 "parse_error", "partial_tail", "oversized_line", "unknown_timestamp",
                 "unreadable_files", "changed_files", "non_standard_json")))
         if not trace_available and not any(stats[k] for k in (
@@ -284,10 +402,100 @@ def record_matches(rec: dict, candidates: set[str]) -> bool:
     return False
 
 
-def find_records(root: Path, query: str, since_hours: float | None = None, *, caps=None, stats=None):
+def find_records(root: Path, query: str, since_hours: float | None = None, *, caps=None, stats=None,
+                 tail_lines: int | None = None):
     candidates = id_candidates(query)
-    return [(f, r) for f, r in iter_records(root, since_hours, caps=caps, stats=stats)
+    return [(f, r) for f, r in iter_records(root, since_hours, caps=caps, stats=stats,
+                                          tail_lines=tail_lines)
             if record_matches(r, candidates)]
+
+
+def recommended_action(rec: dict) -> str:
+    """Deterministic one-line next step for the compact card (no model calls)."""
+    err = str(rec.get("errorClass") or "none")
+    outcome = str(rec.get("outcome") or "").strip().lower()
+    base = str(rec.get("baseUrlClass") or "")
+    try:
+        fb = int(rec.get("fallbackCount") or 0)
+    except (TypeError, ValueError):
+        fb = 0
+    if err == "cancelled":
+        return "reproduce by runId; inspect cancel/timeout path in var/debug logs"
+    if err not in ("", "none"):
+        if base == "local":
+            return "check local Ollama/model availability (Status-RAG.bat) then rerun"
+        return "check provider reachability/quota; run export <id> for full trace keys"
+    if fb > 0:
+        return "fallback engaged; verify primary provider/model reachability"
+    if rec.get("harmonyWarn"):
+        return "harmony postprocess degraded; inspect harmonyDecision and traceKeys"
+    if outcome and outcome not in ("completed", "ok", "success"):
+        return "unusual outcome; open full record via show/export"
+    return "none-needed"
+
+
+def compact_card(rec: dict) -> dict:
+    """Bounded diagnostic card (~1KB): ids stay hashed, values are sanitized."""
+    card = {
+        "schema": CARD_SCHEMA,
+        "ts": rec.get("ts"),
+        "sessionId": rec.get("sessionId"),
+        "runId": rec.get("runId"),
+        "surface": rec.get("surface"),
+        "requestedModel": rec.get("requestedModel"),
+        "effectiveModel": rec.get("effectiveModel"),
+        "baseUrlClass": rec.get("baseUrlClass"),
+        "outcome": rec.get("outcome"),
+        "errorClass": rec.get("errorClass"),
+        "harmonyWarn": rec.get("harmonyWarn"),
+        "harmonyDecision": rec.get("harmonyDecision"),
+        "cfvmQueued": rec.get("cfvmQueued"),
+        "ragEnabled": rec.get("ragEnabled"),
+        "fallbackCount": rec.get("fallbackCount"),
+        "recommendedAction": recommended_action(rec),
+        "source": {k: v for k, v in (
+            ("file", rec.get("_file")), ("line", rec.get("_line")),
+            ("offset", rec.get("_offset")), ("sha12", rec.get("_sha12")))
+            if v is not None},
+    }
+    return {k: v for k, v in card.items() if v is not None}
+
+
+def compact_coverage(coverage: dict) -> dict:
+    """Token-light coverage: per-file byte map collapses to a count."""
+    out = dict(coverage)
+    cutoffs = out.get("source_cutoffs")
+    if isinstance(cutoffs, dict):
+        out["source_cutoffs"] = {"files": len(cutoffs)}
+    return out
+
+
+def render_card_text(card: dict) -> str:
+    """Bounded plain-text card for --summary (hard cap CARD_MAX_BYTES)."""
+    source = card.get("source") or {}
+    src = source.get("file") or "-"
+    if source.get("line") is not None:
+        src += ":" + str(source["line"])
+    elif source.get("offset") is not None:
+        src += "@" + str(source["offset"])
+    lines = [
+        "# card " + str(card.get("schema", CARD_SCHEMA)),
+        "ts={0} surface={1} outcome={2} err={3}".format(
+            card.get("ts"), card.get("surface"), card.get("outcome"), card.get("errorClass")),
+        "session={0} run={1}".format(card.get("sessionId"), card.get("runId")),
+        "model req={0} eff={1} base={2}".format(
+            card.get("requestedModel"), card.get("effectiveModel"), card.get("baseUrlClass")),
+        "rag={0} harmonyWarn={1} cfvm={2} fallbacks={3}".format(
+            card.get("ragEnabled"), card.get("harmonyWarn"),
+            card.get("cfvmQueued"), card.get("fallbackCount")),
+        "action={0}".format(card.get("recommendedAction")),
+        "src=" + src,
+    ]
+    text = "\n".join(lines)
+    encoded = text.encode("utf-8")
+    if len(encoded) > CARD_MAX_BYTES:
+        text = encoded[:CARD_MAX_BYTES].decode("utf-8", errors="ignore") + "\n<truncated>"
+    return text
 
 
 def export_root(root: Path) -> Path:
@@ -349,12 +557,27 @@ def cmd_status(root: Path) -> int:
     return 0 if base.is_dir() else 2
 
 
-def cmd_list(root: Path, since_hours: float, *, as_json: bool = False) -> int:
+def cmd_list(root: Path, since_hours: float, *, as_json: bool = False,
+             summary: bool = False, compact_json: bool = False,
+             tail_lines: int | None = None) -> int:
     coverage = {}
-    rows = list(iter_records(root, since_hours, stats=coverage))
+    rows = list(iter_records(root, since_hours, stats=coverage, tail_lines=tail_lines))
+    if compact_json:
+        print(json.dumps({"schema": CARD_SCHEMA + "-list",
+                          "cards": [compact_card(r) for _, r in rows],
+                          "coverage": compact_coverage(coverage)},
+                         indent=2, ensure_ascii=False))
+        return 0
     if as_json:
         print(json.dumps({"records": [r for _, r in rows], "coverage": coverage},
                          indent=2, ensure_ascii=False))
+        return 0
+    if summary:
+        print("# coverage=" + json.dumps(compact_coverage(coverage), sort_keys=True))
+        print(f"# {len(rows)} session trace card(s) under {trace_dir(root)} "
+              f"(since {since_hours}h)")
+        for _file, rec in rows:
+            print(render_card_text(compact_card(rec)))
         return 0
     print("# coverage=" + json.dumps(coverage, sort_keys=True))
     print(f"# {len(rows)} session trace record(s) under {trace_dir(root)} "
@@ -373,13 +596,19 @@ def cmd_list(root: Path, since_hours: float, *, as_json: bool = False) -> int:
     return 0
 
 
-def cmd_show(root: Path, query: str) -> int:
-    matches = find_records(root, query)
+def cmd_show(root: Path, query: str, *, summary: bool = False,
+             compact_json: bool = False, tail_lines: int | None = None) -> int:
+    matches = find_records(root, query, tail_lines=tail_lines)
     if not matches:
         print(f"no session trace found (queryHash={query_identity(query)[0]})", file=sys.stderr)
         return 4
     for _file, rec in matches:
-        print(json.dumps(rec, indent=2, ensure_ascii=False, sort_keys=False))
+        if compact_json:
+            print(json.dumps(compact_card(rec), ensure_ascii=False))
+        elif summary:
+            print(render_card_text(compact_card(rec)))
+        else:
+            print(json.dumps(rec, indent=2, ensure_ascii=False, sort_keys=False))
     return 0
 
 
@@ -497,9 +726,23 @@ def main(argv=None) -> int:
     sub.add_parser("status", help="JSON status of trace dir + exports (no mutate)")
     p_list = sub.add_parser("list", help="list recent session traces")
     p_list.add_argument("--since-hours", type=float, default=DEFAULT_SINCE_HOURS)
-    p_list.add_argument("--json", action="store_true", help="JSON records with scan coverage")
+    p_list_mode = p_list.add_mutually_exclusive_group()
+    p_list_mode.add_argument("--json", action="store_true", help="JSON records with scan coverage")
+    p_list_mode.add_argument("--summary", action="store_true",
+                             help="bounded text card per record (token-light)")
+    p_list_mode.add_argument("--compact-json", action="store_true",
+                             help="bounded JSON cards + coverage (token-light)")
+    p_list.add_argument("--tail", type=int, default=None, metavar="N",
+                        help="fast path: scan only the last N lines of each trace file")
     p_show = sub.add_parser("show", help="show records for a sessionId or runId")
     p_show.add_argument("id")
+    p_show_mode = p_show.add_mutually_exclusive_group()
+    p_show_mode.add_argument("--summary", action="store_true",
+                             help="bounded text card per record (token-light)")
+    p_show_mode.add_argument("--compact-json", action="store_true",
+                             help="one compact JSON card per record (token-light)")
+    p_show.add_argument("--tail", type=int, default=None, metavar="N",
+                        help="fast path: scan only the last N lines of each trace file")
     p_export = sub.add_parser("export", help="export a shared evidence bundle")
     p_export.add_argument("id")
     args = parser.parse_args(argv)
@@ -508,9 +751,12 @@ def main(argv=None) -> int:
     if args.cmd == "status":
         return cmd_status(root)
     if args.cmd == "list":
-        return cmd_list(root, args.since_hours, as_json=args.json)
+        return cmd_list(root, args.since_hours, as_json=args.json,
+                        summary=args.summary, compact_json=args.compact_json,
+                        tail_lines=args.tail)
     if args.cmd == "show":
-        return cmd_show(root, args.id)
+        return cmd_show(root, args.id, summary=args.summary,
+                        compact_json=args.compact_json, tail_lines=args.tail)
     if args.cmd == "export":
         return cmd_export(root, args.id)
     return 2

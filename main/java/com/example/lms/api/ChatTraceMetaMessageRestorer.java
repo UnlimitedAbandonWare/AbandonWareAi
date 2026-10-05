@@ -39,7 +39,7 @@ final class ChatTraceMetaMessageRestorer {
             "prompt.context.refiner.activated", "prompt.context.refiner.failSoft", "prompt.learningDegraded",
             "llm.output.blank", "attachment.bind.attempted", "attachment.bind.applied",
             "rag.evidence.promotion.evidenceGatePassed", "rag.evidence.promotion.citationGateMinPassed",
-            "finalAnswer.releaseAllowed", "finalAnswer.evidenceScopeBound");
+            "finalAnswer.releaseAllowed", "finalAnswer.evidenceScopeBound", "executionMode.expanded");
     private static final Set<String> DETAIL_COUNTS = Set.of(
             "queryTransformer.bypassed.queryLength", "qtx.minLiveBudgetMs",
             "qtx.timeoutMs.before", "qtx.timeoutMs.after", "qtx.constraints.rejectedCount",
@@ -53,7 +53,7 @@ final class ChatTraceMetaMessageRestorer {
             "llm.output.contentLength", "memory.session.tokenEstimate", "fallbackCount",
             "attachment.bind.count", "attachment.sessionFilter.allowedCount",
             "rag.evidence.promotion.candidateCount", "rag.evidence.promotion.citableLocatorCount",
-            "rag.evidence.promotion.promotedCount");
+            "rag.evidence.promotion.promotedCount", "executionMode.queryCount", "executionMode.httpAttempts");
     private static final Set<String> DETAIL_NUMBERS = Set.of("prompt.context.refiner.phi", "orch.irregularity");
     private static final Set<String> DETAIL_LABELS = Set.of(
             "queryTransformer.reason", "qtx.bypass.reason", "qtx.constraints.reason",
@@ -63,7 +63,8 @@ final class ChatTraceMetaMessageRestorer {
             "orch.mode", "orch.reason", "llm.output.doneReason", "llm.route",
             "observedProvider", "routeId", "fallbackReason", "observedReason",
             "attachment.bind.reason", "rag.evidence.promotion.disabledReason",
-            "finalAnswer.releaseReason", "finalAnswer.evidenceReleaseState", "finalAnswer.retrievalExecution");
+            "finalAnswer.releaseReason", "finalAnswer.evidenceReleaseState", "finalAnswer.retrievalExecution",
+            "executionMode.requested", "executionMode.effective", "executionMode.reason");
     private static final int MAX_DURABLE_PROJECTION_BYTES = 2_048;
     private static final int MAX_DURABLE_PROJECTION_B64_CHARS = 2_732;
     private static final int MAX_DURABLE_PROJECTION_FIELDS = 16;
@@ -169,7 +170,17 @@ final class ChatTraceMetaMessageRestorer {
     static Map<String, String> projectDiagnostics(Map<String, Object> source) {
         Map<String, String> out = new LinkedHashMap<>();
         if (source == null) return out;
-        source.keySet().stream().filter(java.util.Objects::nonNull).sorted().forEach(key -> {
+        var mode = ChatStreamSignalBuilder.executionModeSnapshot(source);
+        if (mode != null) {
+            out.put("diag.executionMode.requested", "s:" + mode.requested());
+            if (mode.effective() != null) out.put("diag.executionMode.effective", "s:" + mode.effective());
+            if (mode.reason() != null) out.put("diag.executionMode.reason", "s:" + mode.reason());
+            if (mode.queryCount() != null) out.put("diag.executionMode.queryCount", "n:" + mode.queryCount());
+            if (mode.httpAttempts() != null) out.put("diag.executionMode.httpAttempts", "n:" + mode.httpAttempts());
+            if (mode.expanded() != null) out.put("diag.executionMode.expanded", "b:" + mode.expanded());
+        }
+        source.keySet().stream().filter(java.util.Objects::nonNull)
+                .filter(key -> !key.startsWith("executionMode.")).sorted().forEach(key -> {
             Object safe = SafeRedactor.diagnosticValue(key, source.get(key));
             String encoded = encodeDiagnostic(key, safe);
             if (encoded != null && out.size() < 80) out.put("diag." + key, encoded);

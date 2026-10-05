@@ -59,13 +59,21 @@ public class ChatService {
             return "";
 
         MessageDigest digest = sha256();
+        appendFingerprint(digest, "verifiedRequestOwnerHash", req.getVerifiedRequestOwnerHash());
         appendFingerprint(digest, "message", req.getMessage());
         appendFingerprint(digest, "systemPrompt", req.getSystemPrompt());
         appendFingerprint(digest, "traits", req.getTraits());
         appendFingerprint(digest, "history", req.getHistory());
         appendFingerprint(digest, "mode", req.getMode());
         appendFingerprint(digest, "memoryMode", req.getMemoryMode());
+        appendFingerprint(digest, "customInstructions", req.getCustomInstructions());
+        appendFingerprint(digest, "responseTone", req.getResponseTone());
+        appendFingerprint(digest, "responseLength", req.getResponseLength());
+        appendFingerprint(digest, "responseLanguage", req.getResponseLanguage());
         appendFingerprint(digest, "model", req.getModel());
+        appendFingerprint(digest, "strictModelSelection", req.getStrictModelSelection());
+        appendFingerprint(digest, "modelSelectionMode", req.getModelSelectionMode());
+        appendFingerprint(digest, "executionMode", req.getExecutionMode());
         appendFingerprint(digest, "temperature", req.getTemperature());
         appendFingerprint(digest, "topP", req.getTopP());
         appendFingerprint(digest, "frequencyPenalty", req.getFrequencyPenalty());
@@ -76,6 +84,7 @@ public class ChatService {
         appendFingerprint(digest, "useWebSearch", req.getUseWebSearch());
         appendFingerprint(digest, "useVerification", req.getUseVerification());
         appendFingerprint(digest, "ragStandalone", req.getRagStandalone());
+        appendFingerprint(digest, "ragAnswerPolicy", req.getRagAnswerPolicy());
         appendFingerprint(digest, "useAdaptive", req.isUseAdaptive());
         appendFingerprint(digest, "autoTranslate", req.isAutoTranslate());
         appendFingerprint(digest, "polish", req.getPolish());
@@ -105,15 +114,24 @@ public class ChatService {
         appendFingerprint(digest, "memoryProfile", req.getMemoryProfile());
 
         String messageHash = SafeRedactor.hash12(req.getMessage());
-        return "chat:v2:" + (messageHash == null ? "none" : messageHash)
+        return "chat:v3:" + (messageHash == null ? "none" : messageHash)
                 + ":" + HexFormat.of().formatHex(digest.digest());
     }
 
     /**
-     * Only stateless requests with explicit execution choices may reuse a response.
+     * Only server-owned stateless requests with explicit execution choices may reuse a response.
+     * Revision-dependent contexts bypass this cache because the DTO carries no durable source/config revision.
      */
     public static boolean isCacheSafe(ChatRequestDto req) {
         if (req == null
+                || req.getVerifiedRequestOwnerHash() == null
+                || req.getVerifiedRequestOwnerHash().isBlank()
+                || req.getChatSettingsSnapshot() != null
+                || req.getContextSourceCheck() != null
+                || req.getGeneralGraphScope() != null
+                || req.getMainRouteDecision() != null
+                || !req.getUsedAttachmentSources().isEmpty()
+                || req.isContextPreparationRequested()
                 || req.getSessionId() != null
                 || req.getModel() == null
                 || req.getModel().isBlank()

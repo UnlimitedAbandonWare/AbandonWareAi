@@ -1,0 +1,16 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "f1aa98216686d88d6e960e5da0827df02831987af980ad812740303bd3c7ffa6",
+                        "path":  "scripts/agent_work_guard.py"
+                    },
+                    {
+                        "sha256":  "ae5a9d2beda2e947a7c09ce38659eb8829ff1494d63a6009b5ba0c3c3b67fb96",
+                        "path":  "scripts/agent_session_watch.py"
+                    },
+                    {
+                        "sha256":  "c6d246fdab23a1dad4b708637168b488eed3758caf47e3ebc071446559c6ad0c",
+                        "path":  "scripts/devin_pre_edit_guard.ps1"
+                    }
+                ]
+}

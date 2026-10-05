@@ -11,7 +11,7 @@
   - main Java: `main/java`
   - main resources: `main/resources`
   - tests: `src/test/java`, `src/test/resources`
-- `app/build.gradle.kts` compiles `app/src/main/java_clean` and resources from `app/src/main/resources`.
+- `app/build.gradle.kts:44–56` explicitly empties app main/test Java and resources. Legacy app files are reference-only; `:app:classes`/`:app:test NO-SOURCE` do not verify the root runtime.
 - `gradlew`, `gradlew-real`, `verify_boot.sh`, `verify_boot_plus.sh`, `tools/run_build_error_miner.sh`, and `tools/build_error_miner.py` exist.
 - No `*.zip` was present at the repo root during the skill creation pass.
 - No `package.json` or `next.config.*` was found inside this `src` checkout during the skill creation pass.
@@ -34,7 +34,6 @@ Run from `<repo>` unless a command proves another root:
 ```powershell
 .\gradlew.bat projects --no-daemon
 .\gradlew.bat compileJava --no-daemon -x test
-.\gradlew.bat :app:classes --no-daemon -x test
 .\gradlew.bat bootJar --no-daemon -x test
 bash verify_boot.sh
 bash verify_boot_plus.sh
@@ -55,7 +54,7 @@ If `bash` is unavailable, report it as environment evidence and use Gradle comma
 
 - Naver: `main/java/com/example/lms/service/NaverSearchService.java`
 - Brave: `main/java/com/example/lms/service/web/BraveSearchService.java`
-- Web fusion/orchestration: `main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java`
+- Main retrieval: `ChatWorkflow` → `main/java/com/example/lms/service/rag/HybridRetriever.java` → fixed/dynamic handler chain. `main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java` is a separate orchestration surface; its fixture/probe success is not main wiring proof.
 - Debug/trace: `main/java/com/example/lms/debug/DebugEventStore.java`, `main/java/com/example/lms/search/TraceStore.java`
 
 Patch missing-key behavior as provider disabled with reason. Never turn blank, dummy, `sk-local`, `test`, `changeme`, or unresolved `${...}` into a successful external credential.

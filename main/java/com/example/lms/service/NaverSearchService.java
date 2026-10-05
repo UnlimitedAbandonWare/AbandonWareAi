@@ -1605,7 +1605,9 @@ public class NaverSearchService implements WebSearchProvider {
         final int outboundDisplay = outboundDisplayFor(resultLimit);
         GuardContext ctx = GuardContextHolder.get();
         final Map<String, Object> callerTraceContext = TraceStore.context();
-        final boolean boundedRoute = traceBool("web.boundedRoute");
+        final String logicalQuery = query;
+        var executionBudget = com.example.lms.service.rag.SelfAskSearchBudget.current();
+        final boolean boundedRoute = traceBool("web.boundedRoute") || (executionBudget != null && !executionBudget.expansionAllowed());
         // Privacy boundary: allow orchestration to block outbound web search entirely.
         // (Higher-level providers already enforce this, but keep a final fail-safe here
         // in case a call path reaches NaverSearchService directly.)
@@ -1665,6 +1667,7 @@ public class NaverSearchService implements WebSearchProvider {
         // 두 번째 소스의 normalizeQuery + 기존 선언형 정리(normalizeDeclaratives) 결합
         String cleaned = normalizeQuery(query == null ? "" : query.trim());
         String normalized = normalizeDeclaratives(cleaned);
+        if (!com.example.lms.service.rag.SelfAskSearchBudget.tryQueryAlias(logicalQuery, normalized)) return Mono.just(Collections.emptyList());
 
         // 의료/공공/위치 등 엄격한 출처가 요구되는 질의인지 판별
         boolean isMedicalOfficialInfoQuery = isMedicalOfficialInfoQuery(normalized);
@@ -2498,6 +2501,9 @@ public class NaverSearchService implements WebSearchProvider {
                     if (requestBudget != null && requestBudget.expired()) {
                         return expiredNaverSubscription(query, fetch, permit, capturedTraceContext);
                     }
+                    if (!com.example.lms.service.rag.SelfAskSearchBudget.tryReserveHttp(capturedTraceContext, query)) {
+                        return expiredNaverSubscription(query, fetch, permit, capturedTraceContext);
+                    }
                     var attemptContext = TraceStore.searchContext(capturedTraceContext, "providerAttemptId");
                     var observation = new NaverObservation(query, attemptContext, true);
                     latestObservation.set(observation);
@@ -2505,7 +2511,10 @@ public class NaverSearchService implements WebSearchProvider {
                             .doOnCancel(() -> observation.put("clientCancellationDelivered", true))
                             .doOnError(error -> {
                                 int status = naverHttpStatus(error);
-                                if (status > 0) observation.put("httpStatus", status);
+                                if (status > 0) {
+                                    observation.put("httpStatus", status);
+                                    observation.put("providerReceiptObserved", true);
+                                }
                                 observation.put("failureClass", classifyNaverFailureClass(status,
                                         isNaverRateLimited(error), isNaverTimeoutFailure(error), naverFailureReason(error)));
                                 observation.finish();
@@ -2552,6 +2561,7 @@ public class NaverSearchService implements WebSearchProvider {
                     ResponseEntity<String> entity = observed.entity();
                     NaverObservation observation = observed.observation();
                     observation.put("httpStatus", entity.getStatusCode().value());
+                    observation.put("providerReceiptObserved", true);
                     try {
                         ratePolicy.updateFromHeaders(entity.getHeaders());
                     } catch (Exception suppressed) { NaverTraceSuppressions.traceSuppressed("ratePolicy.headers.success", suppressed); }

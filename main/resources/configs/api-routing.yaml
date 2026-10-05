@@ -32,18 +32,19 @@ ollama:
       - "qwen3.6:27b"
       - "gemma4:12b"
       - "qwen3.5:9b"
-      - "gemma4:latest"
       - "gemma4:26b"
       - "nomic-embed-text:latest"
       - "qwen3-embedding:latest"
       - "bge-m3:latest"
       - "qwen3-vl:8b"
-    chat: ["gemma4:26b", "gemma4:31b", "gemma4:latest", "gemma4:12b", "qwen3.6:27b", "smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.5:9b"]
-    fast: ["qwen3.5:9b", "gemma4:12b"]
+      - "qwen2.5:32b"
+      - "qwen2.5:14b"
+    chat: ["gemma4:26b", "gemma4:31b", "gemma4:12b", "qwen3.6:27b", "smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.5:9b", "qwen2.5:32b", "qwen2.5:14b"]
+    fast: ["qwen3.5:9b", "gemma4:12b", "qwen2.5:14b"]
     vision: ["qwen3-vl:8b"]
     # Q3_K_XL (14GB) preferred for VRAM-tight judge/coder; unquantized-heavy qwen3.8:27b removed 2026-09-25
-    judge: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.6:27b", "gemma4:31b"]
-    coder: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.6:27b"]
+    judge: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.6:27b", "gemma4:31b", "qwen2.5:32b"]
+    coder: ["smtek/Qwen3.8-27B:Q3_K_XL", "qwen3.6:27b", "qwen2.5:32b"]
     embed: ["qwen3-embedding:4b", "qwen3-embedding:latest", "nomic-embed-text:latest", "bge-m3:latest"]
   # Dead tags: alias-only — never wire as Spring defaults
   alias_to_installed:

@@ -1,9 +1,13 @@
 # Brave Search limits (SSOT)
 
 ```yaml
-capturedAt: "2026-09-24"
+capturedAt: "2026-10-05"
 timezone: "Asia/Seoul"
-reviewedAt: "2026-10-01"
+reviewedAt: "2026-10-05"
+ttlDays: 90
+expiresAt: "2027-01-03"
+status: "ACTIVE"
+expiryAction: "archive"
 sourceType: "official_public_documentation"
 accountPlan: "unknown"
 accountEvidenceCapturedAt: null
@@ -13,7 +17,7 @@ credentialStatus: "not_checked"
 reviewAfterDays: 90
 runtimeEnforcement: "unchanged"
 disclaimer: >
-  This page records public Brave Search API pricing/capacity as of 2026-09-24.
+  This page records public Brave Search API pricing/capacity as of 2026-10-05.
   It is not an account statement, free-plan confirmation, or key-validity check.
   Env names like BRAVE_API_KEY_FREE are routing aliases; they do not prove the current
   plan or remaining credits by themselves.
@@ -40,12 +44,22 @@ sourceUrls:
 Free credits are advertised as "$5 in free credits every month" and applied automatically.
 This is a public pricing description, not this account's current balance.
 
-## Project routing policy
+## Project routing policy — dual key (Free → Base)
 
-- Routing YAML (`configs/api-routing.yaml`) classifies Brave as `free_local`.
-- `docs/codex/BRAVE_FREE_TO_BASE_ROUTING_DIRECTIVE.md` defines the dual-key behavior:
-  `BRAVE_API_KEY_FREE` first up to a local monthly quota, then `BRAVE_API_KEY` base.
-  This is an application policy, not Brave's official plan classification.
+- Routing YAML (`configs/api-routing.yaml`) classifies Brave as `free_local`,
+  env `[BRAVE_API_KEY_FREE, BRAVE_API_KEY]`, auth header `X-Subscription-Token`.
+- **Free lane** `BRAVE_API_KEY_FREE`: official free monthly credit **$5 ≈
+  1,000 requests** (at $5/1,000 req). Consumed first up to
+  `gpt-search.brave.monthly-quota`.
+- **Base lane** `BRAVE_API_KEY`: same-host Brave paid tier, official list
+  **$5 / 1,000 requests, 50 queries/second** pay-as-you-go. On free-quota
+  exhaustion or a provider `402`/`429` signal the same request promotes to the
+  base key — pre-approved 2026-09-30, no per-call ask
+  (`docs/API_ROUTING_SPEC.md` env table).
+- Promotion never disables Brave and never jumps to Naver/Tavily on quota
+  grounds (`docs/agents-rules/DEMO1-BRAVE-DUAL-KEY.md`). Contract:
+  `docs/codex/BRAVE_FREE_TO_BASE_ROUTING_DIRECTIVE.md`. This is an application
+  policy, not Brave's official plan classification.
 
 ## Local quota vs official credits (reviewed 2026-10-01)
 
@@ -70,5 +84,9 @@ This is a public pricing description, not this account's current balance.
 
 - API 관련 작업에서만 이 문서를 읽는다.
 - `capturedAt`이 90일 이내이고 공식 정책 변경 증거가 없으면 재사용한다.
+- 90일 재검토: `python -B scripts/verify_provider_limits_freshness.py --check`
+  가 만료 여부·`sourceUrls`·추천 웹서치 키워드를 반환한다. 변동 없으면
+  `reviewedAt`만 당일로 갱신해 90일을 연장하고, 변동이 있으면 본문 반영 후
+  `capturedAt`을 갱신한다 (README "90-day expiry auto-refresh protocol").
 - 키가 없거나 상태가 미확인이어도 문서 작성은 계속할 수 있다. 가입·로그인·발급 퀴즈를
   하지 않는다.

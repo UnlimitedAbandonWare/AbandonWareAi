@@ -1,0 +1,108 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 아티팩트 비파괴 보존·슬림화 및 충돌 방지 작업을 실제로 완수하고 검증해야 합니다.
+@demo1-ops-surface-thin
+
+[DEVIN 지시서] 널부러진 리포트·지시서 비파괴 보존(Tiered Archival) 및 멀티에이전트 충돌 방지 슬림화 — 2026-10-05 00:35 KST
+파일 ID: PASTE_DEVIN_ARTIFACT_COMPACTION_THINNING_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 소스 수정 0 · 데이터 파괴적 삭제(del/rm) 0 · git push/pull/commit/add -A 0 · remote 추가 0 · 비밀값/토큰 출력 0 · 유료 외부 API 호출 0 · PROTO_OPEN 준수
+
+## 0. 한 줄 목표
+과거 리포트와 지시서 데이터의 파괴 없는 100% 보존(Zero-loss Tiered Archival)과 색인화를 달성하고, 만료된 락 회수 및 운영 표면 슬림화(Compaction)로 바이브 코딩 시 에이전트 간 컨텍스트 오염과 충돌율을 0으로 낮춘다.
+
+## 1. 사실 (2026-10-05 00:27 KST 읽기 전용 확인)
+- Project Root: `C:\AbandonWare\demo-1\demo-1\src` (헤드 8420b897, 120 dirty).
+- 에이전트 현황 스캔 (`scripts/agent_recovery_status.py`):
+  * 만료된 Stale 락 1건: `devin-path-registry-p1` (ttl 110,297초 만료, 30시간 이상 방치).
+  * 24시간 초과 정체 저널 1건: `codex-timeout-split-ae8f6e83` (25.1시간 경과).
+  * 실시간 활성 리스 4건 보호 필요: `codex-interview-oauth-default-bb3ddc47`, `devin-mariadb-lms-legacy-safe` 등.
+- 운영 표면 슬림화 WhatIf 진단 (`var/debug/ops-surface-thin-20261005-002653-790.json`):
+  * 닫힌 지시서 및 과거 타깃 json 67건이 운영 표면에 노출되어 에이전트 컨텍스트 오염 유발.
+  * 보존 대상 98건(활성 저널, 현재 진행 지시서, 스킬 레일)은 철저히 보호됨(kept=98).
+- 최신 웹 리서치 근거 (Context Debt & Multi-Agent Drift):
+  * 바이브 코딩 시 에이전트 산출물이 적재되면 컨텍스트 오염(Context Pollution) 및 충돌 발생.
+  * 해결책: "파괴적 삭제"가 아닌 "계층형 아카이빙(L0 원본 보존 + L1 요약 색인화)"과 "비파괴적 표면 경량화".
+- 관련 레일 도구 실존:
+  * `scripts/demo1_ops_surface_thin.ps1` (sha12: 378c075700a1)
+  * `Ops-Surface-Thin.bat` (sha12: c9963ecf74b0)
+  * `scripts/lease_conflict_autoflow.py` (sha12: 49f57847667a)
+  * `scripts/agent_recovery_status.py` (sha12: e7ccdf7d6d58)
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 준수.
+- 비파괴 보존: 어떠한 파일도 영구 삭제하지 않으며, `_archive/<날짜>/` 이동 보존 및 `INDEX.md` 색인화.
+- 활성 리스 보호: live-lease 및 최근 저널은 절대 손대지 않는다.
+- 실행 못한 항목은 `NOT_RUN` + 사유를 명시하며 PASS로 허위 기재하지 않는다.
+- PROTO_OPEN 정책을 준수하며 추가 인증 절차를 요구하지 않는다.
+
+## 3. 항목 (작업 패키지 WP1 ~ WP4)
+
+### WP1 [DEVIN] 만료된 Stale Lease 안전 회수 (충돌 요인 제거)
+- 대상: `scripts/lease_conflict_autoflow.py`, `scripts/agent_recovery_status.py`
+- 목표: 30시간 이상 만료된 `devin-path-registry-p1` 락 회수로 락 충돌 방지, live 리스는 100% 보호.
+- 실행:
+  1. `python -B scripts/agent_recovery_status.py status; "exit=$LASTEXITCODE"`
+  2. `python -B scripts/lease_conflict_autoflow.py reclaim --task devin-ops-thin-20261005; "exit=$LASTEXITCODE"`
+- 검증: `expiredCount`=0, 활성 리스(live 4건) 유지 확인.
+
+### WP2 [DEVIN] 닫힌 지시서 비파괴 이동 및 아카이브 색인 생성 (표면 슬림화)
+- 대상: `Ops-Surface-Thin.bat`, `scripts/demo1_ops_surface_thin.ps1`
+- 목표: 닫힌 지시서 67건을 `agent-prompts/_archive/20261005/`로 안전 이동(Move) 및 `agent-prompts/INDEX.md` 색인 재생성.
+- 실행:
+  1. `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\demo1_ops_surface_thin.ps1 -WhatIf; "exit=$LASTEXITCODE"`
+  2. `powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\demo1_ops_surface_thin.ps1 -Apply; "exit=$LASTEXITCODE"`
+- 검증: `agent-prompts/_archive/20261005/` 보존 확인 및 `agent-prompts/INDEX.md` 갱신 확인.
+
+### WP3 [DEVIN] 24시간 초과 정체 저널 안전 점검 및 상태 기록
+- 대상: `data/agent-handoff/journal/codex-timeout-split-ae8f6e83` (25.1시간 경과 저널)
+- 목표: 정체 저널 상태 확인으로 블로킹 방지.
+- 실행: `python -B scripts/work_journal.py status --task codex-timeout-split-ae8f6e83; "exit=$LASTEXITCODE"`
+- 검증: 임의 done 변경 금지, 상태 점검 및 기록.
+
+### WP4 [DEVIN] 데이터 보존 무결성(Zero-loss) 및 충돌율 감소 검증
+- 대상: 아카이브 디렉토리 및 에이전트 복구 상태
+- 목표: 데이터 유실 0건, 활성 운영 표면 경량화, 락 충돌율 0 입증.
+- 검증:
+  1. `Test-Path agent-prompts/_archive/20261005` 확인 (데이터 보존 증거).
+  2. `python -B scripts/agent_signal_digest.py; "exit=$LASTEXITCODE"` 로 expired lease=0 확인.
+  3. 보고서에 이동 건수(67건), 보존 건수(98건), 회수된 락(1건) 명시.
+
+## 4. HOLD 조건
+- `Ops-Surface-Thin.ps1` 실행 시 활성 저널/live lease 대상이 `wouldMove`에 포함되는 경우 (즉시 중단).
+- 파일 삭제(`del`, `rm`) 명령이 요구되는 경우 (즉시 거부).
+- 유료 외부 API 결제나 크레딧 변경이 필요한 경우.
+
+## 5. ASK_ONCE
+- U-1 아카이브 디렉토리 보존 정책:
+  * (a) 권장: `agent-prompts/_archive/<YYYYMMDD>/` 계층 구조를 유지하고 `INDEX.md`를 통해 언제든 복원/재참조 가능하도록 영구 보존한다.
+  * (b) 30일 경과 후 별도 콜드 스토리지(zip 압축)로 2차 압축 이관한다.
+
+## 6. 절대 금지
+- `git push`, `git pull`, `git add -A`, `git commit`, `git reset`, `git clean` 등 VCS 조작 금지.
+- remote 추가 금지.
+- 어떠한 파일도 영구 삭제(delete/rm)하지 않는다 (Move로만 아카이빙).
+- 제품 소스 코드(`.java`, `.js`, `.ts` 등) 일체 수정 금지.
+- `.secrets`, 패스워드, API 키, 토큰 등 비밀값 노출 금지.
+- 유료 외부 API 호출 및 과금 발생 행위 금지.
+- PROTO_OPEN 보안 규칙 임의 변경 금지.
+
+## 7. Acceptance (완료 기준)
+- A1 (대응 WP1): 만료된 stale lease `devin-path-registry-p1` 안전 회수로 `expiredCount=0` 달성.
+- A2 (대응 WP2): 닫힌 지시서 67건이 `_archive/20261005/`로 이동되고 `INDEX.md`가 갱신되어 접근성 확보.
+- A3 (대응 WP3): 데이터 유실 0건 입증 (삭제된 파일 0, 이동된 파일 100% 보존).
+- A4 (대응 WP4): `agent_signal_digest.py` 실행 결과 에러 0건, 만료 락 0건으로 충돌 위험 제거 확인.
+- A5: 실행하지 못한 항목은 `NOT_RUN` + 구체적 이유를 명시.
+
+## 8. 보고 형식
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+보고 첫 줄:
+```
+외부 API: 0원 (로컬 검증 완료)
+```
+
+보고 본문 포함 사항:
+1. 회수된 만료 락 목록 및 잔여 활성 락 상태.
+2. 아카이브로 안전 이동된 파일 수 (WhatIf 67건 대비 실제 이동 건수).
+3. 보존된 라이브 지시서/레일 수 (98건 보존 증거).
+4. `agent-prompts/INDEX.md` 갱신 결과 및 데이터 보존 확인 경로.
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업 패키지(WP1~WP4)를 실제로 실행하고 검증 보고서를 제출해야 합니다.

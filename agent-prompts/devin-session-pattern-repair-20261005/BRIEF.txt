@@ -1,0 +1,95 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
+@objective-executor
+# [DEVIN 지시서] 데빈 세션 4대 패턴 최적화 및 인프라 누적 결함 정비 — 2026-10-05 16:35 KST
+파일 ID: PASTE_DEVIN_SESSION_PATTERN_REPAIR_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+최근 데빈 세션 분석에서 적발된 인프라 누적 결함(P15 고립 락 219개·워커 누적)을 안전 이동 격리하고, 최근 4개 세션의 완료 청사진과 도출된 5대 동시성 파라미터 최적값을 통합 검증·기록한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 16:10~16:35 KST)
+- 데빈 세션 가드 진단(devin_session_guard.py status): processCount=48, workingSetMB=10096.0MB(약 10.1GB), lockCount=219(deadLock 72, heldLock 140, aliveLock 7), sessions.db=3.1GB, wal=132MB. Watchdog P15(devin-lock-pileup) 자동 경보 상태.
+- 최근 4개 세션 완료 상태: concurrency-resilience(12618dc9), concurrency-doc-sync(8fcf201d), ollama-spillover(4e9a9f80), codex-debug-observability(a6f3533c, 246개 포커스 테스트 통과) 모두 DONE_OFFLINE 정상 종료 및 리스 0 확인됨.
+- 동시성·회복력 5대 최적 파라미터 합의: CONCURRENCY_RESILIENCE_PLAN.md 및 FOR_CODEX_RESILIENCE_PATCH.md에서 LLM Bulkhead=16, RateLimiter=8, Ollama 슬롯=1(단일), TTFT 초과=3000ms, API 사다리(chatgpt_oauth -> groq -> gemini -> openai -> anthropic) 확정.
+- 지시서 수신/종료 형식 주의점: 보고서 첫 줄 # REPORT 금지(외부 API: 필수), 저널 종료 키워드 done 사용 불가(verified/partial 필수), status_doc.py는 --expect-sha256 필수.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 작업 항목 (WP)
+### WP1 [Devin] 고립 세션 락(Dead PID 72건) 안전 백업 이동 및 SQLite WAL 체크포인트
+- 증거: scripts/devin_session_guard.py:8-16
+- 최소 실행:
+  1) python -B scripts/devin_session_guard.py clean-locks --force
+  2) python -B scripts/devin_session_guard.py checkpoint --force
+- GREEN: python -B scripts/devin_session_guard.py status --json; "exit=$LASTEXITCODE" (deadLockCount == 0 확인)
+- 완료 조건: deadLock 0건 확인, aliveLock/heldLock 및 인터랙티브 프로세스(PID 35296) 안전 보존.
+
+### WP2 [Devin] 최근 4개 세션 청사진 통합 인계 명세서 작성
+- 증거: data/agent-handoff/for-codex/ (FOR_CODEX_RESILIENCE_PATCH.md, FOR_CODEX_OLLAMA_BOTTLENECK_FALLBACK.md)
+- 배경: 오늘 실행된 4개 세션의 성과물(Resilience4j Bean 설계, Reactive 스트림 경계, Ollama Spillover 프로브, 246개 포커스 테스트 통과 결과)을 Codex 단일 수신용 종합 인계 명세서로 집약.
+- 최소 실행:
+  1) data/agent-handoff/for-codex/FOR_CODEX_SESSION_SYNTHESIS_20261005.md 작성.
+  2) 4대 패치 항목 요약, 대상 FQCN 5개 목록, 실행 검증 명령 기록.
+- GREEN: Test-Path data/agent-handoff/for-codex/FOR_CODEX_SESSION_SYNTHESIS_20261005.md; "exit=$LASTEXITCODE"
+- 완료 조건: Codex 전달용 종합 인계 청사진 1건 생성, 제품 소스 diff 0 유지.
+
+### WP3 [Devin] 동시성·회복력 5대 파라미터 최적값 동기화 및 모의 프로브 양방향 검증
+- 증거: CONCURRENCY_RESILIENCE_PLAN.md:73-104, scripts/probe_concurrency_resilience.py, scripts/probe_ollama_concurrency_spillover.py
+- 최적값 확정:
+  * LLM Bulkhead maxConcurrentCalls: 16 (기존 admission 64의 과점유 방지)
+  * LLM RateLimiter limitForPeriod: 8 (초당 8회)
+  * Ollama GPU Lane permits: 1 (단일 슬롯 큐잉 방지)
+  * Ollama Spillover TTFT 상한: 3000ms (3초 내 첫 토큰 미발생 시 클라우드 무대기 전환)
+  * API 사다리: chatgpt_oauth -> groq -> gemini -> openai -> anthropic
+- RED/GREEN 검사:
+  1) python -B scripts/probe_concurrency_resilience.py --dry-run; "exit=$LASTEXITCODE"
+  2) python -B scripts/probe_ollama_concurrency_spillover.py --dry-run; "exit=$LASTEXITCODE"
+- 완료 조건: 두 모의 프로브 모두 100% 통과(exit 0).
+
+### WP4 [Devin] 라이프사이클 준수 픽스처 점검 및 PROJECT_STATUS 안전 갱신
+- 증거: docs/PROJECT_STATUS.md, scripts/status_doc.py
+- 3대 수칙 준수:
+  1) 보고서 첫 줄은 반드시 "외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0"으로 시작.
+  2) 저널 닫기는 반드시 --result verified 사용.
+  3) command-id는 영문·숫자·하이픈만 사용.
+- 실행:
+  1) $sha = (python -B scripts/status_doc.py --file docs/PROJECT_STATUS.md read --key devin-agy-specialization-c6907464 | ConvertFrom-Json).sha256
+  2) python -B scripts/status_doc.py --file docs/PROJECT_STATUS.md append-row --after-key devin-agy-specialization-c6907464 --expect-sha256 $sha --line "| 2026-10-05 07:35 UTC | devin-session-pattern-repair-20261005 | docs/PROJECT_STATUS.md | devin session infrastructure & pattern optimization: clean-locks 72 dead-locks, checkpoint WAL, unified 4-session blueprint, verified concurrency params 16/8/1/3000ms | verified |"
+- GREEN: python -B scripts/agent_session_watch.py scan --agent devin --since-hours 1; "exit=$LASTEXITCODE"
+- 완료 조건: P15 알림 해소, 상태 문서 1행 갱신.
+
+## 4. HOLD
+- holdScope: main/java/**, main/resources/**, src/test/java/** 등 제품 소스 일체 수정 금지.
+- firstBlockingRule: 활성 프로세스 무차별 강제종료 금지 (clean-locks는 dead-PID만 격리, 살아있는 PID는 보호).
+- blockingEvidence: sessions.db 원본 삭제 시도 또는 외래 활성 리스 충돌 시 즉시 중단.
+
+## 5. ASK_ONCE
+- U-1 [고립 락 백업 위치]
+  - (a) 권장: cli/session_locks_backup_YYYYMMDD 디렉터리로 이동 백업 (도구 기본값)
+  - (b) 다른 안전 디렉터리로 이동 지정
+
+## 6. 절대 금지
+- 제품 소스 diff > 0
+- git push / add -A / commit 0 / remote 추가 금지
+- 비밀값 출력 및 .secrets 파일 열람 금지
+- PROTO_OPEN 위반 인증 게이트 추가 금지
+- live 외부 유료 API 호출 0
+- sessions.db 원본 파일 삭제 금지
+- 인터랙티브 데빈 루트 프로세스 강제 종료 금지
+
+## 7. Acceptance (완료 기준)
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- WP1: devin_session_guard.py status에서 deadLockCount == 0 확인.
+- WP2: data/agent-handoff/for-codex/FOR_CODEX_SESSION_SYNTHESIS_20261005.md 생성 확인.
+- WP3: probe_concurrency_resilience.py 및 probe_ollama_concurrency_spillover.py dry-run exit 0 통과 확인.
+- WP4: PROJECT_STATUS.md 1행 갱신 및 agent_session_watch.py scan에서 P15 알림 해소 확인.
+- 종료 시 잔여 리스 0, 제품 소스 diff 0.
+
+## 8. 보고 형식
+외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- 작업 결과 요약 (WP1~WP4)
+- 락 정리 건수 (Dead PID 72건 백업 완료)
+- 인계 명세서 생성 상태 (FOR_CODEX_SESSION_SYNTHESIS_20261005.md)
+- 파라미터 검증 결과 (Bulkhead 16, RateLimiter 8, Ollama Slot 1, TTFT 3000ms 통과)
+[ANTI-STOP]

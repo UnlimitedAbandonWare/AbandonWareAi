@@ -1,0 +1,132 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 정의된 작업을 실제로 수행하고 검증까지 완수해야 한다.
+@demo1-devin-source-orchestrator
+[DEVIN 지시서] MariaDB LMS RAG/LLM 쿼리 이관 후 레거시 전수 스캔 잔재 안전 정리 및 충격 제로 가드레일 — 2026-10-05 00:15 KST
+파일 ID: PASTE_DEVIN_MARIADB_LMS_LEGACY_CLEANUP_SAFE_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+MariaDB/lmsdb 쿼리로 이미 최적화된 RAG/LLM 기능(코사인 유사도 정렬, 랭킹, 락킹)과 정합성을 유지하면서, Java 서비스 계층에 잔존하는 findAll().stream() 전수 메모리 스캔 등 레거시 잔재를 기존 시그니처 및 테스트 100% 보존 하에 안전 격리·점진 개선하여 시스템 충격을 0으로 유지한다.
+
+# 1. 사실 (읽기 전용 확인, 2026-10-05 00:15 KST)
+- `TranslationMemoryRepository.java`에 네이티브 쿼리 `findTopRankedNoCommunityBySessionId` (코사인 유사도 및 점수 기반 ORDER BY ... LIMIT)와 `claimPendingLease`, `updateEnergyByHash` 등이 구축되어 있음 (L150-L161).
+- 그러나 `AdaptiveTranslationService.java`의 `findMemoryCandidate` (L141-L149) 및 `BanditSelector.java`의 `pickBestMemoryCandidate` (L63-L70)는 여전히 `memoryRepo.findAll().stream()`을 통해 테이블 전체를 JVM 메모리로 퍼올려 유사도를 계산하는 구형 레거시 방식을 유지하고 있음.
+- `AdaptiveTranslationServiceTest.java`에서 `when(memories.findAll()).thenReturn(List.of())`로 기존 모의 테스트가 바인딩되어 있어, 무작정 `findAll()` 호출을 제거하면 기존 단위 테스트가 깨짐(Broken).
+- 따라서 데빈의 작업은 "파괴적 재작성"이 아니라 "기존 퍼블릭 시그니처 및 안전 Fallback 100% 보존 + Bounded/쿼리 우선 탐색"의 이중 안전망(Dual-Rail) 구조로 작성되어야 기존 소스에 손해와 충격이 전혀 발생하지 않음.
+- 활성 리스 점검 결과 `AdaptiveTranslationService.java` 및 `BanditSelector.java` 대상 충돌 리스 없음 (allowed=true).
+
+# 2. 공통 규칙 및 가드레일
+- [가드 1: 기존 소스 충격 제로 (Zero Breaking Change)] 기존 메서드 시그니처(`translate`, `pickBestMemoryCandidate`, `decideWithBoltzmann`)는 매개변수나 반환 타입을 바꾸지 않으며, 외부 호출자에게 완벽한 하위 호환성을 제공한다.
+- [가드 2: Fallback-First 이중 레일] 최적화된 쿼리 또는 Bounded 조회가 비어있거나 예외 발생 시, 기존 동작과 동일하게 안전하게 처리(null-safe, empty-safe)되어 서비스 장애를 차단한다.
+- [가드 3: Focused 테스트만 실행] `gradlew :test` 전체 스위프는 OOM 및 타임아웃을 유발하므로 실행하지 않으며, 오직 대상 클래스 단위 테스트(`com.example.lms.service.AdaptiveTranslationServiceTest`)만 실행한다.
+- [가드 4: 프론트엔드 보존] 본 작업은 백엔드 서비스 계층의 안전한 잔재 정리이므로 UI 소스(`chat.js`, CSS, HTML)는 일체 수정하지 않는다.
+- [가드 5: 작업 범위 최소화] 오직 지정된 3개 파일만 수정하며, 임의의 스키마 변경이나 전역 리팩토링을 배제한다.
+
+# 3. 기준 해시 표 (참조 및 대상 파일)
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| main/java/com/example/lms/service/AdaptiveTranslationService.java | 02B7C98AECCF | - | 수정 허용 (최소 변경) |
+| main/java/com/example/lms/service/ml/BanditSelector.java | A96FA32847BF | - | 수정 허용 (최소 변경) |
+| src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java | 6D65E075D96C | - | 수정 허용 (테스트 보존 및 추가) |
+| main/java/com/example/lms/repository/TranslationMemoryRepository.java | 6CA62F88388C | - | 읽기 전용 (참조) |
+| main/java/com/example/lms/repository/DomainKnowledgeRepository.java | ECE29CE6CECE | - | 읽기 전용 (참조) |
+
+# 4. 입력 판정표
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| MariaDB/lmsdb에 RAG/LLM 랭킹 및 벡터 쿼리가 구축되어 있다 | RIGHT | `TranslationMemoryRepository.java:150-161`에 네이티브 정렬/랭킹 쿼리 구현 확인. |
+| 기존 소스에 findAll().stream() 전수 메모리 스캔 레거시 잔재가 있다 | RIGHT | `AdaptiveTranslationService.java:141`, `BanditSelector.java:63`에 `memoryRepo.findAll()` 존재 확인. |
+| 데빈이 임의로 코드를 지우면 기존 테스트와 소스가 깨질 위험(도박)이 있다 | RIGHT | `AdaptiveTranslationServiceTest.java:85`에서 `findAll()` 모킹이 전제되어 있어 파괴적 수정 시 즉시 실패함. |
+| Fallback 보존 및 이중 레일 방식으로 충격 없는 개선이 가능하다 | RIGHT | exact hash 우선 → 쿼리/제한 탐색 → 결과 부재 시 빈 리스트 안전 반환 형태로 시그니처 100% 호환 보장. |
+
+# 5. 수정 허용 (Allow List)
+- `main/java/com/example/lms/service/AdaptiveTranslationService.java`
+- `main/java/com/example/lms/service/ml/BanditSelector.java`
+- `src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java`
+
+# 6. 항목 (세부 실행 WP)
+
+### WP1 [DEVIN] 기준선 단위 테스트 사전 검증
+- 증거: `src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java`
+- RED/기준 검사: 수정 착수 전 기존 테스트가 현재 소스에서 100% 정상 통과함을 터미널에서 확인
+- 실행 명령:
+  `.\gradlew.bat :test --tests com.example.lms.service.AdaptiveTranslationServiceTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- GREEN: 기존 3개 테스트 PASS (exit=0)
+- 완료 조건: 기존 테스트 통과 로그 확보
+
+### WP2 [DEVIN] `AdaptiveTranslationService`의 전수 메모리 스캔 레거시 잔재 안전 격리
+- 증거: `main/java/com/example/lms/service/AdaptiveTranslationService.java:134-160`
+- 대상 파일: `main/java/com/example/lms/service/AdaptiveTranslationService.java`
+- 최소 수정 지침:
+  1. `findMemoryCandidate(String text, String hash)` 내부에서 `exact` 매칭(`findBySourceHash`) 최우선 로직을 그대로 보존한다.
+  2. `findAll().stream()`을 무조건 삭제하지 않고, 내부 헬퍼 메서드로 분리하거나 `@Deprecated /* legacy in-memory fallback */` 형태로 격리한다.
+  3. 테스트 모킹과의 호환성을 100% 유지하기 위해, `findAll()`이 모킹된 단위 테스트 환경에서도 NPE나 불일치 없이 정상 작동하도록 방어 코드를 작성한다.
+  4. 시그니처 및 반환형 `Optional<TranslationMemory>`는 일체 변경하지 않는다.
+- GREEN: `AdaptiveTranslationServiceTest` 실행 시 회귀 에러 0건 (exit=0)
+- 완료 조건: `AdaptiveTranslationService.java` 파일의 수정 및 컴파일 성공
+
+### WP3 [DEVIN] `BanditSelector`의 전수 메모리 스캔 레거시 잔재 안전화
+- 증거: `main/java/com/example/lms/service/ml/BanditSelector.java:53-89`
+- 대상 파일: `main/java/com/example/lms/service/ml/BanditSelector.java`
+- 최소 수정 지침:
+  1. `pickBestMemoryCandidate(String srcText, String srcHash)`의 퍼블릭 시그니처 및 반환형을 100% 유지한다.
+  2. 동적 하이퍼파라미터(`hp.getInt("memory.k-top", 5)`, `dynThreshold`, 볼츠만 소프트맥스 샘플링) 로직의 정합성을 보존한다.
+  3. `exact` 매칭 우선 로직을 온전히 유지하고, 후보군이 비어있을 때의 `Optional.empty()` 반환 경로를 안전하게 지킨다.
+  4. 주석 및 레거시 표시를 통해 전수 스캔 잔재가 무분별하게 확장되지 않도록 경계를 명확히 둔다.
+- GREEN: 컴파일 오류 0건 및 `AdaptiveTranslationServiceTest`와의 연동 정상
+- 완료 조건: `BanditSelector.java` 수정 및 컴파일 성공
+
+### WP4 [DEVIN] 회귀 방지 단위 테스트 검증 및 확정
+- 증거: `src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java`
+- 대상 파일: `src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java`
+- 최소 작업:
+  1. 기존 3개 테스트가 단 하나의 실패 없이 통과하는지 검증한다.
+  2. 신규 테스트 메서드 `exactHashMatchBypassesMemoryScan()`를 추가하여 정확 일치 해시가 존재할 때 불필요한 전체 탐색 없이 즉시 반환되는 가드레일을 입증한다.
+- 검증 명령:
+  `.\gradlew.bat :test --tests com.example.lms.service.AdaptiveTranslationServiceTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- GREEN: 총 4개 테스트 모두 PASS (exit=0)
+- 완료 조건: 단위 테스트 전체 성공 확인
+
+# 7. HOLD 조건
+- WP1 사전 검증에서 `AdaptiveTranslationServiceTest`가 실패하는 경우 즉시 HOLD (사전 상태 오염).
+- `TranslationMemoryRepository`나 타 리포지토리의 DDL/스키마 변경 또는 엔티티 필드 삭제가 요구되는 경우 즉시 HOLD.
+- `chat.js`, `ChatController`, `PromptBuilder` 등 RAG 코어 프론트/오케스트레이션 파일을 건드려야 하는 상황 발생 시 즉시 HOLD.
+- 자가 수정 시도가 3회를 초과하거나 컴파일 에러를 해결하지 못하면 즉시 롤백하고 FOR_CODEX로 이관 후 HOLD.
+
+# 8. ASK_ONCE (사용자 결정, 최대 6개, 권장값 먼저)
+- U-1: 레거시 `findAll()` 잔재 처리 강도 — (a) 권장: 기존 테스트 모킹과의 100% 호환성을 위해 fallback 헬퍼로 격리하고 @Deprecated 주석 처리 (충격 제로) (b) 테스트 코드까지 모두 고쳐서 `findAll()`을 완전히 제거 (호환성 리스크 존재)
+- U-2: `BanditSelector` 최적화 범위 — (a) 권장: 메서드 시그니처와 볼츠만 수식을 온전히 유지하며 방어 코드 보강 (안전 우선) (b) DB 쿼리로 볼츠만 전처리까지 이관 (설계 변경 필요)
+
+# 9. 절대 금지
+- Git push, commit, add -A, commit -a, branch 생성, remote 추가 절대 금지.
+- 전체 테스트 스위트(`gradlew :test`, `gradlew check`, full test suite) 실행 금지 (focused test만 허용).
+- `chat.js`, CSS, HTML 등 UI/프론트엔드 파일 수정 절대 금지.
+- 평문 비밀번호, API 키, DB 접속 토큰 등 비밀값의 출력 또는 커밋 절대 금지 (환경변수 이름만 참조).
+- 퍼블릭 메서드 시그니처 삭제 또는 예외 던지기 변경 절대 금지.
+- PROTO_OPEN 보안 규칙 임의 변경 절대 금지.
+
+# 10. Acceptance (완료 기준, 미실행은 NOT_RUN+사유)
+- [ ] AC-1 (WP1): 사전 기준선 `AdaptiveTranslationServiceTest` 기존 3개 테스트 PASS 확인. (미실행 시: NOT_RUN_BASELINE_FAIL)
+- [ ] AC-2 (WP2): `AdaptiveTranslationService`의 전수 메모리 스캔 레거시 잔재 안전 격리 및 시그니처 100% 보존. (미실행 시: NOT_RUN_ADAPTIVE_FAIL)
+- [ ] AC-3 (WP3): `BanditSelector` 시그니처 보존 및 볼츠만 정합성 유지. (미실행 시: NOT_RUN_BANDIT_FAIL)
+- [ ] AC-4 (WP4): `AdaptiveTranslationServiceTest` 기존 3개 + 신규 1개 총 4개 테스트 100% 통과 입증. (미실행 시: NOT_RUN_TEST_FAIL)
+
+# 11. 보고 형식
+외부 API: 호출 0건 ($0)
+- ledger: data\agent-handoff\devin-mariadb-lms-legacy-cleanup-safe\state.json
+- 결과 요약: (성공/HOLD)
+- 변경 파일:
+  - main/java/com/example/lms/service/AdaptiveTranslationService.java
+  - main/java/com/example/lms/service/ml/BanditSelector.java
+  - src/test/java/com/example/lms/service/AdaptiveTranslationServiceTest.java
+- 검증 증거:
+  - gradlew test 결과 (exit code 및 통과 테스트 수)
+- 충격 평가: 기존 퍼블릭 API 호환성 100% 보존, 회귀 0건 확인
+
+# 12. 검증 명령 블록
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+.\gradlew.bat :test --tests com.example.lms.service.AdaptiveTranslationServiceTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+```
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업을 실제로 완수하고 결과를 검증·보고해야 한다.

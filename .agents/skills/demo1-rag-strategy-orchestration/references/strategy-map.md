@@ -117,7 +117,7 @@
 
 ## Runtime Boundary And Non-Strategy Canonical Seams
 
-- Active sourceSets: backend `main/java` + `main/resources`; `:app` `app/src/main/java_clean` + `app/src/main/resources`. `project/src/main/java`, `app/src/main/java`, `demo-1`, `lms-core`, backups, archives, generated outputs = inactive/reference unless Gradle evidence proves otherwise.
+- Active sourceSets: root `main/java` + `main/resources`, tests `src/test/java` + `src/test/resources` (`build.gradle.kts`). `app/build.gradle.kts` explicitly empties app main/test Java and resources; `app/src/main/java_clean`, `app/src/main/resources`, `project/src/main/java`, `app/src/main/java`, `demo-1`, `lms-core`, backups and generated outputs are reference-only unless current Gradle declarations prove otherwise. Empty `:app:test` is not runtime verification.
 - Application entry: `main/java/com/example/lms/LmsApplication.java`. Non-web boot must stay valid: servlet request helpers tolerate no current `HttpServletRequest`; servlet `SecurityFilterChain` beans guarded `@ConditionalOnWebApplication(type = SERVLET)`.
 - Final prompt assembly: `main/java/com/example/lms/prompt/PromptBuilder.java` — keep final prompt construction on the builder/context boundary.
 - CFVM failure-pattern memory: `main/java/com/example/lms/cfvm` (`RawMatrixBuffer`, `RawSlotExtractor`, `CfvmFailureRecorder`).

@@ -1,0 +1,156 @@
+[depth L2: 실행자 직행 지시서 — 주장 전부 라이브 file:line·트레이스 대조 완료]
+[ANTI-STOP]
+$demo1-work-ledger
+[CODEX 지시서] 검증기 판정불능(fail-soft)이 웹서치 성공 답변을 통째로 보류시키는 결함 수정 — 2026-10-05 19:30 KST
+파일 ID: PASTE_CODEX_VERIFIER_FAILSOFT_RELEASE_20261005
+금지 (이 작업 전체): push/commit/add -A 0 · remote 추가·원격 조작 0 · 비밀값 출력 0 · 유료/외부 라이브 API 호출 0 · 무관 파일 수정 0 · PROTO_OPEN 관련 임의 규칙 변경 0 · 전체 :test 스위프 0
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+웹서치 후보가 검색·승격까지 성공했는데도 최종 검증기의 인프라 판정불능(fail-soft, outcomeKnown=false)만으로 답변 본문이 통째로 "검증된 근거가 추가로 필요해 응답 본문을 보류했습니다"로 대체되는 경로를, DEMO1-EVIDENCE-ZERO-RELEASE 정책에 맞게 "본문 유지 + 미검증 표기 + 메모리 쓰기 금지"로 재분류한다.
+
+### 1. 사실 (라이브 읽기 전용 확인, 2026-10-05 18:55~19:30 KST)
+- 영상 `C:\Users\nninn\Downloads\24274.mp4` (32,541,568 B, sha12 1E17AFE27B0F, ~203초): 공개 채팅에서 "을지대학교병원 이창화 교수" 질의 → 웹검색 실행(검색 질의 1개·전송 1회) → 후보 W1~W4(emc.ac.kr 등 정답 페이지) → 60초+ 대기 → 본문이 보류 문구로 대체, 근거 카드는 "검색 후보 · 인용 미확인 / 출처 연결만 표시".
+- 라이브 트레이스 `logs/debug-events.ndjson`, trace `hash:5f8510ef244c` (19:01:03 KST, sid hash:df9112c1a383, 모델 chatgpt-oauth:gpt-5.6-sol):
+  - `RagEvidenceAttributionService.promoteForPrompt`: candidateCount=7, promotedCount=7, evidenceGatePassed=true — 검색·근거 승격은 성공.
+  - `PROMPT_EVIDENCE`: status=HELD, reasonCode=existing_release_guard_hold, hardGuard=true (POLICY_DENIED).
+  - `LLM`: status=HELD, reasonCode=runtime_lineage_missing (OBSERVABILITY_GAP).
+  - `VERIFICATION`: status=HELD, reasonCode=verification_outcome_missing (OBSERVABILITY_GAP).
+- 서버: 18:40 boot-검증된 pid 33668(:18180)이 영상 내내 동일 프로세스, compileJava UP-TO-DATE — 중간-수정 상태가 아닌 확정 빌드 경로에서 발생.
+- 저널/리스 (19:15 KST, `python -B scripts/agent_scope_lease.py who`): 활성 리스 0. in_progress 저널 `codex-display-model-state-f1a1a8b1`의 범위는 `main/resources/static/assets/display/display-focus-controls.js`+`src/test/js/display-focus-client.test.cjs`뿐 — 채팅 보류 경로와 무관. `codex-timeout-split-ae8f6e83` 저널은 10-03 갱신 이후 stale(범위 `main/java/com/example/lms/llm`, `service/chat` 등 — 본 지시 대상과 비중복). working tree dirty 539(만성, 완료 조건 아님).
+- 확정 인과 체인: 웹서치 성공+초안 생성 → `FactVerifierService`의 `VerificationState`가 fail-soft(`markFailSoft()`/`reject("unknown")` → status="unknown", outcomeKnown=false, `main/java/com/example/lms/service/FactVerifierService.java:490-534`) → `ChatWorkflow.applyFinalVerificationReleaseGate`의 `!outcomeKnown` 분기(:8152-8159)가 content를 "evidence_needed…"로 교체하고 releaseAllowed=false → `hardGuardHeld=true`(:4743) → plan `existing_release_guard_hold` → `RagActionPlan.shouldStop()`(`RagActionPlan.java:94-95`) → `heldNoticeFor` default 분기(`RagControlPresentationBoundary.java:180-189`) → `HELD_NOTICE`(`RagControlProjectionRenderer.java:12-16,30`)로 본문 대체.
+- "검색 후보 · 인용 미확인" 카드 문구는 `main/resources/static/js/chat-evidence-graph.js`의 `source.cited=false` 라벨일 뿐이며 검색 실패의 증거가 아니다.
+- 보조 HOLD: `runtime_lineage_missing`은 `RagControlRuntimeAdapter.isSelectedReceiptBackedSuccess`(:411~)가 요구하는 `controlled_http_server` 영수증 체인 미완결로 발생 — 다이제스트 `DecisionEvidenceReconstruction`에 attempts=0·lineageMismatch=1이 만성 기록돼 있어 이 run만의 일시 장애가 아니다.
+- 정책: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` — HOLD는 명시 evidence_needed/must-cite, 미해결 최종검증 "실패", 기존 안전 차단에만. fail-soft(판정 인프라 실패)는 검증 실패(부정 판정)와 다르다.
+
+### 2. 기준 해시 표 (2026-10-05 19:20 KST)
+| 경로 | sha12 | 권한 |
+|---|---|---|
+| main/java/com/example/lms/service/ChatWorkflow.java | 8EBC96911732 | 수정 |
+| main/java/com/example/lms/service/FactVerifierService.java | F155F2F18905 | 읽기(수정 필요 시 ASK) |
+| main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java | 35C70B50C905 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlPresentationBoundary.java | D4C36C5962E7 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlProjectionRenderer.java | 2783DA363585 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagActionPlan.java | (대조 시 측정) | 읽기 |
+| main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java | 4AA45D1144EC | 읽기(이미 구현, 참조용) |
+| main/resources/static/js/chat-evidence-graph.js | EED49DCBCC1A | 읽기(라벨만, 수정 금지) |
+| src/test/java/com/example/lms/service/ChatWorkflowFinalVerificationReleaseGateTest.java | AEA77B88578B | 수정(계약 갱신) |
+| src/test/java/com/example/lms/api/ChatHarmonyFinalVerificationReleaseBoundaryTest.java | 33DB602BB616 | 수정(계약 갱신) |
+| src/test/java/com/example/lms/orchestration/control/RagControlPresentationBoundaryTest.java | 2BA99DDFD89A | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlProjectionRendererTest.java | CAFB553BDED7 | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlRuntimeAdapterTest.java | 6C2BD38460F2 | 수정 |
+| src/test/java/com/example/lms/service/ChatWorkflowAgentWebBudgetContractTest.java | 7BF1FB166C0E | 수정 |
+| src/test/java/com/example/lms/service/FactVerifierDetailedOutcomeTest.java | A77A3D7C7F78 | 읽기(참조) |
+| docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md | AF76A4D14AED | 읽기(정책 근거) |
+
+### 3. 입력 판정표
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| "웹서치 결과가 나왔는데 씹혔다" | RIGHT (행동 기술로는 정확) | trace promotedCount=7·evidenceGatePassed=true인데 본문이 HELD_NOTICE로 대체 |
+| "검색 자체가 실패했다" | WRONG | promoteForPrompt 로그가 승격 성공을 증명 |
+| "영상 시각에 내가/에이전트가 소스를 만진 게 원인" | WRONG | 동일 pid·UP-TO-DATE 컴파일, 활성 저널 범위는 Display JS뿐 — 보류는 결정적 코드 경로 |
+| "10-02 제로-근거 보류 해제 패치가 이 증상을 이미 고쳤다" | 부분 RIGHT | `applyEvidenceReleasePolicy` 경로는 정상 동작 — 이번 보류는 final-verification gate 경로라 미해결 잔재 |
+| "SelfAsk safety-gate가 무분별 사유만 찍는다" | 부분 STALE | `SelfAskWebSearchRetriever.java:359-373`은 `safety-gate:<detail>` 이미 구현; `ChatWorkflow.java:2334`의 skip("safety-gate")만 무분별 잔재 |
+| "Brave/Naver providerReceiptObserved 미갱신" | STALE | `NaverSearchService.java:2516,2564`·`BraveSearchService.java:1031,1039`에 true 기록 이미 구현 — 재지시 금지 |
+| "outcomeKnown=false면 본문 HOLD가 맞다" | RIGHT(현 계약)·정책 충돌 | `ChatWorkflowFinalVerificationReleaseGateTest:107-113`이 HOLD 주장 — 정책 문서와 충돌하므로 의도적 계약 변경 대상 |
+
+### 4. 공통 규칙
+- 최소 diff. 무관 코드·테스트·문서 건드리지 않는다. 비밀값 출력/커밋 금지.
+- 형상 관리 금지: git push/pull/fetch/merge/rebase/reset/clean, add -A/add ./commit -a, remote 추가 등 원격 조작 일절 금지. 이 작업은 로컬 커밋도 하지 않는다.
+- 테스트는 WP별 지정 focused 명령만 — `:test` 전체 스위프 금지.
+- 컴파일이 있는 WP는 `AWX_SPLIT_BUILD_OUTPUTS=1` + `AWX_BUILD_HOST_ID=<host>` 환경에서 focused만, clean 금지.
+- FactVerifierService는 원칙 읽기 전용 — 수정이 불가피하다고 판단되면 그 시점에 멈추고 U-1에 답을 받는다.
+- 명시 must-cite/evidence-required 요청, 실제 부정 판정(insufficient/rejected/inconsistent), 안전 차단의 HOLD는 유지 — 지시 범위는 "판정 인프라 불능"과 "관측성 갭"뿐이다.
+
+### 작업 항목 (WP1~WP4)
+
+WP1 [Codex] 검증기 판정불능 분기 재분류 — 초안 유지 + 미검증 릴리스 + 메모리 금지
+- 증거: `main/java/com/example/lms/service/ChatWorkflow.java:8132-8192` (`applyFinalVerificationReleaseGate`), `main/java/com/example/lms/service/FactVerifierService.java:490-534` (fail-soft 의미: judge 빈 응답/예외/malformed/budget = 인프라 판정불능이지 답변 부정 판정이 아님), `ChatWorkflow.java:4743` (hardGuardHeld 전파)
+- 최소 수정: `:8152-8159` `!outcomeKnown` 분기에서
+  - content = safeCandidate (초안 본문 유지)
+  - releaseStatus = 신규 값(예: "RELEASED_UNVERIFIED") 또는 기존 체계에 맞는 신규 상태
+  - reasonCode = "verification_unknown_release" (신규)
+  - releaseAllowed = true, evidencePolicyApplied = false, knowledgeWriteAllowed = false
+  - `insufficient`/`rejected`/`inconsistent`/실제 부정 판정 분기는 변경 금지. 명시 evidence-required 요청은 `applyEvidenceReleasePolicy`가 이어서 최종 판정하므로 이 분기가 그 판정을 우회하지 않는다(기존 `evidence_required_empty` 계약 유지 — 테스트 :172-177 보존).
+- RED: `.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowFinalVerificationReleaseGateTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` — 현재 :107-113의 `!outcomeKnown→HOLD` 주장이 FAIL(의도된 RED)이어야 하고, 신규 주장 3개(unknown→releaseAllowed=true·reasonCode=verification_unknown_release·knowledgeWriteAllowed=false)를 추가한다.
+- GREEN: 같은 명령 재실행 exit=0 + `.\gradlew.bat :test --tests com.example.lms.api.ChatHarmonyFinalVerificationReleaseBoundaryTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` — :26-40의 `unknown→releaseAllowed=false` 주장을 신규 계약으로 갱신.
+- 완료 조건: fail-soft(unknown) 답변은 본문 유지로 릴리스되고 `finalAnswer.releaseReason=verification_unknown_release`, `finalAnswer.memorySaveAllowed=false`가 트레이스에 기록. insufficient/rejected/inconsistent는 기존 HOLD/REJECT 그대로.
+
+WP2 [Codex] 보류 사유 전파 — existing_release_guard_hold 붕괴 해소 + 사유별 문구
+- 증거: `ChatWorkflow.java:4743` (releaseDecision이 bool로 붕괴), `RagControlPresentationBoundary.java:180-189` (existing_release_guard_hold → default → generic HELD_NOTICE), `RagControlProjectionRenderer.java:12-16`
+- 최소 수정: RuntimeInput/finding evidence에 실제 `releaseDecision.reasonCode()`를 싣고(plan finding에 reason 노출), `heldNoticeFor`에 사유별 문구 분기 최소 1개 추가 — 남은 HOLD가 "검증기 호출 실패"인지 "근거 부족"인지 사용자·에이전트가 구분 가능하게. 신규 문구는 기존 CONTROL_FAILURE_NOTICE/MODEL_FAILURE_NOTICE와 같은 상수 패턴을 따른다.
+- RED: `.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlPresentationBoundaryTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` — 사유별 문구 분기 주장 추가
+- GREEN: 같은 명령 + `.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlProjectionRendererTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- 완료 조건: HOLD 시 실제 release 사유(reasonCode)가 finding/트레이스에 노출되고 사유별 문구 분기가 테스트로 고정.
+
+WP3 [Codex] runtime_lineage_missing 격하 — 관측성 갭이 본문을 잠그지 않게
+- 증거: `RagControlRuntimeAdapter.java:378,411~` (`isSelectedReceiptBackedSuccess`의 controlled_http_server 영수증 요구), trace LLM finding `runtime_lineage_missing` HOLD, DecisionEvidenceReconstruction의 만성 attempts=0·lineageMismatch=1
+- 최소 수정: lineage 불완전만으로는 본문 stop을 하지 않도록 — plan 합성에서 lineage-missing finding을 본문 stop 대상에서 제외하고 진단(DEGRADE/진단 finding)으로 기록하거나, verificationRequired와의 결합 조건을 조정. control_projection_failed 등 진짜 제어-계층 장애와 안전 차단은 유지. 격하 지점은 최소 diff가 되는 쪽을 실행자가 선택하되, "관측성 갭은 본문 보류 사유가 아니다" 계약을 테스트로 고정.
+- RED: `.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlRuntimeAdapterTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` — lineage-missing 단독 finding이 본문 stop을 유발하지 않음을 주장
+- GREEN: 같은 명령 + `RagControlPresentationBoundaryTest`
+- 완료 조건: lineage-missing만 있는 run은 본문이 살아 있고 finding은 진단으로 남는다. attempt ledger coverage(attempts=0 근본 원인)는 이번 범위 밖 — 후속 지시서 대상으로 보고에 기록.
+
+WP4 [Codex] 워크플로우 safety-gate skip 사유 상세화
+- 증거: `ChatWorkflow.java:2334` `requestSearchBudget.skip("safety-gate")` 무분별 vs `SelfAskWebSearchRetriever.java:359-373` `safety-gate:<detail>` 이미 구현
+- 최소 수정: `:2334`를 `skip("safety-gate:" + <발동 플래그>)`로 — `!executionSelfAskEnabled / !hints.isEnableSelfAsk() / !hints.isAllowWeb() / forceLightSearchMode` 중 실제 발동 플래그 태깅
+- RED: `.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowAgentWebBudgetContractTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` — `"safety-gate:<detail>"` 패턴 주장 추가
+- GREEN: 같은 명령 exit=0
+- 완료 조건: 트레이스/예산 스킵에 `safety-gate:<detail>` 형태 기록.
+
+### 6. 검증 명령 블록 (각 명령 exit 기록)
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+$env:AWX_SPLIT_BUILD_OUTPUTS='1'; $env:AWX_BUILD_HOST_ID='codex-release-gate'
+.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowFinalVerificationReleaseGateTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+.\gradlew.bat :test --tests com.example.lms.api.ChatHarmonyFinalVerificationReleaseBoundaryTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlPresentationBoundaryTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlProjectionRendererTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+.\gradlew.bat :test --tests com.example.lms.orchestration.control.RagControlRuntimeAdapterTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowAgentWebBudgetContractTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+
+### 7. lease · journal 절차
+- 시작: `python -B scripts/agent_scope_lease.py check --path <대상>` → 충돌 없으면 `python -B scripts/agent_scope_lease.py claim --targets <대상> --task <taskId>` → 끝에 `done`.
+- journal: `python -B scripts/work_journal.py open --task <taskId> --agent codex --purpose "..." --scope <targets>` → 변경마다 `scripts/codex_work_checkpoint.py` 체크포인트 → 검증 후 `note`/`close`.
+- 타인 리스/저널이 대상 파일을 잡고 있으면 BLOCKED_LEASE로 표기하고 우회 금지.
+- stale `codex-timeout-split-ae8f6e83` 저널의 범위(`main/java/com/example/lms/llm` 등)와 본 지시 대상은 비중복 — 정리는 하지 않고 표기만.
+
+### 8. HOLD 조건
+- 대상 파일에 활성 타인 리스 확인 → 해당 파일 BLOCKED_LEASE, 나머지 계속.
+- 명시 must-cite/evidence-required 요청 또는 안전 차단 계약을 건드려야 한다고 판단되면 즉시 HOLD + U-1 보고.
+- 로그/출력에 API 키·토큰 평문이 노출될 위험 감지 → 즉시 HOLD.
+- 실행 중 서버(:18180) 강제 종료/재기동이 필요해지면 HOLD — 생명주기 규칙 문의.
+
+### 9. ASK_ONCE (기본값 포함, 무응답 시 권장값으로 진행)
+- U-1. `!outcomeKnown`(검증기 판정불능) 처리: (a) 권장 — 본문 유지 릴리스 + 미검증 표기 + 메모리 쓰기 금지 (b) 현행 HOLD 유지 + 사용자에게 재시도 안내 (c) 재시도 1회 후 판정불능이면 (a)
+- U-2. `runtime_lineage_missing` 처리: (a) 권장 — 본문 stop 해제·진단 finding으로 격하(attempt ledger 보강은 별도 후속) (b) 본 지시서에서 attempt ledger coverage까지 수정(범위 확대, 비추천)
+- U-3. 보류 문구: (a) 권장 — 사유별 문구 분기 추가 (b) generic 문구 유지하고 트레이스 사유만 노출
+
+### 10. 절대 금지
+- git push/pull/fetch/merge/rebase/reset/clean/stash, add -A/add ./commit -a/commit --no-verify, remote 추가 등 원격 조작 일절 금지. 이 작업은 로컬 커밋도 하지 않는다.
+- API 키·OAuth 토큰 등 비밀값의 평문 출력/커밋 금지. PROTO_OPEN 관련 규칙 임의 변경 금지.
+- `:test` 전체 스위프·`clean`·전체 빌드 금지 — 지정 focused 명령만.
+- FactVerifierService 임의 수정 금지(필요 시 HOLD+ASK). openssl 관련 파일 무조건 불변.
+- 18180 서버·cloudflared·터널·배포 설정 임의 변경 금지.
+- `chat-evidence-graph.js`의 카드 라벨을 인용 없이 "인용됨"으로 바꾸는 식의 표면 패치 금지 — 보류 원인을 고치는 것이지 라벨을 위장하지 않는다.
+- 외부 유료 API·라이브 모델 호출로 검증하지 않는다 — 모든 검증은 focused 단위 테스트로.
+
+### 11. Acceptance (완료 수용 기준)
+- WP1: unknown 분기에서 releaseAllowed=true·knowledgeWriteAllowed=false·reasonCode=verification_unknown_release이고, insufficient/rejected/inconsistent는 기존과 동일하게 HOLD/REJECT — 테스트로 증명.
+- WP2: 남은 HOLD에 실제 사유가 finding·문구로 노출 — 테스트로 증명.
+- WP3: lineage-missing 단독으로 본문이 stop되지 않음 — 테스트로 증명.
+- WP4: `safety-gate:<detail>` 기록 — 테스트로 증명.
+- 지정 6개 focused 테스트 전부 exit=0 기록(각 명령 exit 표기). 미실행은 NOT_RUN+사유.
+- `finalAnswer.releaseReason`/`finalAnswer.memorySaveAllowed` 트레이스 키가 신규 동작을 반영.
+
+### 12. 종료 상태 (하나만)
+DONE_OFFLINE | DONE_LIVE | ALREADY_COVERED | BLOCKED_LEASE | NOT_RUN_ENV | APPROVAL_REQUIRED
+
+### 13. 보고 형식
+- 첫 줄: `외부 API: 없음`
+- WP별 RED→GREEN 증거(명령+exit), 계약 변경 요약, 변경 파일 sha12(before/after)
+- NOT_RUN·BLOCKED·보류 사유 명시, U-1~U-3 채택안 표기
+- 끝에 `한 줄:` 요약
+
+근거 SSOT: docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md · logs/debug-events.ndjson (trace hash:5f8510ef244c) · AGENTS.md#Evidence And Verification · .agents/skills/demo1-work-ledger
+[ANTI-STOP]

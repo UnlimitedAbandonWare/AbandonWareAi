@@ -1,0 +1,158 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 끝까지 수행하고 결과를 검증·보고하는 실행 지시서다.
+@demo1-db-agent-cli
+[DEVIN 지시서] MariaDB LMS 학습 잔재 쓰레기 데이터 안전 식별 및 격리·삭제 가드레일 — 2026-10-05 00:00 KST
+파일 ID: PASTE_DEVIN_MARIADB_LMS_CLEANUP_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 원본 무백업 삭제 0 · 보호 테이블 변조 0 · commit/push/add -A 0 · remote 추가 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 위반 0
+
+0. 한 줄 목표
+MariaDB 데이터베이스에서 과거 LMS 학습·실험 과정에서 누적된 저품질·고아·실패 잔재(학습 작업, 미검수/고오차 샘플, 볼츠만 에너지 폭주 메모리, DLQ 만료건)를 식별하고, 전체 백업과 DRY-RUN 감사 가드레일 하에 안전하게 격리·배치 삭제하여 기존 운영 기능(관리자, 설정, 정상 대화/RAG)의 무결성을 100% 보존한다.
+
+# 1. 사실 (읽기 전용 확인, 2026-10-05 00:00 KST)
+- MariaDB 데이터소스 설정은 `main/resources/application-prod.yml`에 LMS_DB_URL, LMS_DB_USERNAME, LMS_DB_PASSWORD 기반 정의(MariaDBDialect).
+- 메타데이터 검사용 도구 `scripts/DesktopMariaDbMetadataSnapshot.java` 및 연결 점검 스크립트 `scripts/smoke_agent_mariadb_context.ps1`이 레포에 기구축됨.
+- 학습/LMS 관련 테이블: `training_job`, `hyperparameter`, `translation_samples`, `translation_memory`, `vector_quarantine_dlq`, `vector_shadow_merge_dlq`.
+- 핵심 보호 테이블: administrators(관리자 토큰), users/user_preference_profiles(사용자), configuration_setting(설정), current_model/models/model_info(모델 메타). 임의 삭제/변경 전면 금지.
+- `translation_memory`의 PROTECTED FIELDS (`qValue`, `energy`, `temperature`, `confidenceScore`, `lastUsedAt`)는 모델 서빙 및 강화 파이프라인에서 참조하므로 스키마 변경/드롭 불가, 비정상 고아 행만 정밀 선별 삭제.
+
+# 2. 공통 규칙 및 가드레일
+- [가드 1: 사전 백업 필수] 작업 착수 전 반드시 `mariadb-dump` 또는 `mysqldump`로 `--single-transaction --routines --triggers --events` 전체 논리 백업 수행 후 용량(>0)과 sha12 기록. 무백업 DELETE 즉시 중단.
+- [가드 2: 절대 보호 테이블] `administrators`, `users`, `user_preference_profiles`, `configuration_setting`, `current_model`, `models`, `model_info` 테이블 DELETE/TRUNCATE/ALTER 엄격 금지.
+- [가드 3: DRY-RUN 우선] 모든 삭제 쿼리는 먼저 `SELECT COUNT(*)`, `SELECT id, ... LIMIT 5`로 영향도 확인 후 진행. 대상 0건이면 안전하게 스킵.
+- [가드 4: 외래키 바텀업] `foreign_key_checks`는 수동 삭제 시 인위적으로 끄지 않으며, 자식 테이블(`hyperparameter`) 먼저 삭제 후 부모 테이블(`training_job`) 삭제.
+- [가드 5: 배치 삭제 및 락 방지] 대량 건수(1,000건 초과) 삭제 시 `LIMIT 1000` 반복 배치 처리를 통해 테이블 락 방지.
+- [가드 6: 제품 소스 변경 금지] Java 소스나 프로덕션 코드는 수정하지 않으며, SQL 및 점검 도구 형태로 격리 실행.
+
+# 3. 기준 해시 표 (참조 및 대상 파일)
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| scripts/smoke_agent_mariadb_context.ps1 | 792ccde28b9a | - | 읽기/실행 |
+| scripts/DesktopMariaDbMetadataSnapshot.java | 0f3899966401 | - | 읽기/실행 |
+| scripts/db_agent.py | b686165280fa | - | 읽기/실행 |
+| main/resources/application-prod.yml | 1b0b4cf079e8 | - | 읽기 전용 (수정 금지) |
+| main/java/com/example/lms/domain/TrainingJob.java | 5a3daa067094 | - | 읽기 전용 (참조) |
+| main/java/com/example/lms/domain/TranslationSample.java | e25d14e096d2 | - | 읽기 전용 (참조) |
+| main/java/com/example/lms/entity/TranslationMemory.java | 7d9207558e06 | - | 읽기 전용 (참조) |
+| main/java/com/example/lms/entity/VectorQuarantineDlq.java | a29286c7f0a8 | - | 읽기 전용 (참조) |
+
+# 4. 입력 판정표
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| 과거 LMS 학습 작업 중 실패/방치된 쓰레기 데이터 존재 가능 | RIGHT | `TrainingJob`, `Hyperparameter` 엔티티 존재. status FAILED 또는 중단된 작업이 DB에 잔존 가능. |
+| 번역/학습 샘플 중 품질 오차가 높거나 깨진 텍스트 존재 가능 | RIGHT | `TranslationSample`에 `qError`, `needsReview`, `trainedAt` 필드로 미검수/에러 샘플 잔재 판별 가능. |
+| 볼츠만 메모리 중 오염 데이터가 RAG에 악영향 줄 가능 | RIGHT | `TranslationMemory`의 비정상 energy(극단값) 또는 실패 누적(failureCount 과다) 데이터는 검색 랭킹을 왜곡함. |
+| 관리자나 기존 핵심 서비스 데이터가 삭제될 위험 | RIGHT | 가드레일 없이 전체 TRUNCATE 시 시스템 마비 위험 → 절대 보호 테이블 지정으로 격리 해결. |
+
+# 5. 항목 (세부 실행 WP)
+
+### WP1 [DEVIN] DB 환경 진단 및 사전 전체 논리 백업
+- 증거: `scripts/smoke_agent_mariadb_context.ps1`, `scripts/DesktopMariaDbMetadataSnapshot.java`
+- RED 검사: MariaDB 접속 가능 여부 및 백업 미확보 상태 확인
+- 최소 작업:
+  1. DB 연결 상태 점검: `powershell -File scripts/smoke_agent_mariadb_context.ps1 -Endpoint snapshot`
+  2. 사전 논리 백업: `mariadb-dump -u $env:LMS_DB_USERNAME -p --single-transaction --quick --routines --triggers --events --databases lmsdb > ./var/backup_lmsdb_before_cleanup_20261005.sql`
+  3. 전체 테이블 ROW COUNT 측정 스크립트 실행 및 기록.
+- GREEN: 백업 파일 생성(용량 > 0, 해시 확보) + 사전 테이블 건수 집계 성공
+- 완료 조건: `var/backup_lmsdb_before_cleanup_20261005.sql` 생성 및 용량 > 0 확인
+
+### WP2 [DEVIN] 과거 LMS 학습 작업 및 하이퍼파라미터 쓰레기 데이터 선별 및 안전 삭제
+- 증거: `main/java/com/example/lms/domain/TrainingJob.java`
+- 대상: `training_job`, `hyperparameter`
+- 정리 조건: `status IN ('FAILED', 'ABORTED', 'CANCELLED', 'ERROR')` OR `(finished_at IS NULL AND started_at < DATE_SUB(NOW(), INTERVAL 30 DAY))`
+- 최소 작업:
+  1. DRY-RUN 카운트: `SELECT COUNT(*) FROM training_job WHERE status IN ('FAILED', 'ABORTED', 'CANCELLED', 'ERROR') OR (finished_at IS NULL AND started_at < DATE_SUB(NOW(), INTERVAL 30 DAY));`
+  2. 자식 테이블 선삭제: `DELETE h FROM hyperparameter h INNER JOIN training_job t ON h.training_job_id = t.id WHERE t.status IN ('FAILED', 'ABORTED', 'CANCELLED', 'ERROR') OR (t.finished_at IS NULL AND t.started_at < DATE_SUB(NOW(), INTERVAL 30 DAY));`
+  3. 부모 테이블 배치 삭제: `DELETE FROM training_job WHERE status IN ('FAILED', 'ABORTED', 'CANCELLED', 'ERROR') OR (finished_at IS NULL AND started_at < DATE_SUB(NOW(), INTERVAL 30 DAY)) LIMIT 1000;`
+- GREEN: 실패/좀비 작업 레코드 정리 완료, 외래키 에러 0건
+- 완료 조건: 정상 완료된 학습 작업만 남고 실패/좀비 작업 잔여 0건 확인
+
+### WP3 [DEVIN] 저품질·에러 샘플, 오염된 볼츠만 메모리 및 만료 DLQ 정리
+- 증거: `main/java/com/example/lms/domain/TranslationSample.java`, `main/java/com/example/lms/entity/TranslationMemory.java`, `main/java/com/example/lms/entity/VectorQuarantineDlq.java`
+- 대상: `translation_samples`, `translation_memory`, `vector_quarantine_dlq`, `vector_shadow_merge_dlq`
+- 정리 조건:
+  - `translation_samples`: `(source_text IS NULL OR TRIM(source_text) = '' OR CHAR_LENGTH(source_text) < 2)` OR `(translated LIKE '%Exception%' OR translated LIKE '%Error 5%')` OR `(q_error >= 0.90 AND trained_at IS NULL AND needs_review = 1 AND created_at < DATE_SUB(NOW(), INTERVAL 14 DAY))`
+  - `translation_memory`: `(query IS NULL OR TRIM(query) = '')` OR `(energy > 200.0 OR energy < -200.0)` OR `(failure_count >= 10 AND success_count = 0 AND hit_count = 0)` OR `(status IN ('CORRUPTED', 'POISONED'))`
+  - DLQ: `status IN ('FAILED', 'DONE') AND created_at < DATE_SUB(NOW(), INTERVAL 30 DAY)`
+- 최소 작업:
+  1. DRY-RUN 영향도 확인 후 `LIMIT 1000` 배치 삭제.
+  2. 정상 학습 반영 샘플(`trained_at IS NOT NULL`) 및 양호 메모리 전면 보존.
+- GREEN: 비정상 쓰레기 행만 삭제되고 양질 데이터 및 PROTECTED FIELDS 스키마 보존
+- 완료 조건: 대상 쓰레기 데이터 정리 및 잔여 정상 건수 확인
+
+### WP4 [DEVIN] 삭제 사후 무결성 감사 및 서비스 헬스체크
+- 증거: `scripts/smoke_agent_mariadb_context.ps1`, Spring Actuator
+- 최소 작업:
+  1. 사후 전체 테이블 행 수 재측정 및 정리 전후 비교표 작성.
+  2. 절대 보호 테이블(`administrators`, `users`, `configuration_setting`, `current_model`) 행 수 100% 동일 보존 검증.
+  3. 서비스 헬스체크 실행: `powershell -File scripts/smoke_agent_mariadb_context.ps1 -Endpoint snapshot`
+- GREEN: 보호 테이블 보존율 100% + 서비스 헬스체크 PASS + DB 정상 작동
+- 완료 조건: 전후 비교 보고서 작성 및 헬스체크 성공
+
+# 6. HOLD 조건
+- 사전 백업(`mariadb-dump`) 실행 실패 또는 백업 파일 크기가 0바이트인 경우 즉시 HOLD.
+- 대상 DB 연결 정보(호스트, 계정)가 유효하지 않거나 접근 거부 발생 시 HOLD.
+- 보호 테이블(`administrators`, `users` 등)에 영향을 주는 외래키 CASCADE 발견 시 HOLD.
+- 삭제 대상 조건에 정상적인 활성 데이터가 대량 포함될 우려가 있는 경우 HOLD.
+
+# 7. ASK_ONCE (사용자 결정, 최대 6개, 권장값 먼저)
+- U-1: 삭제 방식 선택 — (a) 권장: 영구 DELETE 전 `_backup_lms_trash` 테이블로 임시 INSERT 백업 후 원본 삭제 (가장 안전) (b) 논리 백업(.sql)만 믿고 원본 테이블에서 직접 DELETE
+- U-2: `translation_samples` 삭제 기준 — (a) 권장: q_error >= 0.90 및 미학습(trained_at IS NULL) 방치건만 삭제 (b) q_error >= 0.80까지 더 과감하게 삭제
+- U-3: 대화 이력(`chat_messages`, `chat_sessions`) 포함 여부 — (a) 권장: 명시하지 않았으므로 대화 이력은 삭제하지 않고 전면 보존 (b) 6개월 이상 된 빈 세션만 정리
+- U-4: `translation_memory` 삭제 범위 — (a) 권장: 에너지 극단치(폭주) 및 연속 실패만 삭제 (b) 최근 180일간 hitCount=0인 미사용 메모리까지 확대 삭제
+
+# 8. 절대 금지
+- 사전 전체 논리 백업 없는 DELETE, TRUNCATE, DROP 실행 절대 금지.
+- `administrators`, `users`, `user_preference_profiles`, `configuration_setting`, `current_model`, `models`, `model_info` 테이블 손상/삭제 절대 금지.
+- 외래키 검사 강제 무력화(`SET foreign_key_checks = 0;`) 상태에서 무차별 부모 테이블 삭제 금지.
+- Git commit/push/add -A/commit -a 및 remote 추가 절대 금지.
+- 평문 비밀번호, API 키, DB 비밀값의 로그/지시서 출력 절대 금지 (환경변수 이름만 표기).
+- Spring/Java 제품 소스 임의 리팩토링이나 재작성 금지.
+- PROTO_OPEN 보안 규칙 및 기존 관리자 토큰 체계 무단 변경 금지.
+
+# 9. Acceptance (완료 기준, 미실행은 NOT_RUN+사유)
+- [ ] AC-1 (WP1): 전체 DB 사전 논리 백업(`.sql`) 정상 생성 및 용량 검증 완료. (미실행 시: NOT_RUN_BACKUP_FAIL)
+- [ ] AC-2 (WP2): 과거 LMS 학습 작업(`training_job`, `hyperparameter`) 실패/좀비 행 선별 삭제 완료. (미실행 시: NOT_RUN_JOB_FAIL)
+- [ ] AC-3 (WP3): `translation_samples`, `translation_memory`, DLQ 쓰레기 데이터 정리 및 정상 데이터 보존 완료. (미실행 시: NOT_RUN_CLEANUP_FAIL)
+- [ ] AC-4 (WP4): 보호 테이블 행 수 100% 보존 확인 및 `smoke_agent_mariadb_context.ps1` 헬스체크 통과. (미실행 시: NOT_RUN_HEALTH_FAIL)
+
+# 10. 검증 명령 블록
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+# 1. DB 연결 및 메타데이터 확인
+powershell -File scripts/smoke_agent_mariadb_context.ps1 -Endpoint snapshot; "exit=$LASTEXITCODE"
+
+# 2. 백업 파일 검증
+Get-Item var/backup_lmsdb_before_cleanup_20261005.sql | Select-Object Name, Length, LastWriteTime; "exit=$LASTEXITCODE"
+
+# 3. H2/MariaDB 드라이버 및 애플리케이션 연결 상태 재점검
+powershell -File scripts/smoke_agent_mariadb_context.ps1 -Endpoint memory; "exit=$LASTEXITCODE"
+```
+
+# 11. 루프 · 이관 및 종료 상태
+- 자가 수정 루프: 동일 SQL 문법 오류나 잠금 이슈 발생 시 최대 3회 시도 후 중단.
+- 에이전트 이관: DB 커넥션 오류나 포트 차단 발생 시 FOR_USER (DB 가동 확인 요청), 스키마 불일치 시 FOR_CODEX.
+- 종료 상태 (택1):
+  - DONE_OFFLINE: 백업 및 스크립트 작성/드라이런 검증 완료
+  - DONE_LIVE: 실제 MariaDB 접속하여 백업 후 삭제 완료 및 헬스체크 통과
+  - BLOCKED_LEASE: 다른 작업으로 DB나 관련 파일이 잠긴 경우
+  - NOT_RUN_ENV: MariaDB 서버가 미기동 상태이거나 접속 정보 누락 시
+  - APPROVAL_REQUIRED: 삭제 대상 건수가 예상보다 과도하여 사용자 추가 승인 필요 시
+
+# 12. 보고 형식
+Devin의 최종 보고는 반드시 아래 규격으로 시작하여 작성한다:
+```
+외부 API: 호출 0건 ($0)
+종료 상태: <DONE_LIVE | DONE_OFFLINE | NOT_RUN_ENV | APPROVAL_REQUIRED>
+사전 백업: <백업 파일 경로, 바이트 수, sha12>
+보호 테이블 현황: administrators(<N>행 유지), users(<N>행 유지), config(<N>행 유지)
+정리 결과 요약:
+  - training_job / hyperparameter: <N>건 삭제
+  - translation_samples: <N>건 삭제
+  - translation_memory: <N>건 삭제
+  - vector DLQ: <N>건 삭제
+사후 헬스체크: smoke_agent_mariadb_context exit=0 확인
+잔여 확인 필요 사항: <없음 또는 특이사항>
+```
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업을 실제로 끝까지 수행하고 결과를 검증·보고하는 실행 지시서다.

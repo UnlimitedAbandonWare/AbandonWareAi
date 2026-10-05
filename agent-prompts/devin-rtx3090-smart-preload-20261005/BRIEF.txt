@@ -1,0 +1,105 @@
+[ANTI-STOP]
+# [DEVIN 지시서] RTX 3090 로컬 오라마 콜드 스타트 방지 및 스마트 프리로드 배선 — 2026-10-05 15:30 KST
+파일 ID: PASTE_DEVIN_RTX3090_SMART_PRELOAD_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 Java 소스 수정 0 · git push/pull/fetch/merge/rebase 0 · git add -A/commit -a 0 · 비밀값 원문 출력 0 · 유료 API 호출 0 · remote 추가 0 · PROTO_OPEN 완화 금지
+
+@demo1-gpu-lane-evidence
+
+# 0. 한 줄 목표
+메인 채팅 3순위 폴백 및 RAG 임베딩의 첫 쿼리 15초 콜드 스타트를 방지하기 위해, RTX 3090(11434)에 경량 고속 모델(qwen3.5:9b + qwen3-embedding:4b)을 스마트 프리로드/웜업하는 런타임 스크립트를 확정하고 검증한다.
+
+# 1. 사실 (2026-10-05 15:20 KST 기준 읽기 전용 확인)
+- `scripts/ollama-status-snapshot.ps1` 실측 결과: RTX 3090 VRAM 점유 0 MiB (0/24576 MiB), 로드된 모델 0개 (완전 유휴/콜드 상태).
+- 현재 RTX 3060만 디스플레이/브라우저/OBS 앱용으로 1331 MiB 점유 중이며, 3090은 가용 VRAM 24GB 전체가 비어 있음.
+- 메인 `/chat` 런타임 우선순위(2026-10-02 결정, `configs/api-routing.yaml:138-142`): 1순위 ChatGPT OAuth(구독분) -> 2순위 외부 저비용 API(Groq/Gemini 등) -> 3순위 로컬 Ollama.
+- `scripts/ollama-light-preload.ps1:18`에 `[string]$EmbeddingModel = 'PLACEHOLDER-EMBED-MODEL'`로 플레이스홀더가 방치되어 있어 단독 실행 시 임베딩 웜업이 누락됨.
+- `scripts/start_rag_stack.ps1` 부팅 파이프라인에서 `ollama serve`만 기동하고 특정 모델 프리로드/웜업 연계 호출이 누락되어 있음.
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+# 3. 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+| --- | --- | --- | --- |
+| `scripts/ollama-light-preload.ps1` | 468fcc17f40c | - | 수정 |
+| `scripts/start_rag_stack.ps1` | a0ace0631a5f | - | 수정 |
+| `scripts/ollama-status-snapshot.ps1` | bc53a6e7831d | - | 읽기 |
+| `configs/api-routing.yaml` | fd32afd2888e | - | 읽기 |
+
+# 4. 입력 판정표
+| 주장 | 판정 | 근거 |
+| --- | --- | --- |
+| RTX 3090 VRAM이 미리 로드되어야 빠릿하다 | RIGHT | Ollama는 미로드 상태 시 최초 요청 시 디스크에서 VRAM으로 모델 가중치(수 GB~14GB) 적재에 10~20초 콜드 스타트 지연 발생. |
+| 현재 내 구조가 미리 로드하고 쓰는 구조인가? | WRONG | 실시간 진단 결과 3090 VRAM 점유 0 MiB, 포트 11434/11435 로드 모델 0개. 완전 콜드 스타트 온디맨드 구조임. |
+| 1순위 auth, 2순위 api, 3순위 로컬 오라마 | RIGHT | `configs/api-routing.yaml:138-142` 및 `DEMO1-RTX3090-WATCH.md:6` 확인 완료. |
+| 27B 대형 모델 상시 상주(keep_alive=-1)가 최선인가? | WRONG (비효율) | 1~2순위가 메인인 상황에서 14~18GB 대형 모델 상시 상주는 전력/발열 리스크 및 VRAM 낭비. 경량 Fast 모델(`qwen3.5:9b`, 6.6GB)과 임베딩 모델(`qwen3-embedding:4b`, 2.5GB) 조합(총 ~9GB, VRAM 37%)으로 스마트 프리로드하는 것이 안전하고 빠릿함. |
+
+# WP1 [DEVIN] `scripts/ollama-light-preload.ps1` 플레이스홀더 제거 및 정규화
+- 증거: `scripts/ollama-light-preload.ps1:17-20`
+- RED 검사:
+  `powershell -NoProfile -Command "Select-String -Path scripts/ollama-light-preload.ps1 -Pattern 'PLACEHOLDER'; exit `$LASTEXITCODE"`
+- 최소 수정:
+  1) `$EmbeddingModel` 기본값을 `'qwen3-embedding:4b'` (실제 설치된 2.5GB 공식 태그)로 수정.
+  2) `$ChatModels` 기본값은 `qwen3.5:9b` 유지.
+  3) `$Port` 기본값 11434 (RTX 3090 메인 Ollama 포트) 확인.
+  4) `$KeepAlive` 기본값을 `'60m'`으로 설정하여 1시간 유휴 상주 보장.
+- GREEN 검사:
+  `powershell -NoProfile -Command "if (Select-String -Path scripts/ollama-light-preload.ps1 -Pattern 'PLACEHOLDER') { exit 1 } else { exit 0 }"; "exit=$LASTEXITCODE"`
+- 완료 조건: `PLACEHOLDER` 문자열 0건, 스크립트 실행 구문 오류 없음.
+
+# WP2 [DEVIN] `scripts/start_rag_stack.ps1`에 스마트 프리로드 옵션 연동
+- 증거: `scripts/start_rag_stack.ps1:10-13, 293-295`
+- RED 검사:
+  `powershell -NoProfile -Command "Select-String -Path scripts/start_rag_stack.ps1 -Pattern 'ollama-light-preload'; exit `$LASTEXITCODE"` (반환 exit=1 기대)
+- 최소 수정:
+  1) `start_rag_stack.ps1` param 블록에 `[switch]$Preload` 추가.
+  2) `Start-RagOllama` 성공 로그 직후, `$Preload` 스위치가 활성화되어 있으면 백그라운드 작업(`Start-Job` 또는 `Start-Process`)으로 `scripts/ollama-light-preload.ps1 -Port $Port -KeepAlive 60m`를 비동기 호출.
+  3) 부팅 전체 지연(블로킹)을 방지하기 위해 프리로드는 백그라운드로 실행하고 결과를 로그에 한 줄 기록.
+- GREEN 검사:
+  `powershell -NoProfile -Command "Select-String -Path scripts/start_rag_stack.ps1 -Pattern 'ollama-light-preload'; exit `$LASTEXITCODE"` (반환 exit=0 기대)
+- 완료 조건: `start_rag_stack.ps1`에서 비동기 preload 호출 로직 확인.
+
+# WP3 [DEVIN] 3090 포트(11434) 경량 프리로드 수동 검증 및 VRAM 상주 증거 확보
+- 증거: `scripts/ollama-status-snapshot.ps1`
+- 실행 명령:
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ollama-light-preload.ps1 -Port 11434 -KeepAlive 30m; "exit=$LASTEXITCODE"`
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/ollama-status-snapshot.ps1; "exit=$LASTEXITCODE"`
+- 완료 조건:
+  `ollama-status-snapshot.ps1` 출력에서 포트 11434에 `qwen3.5:9b` 및 `qwen3-embedding:4b`가 로드된 상태로 확인되고, RTX 3090 VRAM이 약 8~10GB 점유 상태로 관측됨.
+
+# HOLD 조건
+- `python -B scripts/gpu_incident.py status` 결과가 exit 3(사고 플래그 활성)이거나 `nvidia-smi`에서 3090 "GPU is lost" 에러 발생 시 즉시 HOLD.
+- Ollama 11434 포트 바인딩 충돌 또는 데몬 비정상 종료 시 HOLD.
+
+# ASK_ONCE
+- U-1 Start-RAG 기동 시 자동 프리로드 기본 동작 정책:
+  - (a) 권장: `Start-RAG.bat` 실행 시 기본으로 `-Preload`를 켜서 부팅 후 바로 3090에 9b/4b가 준비되도록 함 (비동기 백그라운드 로드이므로 웹서버 부팅 지연 없음).
+  - (b) 수동 모드: 필요할 때만 운영자가 `scripts/ollama-light-preload.ps1`을 직접 실행.
+
+# 절대 금지
+- git push, git pull, git fetch, git merge, git rebase, git reset 절대 금지.
+- git add -A, git add ., git commit -a, git commit --no-verify 절대 금지.
+- remote 추가 또는 git 설정 변경 절대 금지.
+- 제품 Java 소스(`main/java/**`, `src/test/java/**`, `application*.yml`) 수정 절대 금지 (Devin은 스크립트/운영 레인 전담).
+- API 키, 토큰, 패스워드 등 비밀값 원문 출력 금지 (env 이름만 취급).
+- 27B/31B 대형 모델을 무조건 `keep_alive=-1`로 상시 강제 상주시키는 행위 금지 (전력/발열/VRAM 고갈 위험).
+- PROTO_OPEN 인증 완화 규칙 위반 금지.
+
+# Acceptance
+- [ ] A1. `scripts/ollama-light-preload.ps1`의 `PLACEHOLDER`가 제거되고 `qwen3-embedding:4b`와 `qwen3.5:9b`로 정규화 완료 (PASS).
+- [ ] A2. `scripts/start_rag_stack.ps1`에 `-Preload` 스위치 및 비동기 웜업 실행 경로 배선 완료 (PASS).
+- [ ] A3. `scripts/ollama-status-snapshot.ps1`에서 RTX 3090(11434)에 모델 2개 로드 및 VRAM 정상 점유 관측 (PASS).
+- 미실행 항목은 반드시 `NOT_RUN(사유)`로 표기할 것.
+
+# 보고 형식
+외부 API: 0
+실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+
+| 작업 | 상태 | 증거 |
+| --- | --- | --- |
+| WP1 light-preload 정규화 | DONE_OFFLINE | scripts/ollama-light-preload.ps1 |
+| WP2 start_rag_stack 연동 | DONE_OFFLINE | scripts/start_rag_stack.ps1 |
+| WP3 3090 VRAM 상주 검증 | DONE_LIVE | ollama-status-snapshot 결과 |
+
+[ANTI-STOP]

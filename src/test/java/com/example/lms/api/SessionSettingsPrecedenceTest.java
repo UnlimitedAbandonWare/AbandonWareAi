@@ -21,6 +21,18 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SessionSettingsPrecedenceTest {
 
+    @Test
+    void responsePreferencesRestorePerSessionAndExplicitBlankClearsInstructions() throws Exception {
+        var session = sessionWithMeta("{\"customInstructions\":\"synthetic preference\",\"responseTone\":\"friendly\",\"responseLength\":\"brief\",\"responseLanguage\":\"ko\",\"memoryMode\":\"ephemeral\"}");
+        var req = objectMapper.readValue("{\"message\":\"fixture\",\"customInstructions\":\"\"}", ChatRequestDto.class);
+        ChatSessionMetaMerger.merge(objectMapper, session, req, LOG);
+        var fields = ChatRequestSettingsMerger.requestValues(req);
+        assertEquals("", fields.get("customInstructions"));
+        assertEquals("brief", fields.get("responseLength"));
+        assertEquals("ephemeral", fields.get("memoryMode"));
+        assertFalse(com.example.lms.domain.enums.MemoryMode.HYBRID.isWriteEnabled());
+    }
+
     private static final org.slf4j.Logger LOG = LoggerFactory.getLogger(SessionSettingsPrecedenceTest.class);
     private final ObjectMapper objectMapper = new ObjectMapper();
 

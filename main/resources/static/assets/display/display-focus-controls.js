@@ -20,7 +20,7 @@
   function mount({host=globalThis,document=host.document,client,cache=createCache(host)}){
     const $=id=>document.getElementById(id),panel=$('nova-fold');
     if(!panel||!host.NovaFocus)return null;
-    let loaded='',loading=false,stored=null,settingsBusy=false,cursor=null,historyBusy=false,pendingInput=null;
+    let loaded='',loading=false,stored=null,settingsBusy=false,settingsEdits=0,cursor=null,historyBusy=false,pendingInput=null;
     let cacheScope='',scopeEpoch=0,reconcileBusy=false,disposed=false,settingsAttempts=0,wasActive=false,memoryDraft=null,memoryBusy=false;
     // OFF 의도는 서버 저장 성공과 무관하게 이 기기의 촬영을 즉시 차단한다. ON은 저장 성공 뒤에만 해제된다.
     let snapshotLocalBlocked=false,catalogLoaded=false,catalogBusy=false,catalogRows=[],catalogGeneration=0,catalogAbort=null;
@@ -29,8 +29,13 @@
     const snapshotter=host.DisplaySnapshot?host.DisplaySnapshot.createSnapshotter({navigator:host.navigator,document}):null;
     $('nova-question').disabled=true;
     const projection=host.NovaFocus.createProjection({host,document,target:'fold',panel,status:$('nova-fold-status'),draft:$('nova-fold-draft'),answer:$('nova-fold-answer'),receipt:host.NovaFocus.receiptSender(host)});
-    const fields={enabled:'nf-enabled',recallEnabled:'nf-recall',rememberFactsEnabled:'nf-remember',wakeWord:'nf-wake',utteranceQuietMs:'nf-quiet',followupIdleMs:'nf-idle',wakeListenTimeoutMs:'nf-listen'};
-    const flags=new Set(['enabled','recallEnabled','rememberFactsEnabled']);
+    const fields={enabled:'nf-enabled',recallEnabled:'nf-recall',rememberFactsEnabled:'nf-remember',wakeWord:'nf-wake',utteranceQuietMs:'nf-quiet',followupIdleMs:'nf-idle',wakeListenTimeoutMs:'nf-listen',answerLengthChars:'nf-answer-length',quickAnswerEnabled:'nf-quick'};
+    const flags=new Set(['enabled','recallEnabled','rememberFactsEnabled','quickAnswerEnabled']);
+    const length=$('nf-answer-length'),lengthPreset=$('nf-answer-length-preset');
+    function syncLengthPreset(){if(lengthPreset)lengthPreset.value=['320','400','480'].includes(String(length?.value))?String(length.value):'';}
+    if(length)length.oninput=syncLengthPreset;
+    if(lengthPreset)lengthPreset.onchange=()=>{if(lengthPreset.value&&length)length.value=lengthPreset.value;};
+    if($('nf-answer-length-reset'))$('nf-answer-length-reset').onclick=()=>{if(length){length.value=400;settingsEdits++;}syncLengthPreset();};
     const presentation={sequentialTextEnabled:'nf-sequential',charIntervalMs:'nf-speed',maxVisibleLines:'nf-lines',autoFadeEnabled:'nf-fade-on',tailHoldMs:'nf-hold',fadeMs:'nf-fade'};
     const messages={focus_settings_conflict:'다른 기기에서 설정이 바뀌었습니다. 서버 설정을 다시 불러와 주세요.',focus_busy:'앞선 질문을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.',focus_unavailable:'노바 응답 경로가 아직 준비되지 않았습니다.',focus_answer_unavailable:'응답을 확인하지 못했습니다. 기록에서 상태를 확인해 주세요.',focus_session_stale:'연결이 바뀌었습니다. 다시 연결된 뒤 시도해 주세요.',event_owner_required:'현재 수음을 보내는 기기에서 사용해 주세요.',display_rate_limited:'잠시 후 다시 시도해 주세요.'};
     messages.focus_model_selection_invalid='기본 모델과 대체 모델을 중복 없이 선택해 주세요.';
@@ -65,29 +70,44 @@
       upstream_error:'Jev 서버 오류 · 기존 판단 사용'};
     function jevReasonLabel(code){const key=String(code||'');const text=jevReasonText[key];return text?text+' ('+key+')':(key?'대기('+key+')':'대기');}
     function notice(error){const text=messages[error?.message]||'연결과 입력 범위를 확인해 주세요.';$('nf-status').textContent=text;const alert=$('error');if(alert)alert.textContent=text;}
+    function modelStatus(){
+      const output=$('nf-model-status');if(!output)return;
+      const selected=$('nf-answer-model')?.value,row=catalogRows.find(value=>value.id===selected);
+      output.textContent=!selected?'자동 선택은 기존 서버 정책을 따릅니다.':row?.selectable===false?
+        '서버 목록에서 현재 선택 불가입니다. 저장된 선택은 유지합니다. 다른 모델을 선택하세요.':row?.selectable===true?
+        '선택 가능한 서버 목록에 있습니다. 실제 실행·세부 지원 기능은 별도 확인이 필요합니다.':
+        '저장된 선택의 현재 사용 가능 여부가 미확인입니다. 선택은 유지합니다.';
+    }
     function modelOptions(rows,selections){
       for(const id of modelInputs){const input=$(id);if(!input)continue;const selected=selections?.[id]??input.value??'';
-        input.replaceChildren();const add=(value,label)=>{const option=document.createElement('option');option.value=value;option.textContent=label;input.append(option);};
+        input.replaceChildren();const add=(value,label,disabled=false)=>{const option=document.createElement('option');option.value=value;option.textContent=label;option.disabled=disabled;input.append(option);};
         add('',id==='nf-answer-model'?'자동 선택':'대체 모델 없음');
-        for(const row of rows)add(row.id,row.provider+' · '+row.id);
-        if(selected&&!rows.some(row=>row.id===selected))add(selected,'저장된 선택 · '+selected+' (현재 사용 가능 여부 미확인)');
+        for(const row of rows.filter(value=>value.selectable===true))add(row.id,row.provider+' · '+row.id);
+        if(selected&&!rows.some(row=>row.id===selected&&row.selectable===true)){
+          const unavailable=rows.some(row=>row.id===selected&&row.selectable===false);
+          add(selected,'저장된 선택 · '+selected+(unavailable?' (현재 선택 불가)':' (현재 사용 가능 여부 미확인)'),unavailable);
+        }
         input.value=selected;
       }
+      modelStatus();
     }
+    if($('nf-answer-model'))$('nf-answer-model').onchange=modelStatus;
     async function loadModels(){
       if(catalogLoaded||catalogBusy||!host.fetch||!$('nf-answer-model'))return;catalogBusy=true;
       const generation=catalogGeneration,abort=new AbortController();catalogAbort=abort;const timer=host.setTimeout?.(()=>abort.abort(),4000);
       try{const response=await host.fetch('/api/chat/models',{credentials:'same-origin',cache:'no-store',signal:abort.signal});
         if(!response.ok)throw Error('model_catalog_unavailable');const rows=await response.json();
         if(!Array.isArray(rows)||rows.length>128)throw Error('model_catalog_contract');
-        if(disposed||generation!==catalogGeneration)return;catalogRows=rows.filter(row=>row.selectable===true&&typeof row.id==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._/:+-]{0,179}$/.test(row.id));modelOptions(catalogRows);
-        catalogLoaded=true;if($('nf-model-status'))$('nf-model-status').textContent='서버에 등록된 모델입니다. 답변 위치와 대체 모델을 함께 선택하세요.';
+        if(disposed||generation!==catalogGeneration)return;catalogRows=rows.filter(row=>row&&typeof row.id==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._/:+-]{0,179}$/.test(row.id));modelOptions(catalogRows);
+        catalogLoaded=true;
       }catch{if(!disposed&&generation===catalogGeneration&&$('nf-model-status'))$('nf-model-status').textContent='모델 목록을 확인하지 못했습니다. 저장된 선택은 유지합니다.';}
       finally{host.clearTimeout?.(timer);if(generation===catalogGeneration){catalogBusy=false;catalogAbort=null;}}
     }
     function paintSettings(value){
+      value={...value,settings:{...value.settings,answerLengthChars:value.settings?.answerLengthChars??400,quickAnswerEnabled:value.settings?.quickAnswerEnabled??false}};
       stored=value;
       for(const [key,id] of Object.entries(fields)){const e=$(id);if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
+      syncLengthPreset();
       for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=value.settings.presentation[key];}
       const snap=value.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
       const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
@@ -226,13 +246,17 @@
         captureJobs.delete(command.captureId);if(job.capturing)snapshotter?.stop?.();say('');
       }
     }
+    $('nova-settings-form').oninput=$('nova-settings-form').onchange=()=>{settingsEdits++;};
     $('nova-settings-form').onsubmit=async event=>{
       event.preventDefault();if(settingsBusy||!stored)return;settingsBusy=true;$('nf-save').disabled=true;
+      const saveEpoch=scopeEpoch,saveEdits=settingsEdits;
       const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
       const prev=stored.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
       const wantEnabled=!!(snapEnabled&&snapEnabled.checked);
       try{
         const settings={presentation:{}};
+        const rawLength=String($('nf-answer-length')?.value??'').trim();
+        if(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(Number(rawLength))||Number(rawLength)<80||Number(rawLength)>800)throw Error('invalid_nova_settings');
         for(const [key,id] of Object.entries(fields)){const e=$(id);settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'?e.value:Number(e.value);}
         for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value);}
         if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR'};
@@ -246,14 +270,17 @@
         if($('nf-memory-mode'))settings.memory={mode:$('nf-memory-mode').value||null,graphMode:$('nf-graph-mode').value||'OFF',maxEvidence:Number($('nf-max-evidence').value),embeddingPrefer:$('nf-embed-prefer').value||'LOCAL_THEN_CLOUD',webOnUnknown:$('nf-web-unknown').value===''?null:$('nf-web-unknown').value==='true'};
         // OFF 의도는 서버 저장을 기다리지 않는다: 이 기기의 촬영·업로드를 먼저 중단한다.
         if(snapEnabled&&!wantEnabled){snapshotLocalBlocked=true;cancelCaptureJobs();}
-        const value=await client.focusRequest('settings',{settingsVersion:stored.settingsVersion,settings});paintSettings(value);$('nf-status').textContent='설정을 저장했습니다.';
+        const value=await client.focusRequest('settings',{settingsVersion:stored.settingsVersion,settings});if(disposed||scopeEpoch!==saveEpoch)return;
+        if(saveEdits===settingsEdits){paintSettings(value);syncLengthPreset();}else{stored=value;}
+        $('nf-status').textContent=saveEdits===settingsEdits?'설정을 저장했습니다.':'설정을 저장했습니다. 새로 편집한 값은 다음 저장에 적용합니다.';
         // ON은 서버 저장 성공 뒤에만 해제한다. 저장된 장치 변경은 진행 중 촬영을 무효화하고 자동 재촬영은 없다.
         if(snapEnabled&&wantEnabled){snapshotLocalBlocked=false;if(settings.snapshot.source!==prev.source)cancelCaptureJobs();}
       }catch(error){
+        if(disposed||scopeEpoch!==saveEpoch)return;
         notice(error);
         // 서버 저장 실패 시에도 로컬 OFF는 유지한다 — 사용자의 OFF 의도가 우선이다.
         if(snapEnabled&&!wantEnabled){snapshotLocalBlocked=true;$('nf-status').textContent='이 기기의 촬영은 중지했습니다. 서버 설정 저장은 실패했습니다.';}
-      }finally{settingsBusy=false;$('nf-save').disabled=!stored;}
+      }finally{settingsBusy=false;$('nf-save').disabled=disposed||!stored;}
     };
     // 시험 촬영은 이 기기에서만 확인한다 — 서버 업로드·AI 호출 없이 한 장 찍고 즉시 해제한다.
     const testShot=$('nf-snapshot-test');
@@ -342,6 +369,7 @@
       if((owned&&loaded!==key)||(!owned&&loaded)){
         clearContent();clearMemoryDraft();wasActive=false;
         scopeEpoch++;cacheScope='';pendingInput=null;$('nova-question').value='';$('nova-question').disabled=true;$('nova-history-list').replaceChildren();$('nova-history').hidden=true;
+        catalogGeneration++;catalogAbort?.abort();catalogBusy=false;catalogLoaded=false;catalogRows=[];
         loaded=owned?key:'';stored=null;settingsAttempts=0;$('nf-save').disabled=true;
       }
       if(!owned){snapshotLocalBlocked=false;cancelCaptureJobs();}

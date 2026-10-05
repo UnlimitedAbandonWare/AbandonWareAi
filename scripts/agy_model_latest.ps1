@@ -28,6 +28,7 @@
 param(
     [switch]$Pick,
     [switch]$SelfTest,
+    [switch]$FlashMaxEffort,
     [int]$TimeoutSeconds = 5
 )
 
@@ -142,6 +143,25 @@ function Get-BestSameTier {
     return $best
 }
 
+function Get-MaxEffortForTier {
+    # Highest effort suffix present among same-tier rows (e.g. flash-*).
+    # Rank: low < medium < high < xhigh < max. Unknown suffixes are ignored;
+    # returns $null when the tier prefix is absent entirely.
+    param([array]$Rows, [string]$TierPrefix)
+    $rank = @{ low = 0; medium = 1; high = 2; xhigh = 3; max = 4 }
+    $best = $null; $bestScore = -1
+    foreach ($r in $Rows) {
+        $info = ConvertTo-ModelInfo -Id $r.id
+        if ($null -eq $info) { continue }
+        if ($info.tier -notmatch '^(?<tp>[a-z]+)-(?<eff>[a-z]+)$') { continue }
+        if ($Matches['tp'] -ne $TierPrefix) { continue }
+        $eff = $Matches['eff']
+        if (-not $rank.ContainsKey($eff)) { continue }
+        if ($rank[$eff] -gt $bestScore) { $bestScore = $rank[$eff]; $best = $eff }
+    }
+    return $best
+}
+
 function Resolve-ModelStatus {
     param([array]$Rows, [string]$CurrentLabel)
     if (-not $Rows -or $Rows.Count -eq 0) {
@@ -219,11 +239,44 @@ gpt-oss-120b-medium`tGPT-OSS 120B (Medium)
     $u = Get-AgyUpdateState
     if ($u -in @('OK', 'STALE', 'UNKNOWN')) { $pass++ } else { $fail++; Write-Output "[agy-model][selftest] FAIL $t" }
 
+    $t = 'pick-3.9-when-no-3.10'
+    $rows39 = $rows | Where-Object { $_.id -ne 'gemini-3.10-flash-high' }
+    $r = Resolve-ModelStatus -Rows $rows39 -CurrentLabel 'Gemini 3.8 Flash (High)'
+    if ($r.kind -eq 'NEWER_AVAILABLE' -and $r.id -eq 'gemini-3.9-flash-high') { $pass++ } else { $fail++; Write-Output "[agy-model][selftest] FAIL $t kind=$($r.kind) id=$($r.id)" }
+
+    $t = 'flash-max-effort-is-high'
+    $mx = Get-MaxEffortForTier -Rows $rows -TierPrefix 'flash'
+    if ($mx -eq 'high') { $pass++ } else { $fail++; Write-Output "[agy-model][selftest] FAIL $t got=$mx" }
+
+    $t = 'flash-max-effort-xhigh-detected'
+    $rowsX = $rows + @{ id = 'gemini-3.9-flash-xhigh'; label = 'Gemini 3.9 Flash (XHigh)' }
+    $mx = Get-MaxEffortForTier -Rows $rowsX -TierPrefix 'flash'
+    if ($mx -eq 'xhigh') { $pass++ } else { $fail++; Write-Output "[agy-model][selftest] FAIL $t got=$mx" }
+
+    $t = 'flash-max-effort-ignores-pro-max'
+    $rowsP = $rows + @{ id = 'gemini-3.1-pro-max'; label = 'Gemini 3.1 Pro (Max)' }
+    $mx = Get-MaxEffortForTier -Rows $rowsP -TierPrefix 'flash'
+    if ($mx -eq 'high') { $pass++ } else { $fail++; Write-Output "[agy-model][selftest] FAIL $t got=$mx" }
+
     Write-Output "[agy-model][selftest] pass=$pass fail=$fail"
     if ($fail -eq 0) { exit 0 } else { exit 1 }
 }
 
 if ($SelfTest) { Invoke-SelfTest }
+
+if ($FlashMaxEffort) {
+    # One word: the highest effort tier currently offered for gemini-*-flash
+    # (low|medium|high|xhigh|max). Falls back to 'high' on any failure so a
+    # launcher always has a safe Flash-valid value.
+    $exeFm = Get-AgyExePath
+    $rowsFm = $null
+    if ($exeFm) { $rowsFm = Get-ModelRows -Exe $exeFm -TimeoutSec $TimeoutSeconds }
+    $mxFm = $null
+    if ($rowsFm) { $mxFm = Get-MaxEffortForTier -Rows $rowsFm -TierPrefix 'flash' }
+    if (-not $mxFm) { $mxFm = 'high' }
+    Write-Output $mxFm
+    exit 0
+}
 
 $update = Get-AgyUpdateState
 $exe = Get-AgyExePath

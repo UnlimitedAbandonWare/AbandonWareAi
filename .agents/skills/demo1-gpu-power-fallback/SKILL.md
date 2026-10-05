@@ -1,15 +1,17 @@
 ---
 name: demo1-gpu-power-fallback
-description: Use when choosing local GPU vs API after the RTX 3090 power issue was resolved on DESKTOP-M5NOV6K — prefer 3090 local first; on a classified local Ollama/embedding/LLM failure, cap local retry <=1 and fall back to the api-routing.yaml API order
+description: Use when a local Ollama/embedding/local-LLM call fails on DESKTOP-M5NOV6K (RTX 3090 power issue resolved) — classify the failure, cap local retry <=1, fall back to the api-routing.yaml API order; product main /chat routing is API/OAuth-first and app-owned
 ---
 
 # demo1 GPU Power Fallback (RTX 3090)
 
 > **2026-09 RESOLVED:** DESKTOP-M5NOV6K RTX 3090의 전력 피크/불안정 이슈는
 > **별도 보조 PSU 전원 투입으로 해결됨**. 3090은 정상 운용 대상이며 로컬
-> Ollama·임베딩·LLM 작업은 **3090 로컬 우선**이다. "3090이 불안해서" API로
-> 상시 우회하던 구 지침은 폐기 — 이 스킬은 **분류된 명시적 로컬 실패 1건**의
-> 폴백 판정만 얇게 얹는다 — 새 오케스트레이터/HTTP 스택을 만들지 않는다.
+> Ollama·임베딩·로컬 LLM 작업은 **3090 로컬 우선**이다 (제품 main `/chat`
+> 생성 라우팅은 별개 — API·OAuth 우선·Ollama 마지막 폴백, 앱 코드 소관).
+> "3090이 불안해서" API로 상시 우회하던 구 지침은 폐기 — 이 스킬은 **분류된
+> 명시적 로컬 실패 1건**의 폴백 판정만 얇게 얹는다 — 새 오케스트레이터/HTTP
+> 스택을 만들지 않는다.
 
 ## When
 
@@ -35,7 +37,9 @@ description: Use when choosing local GPU vs API after the RTX 3090 power issue w
    (free_local → low_cost → paid_quality). 실패한 free_local 레인은 건너뛰고,
    `paid_quality`는 `AWX_AGENT_ALLOW_PAID_MODELS` kill-switch 준수
    (`=0`/`false`/`no`/`off`이면 차단, 미설정·그 외 값은 허용 —
-   `$demo1-agent-api-spend-guard` SSOT).
+   `$demo1-agent-api-spend-guard` SSOT). 이 순서는 에이전트·도구 계층의 폴백
+   판정일 뿐이다 — 제품 main 채팅 생성의 런타임 라우팅은 앱 코드
+   (`LlmRouterAspect`) 소관이며 이 스킬이 바꾸지 않는다.
 4. **Log why only** — `[AWX][api-spend]` 필드에 `why=local_failover`,
    `errorClass=<reason>`, provider/model/env **이름**만. 키·토큰 값 금지
    (`docs/AGENT_API_SPEND_GUARD.md`).
@@ -62,6 +66,13 @@ description: Use when choosing local GPU vs API after the RTX 3090 power issue w
 - 글로벌 RAG 기본 임베딩을 OpenAI로 통째 바꾸지 말 것 (spec §3 fallback
   순서는 유지, 사고 한 건으로 기본값 변경 금지).
 
+## Incident mode (GPU3090_LOST)
+
+- `python -B scripts/gpu_incident.py status` exit 3이면 사고 중 — 3090 레인(`ollama:11434`)을 건너뛴다.
+- `decide`는 활성 플래그를 자동 감지한다(`--from-incident`는 호환 옵션): llm → `chatgpt_oauth`(구독 포함량) 1순위, 그 뒤 기존 API 순서. `gpu lost`/`GPU is lost`/`Unable to determine the device handle` 문구는 플래그 없이도 `gpu_lost`로 판정된다.
+- `decide --purpose embed --from-incident` → 3060 레인(`ollama:11435`) 먼저, 그 뒤 기존 API 순서.
+- `clear`는 새 probe가 OK일 때만 플래그를 해제한다(거짓 복구 금지). 이건 사고 중 폴백이지 상시 우회·기본값 변경이 아니다.
+
 ## Don't
 
 - Ollama/GPU 무한 연속 재시도 금지. 새 HTTP 클라이언트·프로바이더
@@ -78,3 +89,5 @@ description: Use when choosing local GPU vs API after the RTX 3090 power issue w
 - `$demo1-rtx3090-health-watch` (관측·가설 전용), `$demo1-api-routing-inventory`,
   `$demo1-agent-api-spend-guard`, `docs/API_ROUTING_SPEC.md`,
   `configs/api-routing.yaml`, `configs/agent-api-spend-guard.yaml`.
+- 폐기 문구 점검: `python -B scripts/routing_policy_wording_check.py`
+  (인벤토리 `configs/retired-phrases.json`; exit 0=깨끗/3=폐기 문구/4=설정 오류).

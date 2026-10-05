@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # orchestra-agy (pointer for agy sessions)
 - SSOT: `.agents/skills/demo1-orchestra-synergy/SKILL.md` + `docs/agent-tooling/orchestra-synergy-ko.md`.
 - agy는 조사 결과를 `web-evidence` 신호로 남긴다: `python -B scripts/orchestra_signal.py new --from agy --kind web-evidence --summary "<한 줄 결론>" --parent <id>`.

@@ -76,7 +76,7 @@
         if(fade>0)paint(Math.max(0,1-fade));schedule();return;
       }
       if(index<units.length){
-        const wait=mode==='sentence'?1200:cfg.sequentialTextEnabled?cfg.charIntervalMs:Math.max(1200,cfg.charIntervalMs*24);
+        const wait=mode==='sentence'?1200:cfg.sequentialTextEnabled?cfg.charIntervalMs:index===0?0:Math.max(1200,cfg.charIntervalMs*24);
         if(credit>=wait){
           credit=0;
           if(mode==='sentence'||cfg.sequentialTextEnabled){append(units[index++]);}
@@ -104,6 +104,8 @@
       const next=[server,activation,focus.turnId,focus.answerVersion].join('/');
       if(next===key){schedule();return true;}if(retired.has(next))return false;
       retire();reset();key=next;identity={serverInstanceId:server,activationId:activation,turnId:focus.turnId,answerVersion:focus.answerVersion,renderReceiptTicket:focus.renderReceiptTicket};
+      // Snapshot the font for this answer. Settings affect the next answer without replay/reflow.
+      if(element){element.style.fontSize='';const px=element.ownerDocument?.defaultView?.getComputedStyle?.(element)?.fontSize;if(px)element.style.fontSize=px;}
       const parts=segment(focus.answerText,options.Segmenter===undefined?Intl.Segmenter:options.Segmenter);units=parts.units;mode=parts.mode;
       if(mode!=='grapheme')emit('presentation_degraded',{mode});
       paint();schedule();return true;

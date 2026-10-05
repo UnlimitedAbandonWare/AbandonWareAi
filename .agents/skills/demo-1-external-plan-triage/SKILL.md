@@ -1,5 +1,5 @@
 ---
-name: demo-1 External Plan Triage
+name: demo-1-external-plan-triage
 description: >-
   Use this when the user pastes or attaches a GPT Pro answer, PLAN/P6/UAW
   analysis, ZIP snapshot or another agent's design doc and wants a source brief:

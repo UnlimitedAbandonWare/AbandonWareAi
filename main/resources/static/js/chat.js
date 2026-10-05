@@ -14,6 +14,7 @@ const dom = {
   newChatBtn: $("newChatBtn"),
   modelSelect: $("modelSelect"),
   modelSelectionMode: $("modelSelectionMode"),
+  executionMode: $("executionModeSelect"),
   searchModeSelect: $("searchModeSelect"),
   useRag: $("useRagToggle"),
   chatMessages: $("chatWindow"),
@@ -289,6 +290,7 @@ const CONTROL_SETTINGS_STORAGE_KEY = "chat.controlSettings";
 const SESSION_LIST_LIMIT = 12;
 let sessionListRefreshGeneration = 0;
 let sessionListRefreshInFlight = null;
+let sessionListRefreshPendingReason = null;
 let sessionSelectionGeneration = 0;
 
 function streamProtocolError(code) {
@@ -993,7 +995,7 @@ function sessionListContainer() {
 
 function removeSessionListOwnedRows(list) {
   if (!list) return;
-  ["[data-session-list-row]", "[data-session-list-state]"].forEach((selector) => {
+  ["[data-session-list-row]", "[data-session-list-state]", "[data-session-selection-state]"].forEach((selector) => {
     Array.from(list.querySelectorAll(selector)).forEach((row) => row.remove());
   });
 }
@@ -1088,8 +1090,27 @@ function renderSessionList({ rows = [], state: requestedState = "ready", retryab
   return rendered;
 }
 
+function setSessionSelectionNotice(message = "") {
+  const list = sessionListContainer();
+  if (!list) return;
+  Array.from(list.querySelectorAll("[data-session-selection-state]")).forEach((row) => row.remove());
+  if (!message) return;
+  const notice = document.createElement("div");
+  notice.dataset.sessionSelectionState = "true";
+  notice.setAttribute("role", "status");
+  notice.textContent = message;
+  list.appendChild(notice);
+}
+
 function refreshSessionList(reason = "manual") {
-  if (sessionListRefreshInFlight) return sessionListRefreshInFlight;
+  if (sessionListRefreshInFlight) {
+    if (reason === "session" || reason === "final") {
+      // A response captured before this mutation cannot satisfy its refresh.
+      sessionListRefreshPendingReason = reason;
+      sessionListRefreshGeneration += 1;
+    }
+    return sessionListRefreshInFlight;
+  }
   const generation = ++sessionListRefreshGeneration;
   renderSessionList({ state: "loading", retryable: false });
   const currentSessionId = strictBackendSessionId(state.currentSessionId);
@@ -1134,7 +1155,12 @@ function refreshSessionList(reason = "manual") {
       syncSendButtonState();
       return false;
     } finally {
-      if (sessionListRefreshInFlight === refreshTask) sessionListRefreshInFlight = null;
+      if (sessionListRefreshInFlight === refreshTask) {
+        sessionListRefreshInFlight = null;
+        const pendingReason = sessionListRefreshPendingReason;
+        sessionListRefreshPendingReason = null;
+        if (pendingReason) return refreshSessionList(pendingReason);
+      }
     }
   })();
   sessionListRefreshInFlight = refreshTask;
@@ -1217,7 +1243,8 @@ function validateSessionDetail(candidateId, detail) {
     .map((message) => ({
       role: String(message.role).toLowerCase(),
       content: message.content,
-      turnId: normalizeMessageTurnId(message.turnId ?? message.id)
+      turnId: normalizeMessageTurnId(message.turnId ?? message.id),
+      executionMode: String(message.role).toLowerCase() === "assistant" ? message.executionMode : undefined
     }));
   const turnTraces = validateTurnTraces(detail.turnTraces);
   return { ...detail, id: expectedId, messages, turnTraces, settings: detail.settings || {} };
@@ -1275,6 +1302,7 @@ async function selectSessionCandidate(candidateId) {
     hydrationGeneration: restoredSessionHydrationGeneration
   };
   const listMetadata = sessionListRowMetadata(id);
+  setSessionSelectionNotice();
   try {
     const response = await apiCall(chatTraceRequestUrl(`/api/chat/sessions/${id}`), {
       method: "GET",
@@ -1282,9 +1310,13 @@ async function selectSessionCandidate(candidateId) {
     });
     const detail = await response.json();
     const validated = validateSessionDetail(id, detail);
-    if (!validated || generation !== sessionSelectionGeneration || sessionSelectionBusy()) return false;
+    if (generation !== sessionSelectionGeneration || sessionSelectionBusy()) return false;
     if (selectionSnapshot.currentSessionId !== normalizeSessionIdValue(state.currentSessionId) ||
         selectionSnapshot.hydrationGeneration !== restoredSessionHydrationGeneration) return false;
+    if (!validated) {
+      setSessionSelectionNotice("대화 내용을 불러오지 못했습니다. 목록에서 다시 선택해 주세요.");
+      return false;
+    }
 
     sessionListRefreshGeneration += 1;
     restoredSessionHydrationGeneration += 1;
@@ -1303,6 +1335,10 @@ async function selectSessionCandidate(candidateId) {
     validated.messages.forEach((message) => {
       const node = appendMessage(message.role, message.content);
       if (message.turnId != null) node.dataset.turnId = String(message.turnId);
+      if (message.role === "assistant") {
+        renderExecutionModeReceipt({ executionMode: message.executionMode }, node);
+        try { window.ChatEvidenceGraph?.restore(node); } catch { /* Optional answer view. */ }
+      }
       const turnTrace = restoredTurnTraces.get(message.turnId);
       if (turnTrace) renderRestoredTurnTrace(node, turnTrace);
     });
@@ -1312,7 +1348,18 @@ async function selectSessionCandidate(candidateId) {
     syncSessionSelectionCapability();
     dispatchBrainStateSignal("session", { sessionId: id });
     return true;
-  } catch {
+  } catch (error) {
+    if (generation !== sessionSelectionGeneration || sessionSelectionBusy() ||
+        selectionSnapshot.currentSessionId !== normalizeSessionIdValue(state.currentSessionId) ||
+        selectionSnapshot.hydrationGeneration !== restoredSessionHydrationGeneration) return false;
+    const message = error?.status === 401
+      ? "대화를 불러오려면 로그인이 필요합니다."
+      : error?.status === 403
+        ? "이 기기 또는 계정에서 접근할 수 없는 대화입니다."
+        : error?.status === 404
+          ? "이 대화를 찾을 수 없습니다. 목록을 새로고침해 주세요."
+          : "대화를 불러오지 못했습니다. 잠시 후 다시 선택해 주세요.";
+    setSessionSelectionNotice(message);
     return false;
   }
 }
@@ -1321,6 +1368,7 @@ function currentControlSettings(source = "") {
   const settings = {
     model: dom.modelSelect?.value || "",
     modelSelectionMode: dom.modelSelectionMode?.value || "strict",
+    executionMode: dom.executionMode?.value || "AUTO",
     searchMode: dom.searchModeSelect?.value || "AUTO",
     useRag: dom.useRag?.checked !== false
   };
@@ -1378,6 +1426,8 @@ function resetControlSettingsToDefaults() {
   if (defaultModel) dom.modelSelect.value = defaultModel.value;
   const defaultSelectionMode = defaultSelectOption(dom.modelSelectionMode);
   if (defaultSelectionMode) dom.modelSelectionMode.value = defaultSelectionMode.value;
+  const defaultExecutionMode = defaultSelectOption(dom.executionMode);
+  if (defaultExecutionMode) dom.executionMode.value = defaultExecutionMode.value;
   const defaultSearchMode = defaultSelectOption(dom.searchModeSelect);
   if (defaultSearchMode) dom.searchModeSelect.value = defaultSearchMode.value;
   if (dom.useRag) dom.useRag.checked = dom.useRag.defaultChecked !== false;
@@ -1546,6 +1596,10 @@ function applyRestoredSessionSettings(detail = {}, options = {}) {
   }
 
   const restoredSearchMode = restoredSessionSetting(settings, "searchMode", "search_mode");
+  const restoredExecutionMode = restoredSessionSetting(settings, "executionMode", "execution_mode");
+  if (dom.executionMode && ["AUTO", "STRIKE", "SELF_ASK"].includes(restoredExecutionMode)) {
+    dom.executionMode.value = restoredExecutionMode;
+  }
   const searchMode = restoredSearchMode == null ? null : String(restoredSearchMode).trim().toUpperCase();
   if (searchMode && dom.searchModeSelect && selectCanUseValue(dom.searchModeSelect, searchMode)) {
     dom.searchModeSelect.value = searchMode;
@@ -1648,6 +1702,10 @@ async function hydrateRestoredSessionTranscript() {
       for (const message of messages) {
         const node = appendMessage(message.role, message.content);
         if (message.turnId != null) node.dataset.turnId = String(message.turnId);
+        if (message.role === "assistant") {
+          renderExecutionModeReceipt({ executionMode: message.executionMode }, node);
+          try { window.ChatEvidenceGraph?.restore(node); } catch { /* Optional answer view. */ }
+        }
         const turnTrace = restoredTurnTraces.get(message.turnId);
         if (turnTrace) renderRestoredTurnTrace(node, turnTrace);
         renderedMessages.push(node);
@@ -1791,6 +1849,7 @@ async function recoverExactRunAfterTransportLoss(expectedRun, loaderId) {
     if (recoveredAssistant) {
       clearAssistantPendingPlaceholder(recoveredAssistant);
       setMessageContent(recoveredAssistant, "assistant", restoredAnswer);
+      try { window.ChatEvidenceGraph?.restore(recoveredAssistant); } catch { /* No persisted provenance. */ }
     }
     const acknowledged = await acknowledgeExactRun(
       expectedRun.sessionId, expectedRun.runToken, "recovery");
@@ -2715,14 +2774,17 @@ function syncControlStatus(options = {}) {
   const ragState = dom.useRag?.checked === false ? "OFF" : "ON";
   setStatusRailValue(dom.ragStatus, `요청 ${ragState}`);
   if (dom.responseSettingsSummary) {
-    dom.responseSettingsSummary.textContent = `요청 모델 ${selectedModel} | 선택 방식 ${dom.modelSelectionMode?.value || "strict"} | 검색 ${searchModeRailValue(dom.searchModeSelect?.value)} | RAG ${ragState}`;
+    const executionLabel = {AUTO:"자동", STRIKE:"빠르게", SELF_ASK:"추가 검색"}[dom.executionMode?.value || "AUTO"];
+    dom.responseSettingsSummary.textContent = `요청 모델 ${selectedModel} | 선택 방식 ${dom.modelSelectionMode?.value || "strict"} | 전략 ${executionLabel} | 검색 ${searchModeRailValue(dom.searchModeSelect?.value)} | RAG ${ragState}`;
   }
   if (dom.useRag) {
     const label = `RAG: ${ragState}`;
     dom.useRag.setAttribute("aria-label", "Use RAG context");
     dom.useRag.title = label;
   }
-  if (options.persist !== false) persistControlSettings(options.source || "");
+  const applyingDefault = dom.modelSelect?.dataset.applyingDefault === "true";
+  if (applyingDefault) localControlOverrideActive = false;
+  if (options.persist !== false || applyingDefault) persistControlSettings(applyingDefault ? "catalog-default" : options.source || "");
 }
 
 function handleControlChange() {
@@ -2897,6 +2959,7 @@ function markAssistantStreamStopped(node) {
   clearSelectionEntropyTrace(node);
   setMessageContent(node, "assistant", "Response stopped", "stopped");
   node.dataset.streamCancelState = "stopped";
+  try { window.ChatEvidenceGraph?.invalidate(node, "cancelled"); } catch { /* Preserve the stop latch. */ }
   recordChatTransitionDebug({
     kind: "terminal",
     to: "stopped",
@@ -3374,6 +3437,32 @@ function appendTraceSignalLabel(detail, label, value) {
   traceValue.textContent = ` ${safeValue}`;
   row.replaceChildren(traceLabel, traceValue);
   detail.appendChild(row);
+}
+
+function renderExecutionModeReceipt(pipeline = {}, assistant) {
+  const receipt = pipeline?.executionMode;
+  const labels = {AUTO: "자동", STRIKE: "빠름", SELF_ASK: "추가 확인"};
+  if (!assistant?.dataset || !receipt || !labels[receipt.requested] || !labels[receipt.effective]) return;
+  const reasons = {
+    "base-retrieval": "기본 검색", "user-strike": "빠른 경로 선택", "user-self-ask": "추가 확인 선택",
+    "evidence-gap": "근거 보완", "safety-gate": "안전 제한", "search-off": "검색 꺼짐",
+    "deadline-or-cancel": "시간 제한 또는 취소", "evidence-sufficient": "추가 확인 생략",
+    "simple-query": "기본 경로", "global-disabled": "추가 확인 비활성", "cheap-search-mode": "간단 검색",
+    "search-budget": "검색 예산 제한"
+  };
+  let summary = assistant.querySelector?.("[data-execution-mode-receipt]");
+  if (!summary) {
+    summary = document.createElement("small");
+    summary.dataset.executionModeReceipt = "true";
+    assistant.appendChild(summary);
+  }
+  const parts = [`전략: ${labels[receipt.requested]} → ${labels[receipt.effective]}`];
+  if (Number.isInteger(receipt.queryCount) && receipt.queryCount >= 0 && receipt.queryCount <= 3) parts.push(`검색 질의 ${receipt.queryCount}개`);
+  if (Number.isInteger(receipt.httpAttempts) && receipt.httpAttempts >= 0 && receipt.httpAttempts <= 6) parts.push(`검색 전송 ${receipt.httpAttempts}회`);
+  if (reasons[receipt.reason]) parts.push(reasons[receipt.reason]);
+  summary.textContent = parts.join(" · ");
+  assistant.dataset.executionModeRequested = receipt.requested;
+  assistant.dataset.executionModeEffective = receipt.effective;
 }
 
 const renderTraceSignalDetail = (signal, pipeline, assistant) => {
@@ -4495,7 +4584,63 @@ function refreshEvidenceRailFromAnswerText(target, text, context = {}) {
   });
 }
 
+function presentContextUsage(usage = {}) {
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const input = count(usage?.inputTokens);
+  const limit = usage?.limitSource === "model_spec_snapshot" && count(usage?.contextLimitTokens) > 0
+    ? usage.contextLimitTokens : null;
+  const percent = input !== null && limit !== null ? Math.min(100, Math.round(input / limit * 100)) : null;
+  const format = value => value.toLocaleString("en-US");
+  const contextText = input === null ? "입력 컨텍스트 관측 안 됨 · 한도 확인 안 됨"
+    : limit === null ? `입력 ${format(input)} 토큰 추정 · 한도 확인 안 됨`
+      : `입력 ${format(input)} / ${format(limit)} 토큰 · 추정 ${percent}% · 관측된 모델 한도`;
+  const before = count(usage?.memoryBeforeChars);
+  const after = count(usage?.memoryAfterChars);
+  const reasons = {disabled:"압축 꺼짐",empty_input:"압축할 기억 없음",below_threshold:"압축 기준 미도달",
+    all_lines_dropped:"안전한 기억 줄 없음",exception_original_returned:"압축 실패 · 원문 유지",
+    overflow:"길이 기준 압축",history_context_contamination:"내부 흔적 정리",overflow_and_contamination:"길이 압축 · 내부 흔적 정리"};
+  let compressionText = reasons[usage?.memoryCompressionReason] || "기억 압축 관측 안 됨";
+  if (before !== null && after !== null) compressionText += ` · ${format(before)} → ${format(after)} 문자`;
+  if (usage?.memoryCompressionActivated === true && usage?.memoryCompressionReason !== "exception_original_returned") {
+    compressionText += usage.memoryIncluded === true ? " · 프롬프트에 포함"
+      : usage.memoryIncluded === false ? " · 프롬프트 미포함" : " · 전달 확인 안 됨";
+  }
+  return {percent,contextText,compressionText};
+}
+
+function renderContextUsage(pipeline = {}, reset = false) {
+  const gauge = $("contextGauge");
+  if (!gauge || (!reset && !pipeline?.contextUsage && pipeline?.finalContextCount == null)) return;
+  const view = presentContextUsage(reset ? {} : pipeline.contextUsage);
+  $("contextUsageText").textContent = view.contextText;
+  $("memoryCompressionText").textContent = view.compressionText;
+  $("contextPercent").textContent = view.percent === null ? "?" : `${view.percent}%`;
+  gauge.style.setProperty("--context-percent", `${view.percent ?? 0}%`);
+  gauge.dataset.known = String(view.percent !== null);
+  gauge.setAttribute("aria-label", view.contextText);
+  if (view.percent === null) gauge.removeAttribute("aria-valuenow");
+  else gauge.setAttribute("aria-valuenow", String(view.percent));
+  const evidence = Number.isSafeInteger(pipeline?.finalContextCount) && pipeline.finalContextCount >= 0
+    ? `근거 ${pipeline.finalContextCount}건${pipeline.finalContextCountSource === "web_vector_estimate" ? " · 추정" : " · 관측"}`
+    : "근거 수 관측 안 됨";
+  $("contextEvidenceText").textContent = reset ? "근거 수 관측 대기" : evidence;
+}
+
+function initializeContextSummary() {
+  const panel = $("contextSummary");
+  if (!panel) return;
+  const key = "chat.contextSummary.collapsed";
+  try { panel.open = localStorage.getItem(key) !== "true"; } catch { /* optional UI preference */ }
+  let lastOpen = panel.open;
+  panel.addEventListener("toggle", () => {
+    if (panel.open === lastOpen) return;
+    lastOpen = panel.open;
+    try { localStorage.setItem(key, String(!panel.open)); } catch { /* optional UI preference */ }
+  });
+}
+
 function updateOrchestrationSignalBar(partial = {}) {
+  renderContextUsage(partial.pipelineSnapshot, /^(idle|connecting)$/i.test(String(partial.streamStatus || "")));
   if (/^(idle|connecting)$/i.test(String(partial.streamStatus || ""))) {
     currentTurnRecoveryState = "";
   }
@@ -5824,7 +5969,7 @@ function isHttp403(error) {
   return error?.status === 403 || String(error?.message || "").includes("403");
 }
 
-function renderChatEvent(payload, assistant, fallbackType = "message") {
+function renderChatEvent(payload, assistant, fallbackType = "message", exactFinalRun = null) {
   const rawType = payload?.type || fallbackType || "message";
   const type = rawType === "stream_failed" ? "error" : rawType;
   if (isAssistantStreamStopped(assistant)) {
@@ -5861,6 +6006,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
         activeRunToken = null;
       }
       rememberCurrentSessionId(sid);
+      void refreshSessionList("session");
       const pendingStop = pendingStopBeforeToken;
       if (runToken && pendingStop?.assistant === assistant) {
         // Stop was expressed before the capability arrived. Cancelling the still
@@ -5882,8 +6028,15 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
       clearSelectionEntropyTrace(assistant);
     }
   } else if (type === "final") {
-    const reportedModel = payload.modelUsed || state.responseModelUsed;
-    const model = reportedModel || dom.modelSelect?.value || "-";
+    const legacyReportedModel = payload.modelUsed || state.responseModelUsed;
+    const legacyModel = legacyReportedModel || dom.modelSelect?.value || "-";
+    const hasObservation = ["observedModel", "observed_model", "observedProvider",
+      "observed_provider", "observedReason", "observed_reason"]
+      .some(key => Object.prototype.hasOwnProperty.call(payload, key));
+    const observedModel = [payload.observedModel, payload.observed_model]
+      .find(value => typeof value === "string" && value.trim())?.trim() || null;
+    const reportedModel = hasObservation ? observedModel : legacyReportedModel;
+    const model = hasObservation ? observedModel || "UNKNOWN" : legacyModel;
     const finalSessionId = sessionIdFromPayload(payload);
     const sid = finalSessionId || state.currentSessionId;
     if (finalSessionId && state.currentSessionId !== finalSessionId) {
@@ -5891,7 +6044,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
       dispatchBrainStateSignal('session', { sessionId: finalSessionId });
     }
     const pipeline = payload.pipelineSnapshot || payload.pipeline_snapshot || {};
-    const inferredMode = finalAnswerMode(payload, model);
+    const inferredMode = finalAnswerMode(payload, legacyModel);
     const finalMode = normalizedAnswerMode(pipeline.answerMode || pipeline.answer_mode || pipeline.mode) || inferredMode;
     const traceTurnId = payload.traceTurnId || payload.trace_turn_id || pipeline.traceTurnId || pipeline.trace_turn_id || state.responseTraceId || "ready";
     const bubble = assistant;
@@ -5906,10 +6059,23 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
       appendTextWithBreaks(bubble, completeAnswer);
       if (selectionEntropyCard) bubble.appendChild(selectionEntropyCard);
     }
+    try {
+      window.ChatEvidenceGraph?.finalize(bubble, {
+        identity: exactFinalRun,
+        isCurrent: sameActiveRunIdentity,
+        sessionId: finalSessionId,
+        traceTurnId: payload.traceTurnId ?? payload.trace_turn_id
+          ?? pipeline.traceTurnId ?? pipeline.trace_turn_id ?? null,
+        evidence: payload.evidence,
+        answerText: completeAnswer,
+        projectionVersion: 1
+      });
+    } catch { /* An optional provenance view must not interrupt final delivery or ACK. */ }
     if (String(finalMode || "").toUpperCase().startsWith("FALLBACK")) {
       reflectAssistantModelFallback(bubble?.dataset?.ariaText || bubble?.textContent || "");
     }
     setStatusRailValue(dom.modelStatus, `${reportedModel ? "적용" : "요청"} ${modelStatusRailValue(model, finalMode)}`);
+    renderExecutionModeReceipt(pipeline, bubble);
     const directLiteralDiagnosticsSuppressed = suppressDirectLiteralDiagnostics(bubble, finalMode, model);
     const compactExternalProofDiagnosticsSuppressed = suppressCompactExternalProofDiagnostics(bubble, finalMode, model);
     const localUiModeDiagnosticsSuppressed = suppressLocalUiModeDiagnostics(bubble, finalMode, model);
@@ -5927,6 +6093,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
         answerMode: finalMode
       }
     });
+    if (hasObservation) setStatusRailValue(dom.modelStatus, `응답 ${model}`);
     resetCurrentTurnHealthOverlay();
     renderPrimaryDiagnostic(selectPrimaryDiagnostic({
       healthOverlay: currentTurnHealthOverlay,
@@ -6035,6 +6202,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message") {
     if (hasBlocks) promoteQueryRewriteTransformerToHeartbeat(blocks);
     const liveHeartbeatModelReason = transformerBadges.model || transformerBadges.modelBadge || pipeline.failureClass || pipeline.disabledReason || pipeline.answerMode;
     const bubble = assistant;
+    renderExecutionModeReceipt(pipeline, bubble);
     if (type === "transformer") {
       if (!hasBlocks && meta?.status === "final") return;
       renderTransformerCoreRail(bubble || dom.chatMessages, blocks, meta);
@@ -6643,7 +6811,8 @@ async function sendMessageUnlocked(text) {
     ...modelSelectionPayload(),
     useRag: dom.useRag?.checked ?? true,
     useWebSearch: dom.searchModeSelect?.value !== "OFF",
-    searchMode: dom.searchModeSelect?.value || "AUTO"
+    searchMode: dom.searchModeSelect?.value || "AUTO",
+    executionMode: dom.executionMode?.value || "AUTO"
   };
   const currentSessionId = sessionIdFromPayload({ sessionId: state.currentSessionId });
   if (currentSessionId) payload.sessionId = currentSessionId;
@@ -6656,6 +6825,7 @@ async function sendMessageUnlocked(text) {
   beginChatTransitionDebugTurn(`turn:${assistantMessageSequence}`, "new-turn");
   const assistant = appendMessage("assistant", "");
   assistant.id = loaderId;
+  assistant.dataset.executionModeRequested = payload.executionMode;
   suppressAnswerOnlyDiagnostics(assistant, draftText);
   activeStreamAssistant = assistant;
   invalidatePendingSessionSelectionForTranscriptOwnership();
@@ -6981,7 +7151,7 @@ async function streamChat(payload, loaderId, options = {}) {
         terminalEventSeen = terminalEventSeen || effectiveType === "final" || cancelledStatus;
         if (streamAbortRequested()) throw streamAbortError();
         if (isActiveStreamRenderTarget(assistant, currentStreamController)) {
-          renderChatEvent(eventPayload, assistant, effectiveType);
+          renderChatEvent(eventPayload, assistant, effectiveType, exactFinalRun);
           if (effectiveType === "session" && assistant?.dataset) {
             const requestHash = eventPayload?.traceSignal?.requestIdHash;
             if (/^hash:[a-f0-9]{12,64}$/i.test(requestHash || "")) assistant.dataset.streamRequestHash = requestHash;
@@ -7377,6 +7547,7 @@ dom.sendBtn?.addEventListener("click", () => {
 
 dom.modelSelect?.addEventListener("change", handleControlChange);
 dom.modelSelectionMode?.addEventListener("change", handleControlChange);
+dom.executionMode?.addEventListener("change", handleControlChange);
 dom.searchModeSelect?.addEventListener("change", handleControlChange);
 dom.useRag?.addEventListener("change", handleControlChange);
 dom.newChatBtn?.addEventListener("click", startNewChatSession);
@@ -7389,10 +7560,11 @@ dom.form?.addEventListener("submit", (event) => {
   event.preventDefault();
   sendMessage();
 });
+initializeContextSummary();
 if (!restoreStoredControlSettings()) {
   resetControlSettingsToDefaults();
   const smokeProofDefaultsApplied = applySmokeProofControlDefaults();
-  syncControlStatus({ persist: !smokeProofDefaultsApplied });
+  syncControlStatus({ source: "factory", persist: !smokeProofDefaultsApplied });
 }
 setComposerBusy(false);
 try {

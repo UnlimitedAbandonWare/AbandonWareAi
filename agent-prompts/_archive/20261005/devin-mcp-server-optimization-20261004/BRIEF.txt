@@ -1,0 +1,108 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 아래 4대 MCP 서버 최적화 작업을 순서대로 직접 구현하고 테스트까지 완수해야 합니다.
+@build-error-miner
+
+[DEVIN 지시서] 코덱스 세션 기반 MCP 서버 성능 및 스키마 최적화 — 2026-10-04 19:50 KST
+파일 ID: PASTE_DEVIN_MCP_SERVER_OPTIMIZATION_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+최근 7일간 코덱스 187개 세션에서 확인된 MCP 병목(Stdio 워커 latency, 108KB 스키마 블로트, build_error_mine 91.5% 경로 미스, 38KB 페이로드 낭비)을 해소하고 기존 MCP 테스트 100% PASS를 달성한다.
+
+### 1. 사실 (읽기 전용 확인, 2026-10-04 19:48 KST)
+- 세션 통계: 최근 7일간 코덱스 187개 세션, 총 도구 호출 22,843회 중 MCP 도구 호출 296회.
+- 실사용 도구: 31개 도구 중 실호출은 `mcp__awx_control_tower__build_error_mine`(95회)과 `answer_trace_bundle_read`(1회)뿐이며 29개 도구는 0회 호출.
+- 병목 1 (Latency): `awx_mcp_stdio_server.py`의 `StdioSession`이 매 호출마다 Popen 서브프로세스를 스폰하고 `sys.settrace` 전역 인터프리터 훅을 설치하여 호출당 10~31초 지연 발생.
+- 병목 2 (Schema Bloat): `awx-control-tower-tools.json`이 108,375 bytes (108KB)에 달해 매 세션마다 불필요한 수만 토큰 컨텍스트 소모.
+- 병목 3 (Path Miss): `awx_mcp_toolbox.py`의 `build_error_mine`이 기본값 `build.log`만 확인하여 95회 호출 중 87회 이상 `decision: log_missing`으로 헛돌고 실패.
+- 병목 4 (Payload Bloat): 최대 허용 결과 크기(`MAX_TOOL_RESULT_BYTES`)가 256KB로 지나치게 크고, 일부 응답이 38KB 이상 쏟아져 컨텍스트 오염 유발.
+
+### 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 실행 위치: 항상 `Set-Location C:\AbandonWare\demo-1\demo-1\src`를 첫 줄로 실행한다.
+- 보고 서두: 보고서는 반드시 `외부 API: 0원 / 로컬 파이썬 검증`으로 시작한다.
+- 범위 한정: 지정된 스크립트(`scripts/awx_mcp_stdio_server.py`, `scripts/awx_mcp_toolbox.py`, `main/resources/mcp/awx-control-tower-tools.json`, `scripts/test_*.py`) 외의 프로덕션 Java 백엔드 코드는 수정하지 않는다.
+
+### 기준 해시 표
+| 경로 | sha12 | git | 권한 |
+|---|---|---|---|
+| scripts/awx_mcp_stdio_server.py | 1c3f0248230c | - | 수정 |
+| scripts/awx_mcp_toolbox.py | 0ffdc33468f3 | - | 수정 |
+| main/resources/mcp/awx-control-tower-tools.json | 28ff8ddb6d5a | - | 수정 |
+| scripts/test_awx_mcp_stdio_protocol.py | 8cb93e0a0ee6 | - | 검증 |
+| scripts/test_awx_mcp_boundary_efficiency.py | 15d0d4453f1c | - | 검증 |
+| scripts/test_awx_mcp_toolbox.py | 90aaf723b7d8 | - | 검증 |
+
+### WP1 [Devin] Stdio 서버 서브프로세스 & 트레이스 오버헤드 최적화
+- 증거: `scripts/awx_mcp_stdio_server.py:121` `sys.settrace` 전역 훅으로 파이썬 인터프리터 5~10배 저하.
+- RED: `python -B -c "assert 'sys.settrace' in open('scripts/awx_mcp_stdio_server.py', encoding='utf-8').read()"; 'exit=' + str($LASTEXITCODE)`
+- 최소 수정:
+  1) `tool_worker`에서 `sys.settrace(checkpoint)`를 전면 제거하고 `threading.Event` 기반 협력적 취소 및 타임아웃으로 전환.
+  2) `MAX_TOOL_RESULT_BYTES`를 262,144(256KB)에서 32,768(32KB)로 축소하여 폭주 방지.
+- GREEN: `python -B scripts/test_awx_mcp_stdio_protocol.py; "exit=$LASTEXITCODE"` (26개 PASS, exit 0)
+- 완료 조건: `awx_mcp_stdio_server.py`에서 `sys.settrace` 제거 및 프로토콜 테스트 통과.
+
+### WP2 [Devin] build_error_mine 빌드 로그 다중 Fallback 탐색 구현
+- 증거: `scripts/awx_mcp_toolbox.py:270` `build.log` 미존재 시 무조건 `log_missing` 반환.
+- RED: `python -B -c "from scripts.awx_mcp_toolbox import build_error_mine; assert build_error_mine({}).get('decision') == 'log_missing'"; 'exit=' + str($LASTEXITCODE)`
+- 최소 수정:
+  1) `log_path` 미지정 또는 부재 시 `build/desktop/build.log`, `build/build.log`, `var/diagnostics/*.log`, `./build.log` 순차 자동 탐색.
+  2) 발견 시 파싱 진행 및 `resolvedLogPath` 반환. 모두 없을 때만 `log_missing`.
+- GREEN: `python -B scripts/test_awx_mcp_toolbox.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: 빈 인자 `{}` 호출에서도 기존 빌드 로그 자동 탐색되어 `build_log_mined` 반환.
+
+### WP3 [Devin] 도구 매니페스트 경량화 및 스키마 블로트 해소
+- 증거: `main/resources/mcp/awx-control-tower-tools.json` 108KB. 31개 중 29개 미사용.
+- RED: `python -B -c "import os; assert os.path.getsize('main/resources/mcp/awx-control-tower-tools.json') > 60000"; 'exit=' + str($LASTEXITCODE)`
+- 최소 수정:
+  1) 장황한 description, 중복 enum, 주석 텍스트를 정돈하여 핵심 스키마 중심 압축 (목표: 60KB 이하).
+  2) 핵심 도구(`build_error_mine`, `boot_verify`, `answer_trace_bundle_read`, `guard_status`) 스키마 무결성 유지.
+- GREEN: `python -B scripts/test_awx_mcp_stdio_catalog.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: 매니페스트 60KB 이하 축소 및 카탈로그 테스트 통과.
+
+### WP4 [Devin] 기존 MCP 테스트 스위트 전체 회귀 검증
+- 증거: 최적화 후 전체 MCP 도구 및 프로토콜 동작 증명 필요.
+- RED: 회귀 발생 여부 사전 점검.
+- 최소 수정: 4대 MCP 테스트 스위트 순차 실행 및 PASS 검증.
+- GREEN:
+  1) `python -B scripts/test_awx_mcp_stdio_protocol.py; "exit=$LASTEXITCODE"` (exit 0)
+  2) `python -B scripts/test_awx_mcp_boundary_efficiency.py; "exit=$LASTEXITCODE"` (exit 0)
+  3) `python -B scripts/test_awx_mcp_toolbox.py; "exit=$LASTEXITCODE"` (exit 0)
+  4) `python -B scripts/test_awx_mcp_stdio_catalog.py; "exit=$LASTEXITCODE"` (exit 0)
+- 완료 조건: 4개 테스트 스위트 전원 exit 0 통과.
+
+### 4. HOLD
+- 기존 `test_awx_mcp_stdio_protocol.py` JSON-RPC 프로토콜 테스트 실패 시.
+- `awx-control-tower-tools.json` 수정 후 기존 유효 도구 스키마 유효성 에러 발생 시.
+- 타 세션 활성 리스와 경로 충돌 시 해당 파일만 HOLD.
+
+### 5. ASK_ONCE
+- Q1. `MAX_TOOL_RESULT_BYTES`: (추천) 32KB로 축소하여 컨텍스트 폭주 방지.
+- Q2. 매니페스트 분리 여부: (추천) 단일 파일 내 descriptions 압축으로 호환성 유지.
+
+### 6. 절대 금지
+- git push, git pull, git commit, git add -A 금지.
+- remote 추가 금지.
+- 비밀값, API 키, 토큰 평문 로그 출력 금지.
+- PROTO_OPEN 상태 준수: 인증 게이트 신설/변경 금지.
+- Java 소스 파일(`main/java/**`, `src/**`) 수정 금지.
+- 외부 유료 API 호출 금지.
+
+### 7. Acceptance
+- A1 (WP1 대응): `sys.settrace` 제거, cooperative cancellation 적용, `MAX_TOOL_RESULT_BYTES` 32KB 제한, `test_awx_mcp_stdio_protocol.py` PASS.
+- A2 (WP2 대응): `build_error_mine` 빌드 로그 fallback 탐색 추가, `test_awx_mcp_toolbox.py` PASS.
+- A3 (WP3 대응): `awx-control-tower-tools.json` 60KB 이하 달성, `test_awx_mcp_stdio_catalog.py` PASS.
+- A4 (WP4 대응): 4대 MCP 테스트 스위트 100% PASS.
+- NOT_RUN: 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다. Spring Boot 앱 재기동이나 live API 호출은 범위 밖이므로 NOT_RUN_LIVE로 남긴다.
+
+### 8. 보고 형식
+외부 API: 0원 / 로컬 파이썬 검증
+- 결론: [MCP 성능 및 스키마 최적화 완료 / 통과 테스트 수]
+- 최적화 전후 비교:
+  1) Stdio 실행 오버헤드: sys.settrace 제거 (지연율 개선 결과)
+  2) 매니페스트 크기: 108KB -> X KB (감축률 %)
+  3) build_error_mine Fallback: 자동 탐색 경로 및 동작 확인
+  4) 페이로드 상한: 256KB -> 32KB 축소
+- 검증 증거: 4대 테스트 스위트 개별 결과
+- 미수정/보존 항목: Java 소스 무수정, 외부 원격 MCP 서버 설정 보존
+
+[ANTI-STOP] 모든 작업 패키지는 실제 코드 수정과 테스트 실행으로 검증해야 하며, 단순히 계획만 작성하고 멈추지 마십시오.

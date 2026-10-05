@@ -55,6 +55,11 @@ public class ChatGptOAuthRegistration {
     @Value("${chatgpt.oauth.owner-hash:}")
     private String registeredOwnerHash = "";
 
+    /** Explicit failover ownership; independent of the general catalogue visibility policy. */
+    public boolean isRegisteredOwner(String ownerHash) {
+        return ownerHash != null && ownerHash.matches("[0-9a-f]{64}") && ownerHash.equals(registeredOwnerHash);
+    }
+
     private boolean ownerAllowed(String ownerHash) {
         return !ownAccountOnly || ownerHash != null && ownerHash.matches("[0-9a-f]{64}")
                 && ownerHash.equals(registeredOwnerHash) && accountRef != null && !accountRef.isBlank();

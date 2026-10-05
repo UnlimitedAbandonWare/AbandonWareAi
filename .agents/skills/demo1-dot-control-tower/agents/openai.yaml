@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Dot Control Tower"
+  short_description: "dot (ChatGPT UnlimitedAbandon) is the control tower: receive PASTE_CODEX_* briefs, act as companion only, never revert dot's post-patch rule updates"
+  default_prompt: "Use $demo1-dot-control-tower when a request or file comes from the user's ChatGPT dot (UnlimitedAbandon), a PASTE_CODEX_<UPPER_SNAKE>_<date>.md brief arrives, or another agent is about to edit rules dot recently changed. Check the brief's scope and leases first, HOLD on file overlap with scripts/dot_tower_status.py output, and never revert dot's post-patch rule updates (configs/dot-tower-ratchet.json INV-T1~T5)."

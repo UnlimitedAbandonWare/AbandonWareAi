@@ -72,6 +72,15 @@ public class GeminiCurationService {
             return notApplied("curation_empty_or_not_implemented", emptyDelta());
         }
 
+        // Apply the same admission list to both writers before either can index a memory.
+        List<MemorySnippet> acceptedMemories = delta.memories().stream()
+                .filter(ms -> ms != null && ms.text() != null && !ms.text().isBlank())
+                .filter(ms -> Double.isFinite(ms.confidence())
+                        && Math.max(0.0, Math.min(1.0, ms.confidence())) >= minConfidence)
+                .toList();
+        delta = new KnowledgeDelta(delta.triples(), delta.rules(), delta.aliases(),
+                acceptedMemories, delta.protectedTerms());
+
         try {
             knowledgeBaseService.apply(delta);
             embeddingStoreManager.index(delta.memories());

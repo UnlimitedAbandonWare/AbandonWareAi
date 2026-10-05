@@ -7,6 +7,7 @@
 - Conditional local Git (this root only, user authorization 2026-09-23): `$demo1-conditional-local-git` / `$demo1-git-secret-guard` / `$demo1-git-vibe-workflow`; once an agent judges owned work committable, the single entry point is `python -B scripts/agent_git_vibe_commit.py --repo . --path <owned>... --message-file <file>` (JSON `committed=<sha>`/`deferred=<reason>`) — allow/forbid lines in `DEMO1-GIT-LOCAL-FIRST`.
 - Hooks are advisory detection only; the checkpoint apply/restore path is the enforcement. A hook or MCP failure must stay visible and the guarded path still refuses when safety is unproven.
 - A guard/scanner false positive (e.g. checkpoint secret-scan flagging a Java local variable) is fixed in the scanner with its regression test kept (`scripts/test_codex_work_checkpoint_source_expressions.py`, `test_checkpoint_java_call_args.py`) — never evaded by renaming or mangling source semantics.
+- Behavior ratchet: `python -B scripts/behavior_ratchet.py check|update|unlock` — landed behavior/rules stay locked until a user-approved ADR (`docs/agents-rules/DEMO1-BEHAVIOR-RATCHET.md`, `$demo1-behavior-ratchet`).
 
 ### 보호 범위 해석 (protected scope interpretation)
 

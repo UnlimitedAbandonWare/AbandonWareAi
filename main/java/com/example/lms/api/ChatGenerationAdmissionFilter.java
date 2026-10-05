@@ -59,6 +59,18 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
     @Value("${chat.admission.user-per-minute:20}") private int userPerMinute = 20;
     @Value("${chat.admission.ip-capacity:60}") private int ipCapacity = 60;
     @Value("${chat.admission.ip-per-minute:60}") private int ipPerMinute = 60;
+    @Value("${chat.admission.turn-window.per-minute:10}") private int turnPerMinute = 10;
+    @Value("${chat.admission.turn-window.hourly-enabled:false}") private boolean turnHourlyEnabled;
+    @Value("${chat.admission.turn-window.per-hour:10}") private int turnPerHour = 10;
+    @Value("${chat.admission.turn-window.max-keys:8192}") private int turnMaxKeys = 8192;
+    private java.util.function.LongSupplier turnClock = System::currentTimeMillis;
+    private volatile RollingTurnWindow turnWindow;
+    private synchronized RollingTurnWindow turnWindow() {
+        if (turnWindow == null) turnWindow = new RollingTurnWindow(turnMaxKeys, turnClock);
+        return turnWindow;
+    }
+    public long getEvictedTurnWindowKeys() { return turnWindow == null ? 0 : turnWindow.evictedKeys(); }
+    public long getEvictedTurnReplayKeys() { return turnWindow == null ? 0 : turnWindow.evictedReplayKeys(); }
 
     public ChatGenerationAdmissionFilter(UpstashRedisClient redis, DataSource dataSource, ClientOwnerKeyResolver owners) {
         this.redis = redis; this.owners = owners; this.jdbc = new JdbcTemplate(dataSource);
@@ -70,7 +82,9 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
     }
     @jakarta.annotation.PostConstruct void validate() {
         if (userCapacity < 1 || userPerMinute < 1 || ipCapacity < 1 || ipPerMinute < 1
-                || userCapacity > 100_000 || userPerMinute > 100_000 || ipCapacity > 100_000 || ipPerMinute > 100_000)
+                || turnPerMinute < 1 || turnPerHour < 1 || turnMaxKeys < 1
+                || userCapacity > 100_000 || userPerMinute > 100_000 || ipCapacity > 100_000 || ipPerMinute > 100_000
+                || turnPerMinute > 100_000 || turnPerHour > 100_000 || turnMaxKeys > 100_000)
             throw new IllegalStateException("chat_admission_invalid_limits");
     }
     @Override protected boolean shouldNotFilter(HttpServletRequest request) {
@@ -85,20 +99,56 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
             reject(response, 400, "invalid_idempotency_key", 0); return;
         }
         if (demoAdmission()) {
+            response.setHeader("X-Admission-Mode", "demo-memory-rolling");
+            RollingTurnWindow window;
+            RollingTurnWindow.Result stamp;
+            try {
+                window = turnWindow();
+                var auth = SecurityContextHolder.getContext().getAuthentication();
+                String owner = ownerHash(auth);
+                String ip = owners.clientIpHash(request);
+                if (ip == null || !ip.matches("[a-fA-F0-9]{64}")) throw new IllegalStateException("ip_identity_unavailable");
+                // Retain every possible unrefunded turn in one hour, including when hourly is off.
+                int retained = Math.max(turnPerMinute * 60, turnPerHour);
+                var rules = new ArrayList<RollingTurnWindow.Rule>();
+                rules.add(new RollingTurnWindow.Rule("owner:" + owner, turnPerMinute, 60_000, retained, "minute"));
+                if (turnHourlyEnabled)
+                    rules.add(new RollingTurnWindow.Rule("owner:" + owner, turnPerHour, 3_600_000, retained, "hour"));
+                rules.add(new RollingTurnWindow.Rule("ip:" + ip, ipPerMinute, 60_000, ipPerMinute, "minute"));
+                String replay = key == null ? null : DigestUtils.sha256Hex(owner + "\n" + path(request) + "\n" + key);
+                String fingerprint = null;
+                if (key != null) {
+                    Object bodyHash = request.getAttribute("chat.admission.bodySha256");
+                    if (!(bodyHash instanceof String hash) || !hash.matches("[a-fA-F0-9]{64}"))
+                        throw new IllegalStateException("bounded_body_required");
+                    String canonicalHash = Objects.toString(request.getAttribute("chat.admission.semanticSha256"), hash);
+                    fingerprint = SemanticRequestFingerprint.request(request, path(request), canonicalHash);
+                }
+                stamp = window.tryAcquire(replay, fingerprint, rules);
+            } catch (RuntimeException unavailable) {
+                reject(response, 503, "chat_admission_unavailable", 1000); return;
+            }
+            if (stamp.rejectionReason() != null) {
+                reject(response, 409, stamp.rejectionReason(), 0); return;
+            }
+            if (!stamp.accepted()) {
+                response.setHeader("X-RateLimit-Scope", stamp.scope());
+                reject(response, 429, "chat_rate_limited", stamp.retryAfterMs()); return;
+            }
+            request.setAttribute("chat.admission.turnStamp", stamp);
             var permit = new DemoPermit();
             request.setAttribute("chat.admission.demoPermit", permit);
             request.setAttribute(COMPLETION_ATTRIBUTE, permit);
-            response.setHeader("X-Admission-Mode", "demo-memory");
-            org.slf4j.LoggerFactory.getLogger(ChatGenerationAdmissionFilter.class)
-                    .debug("interview.admission mode=demo-memory accepted=true");
-            chain.doFilter(request, response);
+            try { chain.doFilter(request, response); }
+            finally {
+                if (Boolean.TRUE.equals(request.getAttribute("chat.admission.neverDispatched"))) window.release(stamp);
+            }
             return;
         }
         Claim claim = null;
         try {
             var auth = SecurityContextHolder.getContext().getAuthentication();
-            String owner = DigestUtils.sha256Hex(auth != null && auth.isAuthenticated() && !(auth instanceof AnonymousAuthenticationToken)
-                    ? "user:" + auth.getName() : "owner:" + owners.ownerKey());
+            String owner = ownerHash(auth);
             String ip = owners.clientIpHash(request);
             if (ip == null) throw new IllegalStateException("ip_identity_unavailable");
             Object bodyHash = request.getAttribute("chat.admission.bodySha256");
@@ -156,6 +206,11 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
             throw failed;
         }
     }
+    private String ownerHash(org.springframework.security.core.Authentication auth) {
+        boolean realUser = auth != null && auth.isAuthenticated() && !(auth instanceof AnonymousAuthenticationToken)
+                && !Set.of("proto-open", "admin-token").contains(auth.getName());
+        return DigestUtils.sha256Hex(realUser ? "user:" + auth.getName() : "owner:" + owners.ownerKey());
+    }
     private boolean rejectExisting(HttpServletResponse response, String key, String fingerprint) throws IOException {
         var rows = jdbc.query("SELECT r.fingerprint,r.state,x.result_json,x.content_type FROM awx_chat_requests r LEFT JOIN awx_chat_request_results x ON x.key_hash=r.key_hash WHERE r.key_hash=?",
                 (rs, row) -> new String[]{rs.getString(1),rs.getString(2),rs.getString(3),rs.getString(4)}, key);
@@ -177,7 +232,7 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
         var auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || !auth.isAuthenticated() || auth instanceof AnonymousAuthenticationToken)
             throw new org.springframework.web.server.ResponseStatusException(org.springframework.http.HttpStatus.UNAUTHORIZED, "authentication_required");
-        String owner = DigestUtils.sha256Hex("user:" + auth.getName());
+        String owner = ownerHash(auth);
         String ip = owners.clientIpHash(request);
         if (ip == null || !ip.matches("[a-fA-F0-9]{64}")) throw admissionUnavailable();
         return () -> checkCost(owner, ip);

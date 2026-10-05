@@ -88,6 +88,7 @@ public class LlmRouterAspect {
     private com.example.lms.config.LocalLlmProcessManager localLlmProcessManager;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.example.lms.debug.ApiFailureRecorder apiFailureRecorder;
+    private final ThreadLocal<Boolean> ownerPrimaryEntered = new ThreadLocal<>();
     private final LocalModelAdmission localModelAdmission =
             new LocalModelAdmission();
 
@@ -449,6 +450,13 @@ public class LlmRouterAspect {
             if (gatewayBreadcrumbPublisher != null) {
                 gatewayBreadcrumbPublisher.publishEligibility(eligibility);
             }
+            if (!com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId)
+                    && ((localAdmissionEnabled() && isLocalAdmissionTarget(sel.cfg()) && localSlotSaturated(sel.cfg()))
+                    || (gatewayProbeService.isEnforce() && eligibility != null && !eligibility.eligible()
+                    && "open_blocked".equals(eligibility.safeMeta().get("endpointSelectionDecision"))))) {
+                var ownerFallback = ownerOAuthFallback(sel, ca);
+                if (ownerFallback != null) return ownerFallback.model();
+            }
             if (com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId)
                     && (eligibility == null || !eligibility.eligible()))
                 throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
@@ -526,14 +534,14 @@ public class LlmRouterAspect {
         ChatModel primary;
         if (providedPrimary == null) primary = recordOutcomes(
                 admissionBound(buildRoutedModel(sel, ca, lazyFallbackPossible, primaryRoute::set, "primary"),
-                        sel.cfg()), sel.key());
+                        sel.cfg(), ca), sel.key());
         else {
             publishSelectedRoute(sel.key(), sel.cfg().getName(), sel.cfg().getBaseUrl(), providedProtocol,
                     sel.cfg(), lazyFallbackPossible, primaryRoute::set);
             primary = recordOutcomes(admissionBound(
                     decorateRoutedAttempt(providedPrimary, "primary", sel.key(), sel.cfg().getName(),
                             sel.cfg().getBaseUrl(), providedProtocol, ca, sel.cfg()),
-                    sel.cfg()), sel.key());
+                    sel.cfg(), ca), sel.key());
         }
         if (!lazyFallbackPossible) {
             return rememberRoutedIdentity(
@@ -547,8 +555,25 @@ public class LlmRouterAspect {
         AtomicReference<ModelRuntimeHealthTracker.RequestAttemptRoute> fallbackRoute = new AtomicReference<>();
         FallbackAwareChatModel fallbackAware = new FallbackAwareChatModel(roleBound(primary,sel,ca,!sel.key().equals(original.key())),
                 (failureClass, usedRoutes) -> {
+                    long fbNanos = System.nanoTime();
+                    if (usedRoutes.stream().anyMatch(com.example.lms.llm.ChatGptOAuthRegistration::isRoute)) return null;
                     if (routingPolicy.agentModeActive() && usedRoutes.size() > routingPolicy.maxClassifiedRetries())
                         return null;
+                    if (usedRoutes.size() == 1 && Boolean.FALSE.equals(ownerPrimaryEntered.get())
+                            && ((failureClass == LlmFailureClass.GPU_DEVICE_LOST
+                            && java.util.Set.of("open_blocked", "half_open_busy", "recovery_stabilizing")
+                            .contains(String.valueOf(TraceStore.get("llm.localEndpoint.selectionDecision"))))
+                            || (failureClass == LlmFailureClass.RATE_LIMIT_COOLDOWN
+                            && "local_backend_busy".equals(TraceStore.get("llm.localEndpoint.selectionDecision"))))) {
+                        var ownerFallback = ownerOAuthFallback(sel, ca);
+                        if (ownerFallback != null && !usedRoutes.contains(ownerFallback.routeKey())) {
+                            log.warn("[PROBE:LLM_FAILOVER] provider={}, model={}, reason={}, elapsedMs={}",
+                                    "chatgpt_oauth", ownerFallback.routeKey(),
+                                    String.valueOf(failureClass),
+                                    java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fbNanos));
+                            return ownerFallback;
+                        }
+                    }
                     var considered = new java.util.LinkedHashSet<>(usedRoutes);
                     for (int selectionAttempt = 0; selectionAttempt < Math.min(64, props.getModels().size()); selectionAttempt++) {
                     TimeBudget remainingBudget = TimeBudgetContext.get();
@@ -589,7 +614,7 @@ public class LlmRouterAspect {
                             admissionBound(buildRoutedModel(candidate, withoutLibraryRetries(ca), false, fallbackRoute::set, "fallback",
                                     usedRoutes.size() <= 1 && isLocalEligibilityProvider(sel.cfg().getProvider())
                                     && gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled() ? 1 : 0),
-                                    candidate.cfg()),
+                                    candidate.cfg(), ca),
                             candidate.key());
                     } catch (RuntimeException unavailable) {
                         if (LlmGatewayFailureClassifier.isCancellation(unavailable)) throw unavailable;
@@ -597,6 +622,11 @@ public class LlmRouterAspect {
                         continue;
                     }
                     if (fallbackModel == null || fallbackModel instanceof ExpectedFailureChatModel) continue;
+                    log.warn("[PROBE:LLM_FAILOVER] provider={}, model={}, reason={}, elapsedMs={}",
+                            candidate.cfg() == null ? null : candidate.cfg().getProvider(),
+                            candidate.cfg() == null ? null : candidate.cfg().getName(),
+                            String.valueOf(failureClass),
+                            java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - fbNanos));
                     return new FallbackAwareChatModel.ResolvedFallback(
                             roleBound(fallbackModel,candidate,ca,true),
                             candidate.key(),
@@ -613,9 +643,20 @@ public class LlmRouterAspect {
                 apiFirstEnabled() ? 2 : gatewayProbeService != null && gatewayProbeService.cloudFallbackEnabled()
                         && isLocalEligibilityProvider(sel.cfg().getProvider()) ? 2 : 1)
                 .withMaskedFallbackReporter(this::reportMaskedFallback);
-        return rememberRoutedIdentity(
-                apiFirstEnabled() ? fallbackAware.withApiFirstPolicy() : fallbackAware,
-                sel, primaryRoute.get(), providedProtocol);
+        ChatModel delegate = apiFirstEnabled() ? fallbackAware.withApiFirstPolicy() : fallbackAware;
+        ChatModel scoped = new com.example.lms.llm.NamedChatModel() {
+            public String resolvedModelName() { return com.example.lms.llm.NamedChatModel.resolve(delegate); }
+            public ChatResponse doChat(ChatRequest request) {
+                Boolean previous = ownerPrimaryEntered.get();
+                ownerPrimaryEntered.set(false);
+                try { return invokeDelegate(delegate, request.messages(), request); }
+                finally {
+                    if (previous == null) ownerPrimaryEntered.remove();
+                    else ownerPrimaryEntered.set(previous);
+                }
+            }
+        };
+        return rememberRoutedIdentity(scoped, sel, primaryRoute.get(), providedProtocol);
     }
 
     private ChatModel rememberRoutedIdentity(
@@ -668,6 +709,38 @@ public class LlmRouterAspect {
         return copy;
     }
 
+    private String ownerOAuthRoute(LlmRouterProperties.ModelConfig cfg, CallArgs ca) {
+        var role = com.example.lms.llm.RequestedModelSelection.mainRole();
+        String main = ca.mainConstructionModel;
+        if (!preferCloudOnLocalFailure() || ca.routingInvocation != null || chatGptOAuth == null
+                || !isLocalEligibilityProvider(cfg.getProvider()) || hasCapabilityRequirements(cfg)
+                || com.example.lms.llm.RequestedModelSelection.matches(ca.requestedModelId)
+                || main == null || role != null && role.auxiliary()
+                || !(main.equals(ca.requestedModelId) || main.equals(cfg.getName()))
+                || !chatGptOAuth.isRegisteredOwner(com.example.lms.llm.RequestedModelSelection.ownerHash())) return null;
+        String slug = trimToNull(get("chatgpt.oauth.main-model"));
+        if (slug == null) return null;
+        String route = com.example.lms.llm.ChatGptOAuthRegistration.route(slug);
+        return chatGptOAuth.available(route) ? route : null;
+    }
+
+    private FallbackAwareChatModel.ResolvedFallback ownerOAuthFallback(LlmRouterBandit.Selected sel, CallArgs ca) {
+        String route = ownerOAuthRoute(sel.cfg(), ca);
+        if (route == null) return null;
+        ChatModel model;
+        try { model = apiAttempt(route, (int) Math.min(Integer.MAX_VALUE, ca.timeoutMs), ca.maxTokens == null ? 512 : ca.maxTokens); }
+        catch (RuntimeException unavailable) {
+            if (LlmGatewayFailureClassifier.isCancellation(unavailable)) throw unavailable;
+            return null;
+        }
+        com.example.lms.llm.DynamicChatModelFactory.rememberConfiguredModelIdentity(model,
+                new com.example.lms.llm.DynamicChatModelFactory.ConfiguredModelIdentity(route, null, null, null, null));
+        TraceStore.put("llm.gateway.fallbackReason", "local_unavailable_owner_oauth");
+        recordPreselectionFallback(sel.key(), route, "local_unavailable_owner_oauth");
+        reportMaskedFallback(sel.key(), route);
+        return new FallbackAwareChatModel.ResolvedFallback(model, route, null);
+    }
+
     private boolean roleCandidateAllowed(CallArgs ca,String key,LlmRouterProperties.ModelConfig cfg) {
         if(ca==null || ca.routingInvocation==null)return true;
         return cfg!=null && cfg.isEnabled() && ca.routingInvocation.matches("llmrouter."+key,cfg.getName(),
@@ -717,7 +790,7 @@ public class LlmRouterAspect {
     }
 
     /** invoke 직전 슬롯 점유 래퍼를 씌운다 — 비로컬/예상실패 모델은 그대로 반환. */
-    private ChatModel admissionBound(ChatModel model, LlmRouterProperties.ModelConfig cfg) {
+    private ChatModel admissionBound(ChatModel model, LlmRouterProperties.ModelConfig cfg, CallArgs ca) {
         if (model == null
                 || model instanceof ExpectedFailureChatModel
                 || model instanceof LocalAdmissionChatModel
@@ -730,7 +803,7 @@ public class LlmRouterAspect {
                 localModelAdmission,
                 LocalModelAdmission.slotKey(
                         cfg.getBaseUrl(), cfg.getName()),
-                localAdmissionPermits());
+                localAdmissionPermits(), () -> ownerOAuthRoute(cfg, ca) != null);
     }
 
     private void markLocalContended(LlmRouterBandit.Selected sel) {
@@ -771,15 +844,17 @@ public class LlmRouterAspect {
         private final LocalModelAdmission admission;
         private final String slotKey;
         private final int permits;
+        private final java.util.function.BooleanSupplier ownerOAuthEligible;
 
         private LocalAdmissionChatModel(ChatModel delegate,
                 LocalModelAdmission admission,
                 String slotKey,
-                int permits) {
+                int permits, java.util.function.BooleanSupplier ownerOAuthEligible) {
             this.delegate = delegate;
             this.admission = admission;
             this.slotKey = slotKey;
             this.permits = permits;
+            this.ownerOAuthEligible = ownerOAuthEligible;
         }
 
         @Override
@@ -796,6 +871,12 @@ public class LlmRouterAspect {
             if (!admission.tryAcquire(slotKey, permits)) {
                 TraceStore.put("llm.localAdmission.contended", true);
                 TraceStore.put("llm.localAdmission.slotKeyHash", SafeRedactor.hashValue(slotKey));
+                // A failed acquire proves no local dispatch; preserve ordinary contention classification.
+                if (ownerOAuthEligible.getAsBoolean()) {
+                    TraceStore.put("llm.localEndpoint.selectionDecision", "local_backend_busy");
+                    throw new LlmGatewayException("Local model admission rejected before dispatch",
+                            LlmFailureClass.RATE_LIMIT_COOLDOWN, "local_backend_busy");
+                }
                 throw new LlmGatewayException("Local model admission slot contended",
                         LlmFailureClass.SOFT_CIRCUIT_OPEN, "local_contended");
             }
@@ -1689,9 +1770,20 @@ public class LlmRouterAspect {
             String protocol,
             CallArgs callArgs,
             LlmRouterProperties.ModelConfig cfg) {
-        if (gatewayProbeService != null && gatewayProbeService.localFailoverEnabled() && cfg != null
-                && ("local".equalsIgnoreCase(cfg.getProvider()) || "ollama".equalsIgnoreCase(cfg.getProvider())
-                || (!StringUtils.hasText(cfg.getProvider()) && isLocalGatewayRoute(baseUrl, modelName)))) {
+        boolean local = cfg != null && ("local".equalsIgnoreCase(cfg.getProvider())
+                || "ollama".equalsIgnoreCase(cfg.getProvider())
+                || (!StringUtils.hasText(cfg.getProvider()) && isLocalGatewayRoute(baseUrl, modelName)));
+        if (local && model != null && !(model instanceof ExpectedFailureChatModel)) {
+            ChatModel localDelegate = model;
+            model = new com.example.lms.llm.NamedChatModel() {
+                public String resolvedModelName() { return com.example.lms.llm.NamedChatModel.resolve(localDelegate); }
+                public ChatResponse doChat(ChatRequest request) {
+                    if (ownerPrimaryEntered.get() != null) ownerPrimaryEntered.set(true);
+                    return invokeDelegate(localDelegate, request.messages(), request);
+                }
+            };
+        }
+        if (gatewayProbeService != null && gatewayProbeService.localFailoverEnabled() && local) {
             model = gatewayProbeService.guardLocalModel(model, baseUrl, modelName, cfg.getDeviceRole());
         }
         if (modelRuntimeHealthTracker == null || model == null) {
@@ -2461,6 +2553,7 @@ public class LlmRouterAspect {
 
     private static final class CallArgs {
         final String requestedModelId;
+        final String mainConstructionModel;
         final Double temperature;
         final Double topP;
         final Double frequencyPenalty;
@@ -2492,6 +2585,7 @@ public class LlmRouterAspect {
                 Double presencePenalty,Integer maxTokens,int timeoutSeconds,Integer maxRetriesOverride,
                 com.example.lms.llm.spec.ModelSpecSnapshot observedContext,com.example.lms.routing.RoutingInvocation routingInvocation) {
             this.requestedModelId = requestedModelId;
+            this.mainConstructionModel = com.example.lms.llm.RequestedModelSelection.mainConstructionModel();
             this.temperature = temperature;
             this.topP = topP;
             this.frequencyPenalty = frequencyPenalty;

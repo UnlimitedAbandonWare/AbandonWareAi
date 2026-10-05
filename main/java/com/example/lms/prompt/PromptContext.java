@@ -66,6 +66,8 @@ public class PromptContext {
     // Newly added: history/systemInstruction/verbosityHint/unsupportedClaims
     private final String history;
     private final String systemInstruction;
+    private final Map<String, String> responsePreferences;
+    private final Integer focusAnswerLengthChars;
     private final String verbosityHint;
     private final List<String> unsupportedClaims;
     private final String citationStyle;
@@ -136,6 +138,8 @@ public class PromptContext {
         this.memoryMode = b.memoryMode;
         this.history = b.history;
         this.systemInstruction = b.systemInstruction;
+        this.responsePreferences = b.responsePreferences == null ? Map.of() : Map.copyOf(b.responsePreferences);
+        this.focusAnswerLengthChars = b.focusAnswerLengthChars;
         this.verbosityHint = b.verbosityHint;
         this.unsupportedClaims = snapshotList(b.unsupportedClaims);
         this.citationStyle = b.citationStyle;
@@ -197,6 +201,8 @@ public class PromptContext {
     // Newly added getters
     public String history() { return history; }
     public String systemInstruction() { return systemInstruction; }
+    public Map<String, String> responsePreferences() { return responsePreferences; }
+    public Integer focusAnswerLengthChars() { return focusAnswerLengthChars; }
     public String verbosityHint() { return verbosityHint; }
     public List<String> unsupportedClaims() { return unsupportedClaims; }
     public String citationStyle() { return citationStyle; }
@@ -257,6 +263,8 @@ public class PromptContext {
                 .evidence(evidence)
                 .history(history)
                 .systemInstruction(systemInstruction)
+                .responsePreferences(responsePreferences)
+                .focusAnswerLengthChars(focusAnswerLengthChars)
                 .verbosityHint(verbosityHint)
                 .unsupportedClaims(unsupportedClaims)
                 .citationStyle(citationStyle)
@@ -339,6 +347,8 @@ public class PromptContext {
         // Newly added builder fields
         private String history;
         private String systemInstruction;
+        private Map<String, String> responsePreferences;
+        private Integer focusAnswerLengthChars;
         private String verbosityHint;
         private List<String> unsupportedClaims;
         private String citationStyle;
@@ -381,7 +391,11 @@ public class PromptContext {
         // Newly added builder methods to satisfy legacy callers
         public Builder history(String s) { this.history = s; return this; }
         public Builder systemInstruction(String s) { this.systemInstruction = s; return this; }
+        public Builder responsePreferences(Map<String, String> values) {
+            this.responsePreferences = values == null ? Map.of() : Map.copyOf(values); return this;
+        }
         public Builder verbosityHint(String s) { this.verbosityHint = s; return this; }
+        public Builder focusAnswerLengthChars(Integer value) { if(value!=null&&(value<80||value>800))throw new IllegalArgumentException("invalid_focus_answer_length");this.focusAnswerLengthChars=value;return this; }
         public Builder unsupportedClaims(List<String> list) { this.unsupportedClaims = list; return this; }
         public Builder citationStyle(String s) { this.citationStyle = s; return this; }
         // Newer builder methods for back-compat with legacy callers

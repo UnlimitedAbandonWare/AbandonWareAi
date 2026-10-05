@@ -543,6 +543,8 @@ public class ChatWorkflow {
     private final WebSearchProvider webSearchProvider;
     private final QueryContextPreprocessor qcPreprocessor; // ???숈쟻 洹쒖튃 ?꾩쿂由ш린
 
+    @Value("${selfask.enabled:true}")
+    private boolean executionSelfAskEnabled = true;
     private final SmartQueryPlanner smartQueryPlanner; // 燧낉툘 NEW DI
     // Centralised planner facade (caching + stability)
     private final RoutingPlanService routingPlanService;
@@ -984,6 +986,19 @@ public class ChatWorkflow {
                 .anyMatch(row -> Boolean.TRUE.equals(row.get("wireAttemptObserved")));
     }
 
+    private static java.util.Map<String, String> responsePreferences(ChatRequestDto request) {
+        if (request == null) return java.util.Map.of();
+        var values = new java.util.LinkedHashMap<String, Object>();
+        if (request.getCustomInstructions() != null) values.put("customInstructions", request.getCustomInstructions());
+        if (request.getResponseTone() != null) values.put("responseTone", request.getResponseTone());
+        if (request.getResponseLength() != null) values.put("responseLength", request.getResponseLength());
+        if (request.getResponseLanguage() != null) values.put("responseLanguage", request.getResponseLanguage());
+        var validated = com.example.lms.service.ChatPreferenceService.validate(values);
+        var result = new java.util.LinkedHashMap<String, String>();
+        validated.forEach((key, value) -> result.put(key, (String) value));
+        return java.util.Map.copyOf(result);
+    }
+
     static dev.langchain4j.data.message.UserMessage primaryUserMessage(
             String finalQuery,
             ChatRequestDto request,
@@ -1328,6 +1343,8 @@ public class ChatWorkflow {
                 ? req.getRetrievalRequestIntent()
                 : new ChatRequestDto.RetrievalRequestIntent(req.getUseWebSearch(), req.getUseRag());
 
+        var requestSearchBudget = com.example.lms.service.rag.SelfAskSearchBudget.current();
+        if (requestSearchBudget == null) requestSearchBudget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(req.getExecutionMode());
         Object requestTimelineIdBeforeTraceClear =
                 TraceStore.get(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY);
 
@@ -1358,6 +1375,7 @@ public class ChatWorkflow {
                     requestTimelineIdBeforeTraceClear);
             recordModelRequestTimelinePhase("pending", req == null ? null : req.getModel(), "none");
         }
+        com.example.lms.service.rag.SelfAskSearchBudget.restore(requestSearchBudget);
         rehydrateCreativeEmergenceTrace(GuardContextHolder.get());
         com.example.lms.orchestration.control.RagControlRuntimeAdapter.capturePresentationInput(
                 com.example.lms.orchestration.control.RagControlRuntimeAdapter.RuntimeInput.evidenceNeeded(
@@ -1802,7 +1820,7 @@ public class ChatWorkflow {
         }
 
         // ?? 0-1) Verbosity 媛먯? & ?뱀뀡 ?ㅽ럺 ?????????????????????????
-        VerbosityProfile detectedVp = verbosityDetector.detect(finalQuery);
+        VerbosityProfile detectedVp = verbosityDetector.detect(finalQuery, req.getResponseLength());
         String intent;
         if (directRetrievalOffMode) {
             intent = "GENERAL";
@@ -1984,7 +2002,7 @@ public class ChatWorkflow {
             } else if (sig != null && sig.auxLlmDown()) {
                 // Aux LLM is degraded/hard-down: bypass planner and use the original query.
                 planned = List.of(finalQuery);
-            } else if (!allowPlannerByPolicy) {
+            } else if (requestSearchBudget.requested() != com.example.lms.domain.enums.ExecutionMode.SELF_ASK || !executionSelfAskEnabled || !allowPlannerByPolicy) {
                 planned = List.of(finalQuery);
             } else if (forceLightSearchMode) {
                 planned = List.of(finalQuery);
@@ -2032,6 +2050,15 @@ public class ChatWorkflow {
                 if (planned == null || planned.isEmpty()) {
                     planned = List.of(finalQuery);
                 }
+            }
+
+            // Preserve the original (including existing QTX normalization), at most two supplements.
+            if (requestSearchBudget.requested() != com.example.lms.domain.enums.ExecutionMode.SELF_ASK || !executionSelfAskEnabled) planned = List.of(finalQuery);
+            else {
+                var boundedQueries = new java.util.LinkedHashSet<String>();
+                boundedQueries.add(finalQuery);
+                boundedQueries.addAll(planned);
+                planned = boundedQueries.stream().limit(3).toList();
             }
 
             // Planner can trip request-scoped aux-down / irregularity signals (e.g.
@@ -2127,6 +2154,7 @@ public class ChatWorkflow {
                 metaHints.put(com.example.lms.service.rag.graph.GeneralGraphScope.METADATA_KEY,
                         generalGraphScope);
             }
+            metaHints.put("executionMode", requestSearchBudget.requested().name());
             metaHints.put("plateId", hints.getPlateId());
             // [PATCH] Propagate request searchMode (OFF/FORCE_*) so retrieval handlers can
             // honor it.
@@ -2297,6 +2325,19 @@ public class ChatWorkflow {
 
             // ??PERF: controller媛 ?대? ?섑뻾??web search 寃곌낵(Trace ?ы븿)瑜??ъ궗?⑺빐
             // WebSearchRetriever/HybridRetriever?먯꽌 ?숈씪 荑쇰━ ?ш??됱쓣 諛⑹??쒕떎.
+            if (requestSearchBudget.requested() == com.example.lms.domain.enums.ExecutionMode.STRIKE) {
+                hints.setEnableSelfAsk(false);
+                hints.setEnableAnalyze(false);
+                requestSearchBudget.skip("user-strike");
+            } else if (!executionSelfAskEnabled || !hints.isEnableSelfAsk() || !hints.isAllowWeb() || forceLightSearchMode) {
+                if (!executionSelfAskEnabled) hints.setEnableSelfAsk(false);
+                requestSearchBudget.skip(hints.isAllowWeb() ? "safety-gate" : "search-off");
+            } else if (requestSearchBudget.requested() == com.example.lms.domain.enums.ExecutionMode.SELF_ASK) {
+                requestSearchBudget.allowExpansion("user-self-ask");
+            }
+            metaHints.put("enableSelfAsk", String.valueOf(hints.isEnableSelfAsk()));
+            metaHints.put("enableAnalyze", String.valueOf(hints.isEnableAnalyze()));
+
             if (!preLlmRetrievalBudgetLow && (hints.isAllowWeb() || forceLightSearchMode) && externalCtxProvider != null) {
                 try {
                     String q0 = (planned != null && !planned.isEmpty()) ? planned.get(0) : finalQuery;
@@ -3003,6 +3044,8 @@ public class ChatWorkflow {
                 .userQuery(finalQuery)
                 .lastAssistantAnswer(lastAnswer)
                 .history(historyStr)
+                .responsePreferences(responsePreferences(req))
+                .focusAnswerLengthChars(conversationContext.focusAnswerLengthChars())
                 .intent(intent)
                 .domain(domain)
                 .subject(analysis != null ? analysis.getTargetObject() : null)
@@ -3557,6 +3600,8 @@ public class ChatWorkflow {
         msgs.add(ctx.preparedContextPacket()==null?dev.langchain4j.data.message.SystemMessage.from(unifiedCtx)
                 :dev.langchain4j.data.message.UserMessage.from(unifiedCtx));
         msgs.addAll(conversationContext.roleMessages());
+        String userPreferences = promptBuilder.buildUserPreferences(ctx);
+        if (!userPreferences.isBlank()) msgs.add(dev.langchain4j.data.message.UserMessage.from(userPreferences));
         // The original current question remains last; rewritten queries are retrieval inputs.
 
         // ???ъ슜??吏덈Ц
@@ -3650,6 +3695,11 @@ public class ChatWorkflow {
             if(tokens<0||tokens>cap)throw new IllegalArgumentException("context_prepare_final_input_budget");
             llmReq.getContextSourceCheck().run();
         }
+        ChatMessage renderedContextMessage = conversationContextIndex < msgs.size() ? msgs.get(conversationContextIndex) : null;
+        String renderedMemoryContext = renderedContextMessage instanceof SystemMessage system ? system.text()
+                : renderedContextMessage instanceof UserMessage user ? user.singleText() : "";
+        TraceStore.put("prompt.memory.preparedForModel", ctx.memory() != null && !ctx.memory().isBlank()
+                && renderedMemoryContext.contains(ctx.memory()));
         recordCostZone(
                 "prompt_context",
                 resolvedModelName,
@@ -3898,7 +3948,8 @@ public class ChatWorkflow {
         }
 
         boolean verifierFollowUp = isFollowUpQuery(finalQuery, lastAnswer);
-        String verifierMemoryContext = verifierFollowUp ? memoryCtx : "";
+        // Already-required verification uses the scoped memory that produced the draft.
+        String verifierMemoryContext = org.springframework.util.StringUtils.hasText(memoryCtx) ? memoryCtx : "";
         String verifierEligibilityEvidence = verifierEligibilityContext(
                 verifierEvidenceContext, memoryCtx, verifierFollowUp);
         boolean verifyAnswer = !casualGreetingNoEvidenceIntent
@@ -7205,6 +7256,12 @@ public class ChatWorkflow {
 
         ChatModel modelForCall = model;
         TraceStore.put("llm.call.model.rebuildFallback", null);
+        TraceStore.put("llm.call.contextLimitTokens", null);
+        TraceStore.put("llm.call.contextLimitSource", null);
+        TraceStore.put("llm.call.memoryIncluded", null);
+        TraceStore.put("llm.call.inputCountMethod", msgs.stream().anyMatch(message -> message instanceof UserMessage user
+                && user.contents().stream().anyMatch(content -> !(content instanceof dev.langchain4j.data.message.TextContent)))
+                ? "multimodal_unobserved" : "char_estimate");
         final String contextModel = resolved;
         com.example.lms.llm.spec.ModelSpecSnapshot observedContext = focusModelSpecs == null ? null
                 : focusModelSpecs.snapshots().stream()
@@ -7353,6 +7410,10 @@ public class ChatWorkflow {
                         profileTarget,
                         dto == null ? null : dto.getMaxTokens(),
                         ChatUsageLedger.CapSource.ROUTER_MODEL);
+                String dispatchedModel = com.example.lms.llm.NamedChatModel.resolve(modelForCall);
+                boolean observedLimitMatches = observedContext != null && contextModel.equalsIgnoreCase(dispatchedModel);
+                TraceStore.put("llm.call.contextLimitTokens", observedLimitMatches ? observedContext.contextTokens() : null);
+                TraceStore.put("llm.call.contextLimitSource", observedLimitMatches ? "model_spec_snapshot" : null);
                 dev.langchain4j.data.message.AiMessage ai = TimedChatModelCaller.chat(
                         modelForCall,
                         msgs,
@@ -7361,8 +7422,13 @@ public class ChatWorkflow {
                         resolved,
                         usageAttempt,
                         dynamicChatModelFactory == null ? null : dynamicChatModelFactory.requestModelWarmup(resolved));
+                TraceStore.put("llm.call.memoryIncluded", TraceStore.get("prompt.memory.preparedForModel"));
                 String out = ai == null ? "" : (ai.text() == null ? "" : ai.text());
                 Object responseModel = TraceStore.get("llm.call.responseModel");
+                if (responseModel instanceof String name && !contextModel.equalsIgnoreCase(name)) {
+                    TraceStore.put("llm.call.contextLimitTokens", null);
+                    TraceStore.put("llm.call.contextLimitSource", null);
+                }
                 successSink.accept(new LlmCallSuccess(responseModel instanceof String name && !name.isBlank() ? name : resolved,
                         oauthRequested ? OpenAiEndpointCompatibility.Endpoint.RESPONSES
                                 : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS,
@@ -7375,6 +7441,9 @@ public class ChatWorkflow {
             } catch (Exception e) {
                 // Model-not-found / endpoint mismatch??鍮꾩씪?쒖쟻 ??利됱떆 fail-fast (+ endpoint-compat
                 // failover)
+                TraceStore.put("llm.call.contextLimitTokens", null);
+                TraceStore.put("llm.call.contextLimitSource", null);
+                TraceStore.put("llm.call.memoryIncluded", null);
                 rethrowIfRequestBudgetExhausted("chat_draft", e);
                 if (TimedChatModelCaller.isHardTimeout(e)
                         || "TIMEOUT".equals(com.example.lms.llm.LlmErrorClassifier.classify(e).code())) {
@@ -10773,52 +10842,7 @@ public class ChatWorkflow {
     }
 
     private static String directNumberOnlyMultiplicationLiteral(String text) {
-        if (text == null || text.isBlank()) {
-            return null;
-        }
-        String lower = text.toLowerCase(Locale.ROOT);
-        boolean numberOnly = text.contains("\uC22B\uC790\uB9CC")
-                || lower.contains("number only")
-                || lower.contains("only the number");
-        boolean numberOnlyNegated = Pattern.compile(
-                "\\b(?:(?:do\\s+not|don't|dont)\\s+(?:answer|respond|give)(?:\\s+with)?\\s+"
-                        + "|not\\s+)(?:only\\s+the\\s+number|number\\s+only)\\b")
-                .matcher(lower)
-                .find();
-        boolean arithmeticQuestion = text.contains("\uC5BC\uB9C8")
-                || text.contains("\uACC4\uC0B0")
-                || lower.contains("what is")
-                || lower.contains("calculate");
-        if (!numberOnly || numberOnlyNegated || !arithmeticQuestion) {
-            return null;
-        }
-        java.util.regex.Matcher matcher = Pattern.compile(
-                "(?<![\\p{L}\\p{N}.,+\\-*/^%\\u00d7xX])"
-                + "([+-]?\\d{1,9})\\s*(?:[\\u00d7xX*]|\\uACF1\\uD558\\uAE30)\\s*([+-]?\\d{1,9})"
-                        + "(?![\\p{N}A-Za-z+\\-*/^%\\u00d7xX]|[.,]\\d)")
-                .matcher(text);
-        if (!matcher.find()) {
-            return null;
-        }
-        String beforeExpression = text.substring(0, matcher.start());
-        String afterExpression = text.substring(matcher.end());
-        boolean chainedBefore = Pattern.compile(
-                "[\\d)]\\s*[+\\-*/^%\\u00d7xX]\\s*\\(*\\s*$")
-                .matcher(beforeExpression)
-                .find();
-        boolean chainedAfter = Pattern.compile(
-                "^\\s*\\)*\\s*[+\\-*/^%\\u00d7xX]\\s*\\(*\\s*[+\\-]?\\d")
-                .matcher(afterExpression)
-                .find();
-        if (chainedBefore || chainedAfter) {
-            return null;
-        }
-        long left = Long.parseLong(matcher.group(1));
-        long right = Long.parseLong(matcher.group(2));
-        if (matcher.find()) {
-            return null;
-        }
-        return String.valueOf(Math.multiplyExact(left, right));
+        return DeterministicLiteralAnswers.numberOnlyMultiplication(text);
     }
 
     private static boolean hasDirectLiteralAnswerDirective(String lower, String text) {

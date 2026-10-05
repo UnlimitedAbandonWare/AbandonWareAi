@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "description": "Retired wording detector for demo-1 routing/fallback policy. Scanned by scripts/routing_policy_wording_check.py. A line that merely explains a retirement is not a finding: allow_if_line_contains markers skip it. Never contort phrasing to evade the scan — fix this config's rules or the entry's allow list instead.",
+  "default_allow_if_line_contains": [
+    "폐기",
+    "쓰지 말",
+    "금지",
+    "retired",
+    "obsolete",
+    "superseded",
+    "do not",
+    "don't",
+    "no longer",
+    "없음",
+    "해결됨",
+    "resolved"
+  ],
+  "phrases": [
+    {
+      "id": "agent-cost-free-local-first-ko",
+      "type": "literal",
+      "pattern": "무료·로컬 우선",
+      "case_insensitive": false,
+      "replacement_hint": "에이전트 비용 순서는 Codex 크레딧 → 외부 유료 API → 무료 → 로컬 Ollama (SSOT: demo1-agent-api-spend-guard)",
+      "since": "2026-10-03",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    },
+    {
+      "id": "agent-cost-free-local-first-en",
+      "type": "regex",
+      "pattern": "(?i)\\bfree[/\\s-]+local[/\\s-]+first\\b",
+      "replacement_hint": "agent cost order is codex_credits → external_paid_api → free_tier → local_ollama (demo1-agent-api-spend-guard)",
+      "since": "2026-10-03",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    },
+    {
+      "id": "product-ollama-first-ko",
+      "type": "literal",
+      "pattern": "Ollama 우선",
+      "case_insensitive": false,
+      "replacement_hint": "제품 main 채팅 생성은 API·OAuth 우선, 로컬 Ollama는 마지막 폴백 (사용자 결정 2026-10-02). 임베딩·로컬 LLM 레인의 3090 우선 표현은 '3090 로컬 우선/주력'으로",
+      "since": "2026-10-02",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    },
+    {
+      "id": "agents-md-old-runtime-rag-localfirst",
+      "type": "literal",
+      "pattern": "product runtime RAG keeps 3090-local-first",
+      "case_insensitive": false,
+      "replacement_hint": "product main chat is API/OAuth-first, Ollama last (user 2026-10-02); RAG·embed keep 3090-local",
+      "since": "2026-10-05",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    },
+    {
+      "id": "rtx3090-power-justifies-api-first",
+      "type": "regex",
+      "pattern": "(전원|파워|power).{0,10}(피크|불안정|peak|unstable).{0,40}(API|api|클라우드).{0,12}(우선|first|회피)",
+      "replacement_hint": "RTX 3090 전원 이슈는 2026-09 보조 PSU로 해결 — 전원 사유의 API 우선/로컬 회피 주장은 폐기. 폴백은 분류된 실패 시에만",
+      "since": "2026-10-05",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    },
+    {
+      "id": "source-edit-session-old-actions",
+      "type": "regex",
+      "pattern": "-Action\\s+(acquire|release)\\b",
+      "replacement_hint": "source_edit_session.ps1 -Action 은 begin|end|status|verify|bind-scope|heartbeat|recover 만 — acquire/release 없음",
+      "since": "2026-10-05",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": ["없음", "not ", "no ", "only", "invalid", "removed"]
+    },
+    {
+      "id": "brief-txt-copy-save",
+      "type": "literal",
+      "pattern": "BRIEF.txt 사본 저장",
+      "case_insensitive": false,
+      "replacement_hint": "BRIEF.txt 사본 저장 흐름은 폐기 — 현행 저장 경로(dot-brief-save / brief_save.py 계약)를 참조",
+      "since": "2026-10-05",
+      "scope_globs": ["**/*"],
+      "allow_if_line_contains": []
+    }
+  ]
+}

@@ -347,8 +347,9 @@ public class SelfAskPlanner {
             int timeoutSeconds = timeoutMs > 0
                     ? Math.max(1, (int) Math.ceil(timeoutMs / 1000.0d))
                     : 8;
-            double sanitized = ModelCapabilities.sanitizeTemperature(modelId,
-                    sanitizeRewriteTemperature(rewriteTemperature));
+            double laneTemperature = sanitizeRewriteTemperature(rewriteTemperature);
+            double sanitized = com.example.lms.llm.OpenAiSamplingContract.defersMergerClamp(modelId)
+                    ? laneTemperature : ModelCapabilities.sanitizeTemperature(modelId, laneTemperature);
             return invocation==null?factory.lcWithTimeout(modelId, sanitized, 0.8d, 96, timeoutSeconds)
                     :factory.lcWithTimeout(modelId,sanitized,0.8d,null,null,96,timeoutSeconds,0,null,invocation);
         }

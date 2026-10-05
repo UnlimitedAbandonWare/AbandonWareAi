@@ -465,6 +465,65 @@ class GptproPackTests(unittest.TestCase):
                              gpc.CAP_SKEL_FILE + 512)
         self.assertIn("truncated", skel2)
 
+    # 23. backup profile: restore-ready essentials in, artifacts/secrets out
+    def test_23_backup_profile_contains_build_essentials(self):
+        shutil.copy(ROOT / "configs" / "gptpro-pack.json",
+                    self.repo / "configs" / "gptpro-pack.json")
+        write_file(self.repo, "gradlew", "#!/bin/sh\n")
+        write_file(self.repo, "gradlew.bat", "@rem gradle wrapper\n")
+        for rel in ("Pack-GPTPro.bat", "Git-Ship.bat", "Start-RAG.bat",
+                    "Close-RAG.bat", "Verify-RAG.bat", "Start-Agy-CLI.bat"):
+            write_file(self.repo, rel, "@echo off\n")
+        write_file(self.repo, "GEMINI.md", "# gemini\n")
+        write_file(self.repo, ".agents/rules/test-rule.md", "rule\n")
+        write_file(self.repo, "frontend/public/favicon.svg", "<svg/>\n")
+        write_file(self.repo, "frontend/tsconfig.json", "{}\n")
+        write_file(self.repo, "frontend/tailwind.config.js", "x\n")
+        write_file(self.repo, "frontend/postcss.config.js", "x\n")
+        jar = self.repo / "gradle" / "wrapper" / "gradle-wrapper.jar"
+        jar.write_bytes(b"\x00PK-jar-bytes\x00")
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
+        r = run_pack(self.repo, self.out, "--profile", "backup")
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        zp = sole_zip(self.out)
+        self.assertTrue(zp.name.startswith("demo1_backup_"), zp.name)
+        names = zip_names(zp)
+        for expect in ("gradlew", "gradlew.bat",
+                       "gradle/wrapper/gradle-wrapper.jar",
+                       "Pack-GPTPro.bat", "Git-Ship.bat", "Start-RAG.bat",
+                       "Close-RAG.bat", "Verify-RAG.bat", "Start-Agy-CLI.bat",
+                       "GEMINI.md", ".gitignore",
+                       ".agents/skills/demo-skill/SKILL.md",
+                       ".agents/rules/test-rule.md",
+                       "frontend/public/favicon.svg", "frontend/tsconfig.json",
+                       "frontend/tailwind.config.js", "frontend/postcss.config.js",
+                       "src/test/java/com/example/AppTest.java",
+                       "scripts/foo.py", "docs/other.md",
+                       "main/java/com/example/App.java",
+                       "configs/api-routing.yaml"):
+            self.assertIn(expect, names, expect)
+        for banned in (".env", ".env.local", "shared.env",
+                       "main/resources/application-secrets.yml",
+                       ".secrets/providers.json", "auth.json",
+                       "credentials.json", "cert.pem", "build/out.jar"):
+            self.assertNotIn(banned, names, banned)
+        self.assertFalse(any(n.startswith(".git/") for n in names))
+        self.assertFalse(any("node_modules/" in n for n in names))
+        with zipfile.ZipFile(zp) as z:
+            self.assertEqual(z.read("gradle/wrapper/gradle-wrapper.jar"),
+                             b"\x00PK-jar-bytes\x00")
+
+    # 24. config defaultProfile drives bare invocation (no profile arg)
+    def test_24_default_profile_from_config(self):
+        shutil.copy(ROOT / "configs" / "gptpro-pack.json",
+                    self.repo / "configs" / "gptpro-pack.json")
+        r = run_pack(self.repo, self.out)
+        self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+        zp = sole_zip(self.out)
+        self.assertTrue(zp.name.startswith("demo1_backup_"), zp.name)
+        self.assertIn("profile=backup", r.stdout)
+        self.assertIn(".agents/skills/demo-skill/SKILL.md", zip_names(zp))
+
 
 class EvidenceBoundaryTests(unittest.TestCase):
     """Additive contracts for evidence review findings; original 22 stay unchanged."""

@@ -5,7 +5,20 @@ import java.util.*;
 /** Focus settings are independent of the ordinary caption/cue clocks. */
 public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQuietMs,int followupIdleMs,
                                 int wakeListenTimeoutMs,Presentation presentation,boolean recallEnabled,boolean rememberFactsEnabled,
-                                Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory) {
+                                Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory,
+                                @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled) {
+    public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory){
+        this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,null,null);
+    }
+    /** Local numeric fields reject Jackson's default float/string-to-integer coercion. */
+    public static final class StrictInteger extends com.fasterxml.jackson.databind.JsonDeserializer<Integer> {
+        @Override public Integer deserialize(com.fasterxml.jackson.core.JsonParser p,com.fasterxml.jackson.databind.DeserializationContext c) throws java.io.IOException {
+            if(!p.hasToken(com.fasterxml.jackson.core.JsonToken.VALUE_NUMBER_INT)||!p.getNumberValue().toString().matches("-?[0-9]{1,10}"))
+                throw com.fasterxml.jackson.databind.JsonMappingException.from(p,"invalid_display_integer");
+            try{return Integer.valueOf(p.getNumberValue().toString());}
+            catch(NumberFormatException e){throw com.fasterxml.jackson.databind.JsonMappingException.from(p,"invalid_display_integer");}
+        }
+    }
     public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext){
         this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,answerSelection,recentContext,null);
     }
@@ -79,7 +92,11 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
         if(wakeWord==null||wakeWord.isBlank()||wakeWord.codePointCount(0,wakeWord.length())>16||wakeWord.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("invalid_nova_settings");
         wakeWord=wakeWord.strip();range(utteranceQuietMs,500,5000);range(followupIdleMs,5000,120000);range(wakeListenTimeoutMs,3000,30000);
         if(presentation==null)presentation=Presentation.defaults();
+        if(answerLengthChars!=null)range(answerLengthChars,80,800);
     }
+    public int effectiveAnswerLengthChars(){return answerLengthChars==null?400:answerLengthChars;}
+    public boolean quickAnswer(){return Boolean.TRUE.equals(quickAnswerEnabled);}
+    public Presentation effectivePresentation(){var p=presentation;return !quickAnswer()?p:new Presentation(false,p.charIntervalMs(),p.maxVisibleLines(),p.autoFadeEnabled(),p.tailHoldMs(),p.fadeMs());}
     public Snapshot snapshotOrDefault(){return snapshot==null?Snapshot.defaults():snapshot;}
     public AnswerSelection answerSelectionOrDefault(){return answerSelection==null?AnswerSelection.defaults():answerSelection;}
     public RecentContext recentContextOrDefault(){return recentContext==null?RecentContext.defaults():recentContext;}
@@ -87,6 +104,6 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
     /** An explicit memory mode overrides the legacy switches; without one the booleans stay authoritative. */
     public boolean effectiveRecallEnabled(){var mode=memoryOrDefault().mode();return mode==null?recallEnabled:mode!=Memory.Mode.OFF;}
     public boolean effectiveRememberFactsEnabled(){var mode=memoryOrDefault().mode();return mode==null?rememberFactsEnabled:mode==Memory.Mode.FULL;}
-    public static NovaFocusSettings defaults(){return new NovaFocusSettings(false,"노바",1200,20000,8000,Presentation.defaults(),false,false,Snapshot.defaults(),AnswerSelection.defaults(),RecentContext.defaults(),Memory.defaults());}
+    public static NovaFocusSettings defaults(){return new NovaFocusSettings(false,"노바",1200,20000,8000,Presentation.defaults(),false,false,Snapshot.defaults(),AnswerSelection.defaults(),RecentContext.defaults(),Memory.defaults(),400,false);}
     private static void range(int value,int min,int max){if(value<min||value>max)throw new IllegalArgumentException("invalid_nova_settings");}
 }

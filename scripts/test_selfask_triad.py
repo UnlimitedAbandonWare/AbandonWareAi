@@ -166,6 +166,34 @@ def main() -> int:
     finally:
         shutil.rmtree(td, ignore_errors=True)
 
+    # rewrite: strong-evidence bypass when trigger absent and paths exist
+    code, out, _ = run_tool("rewrite", "--question", "is x wired?",
+                            "--paths", "scripts/selfask_triad.py")
+    cases.append(("rewrite-bypass-strong-evidence", code == 0
+                  and out.get("bypass") == "strong_evidence"
+                  and out.get("rewritten") is False
+                  and out.get("verdict") == "AUTO"
+                  and out.get("subqueries") == [], out))
+
+    # rewrite: explicit trigger fans out into the 3 UAW axes
+    code, out, _ = run_tool("rewrite", "--question", "cache lock error",
+                            "--trigger", "unexpected_red", "--json")
+    axes = [s.get("axis") for s in out.get("subqueries", [])]
+    cases.append(("rewrite-trigger-unexpected-red", code == 0
+                  and out.get("rewritten") is True
+                  and out.get("bypass") is None
+                  and out.get("selfAskCount") == 3
+                  and sorted(axes) == ["aliaser", "challenger", "definer"]
+                  and all(s.get("query") for s in out["subqueries"]), out))
+
+    # rewrite: zero_hit trigger emits expanded search queries
+    code, out, _ = run_tool("rewrite", "--question", "spawn_agent timeout",
+                            "--trigger", "zero_hit", "--json")
+    cases.append(("rewrite-trigger-zero-hit", code == 0
+                  and out.get("rewritten") is True
+                  and out.get("selfAskCount") == 3
+                  and len(out.get("subqueries", [])) == 3, out))
+
     failed = 0
     for name, ok, detail in cases:
         print(f"{'PASS' if ok else 'FAIL'} {name}")

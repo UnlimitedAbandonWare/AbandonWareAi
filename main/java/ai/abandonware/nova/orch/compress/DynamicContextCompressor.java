@@ -427,9 +427,16 @@ public class DynamicContextCompressor {
                 return "";
             }
 
+            // Keep the latest valid exchange before older keyword matches when space runs out.
+            Set<Integer> recentIndices = candidates.stream()
+                    .filter(line -> line.contaminationScore() == 0.0d)
+                    .sorted(Comparator.comparingInt(MemoryLine::index).reversed())
+                    .limit(Math.min(2, maxLines)).map(MemoryLine::index).collect(java.util.stream.Collectors.toSet());
             candidates.sort(Comparator
-                    .comparingDouble(MemoryLine::score).reversed()
-                    .thenComparingInt(MemoryLine::index));
+                    .comparing((MemoryLine line) -> overflow && recentIndices.contains(line.index())).reversed()
+                    .thenComparing(Comparator.comparingDouble((MemoryLine line) ->
+                            overflow && recentIndices.contains(line.index()) ? 0.0d : line.score()).reversed())
+                    .thenComparing(Comparator.comparingInt(MemoryLine::index).reversed()));
             List<MemoryLine> selected = new ArrayList<>();
             int chars = 0;
             for (MemoryLine line : candidates) {

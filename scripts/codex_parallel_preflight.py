@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -68,6 +67,8 @@ def overlapping_claims(root, scope, exclude_task=None):
                         "topic": claim.get("topic"), "paths": sorted(set(hits))})
     for lease in lib.iter_source_leases(root):
         if lib.lease_lifecycle(lease) != "live":
+            continue
+        if lib.lease_owned_by_task(lease, exclude_task):
             continue
         hits = lib.overlapping(scope, [lib.canon(t)
                                        for t in lease.get("targetPaths") or []])
@@ -148,9 +149,8 @@ def peer_occupied_paths(root, task_id, scope):
             continue
         found.update(lib.overlapping(
             mine, [lib.canon(c) for c in writer.get("changedPaths") or []]))
-    task_hash = hashlib.sha256(str(task_id).encode("utf-8")).hexdigest() if task_id else None
     for lease in lib.iter_source_leases(root):
-        if lease.get("taskIdHash") != task_hash or lib.lease_lifecycle(lease) != "live":
+        if not lib.lease_owned_by_task(lease, task_id) or lib.lease_lifecycle(lease) != "live":
             continue
         found.update(lib.overlapping(
             mine, [lib.canon(t) for t in lease.get("targetPaths") or []]))

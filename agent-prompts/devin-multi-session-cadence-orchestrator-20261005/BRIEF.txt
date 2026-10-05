@@ -1,0 +1,83 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-orchestra-synergy
+# DEVIN 실행 지시서: 다중 세션 오케스트레이션 타점 조율기 및 서브에이전트 적재적소 도구 디스패처
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 한 줄 목표
+원신 파티 사이클(달리야 버프 세팅 → 푸리나/에스코피에 백그라운드 도구 대치 → 스커크 메인 딜링 → 최종 캐스팅 안착)의 타점 메커니즘을 시스템화하여, 다중 세션 간 좀비 잔재 격리, 서브에이전트 스폰 시 맥락 인지형 도구/스킬 동적 주입, 원자적 핸드오프 배리어를 제공하는 오케스트레이션 툴체인을 구현·검증한다.
+
+## 사실 (2026-10-05 02:15 KST 기준)
+1. 세션 잔재 증거: `agent_recovery_status.py status` 결과 `codex-timeout-split-ae8f6e83` 저널이 26.8h 경과한 `stale-candidate` 상태이며 블로킹 락 3개 잔류.
+2. 서브에이전트 타점 붕괴 증거: `agent_session_watch.py` 스캔에서 부모 세션 `01a107c2...`이 자식 `01a107c4...`을 `spawn_agent`한 뒤, 자식이 경로를 못 찾는 `P11 (in-output-command-failure)` 및 패치 실패 `P1`을 겪는 타점 어긋남 관찰.
+3. 핸드오프 불일치 증거: `agent_signal_digest.py`에서 `handoff : codex-autonomy 10-05 02:08 [no files]` 처럼 신호 생성과 아티팩트 안착 타이밍이 어긋나 빈 패킷 전달 발생.
+4. 기존 자산: `scripts/orchestra_signal.py`, `scripts/agent_quick_signal.py`, `scripts/agent_session_watch.py`가 있으나 서브에이전트 스폰 시 에러 지문과 타겟을 매핑하는 동적 어댑터 부재.
+
+## 공통 규칙
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- 범위 한정: 도구·스크립트·테스트 파일만 생성/수정(`scripts/`, `src/test/` 등). 제품 소스(`main/`, `app/`, `frontend/`, `configs/`) 수정 엄격 배제.
+- 외부 API 라이브 호출: 0회 ($0 local). 외부 유료 API나 웹서치 호출 배제.
+- 격리 원칙: 타 에이전트의 라이브 락/저널 강제 삭제 배제. 격리/정리 제안 및 자체 타점 검증기만 구현.
+
+## 항목 (WP1 ~ WP3)
+
+### WP1. 세션 진입 전 좀비 잔재 및 리스 타점 프로브 (`scripts/orchestra_cadence_barrier.py pre-flight`)
+- 구현 요구사항:
+  - `python -B scripts/orchestra_cadence_barrier.py pre-flight [--targets targets.json]` CLI 제공.
+  - 실행 시 1초 이내에:
+    1) 현재 활성 락 중 만료되었거나 프로세스 부재(orphan) 락을 감지하여 `stale_locks` 리스트 반환.
+    2) 24시간 초과 방치된 저널을 `zombie_journals`로 분류.
+    3) 신규 진입 세션이 안전하게 획득 가능한지 여부를 `ready: true|false` 및 `wait_reason`으로 JSON 출력.
+  - 외부 파괴적 조작 없이 안전한 read-only 진단 및 진입 타점 확인 제공.
+
+### WP2. 서브에이전트 적재적소 도구/스킬 동적 디스패처 (`scripts/subagent_tool_dispatcher.py`)
+- 구현 요구사항:
+  - `python -B scripts/subagent_tool_dispatcher.py dispatch --parent-session-file <jsonl> --target-files <f1,f2...>` CLI 제공.
+  - 세션 파일이 없을 경우 직전 실행된 `agent_session_watch.py`의 최신 진단(`var/diagnostics/`)을 자동 탐색.
+  - 디스패치 매핑 규칙 (적재적소 원칙):
+    - P11(경로 오류) 또는 P1(패치 컨텍스트 미스): `@source-inspection` + `scripts/agent_recovery_status.py guide` 추천.
+    - P15(락 누적) 또는 리스 충돌: `@agent-scope-lease` + `scripts/agent_scope_lease.py who` 추천.
+    - Java/Kotlin 소스 타겟: `@demo1-toolchain-auto-select` + `.\gradlew.bat test` 포커스 검증 추천.
+    - 웹/Display/프론트엔드 타겟: `@frontend-display-debug` + 웜업 검증 추천.
+    - 신호/오케스트레이션 타겟: `@demo1-orchestra-synergy` + `scripts/agent_quick_signal.py` 추천.
+  - 출력: 서브에이전트 프롬프트에 주입 가능한 3줄 블록 (`@스킬 1개`, `Project Root 1개`, `사전 실행할 디버그 명령 1개`).
+
+### WP3. 작업 완료 후 원자적 핸드오프 & 웜업 배리어 및 자체 검증 (`scripts/orchestra_cadence_barrier.py post-barrier`, `scripts/test_subagent_cadence.py`)
+- 구현 요구사항:
+  - `python -B scripts/orchestra_cadence_barrier.py post-barrier --signal-id <id> [--verify-port 18180] [--timeout-sec 10]` CLI 제공.
+  - 타점 3단계 검증:
+    1) 신호 파일 검증: `data/agent-handoff/orchestra/` 내 해당 신호 파일이 0바이트가 아니고 JSON 파싱이 유효한지 확인 (`atomic_fs_settled`).
+    2) 런타임 웜업 대기: `--verify-port` 지정 시 127.0.0.1 포트 오픈 대기 후 상태 보고.
+    3) 바톤 터치 준비 완료 보고: `ready_for_next_agent: true`.
+  - 자체 단위 검증: `scripts/test_subagent_cadence.py`에 WP1~WP3 100% 로컬 mock 테스트 포함 (종료 코드 0 PASS 필수).
+
+## HOLD 조건
+- 제품 소스(`main/`, `app/`, `frontend/`, `configs/`) 수정이 요구되는 경우 즉시 HOLD.
+- 타 에이전트의 살아있는 락/저널을 임의로 강제 삭제(force-delete)하려는 경우 즉시 HOLD.
+- 외부 유료 API나 네트워크 웹서치 호출이 필요한 경우 즉시 HOLD.
+
+## ASK_ONCE (자동 결정 및 기본값)
+- 디스패처 매핑에 정의되지 않은 파일 확장자가 들어올 경우:
+  - 기본값 (AUTO): `@demo1-orchestra-synergy` + `scripts/agent_signal_digest.py` 기본 번들 적용.
+
+## 절대 금지
+- `push`, `add -A`, `commit -a`, `reset --hard` 등 위험 Git 명령 실행 금지.
+- API 키, 토큰, 비밀 번호, .env 등 비밀 정보 노출 및 출력 절대 금지.
+- 원격 저장소 remote 추가/변경 금지.
+- PROTO_OPEN 보안 완화 정책 임의 수정 금지.
+- full test suite (`gradle test` 전체 스위트) 실행 금지 — 스크립트 단위 테스트만 실행.
+
+## Acceptance (완료 기준)
+- [ ] **WP1**: `scripts/orchestra_cadence_barrier.py pre-flight` 실행 시 1초 내 zombie_journals 및 ready 판정 JSON 정상 출력 (exit=0).
+- [ ] **WP2**: `scripts/subagent_tool_dispatcher.py dispatch` 실행 시 P1~P15 및 파일 타겟에 따른 적재적소 스킬/도구 3줄 추천 블록 정상 출력 (exit=0).
+- [ ] **WP3**: `scripts/orchestra_cadence_barrier.py post-barrier` 신호 무결성 검증 정상 동작 및 `scripts/test_subagent_cadence.py` 단위 테스트 전체 PASS (exit=0).
+- [ ] 기존 제품 소스 무변경 (git diff 제품 소스 0건 확인).
+
+## 보고 형식
+외부 API: 라이브 0건, 비용 0원 ($0 local)
+1. 구현 파일 목록 및 SHA12 해시
+2. `test_subagent_cadence.py` 실행 결과 전문 (테스트 케이스 수, PASS 확인)
+3. 실제 저장소 대상 pre-flight 및 dispatcher 실행 JSON 출력 요약
+4. 미실행 항목이 있는 경우 사유 명시 (NOT_RUN)
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 완수하고 검증 보고서를 제출해야 완료된다.

@@ -1,0 +1,94 @@
+[DEVIN 지시서] 내부 문서 기반 동시성·스트리밍 설계 모순 해소 및 정합성 해결 — 2026-10-05 15:30 KST
+파일 ID: PASTE_DEVIN_CONCURRENCY_DESIGN_CONTRADICTIONS_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 Java 소스 직접 수정 0 · git push/pull/add -A/commit 0 · 비밀값 출력 0 · 유료 외부 API 실호출 0 · PROTO_OPEN 침범 0
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라 설계 모순 분석, 문서 개정, 픽스처 정합성 검증, FOR_CODEX 청사진 갱신을 실제로 수행해야 종료된다. 중간에 멈추지 말고 끝까지 실행하라.
+
+@demo1-devin-task-fit
+
+0. 한 줄 목표
+내부 문서(CONCURRENCY_RESILIENCE_PLAN, FOR_CODEX_RESILIENCE_PATCH, PAUSE_HANDOFF, APISPEC-00~03, TRI-CTX-01) 간의 동시성·스트리밍·타임아웃 4대 설계 모순을 해소하고, chat-stream-boundaries 픽스처 계약을 정상화하여 Codex용 패치 청사진을 완전 동기화한다.
+
+# 1. 사실 (2026-10-05 15:30 KST 기준 라이브 확인)
+- 기준 Project Root: C:\AbandonWare\demo-1\demo-1\src (PowerShell 콘솔).
+- 사실 1 (비동기 vs Bulkhead 모순): docs/design/CONCURRENCY_RESILIENCE_PLAN.md:49-61은 Semaphore Bulkhead가 '모델 호출 구간만 점유'한다고 명시하나, data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md:70-86은 동기 try/finally 패턴을 제시하여 WebFlux 논블로킹(ChatApiController.java:1598) 반환 시 슬롯이 즉시 반납(leak)되거나 스트림 전체(수십초)를 점유하는 모순이 존재함.
+- 사실 2 (Timeout Detach vs Cancel 모순): data/agent-handoff/codex-autonomy/interview-stream-cancel-fba86c49/PAUSE_HANDOFF_20261005.md:25-27에서 Node chat-stream-boundaries.test.cjs 21개 중 8개가 FAIL 상태임(1개는 30초 cap 불일치, 7개는 Timeout 시 Server Cancel 1회 호출 기대와 서버 ChatRunRegistry의 attach=true 지속 완주 정책 충돌).
+- 사실 3 (스트리밍 중도 폴백 환각 모순): CONCURRENCY_RESILIENCE_PLAN.md:98-107은 스트리밍 도중 onError 시 새 TokenStream을 동일 sink에 재연결한다고 명시하나, 이미 클라이언트에 토큰이 방출된 뒤 재연결 시 텍스트 중복·문맥 왜곡(fragmented duplication)이 발생함.
+- 사실 4 (과부하 임계값 역전 모순): PublicChatAdmissionGuard는 글로벌 32(또는 64) 세션을 수용하는데 내부 llmBulkhead는 16개만 수용하여, 200 OK로 연결된 정상 세션의 절반이 본문 SSE error로 거절당하는 임계값 불일치가 존재함.
+- 사실 5 (보안 경계 격리 필요): docs/tri-agent-context/01_ARCHITECTURAL_INVARIANTS.md:27-36은 PROTO_OPEN 계약을 명시하고 있으므로, docs/api-spec-catalog/02_ZERO_TRUST_AUTH.md의 DPoP/RFC 9449 요구사항은 본 프로토타입 런타임에 직접 강제되지 않는 참조 규격으로 격리되어야 함.
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+
+# WP1 [DEVIN] CONCURRENCY_RESILIENCE_PLAN.md 리액티브 생명주기 및 스트리밍 정합성 개정
+- 증거: docs/design/CONCURRENCY_RESILIENCE_PLAN.md:49-110
+- RED 검사: python -B -c "import sys; f=open('docs/design/CONCURRENCY_RESILIENCE_PLAN.md', encoding='utf-8').read(); sys.exit(0 if 'Zero-Token Fallback' in f and 'Reactive' in f else 1)"; "exit=$LASTEXITCODE" (현재 exit 1)
+- 최소 수정:
+  1) §4 Bulkhead 모델을 동기 블로킹 Semaphore에서 '리액티브 스트림 연산자 및 TokenStream 수명주기 연동(Reactive Subscription Boundary)'으로 명세 정정.
+  2) §6 스트리밍 폴백을 'Zero-Token Fallback(첫 토큰 방출 전 지연/에러 시에만 백업 모델 투명 전환)'과 'Mid-Stream Failure(이미 토큰 방출된 후 에러 발생 시 재시작하지 않고 명확한 status/error 안내 후 안전 종료)'의 2단계 경계로 분리 개정.
+  3) §5 파라미터 임계값을 PublicChatAdmissionGuard(32)와 llmBulkhead(16+대기큐 16) 간의 버퍼 조화 모델로 정렬 설명 보강.
+- GREEN: python -B -c "import sys; f=open('docs/design/CONCURRENCY_RESILIENCE_PLAN.md', encoding='utf-8').read(); sys.exit(0 if 'Zero-Token Fallback' in f and 'Reactive' in f else 1)"; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: 문서 내에 비동기 스트리밍 수명주기와 토큰 중복 방지 규칙이 기술적으로 모순 없이 명시됨.
+
+# WP2 [DEVIN] FOR_CODEX_RESILIENCE_PATCH.md 청사진 동기화 및 동기 try/finally 제거
+- 증거: data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md:62-93
+- RED 검사: python -B -c "import sys; f=open('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md', encoding='utf-8').read(); sys.exit(1 if 'finally' in f and 'llmBulkhead.onComplete()' in f else 0)"; "exit=$LASTEXITCODE" (현재 exit 1)
+- 최소 수정:
+  1) §3 ChatApiController diff 가이드에서 Flux 반환 즉시 슬롯이 누수되는 동기 try/finally 코드를 전면 삭제.
+  2) TokenStream 구독 시작 시 acquirePermission, onPartialResponse 최초 진입 시 토큰 전송 시작 플래그 세팅, onComplete/onError 콜백에서 onComplete/release하는 올바른 생명주기 의사코드로 교체.
+  3) Mid-Stream 장애 시 이전 출력과 섞이는 새 모델 재시작을 금지하고, Phase A/B 명세를 Zero-Token 분기로 명문화.
+- GREEN: python -B -c "import sys; f=open('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md', encoding='utf-8').read(); sys.exit(0 if 'onPartialResponse' in f and 'Zero-Token' in f else 1)"; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: Codex가 복사해 구현할 때 비동기 슬롯 누수나 텍스트 꼬임 버그를 유발하지 않는 무모순 청사진 완성.
+
+# WP3 [DEVIN] chat-stream-boundaries.test.cjs 계약 분리 (Detach vs CancelExact) 및 8 FAIL 정합성 조정
+- 증거: src/test/js/chat-stream-boundaries.test.cjs & PAUSE_HANDOFF_20261005.md:25-27
+- RED 검사: node src/test/js/chat-stream-boundaries.test.cjs; "exit=$LASTEXITCODE" (현재 8 FAIL, exit 1 관측)
+- 최소 수정:
+  1) 8개 실패 중 1개인 30초 cap 가정: 현재 서버의 page admission budget(양수 설정 또는 fallback 600,000ms)과 일치하도록 테스트 기대 상한 상수 보정.
+  2) 7개 실패인 Timeout 시 Cancel 1회 기대: 클라이언트 연결 유휴/단절(Transport Abort/Detach)과 명시적 사용자 중단(CancelExact)의 구분을 테스트 시나리오에 반영(서버 Run 지속 보존 케이스와 강제 취소 케이스 분리 검증).
+- GREEN: node src/test/js/chat-stream-boundaries.test.cjs; "exit=$LASTEXITCODE" (21 PASS, exit 0 기대)
+- 완료 조건: Stale한 픽스처 가정을 제거하고 서버 ChatRunRegistry 실제 계약과 일치시켜 테스트 전건 통과.
+
+# WP4 [DEVIN] API Spec Catalog 및 Tri-Agent Invariants 격리 명문화 (PROTO_OPEN 충돌 방지)
+- 증거: docs/api-spec-catalog/README.md & docs/tri-agent-context/01_ARCHITECTURAL_INVARIANTS.md:27-36
+- RED 검사: python -B -c "import sys; f=open('docs/api-spec-catalog/README.md', encoding='utf-8').read(); sys.exit(0 if 'PROTO_OPEN' in f and 'Architecture Reference' in f else 1)"; "exit=$LASTEXITCODE" (현재 exit 1)
+- 최소 수정:
+  1) docs/api-spec-catalog/README.md 및 02_ZERO_TRUST_AUTH.md 상단에 '범위 및 아키텍처 격리 선언' 추가: 본 명세는 외부 연동/미래 규격 참조용이며, 현재 로컬 프로토타입 런타임의 PROTO_OPEN(모든 요청 ROLE_ADMIN 부여, 무로그인 데모) 계약을 절대 침범하거나 변경하지 않음을 명시.
+- GREEN: python -B -c "import sys; f=open('docs/api-spec-catalog/README.md', encoding='utf-8').read(); sys.exit(0 if 'PROTO_OPEN' in f and 'Architecture Reference' in f else 1)"; "exit=$LASTEXITCODE" (exit 0 기대)
+- 완료 조건: 에이전트 간 보안 정책 충돌로 인한 롤백 방지 가드레일 확립.
+
+# HOLD 조건
+- 제품 Java 코드(main/java/)에 대한 직접 파일 수정 권한 요청이 들어오면 HOLD하고 FOR_CODEX로 위임한다.
+- Start-RAG 런타임(PID 52676 등)에 대한 임의 프로세스 kill이나 포트 강제 점유 시도 시 즉시 중단한다.
+- .git 디렉터리 접근, 브랜치 조작, stash 시도 시 즉시 HOLD한다.
+
+# ASK_ONCE (자동 기본값 포함)
+- U-1: Bulkhead 포화 시 클라이언트 알림 방식 — (a) 권장: SSE status 이벤트('동시 요청이 많아 대기 중') 후 1회 재시도 (b) 즉시 HTTP 429 연결 거절 (c) 조용한 대기. -> 자동 결정: (a) 채택.
+- U-2: chat-stream-boundaries 타임아웃 픽스처 기본값 — (a) 권장: 600,000ms admission budget에 맞춰 픽스처 타임아웃 정규화 (b) 30초 강제 단축. -> 자동 결정: (a) 채택.
+- U-3: DPoP 카탈로그 적용 시점 — (a) 권장: 문서 레퍼런스로 완전 격리(PROTO_OPEN 불변) (b) 개발 서버에 인증 모듈 추가. -> 자동 결정: (a) 채택.
+
+# 절대 금지
+- git push, git commit -a, git add -A, git reset --hard, remote 추가 금지.
+- PROTO_OPEN을 무단 해제하고 로그인/역할 강제 게이트를 추가하는 행위 금지.
+- main/java/com/example/lms/ 아래의 프로덕션 Java 소스 파일 직접 수정 금지 (Devin은 청사진 및 픽스처/문서 소유).
+- .secrets/ 및 환경변수 비밀값 출력 금지.
+- 유료 외부 API 실호출 0 (모든 검증은 오프라인 및 로컬 테스트베드 기준).
+
+# Acceptance (수용 기준)
+- WP1: docs/design/CONCURRENCY_RESILIENCE_PLAN.md가 개정되어 'Reactive' 및 'Zero-Token Fallback' 모델이 명시되고 상충 내용이 제거됨 (RED 검사 통과).
+- WP2: data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md에서 동기 try/finally가 제거되고 리액티브 콜백 생명주기 청사진으로 교체됨 (RED 검사 통과).
+- WP3: node src/test/js/chat-stream-boundaries.test.cjs 실행 시 21 tests ALL PASS (0 failures, exit 0 관측).
+- WP4: docs/api-spec-catalog/README.md에 PROTO_OPEN과의 격리 원칙이 명시되어 validator exit 0 통과.
+- 공통: 제품 Java 소스 변경 0, Git 변경 0, 비밀 유출 0, 종료 시 lease 0.
+
+# 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+1. 목표 달성 요약: 설계 모순 4건 해소 및 chat-stream-boundaries 픽스처 정상화 결과
+2. 수정 파일 목록 및 sha12 해시 표
+3. Node 테스트 실행 결과 (21 passed, 0 failed, exit 0)
+4. Codex 인계 안내 (FOR_CODEX_RESILIENCE_PATCH 최신화 상태)
+5. 잔여 상태 및 특이사항 (종료 상태: DONE_OFFLINE)
+
+[ANTI-STOP] 지시서 수행 중 임의 판단으로 중단하지 말고 모든 WP의 수용 기준을 차례대로 충족한 후 최종 보고 형식을 출력하고 종료하라.

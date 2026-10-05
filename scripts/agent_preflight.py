@@ -358,6 +358,16 @@ def collect(root, agent=None):
         "work_journal.py", "codex_home_quarantine.py", "awx_session_evidence.py",
         "agent_preflight.py", "agent_session_watch.py", "agent_work_guard.py",
         "agent_machine_context.py")}
+    ratchet = root / "scripts" / "behavior_ratchet.py"
+    if ratchet.is_file() and (root / "configs" / "behavior-ratchet.json").is_file():
+        report["behaviorRatchet"] = run_json(
+            [py, "-B", str(ratchet), "--root", str(root), "check", "--json"],
+            root, timeout=30)
+        # check exit 4 (REVERTED) surfaces as status=error here; it is a
+        # ratchet verdict, never a preflight failure.
+    else:
+        report["behaviorRatchet"] = {"status": "unavailable",
+                                     "reason": "ratchet-tool-missing"}
     report["machineContext"] = {
         "command": "python -B scripts/agent_machine_context.py [--pretty]",
         "present": rel("scripts", "agent_machine_context.py")["present"],

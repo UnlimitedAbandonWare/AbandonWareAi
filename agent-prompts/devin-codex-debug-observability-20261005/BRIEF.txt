@@ -1,0 +1,88 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 수행하고 검증 보고서를 작성하는 실행 지시서다.
+
+@objective-executor
+# [DEVIN 지시서] 코덱스 세션 디버깅 병목 타점(오류 감춤·검색 영수증·세이프티 게이트) 개선 — 2026-10-05 16:00 KST
+파일 ID: PASTE_DEVIN_CODEX_DEBUG_OBSERVABILITY_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+최근 코덱스 세션 HOLD의 3대 디버깅 병목(OpenAiResponses 예외 원인 감춤, Naver/Brave 검색 영수증 미갱신, SelfAsk 세이프티 게이트 블라인드)을 최소 diff로 정밀화하여 에이전트 자율 진단성을 회복한다.
+
+### 1. 사실 (읽기 전용 확인, 2026-10-05 15:45~15:55 KST)
+- 세션 1: `codex-interview-10turn-resume-8c10743b` q4~q9에서 `chatgpt_oauth_error / PROVIDER_ERROR / no_replay` 발생 시, ReactiveException 이름만 남고 `httpStatus=0`, upstream root cause 및 stack trace 소실되어 원인 확정 불가로 HOLD 됨.
+- 세션 2: `codex-temperature-selfask-resume-68c163c2`에서 A3 `FAIL (search-transport-receipt-not-observed)`로 Naver/Brave 실제 전송 증명 불가로 HOLD 됨. `BraveSearchService.java:1017` 및 `NaverSearchService.java:298`에서 `providerReceiptObserved`가 `false`로 초기화된 후 실제 수신 시 `true`로 갱신되지 않는 결함 실존(각 1회만 언급됨).
+- 세션 3: `codex-temperature-selfask-resume-68c163c2`에서 `SelfAskWebSearchRetriever.java:358-368`의 6개 조건 중 하나만 실패해도 상세 원인 없이 `"safety-gate"`로 일괄 스킵되어 어떤 조건이 막혔는지 관측 불가.
+- 런타임: Java 17, Spring Boot 3.3.4, LangChain4j 1.0.1 고정.
+
+### 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용 (git / lease 등 공통 규칙 일괄 준수)
+
+### 3. 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| `main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java` | 1ED0B1CAA485 | - | 읽기/수정 |
+| `main/java/com/example/lms/service/web/BraveSearchService.java` | AA36187C46AF | - | 읽기/수정 |
+| `main/java/com/example/lms/service/NaverSearchService.java` | ECECF9EAC16C | - | 읽기/수정 |
+| `main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java` | EE1EB7023851 | - | 읽기/수정 |
+| `src/test/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModelTest.java` | 2ADB7AE3394F | - | 읽기/수정 |
+| `src/test/java/com/example/lms/service/web/BraveSearchServiceResponseShapeTest.java` | A3A831F23E4B | - | 읽기/수정 |
+| `src/test/java/com/example/lms/service/rag/SelfAskWebSearchRetrieverTest.java` | 5C98028F914F | - | 읽기/수정 |
+
+### 항목 (WP1~WP3)
+- WP1 [Devin] OpenAiResponsesChatModel reactive/upstream 예외 언랩 및 status/원인 로그 복원
+  - 증거: `OpenAiResponsesChatModel.java:442-460`, `:573-583`
+  - 문제: WebClientResponseException 등 업스트림 HTTP 예외가 `catch (Exception error)`로 넘어가면서 `cause=null`로 버려지고, `phase.httpStatus`가 0으로 남아 실제 upstream 400/401/403/429/500 여부 확인 불가.
+  - 최소 수정: `cause` 체인에서 `WebClientResponseException`을 탐색하여 실제 status code를 `phase.httpStatus` 및 `terminal`에 반영하고, root cause 클래스/메시지 요약을 `observeOauthTerminal` 로그 및 TraceStore에 안전하게 기록(비밀값 마스킹 유지).
+  - RED 검사: `.\gradlew.bat :test --tests ai.abandonware.nova.orch.llm.OpenAiResponsesChatModelTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+  - GREEN: 수정 후 focused 테스트 통과 (exit 0).
+
+- WP2 [Devin] BraveSearchService & NaverSearchService providerReceiptObserved 갱신 누락 수정
+  - 증거: `BraveSearchService.java:1017, 1029`, `NaverSearchService.java:298`
+  - 문제: `row.put("providerReceiptObserved", false);`로 등록된 후 HTTP 응답 수신 시(`received(int httpStatus)` 등) `true`로 갱신되지 않아 코덱스 검증기에서 항상 "search-transport-receipt-not-observed"로 판정되어 HOLD 유발.
+  - 최소 수정: `received(int httpStatus)` 및 completed 시점에 `row.put("providerReceiptObserved", true);` 명시 갱신 (NaverSearchService 동일 반영).
+  - RED 검사: `.\gradlew.bat :test --tests com.example.lms.service.web.BraveSearchServiceResponseShapeTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+  - GREEN: 수정 후 focused 테스트 통과 (exit 0).
+
+- WP3 [Devin] SelfAskWebSearchRetriever safety-gate 6개 조건 실패 원인 명시화
+  - 증거: `SelfAskWebSearchRetriever.java:358-368`
+  - 문제: 6개 조건(`enableSelfAskHint`, `!nightmareMode`, `!auxLlmDown`, `!cheapSearchMode`, `!Thread.isInterrupted()`, `!parentBudget.expired()`) 중 어느 조건이 실패했는지 알 수 없어 `"safety-gate"` 문자열만 반환되어 진단 불능 유발.
+  - 최소 수정: `!permitted` 시 실패한 구체적 원인(`hint_disabled`, `nightmare_mode`, `aux_llm_down`, `cheap_search_mode`, `interrupted`, `budget_expired`)을 태깅하여 `requestSearchBudget.skip("safety-gate:" + detailedReason)` 및 TraceStore에 기록.
+  - RED 검사: `.\gradlew.bat :test --tests com.example.lms.service.rag.SelfAskWebSearchRetrieverTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+  - GREEN: 수정 후 focused 테스트 통과 (exit 0).
+
+### HOLD
+- holdScope: 명시된 4개 제품 소스 및 3개 테스트 파일 외 임의 수정 금지.
+- firstBlockingRule: `main/resources/static/js/chat.js`, DB 스키마, `application.yml` 보안 필터 수정 시 즉시 HOLD.
+- blockingEvidence: 외래 활성 lease 충돌 또는 focused 테스트 외 컴파일 실패 시 즉시 중단.
+- repositoryWideHold: false (본 타점 독립 작업).
+
+### ASK_ONCE
+- U-1 [safety-gate 상세 원인 명명 규칙]
+  - (a) 권장: `safety-gate:<failed_condition>` 콜론 구분 형식 (기존 파서 하위 호환성 유지)
+  - (b) `safety-gate_<failed_condition>` 언더스코어 형식
+
+### 절대 금지
+- git push, git pull, git commit, git reset, git clean, git add -A, remote 추가 금지.
+- PROTO_OPEN 보안 규칙 완화 금지.
+- chat.js 수정 0, DB 스키마 변경 0.
+- 실제 외부 유료 API 호출 0건, mock/오프라인 fixture 테스트만 허용.
+- 비밀번호, API 키, 토큰, 비밀값 출력 금지 (SafeRedactor 마스킹 준수).
+- 전체 gradle :test 실행 금지.
+
+### Acceptance (수용 기준)
+- A1 (WP1): `OpenAiResponsesChatModel`에서 WebClient HTTP 예외 발생 시 실제 HTTP 상태 코드와 root cause가 `observeOauthTerminal` 및 terminal 메타데이터에 보존됨.
+- A2 (WP2): `BraveSearchService` 및 `NaverSearchService`에서 HTTP 수신 시 `providerReceiptObserved=true`로 갱신되어 trace에 기록됨.
+- A3 (WP3): `SelfAskWebSearchRetriever`에서 safety-gate 진입 시 실패 조건 세부 태그가 `requestSearchBudget.skip(...)`에 전달됨.
+- A4 (WP1, WP2, WP3): focused 테스트 3건 모두 exit 0 PASS, 전체 suite는 NOT_RUN 유지.
+- A5: commit/push 0, 비밀값 0, 종료 시 잔여 lease 0.
+
+### 보고 형식
+보고는 반드시 다음 형식으로 시작한다:
+```text
+외부 API: 0
+실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle focused PASS, 종료 시 lease 0
+```
+이후 각 WP1~WP3의 판정(DONE_OFFLINE), 변경 파일, focused 테스트 실행 결과(exit code 및 테스트 통과 수)를 표 형태로 요약한다.
+
+[ANTI-STOP] 모든 작업 완료 후 본인의 lease를 정상 반납하고 보고서를 작성한 뒤 작업을 종료하라.

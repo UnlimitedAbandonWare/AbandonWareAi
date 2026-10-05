@@ -1,0 +1,100 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 수행하고 검증하는 실행 지시서다.
+@demo1-api-first-routing-assist
+# DEVIN 지시서 — 단종/종료 모델 감지 시 자동 폴백(Failover) 보강
+
+### 0. 한 줄 목표
+사용자가 주로 사용하는 Auth(ChatGPT OAuth) 및 API 모델이 공급자 측에서 단종·종료(HTTP 404, 400 model_deprecated, decommissioned, scope 제거)되었을 때 `LlmGatewayFailureClassifier`가 `MODEL_MISSING`으로 정확히 분류하고, `FallbackAwareChatModel`에서 차단되던 폴백 허용 조건을 해제하여 지정된 차세대 안정 모델로 런타임에 즉시 자동 폴백되도록 게이트웨이 파이프라인을 보강하고 focused 테스트로 입증한다.
+
+### 1. 사실 (2026-10-05 17:30 KST 기준)
+- Project Root: `C:\AbandonWare\demo-1\demo-1\src` (단일 작업 기준점).
+- 사용자 주력 Auth 모델 현황: `data/agent-handoff/chatgpt-oauth/models.json`에 `gpt-6-astra`, `gpt-reserve`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `codex-auto-review` 총 7개 모델 등록됨.
+  - 위험도 예측: `gpt-reserve`, `gpt-5.6-sol`, `gpt-5.6-terra`는 실험적/예비용 슬러그로서 OpenAI 측 ChatGPT 백엔드나 Responses API 변경 시 사전 공지 없이 권한 거부(`subscription_sharing_route_not_supported`, 404 Not Found, model_decommissioned)로 즉시 셧다운될 위험이 가장 높음.
+  - 권장 안정 폴백 대상: `gpt-5.5` 또는 `gpt-5.6-luna`.
+- 사용자 주력 API 모델 현황: `configs/cloud-models.manifest.yaml` 및 `configs/api-routing.yaml`에 `gemini-2.5-pro`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gpt-5.5`, `gpt-5.4-mini`, `gpt-4.1`, `gpt-4o-mini`, `openai/gpt-oss-120b` 등록됨.
+  - 웹서치 수명 주기 확인: Google Gemini 1.5 시리즈 및 2.0-flash는 이미 공식 셧다운 완료됨. 현재 설정된 `gemini-2.5-pro`는 2026년 10월 16일 퇴역 예정으로 가장 취약함. OpenAI의 구형 GPT-4 계열도 2026년 10월 23일 셧다운 예정.
+  - 권장 안정 폴백 대상: Gemini는 `gemini-3.8-flash`(또는 `gemini-3.5-flash-lite`), OpenAI API는 `gpt-5.4-mini` 또는 `gpt-5.5`.
+- 코드 결함 지점 1 (`FallbackAwareChatModel.java:415-425`, `529-536`):
+  - `fallbackAllowed` 및 `sameRequestFallbackAllowed`의 허용 목록에 `AUTH_MISSING`, `HEALTH_DOWN`, `TIMEOUT_SOFT`, `RATE_LIMIT_COOLDOWN`, `SOFT_CIRCUIT_OPEN`, `GPU_DEVICE_LOST`, `VRAM_OOM`만 포함되어 있고, **`LlmFailureClass.MODEL_MISSING`이 완전히 누락됨**.
+  - 모델이 종료되어 404나 `MODEL_MISSING`이 발생해도 `fallbackAllowed`가 false를 반환하여 폴백을 타지 않고 즉시 `terminalFailure`로 앱이 중단됨.
+- 코드 결함 지점 2 (`LlmGatewayFailureClassifier.java:214-278`):
+  - 404 상태코드는 `MODEL_MISSING`으로 분류하나, 공급자(OpenAI, Google 등)가 HTTP 400 Bad Request에 반환하는 단종 에러(`model_deprecated`, `decommissioned`, `model has been deprecated`, `no longer supported`, `is not supported for api version`, `model_not_found`)를 `LlmFailureClass.BAD_REQUEST`로 오분류함.
+  - `BAD_REQUEST`는 폴백 대상이 아니어서 모델 단종 에러가 그대로 사용자 에러로 전파됨.
+- 대상 파일 기준 SHA12:
+  - `55f713528ea5` `main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java`
+  - `b230b1fdc496` `main/java/com/example/lms/llm/gateway/LlmGatewayFailureClassifier.java`
+  - `2442575ddb5c` `main/java/com/example/lms/llm/gateway/LlmFailureClass.java`
+  - `5a7468027a39` `src/test/java/com/example/lms/llm/gateway/FallbackAwareChatModelTest.java`
+  - `eb44935d6084` `src/test/java/com/example/lms/llm/gateway/LlmGatewayFailureClassifierTest.java`
+
+### 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+### 3. 작업 항목
+
+#### DV01: `LlmGatewayFailureClassifier.java` 단종·퇴역 에러 패턴 분류 확장
+- 위치: `main/java/com/example/lms/llm/gateway/LlmGatewayFailureClassifier.java`
+- 작업 내용:
+  1. `classifyMessage(String message)` 내에 모델 단종/퇴역 관련 시그니처 추가:
+     - `deprecated`, `decommissioned`, `retired`, `no longer supported`, `not supported for api version`, `model_not_found`, `model not found` 탐지 시 `LlmFailureClass.MODEL_MISSING` 반환.
+  2. `classifyHttpStatus(int status, String responseText)`:
+     - HTTP 404 외에 HTTP 400 및 410에서 `responseText`를 검사하여 모델 단종 키워드나 에러 코드(`model_deprecated`, `model_not_found`)가 포함된 경우 `LlmFailureClass.MODEL_MISSING`으로 분류되도록 보장.
+     - 기존 Quota 및 ChatGPT OAuth 에러코드 검사 순서와 격리 유지.
+
+#### DV02: `FallbackAwareChatModel.java`에 `MODEL_MISSING` 폴백 허용 추가
+- 위치: `main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java`
+- 작업 내용:
+  1. `fallbackAllowed(Throwable failure, LlmFailureClass failureClass)` (라인 ~415):
+     - `apiFirstPolicy` 블록의 허용 집합에 `LlmFailureClass.MODEL_MISSING` 추가.
+  2. `sameRequestFallbackAllowed(Throwable failure, LlmFailureClass failureClass)` (라인 ~529):
+     - 비 API 우선/로컬 경로에서도 모델이 없을 경우 재생 가능한 경우에 한해 폴백이 가능하도록 `LlmFailureClass.MODEL_MISSING` 추가.
+  3. `doChat`의 로그 및 TraceStore 기록에서 `llm.gateway.fallbackReason`에 `model_unavailable` 또는 `model_missing`이 명확히 남도록 보존.
+
+#### DV03: 단종 모델 대응 자동 폴백 경로 체인 우선순위 보장
+- 위치: `FallbackAwareChatModel.java` 및 관련 라우팅 정책
+- 작업 내용:
+  1. `MODEL_MISSING`으로 인한 장애조치 발생 시 NextFallbackResolver가 다음 순위의 안정적 모델을 선택하도록 연계:
+     - ChatGPT OAuth 경로: 비정상/단종 슬러그(`gpt-reserve`, `gpt-5.6-sol`, `gpt-5.6-terra` 등) 실패 시 -> 안정 슬러그 `gpt-5.5` 또는 `gpt-5.6-luna`로 전이. OAuth 전체 불능 시 API 모델(`gemini-3.8-flash` 등)로 안전 탈출.
+     - Gemini API 경로: `gemini-2.5-pro` 실패 시 -> 최신 안정 `gemini-3.8-flash` (또는 `gemini-3.5-flash-lite`)로 전이.
+     - OpenAI API 경로: `gpt-4.1` / `gpt-4o-mini` 실패 시 -> `gpt-5.4-mini` / `gpt-5.5`로 전이.
+  2. 이미 시도한 경로(`usedRoutes`) 재진입 방지 및 최대 fallback 횟수(`maxFallbackCalls`, 기본 1~3회) 준수.
+
+#### DV04: 회귀 방지 focused 단위 테스트 작성 및 통과 입증
+- 위치:
+  - `src/test/java/com/example/lms/llm/gateway/LlmGatewayFailureClassifierTest.java`
+  - `src/test/java/com/example/lms/llm/gateway/FallbackAwareChatModelTest.java`
+- 작업 내용:
+  1. `LlmGatewayFailureClassifierTest`: HTTP 400 Bad Request에 `{"error": {"code": "model_deprecated"}}` 또는 `"The model 'gemini-2.5-pro' has been retired"` 응답이 주어졌을 때 `MODEL_MISSING`으로 분류되는지 검증 테스트 추가.
+  2. `FallbackAwareChatModelTest`: primary 모델 호출 시 `MODEL_MISSING` 예외가 발생했을 때 예외가 바로 터지지 않고 configured된 fallback 모델로 자동 전환되어 정상 응답(`ChatResponse`)을 반환하는지 검증 테스트 추가.
+  3. 실행 명령:
+     `.\gradlew.bat :test --tests com.example.lms.llm.gateway.LlmGatewayFailureClassifierTest --tests com.example.lms.llm.gateway.FallbackAwareChatModelTest --no-daemon --console=plain`
+
+### 4. HOLD
+- 전체 `:test` 스위트 실행 금지 (focused 테스트 2개만 실행).
+- `.secrets` 또는 API 키 파일 수정 금지.
+- 실제 외부 유료 API 라이브 호출 금지 (LangChain4j mock 객체 및 슬라이스 테스트만 사용).
+- `api-routing.yaml` 및 `cloud-models.manifest.yaml`의 기존 모델 ID 임의 삭제 금지 (런타임 폴백 로직으로만 해결).
+
+### 5. ASK_ONCE
+- [기본값: 유지] ChatGPT OAuth 모델 단종 시 1차는 OAuth 내 `gpt-5.5`로 전환하고, OAuth 계정 자체가 비정상인 경우에만 API 우선(`gemini-3.8-flash` 등)으로 전환할 것인가?
+  - 권장: YES (OAuth 크레딧 우선 소진 정책 유지).
+
+### 6. 절대 금지
+- `git commit`, `git push`, `git add -A`, `git add .`, `git commit -a`, remote 추가 절대 금지.
+- 비밀값(API 키, 토큰 원문) 출력 및 하드코딩 절대 금지.
+- PROTO_OPEN 보안 경계 해제 금지.
+- 전체 빌드 clean(`gradlew clean`) 및 전체 테스트 실행 금지.
+
+### 7. Acceptance
+- [ ] `LlmGatewayFailureClassifier`가 HTTP 400의 `model_deprecated` / `decommissioned` 에러 및 404를 `LlmFailureClass.MODEL_MISSING`으로 분류함.
+- [ ] `FallbackAwareChatModel`이 `MODEL_MISSING` 발생 시 즉시 중단되지 않고 fallback 모델을 호출하여 200 응답을 성공시킴.
+- [ ] TraceStore에 `llm.gateway.fallback.started=true`, `llm.gateway.fallbackReason`이 정확히 기록됨.
+- [ ] focused 단위 테스트 통과 (`LlmGatewayFailureClassifierTest`, `FallbackAwareChatModelTest` exit=0).
+- [ ] 미실행 항목은 NOT_RUN과 사유를 명시함.
+
+### 8. 보고 형식
+외부 API: 호출 0회 (순수 오프라인 mock 검증)
+비밀 열람: 0건
+종료 시 lease: 0건
+테스트 결과: focused 단위 테스트 성공 결과 (테스트명, 실행 수, exit=0)
+diff 요약: `LlmGatewayFailureClassifier.java` 및 `FallbackAwareChatModel.java` 변경 사항
+[ANTI-STOP] 지시서 끝. 지금 즉시 Set-Location C:\AbandonWare\demo-1\demo-1\src 로 이동하여 작업을 시작하라.

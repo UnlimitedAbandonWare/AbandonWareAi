@@ -545,7 +545,7 @@ def cmd_pack(args) -> int:
     root = Path(args.root).resolve() if args.root else DEFAULT_ROOT
     cfg = load_config(root)
     profiles = cfg.get("profiles") or {}
-    profile = args.profile_opt or args.profile or "core"
+    profile = args.profile_opt or args.profile or cfg.get("defaultProfile") or "core"
     include_specs = resolve_include(profiles, profile)
     if include_specs is None:
         print(f"[gptpro-pack] unknown profile '{profile}'. "
@@ -593,6 +593,8 @@ def cmd_pack(args) -> int:
             excluded["dir"] += 1
             continue
         reason = name_block_reason(rel_l)
+        if reason and reason.startswith("banned-ext:") and rel_l in allow_files:
+            reason = None
         if reason:
             excluded["name"] += 1
             continue
@@ -938,7 +940,8 @@ def main(argv=None) -> int:
         prog="gptpro_pack.py",
         description="[USER-ONLY] pack demo-1 source into a secret-free zip for GPT Pro")
     p.add_argument("profile", nargs="?", default=None,
-                   help="main | core | full | ctx | brief | evidence (default: core)")
+                   help="backup | main | core | full | ctx | brief | evidence "
+                        "(default: configs/gptpro-pack.json defaultProfile)")
     p.add_argument("--profile", dest="profile_opt", default=None)
     p.add_argument("--root", default=None)
     p.add_argument("--out", default=None)

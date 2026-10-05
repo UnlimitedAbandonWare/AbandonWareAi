@@ -78,3 +78,16 @@ memory other agents write and agy reads via the digest.
 - Brief persistence: `python -B scripts/brief_save.py save --draft <f> --agent <X> --topic <kebab>` — Downloads `PASTE_*` + `agent-prompts\` double-write, sha12 check, registry row; lint FAIL refuses to save. `brief_save.py list|latest|search <q>` recalls who wrote what.
 - Reply contract: Korean, verdict first, `말로: 「…」` on directive/review answers, `한 줄:` ending.
 - Known limit: git watcher off while `core.repositoryformatversion=0` + `extensions.worktreeConfig=true` (diagnosis only, config untouched).
+
+## 9. agy 4대 특화 영역 (2026-10-05 공식화)
+
+멀티에이전트 협업에서 agy의 1순위 주특기 레인 — SSOT:
+`docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md`. 특화는 우선 배정이지
+역량 배제가 아니다(범용 보조 계속, STRICT_ZERO 그대로).
+
+1. **문서 수집** — 공식 문서(T1)·GitHub 릴리스(T2)·최신 스펙/에러 원인 신속 리서치.
+2. **코덱스 최적화 전달 (Context Curation for Codex)** — 3-Pack: 결론 3줄 + `file:line` 앵커 + diff 10줄 이내 정제 컨텍스트.
+3. **지시서 작성** — WP≤5·RED check·`[ANTI-STOP]`·lease 분담 `PASTE_*` 스캐폴딩.
+4. **서브 리포터** — `agent_signal_digest.py` 플릿 점검·활성 저널/리스 확인·보고서 교차 검증.
+
+orchestra `lanes.AGY_RESEARCH.for`와 시너지 역할표가 이 4축을 반영한다.

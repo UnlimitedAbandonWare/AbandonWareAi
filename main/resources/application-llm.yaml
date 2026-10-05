@@ -867,7 +867,7 @@ chat:
     presence-penalty: ${openai.api.presence-penalty.default:0.0}
     max-tokens: 2048
     use-rag: true
-    use-web-search: false
-    search-mode: 'OFF'
+    use-web-search: true
+    search-mode: 'AUTO'
     rag-answer-policy: ${chat.ragAnswerPolicy:adaptive}
     defaults-version: '1'

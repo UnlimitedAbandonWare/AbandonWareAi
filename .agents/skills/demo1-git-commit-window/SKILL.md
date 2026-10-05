@@ -1,6 +1,6 @@
 ---
 name: demo1-git-commit-window
-description: Use when the user is about to commit in GitHub Desktop while agent sessions share the worktree — plan safe-to-commit paths, report index.lock/git.exe state, and open/close the user-commit-window flag. SSOT: docs/agents-rules/demo1-git-read-no-lock.md
+description: 'Use when the user is about to commit in GitHub Desktop while agent sessions share the worktree — plan safe-to-commit paths, report index.lock/git.exe state, and open/close the user-commit-window flag. SSOT: docs/agents-rules/demo1-git-read-no-lock.md'
 ---
 
 # demo1-git-commit-window

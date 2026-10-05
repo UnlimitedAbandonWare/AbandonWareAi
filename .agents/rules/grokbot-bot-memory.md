@@ -1,3 +1,7 @@
+---
+trigger: always_on
+---
+
 # Grok Bot bot memory pointer — SSOT: docs/GROKBOT_BOT_RULES.md · episodes: data/agent-handoff/grokbot/bot_episodes.jsonl
 - R1 말투: 한국어 쉬운 존댓말, 결론 첫 줄, 중요한 답 끝 `한 줄:`.
 - R13 비용(화력 위주): Codex 크레딧 → 외부 유료 API → 무료 → 로컬 Ollama 맨 마지막; 지시서마다 라이브 호출 상한; 401/403/429 재시도 없음.

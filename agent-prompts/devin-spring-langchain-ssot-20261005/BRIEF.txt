@@ -1,0 +1,147 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 자체 검증까지 완료한 뒤 보고서를 작성하는 실행 지시서다.
+@demo1-devin-source-orchestrator
+# DEVIN 실행 지시서: Spring Boot 3.3.4 & LangChain4j 1.0.1 고정 규격 Tri-Agent SSOT 카탈로그 구축
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+웹서치 없이도 Codex, Devin, Grok CLI가 즉시 참조할 수 있도록 Spring Boot 3.3.4(Java 17) 및 단일 고정된 LangChain4j 1.0.1의 버전 순수성 규칙, 정립된 API 패턴, 빈 설정, 안티패턴 방어 카탈로그(`docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md`)를 신설하고 자동 검증기(`scripts/validate_agent_context_docs.py`)에 등록·검증한다.
+
+## 1. 사실 (2026-10-05 10:10 KST 기준)
+1. 빌드 순수성 게이트: `build.gradle.kts` 내 `checkLangchain4jVersionPurity` 태스크가 활성화되어 있어 `dev.langchain4j`의 모든 의존성이 정확히 `1.0.1`이 아니면 빌드가 강제 중단됨.
+   - `dev.langchain4j:langchain4j:1.0.1`
+   - `dev.langchain4j:langchain4j-open-ai:1.0.1`
+   - 금지: `langchain4j-spring-boot-starter`, 0.3x 버전군, beta 버전군.
+2. Spring Boot 프레임워크 베이스라인:
+   - Spring Boot `3.3.4` (Platform BOM: `spring-boot-dependencies:3.3.4`, Java 17).
+   - 핵심 스타터: `web`, `webflux`, `aop`, `data-jpa`, `actuator`, `validation`, `security`, `cache`.
+   - 회복탄력성: `io.github.resilience4j:resilience4j-spring-boot3:2.2.0`, `resilience4j-reactor:2.2.0`.
+   - 데이터베이스: `com.h2database:h2` (로컬 lmsdb 파일 H2 및 인memory 테스트).
+3. 실제 소스 내 LangChain4j 1.0.1 사용 양상:
+   - 빈 정의: `main/java/com/example/lms/config/LlmConfig.java`에 정립됨 (legacy `LangChain4jBeans.java`는 비활성화).
+   - API 규격: 0.3x의 `ChatLanguageModel.generate()`가 아닌 1.0.1 표준 인터페이스 `ChatModel.chat(ChatRequest request)` 및 `ChatModel.chat(ChatMessage... messages)` 사용.
+   - 모델 빌더: `OpenAiChatModel.builder()`로 baseUrl, apiKey, modelName, temperature, timeout 주입.
+   - 요청/응답 객체: `ChatRequest`, `ChatResponse`, `ResponseFormat`, `ResponseFormatType.JSON`, `JsonSchema`.
+   - RAG 어댑터: `dev.langchain4j.rag.content.Content`, `ContentRetriever`, `Query`, `EmbeddingModel`, `TextSegment`.
+4. 웹서치 오류 및 할루시네이션 위험:
+   - 외부 에이전트(Codex, Devin, Grok)가 사전 정보 없이 웹서치 시 LangChain Python 문법이나 0.3x 구버전 Javadoc, 또는 존재하지 않는 `langchain4j-spring-boot-starter`를 도입해 `checkLangchain4jVersionPurity` 게이트 실패를 반복 유발함.
+5. 기존 Tri-Agent 컨텍스트 카탈로그:
+   - `docs/tri-agent-context/`에 01~05 및 README.md 구축 완료.
+   - `scripts/validate_agent_context_docs.py`가 카탈로그 링크 및 수명주기(`INVARIANT` vs `VOLATILE`)를 검증함 (현재 6개 파일 pass).
+
+## 2. 공통 규칙
+- COMMON_RULES: `.agents/rules/demo1-common-brief-rules.md` 적용 (Project Root: `C:\AbandonWare\demo-1\demo-1\src` 엄수).
+- 범위 한정: `docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md` 생성, `docs/tri-agent-context/README.md` 인덱스 추가, `scripts/validate_agent_context_docs.py` 업데이트에 한정.
+- 제품 코어 Java 소스(`main/java/**`) 및 `build.gradle.kts` 수정 금지 (0건).
+- 외부 API 라이브 호출: 0회 ($0 local). 인코딩: UTF-8 no BOM.
+- Git/보안 가드: push 금지, add -A 금지, remote 추가 금지, 비밀값 출력 금지, PROTO_OPEN 경계 엄수.
+
+## 항목 (WP1 ~ WP3)
+
+### WP1. [DEVIN] Spring Boot 3.3.4 & LangChain4j 1.0.1 고정 SSOT 카탈로그 작성
+- 대상 경로: `docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md`
+- YAML Frontmatter 메타데이터:
+  ```yaml
+  ---
+  doc_id: TRI-CTX-06
+  title: Spring Boot 3.3.4 and LangChain4j 1.0.1 Platform Invariant SSOT
+  created_at: "2026-10-05T10:10:00+09:00"
+  expires_at: "PERPETUAL"
+  ttl_days: null
+  lifecycle: INVARIANT
+  validity_basis: "build.gradle.kts 의존성 및 checkLangchain4jVersionPurity 게이트, LlmConfig.java 라이브 소스"
+  ---
+  ```
+- 문서 필수 수록 섹션:
+  1. **플랫폼 베이스라인 및 의존성 매니페스트**:
+     - Java 17, Spring Boot 3.3.4 (Platform BOM: `org.springframework.boot:spring-boot-dependencies:3.3.4`).
+     - 스타터 구성: Web (Tomcat), WebFlux (WebClient, Netty), AOP, Data JPA, Actuator, Validation, Security, Cache.
+     - 회복탄력성: `io.github.resilience4j:resilience4j-spring-boot3:2.2.0`, `resilience4j-reactor:2.2.0`.
+     - DB: H2 (`com.h2database:h2`, JDBC: `jdbc:h2:file:./var/db/lmsdb;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE`).
+  2. **LangChain4j 1.0.1 버전 순수성 계약 (Version Purity Gate)**:
+     - 단일 허용 의존성: `dev.langchain4j:langchain4j:1.0.1` 및 `dev.langchain4j:langchain4j-open-ai:1.0.1`.
+     - 게이트 규칙: Gradle `checkLangchain4jVersionPurity` 태스크가 1.0.1 외의 버전 또는 beta/0.x 라이브러리 검출 시 빌드 실패 처리.
+     - `langchain4j-spring-boot-starter` 사용 금지 사유: 스타터 사용 시 추이 의존성 충돌 및 버전 오염 발생하므로 `LlmConfig.java`에서 직접 빈 등록.
+  3. **LangChain4j 1.0.1 핵심 API 치트시트 (웹서치 불필요 레퍼런스)**:
+     - 인터페이스: `dev.langchain4j.model.chat.ChatModel` (구버전 `ChatLanguageModel` 사용 금지).
+     - 실행 메서드:
+       * `ChatResponse chat(ChatRequest request)`
+       * `default String chat(String userMessage)`
+       * `default ChatResponse chat(ChatMessage... messages)`
+     - 모델 빌더: `OpenAiChatModel.builder().baseUrl(...).apiKey(...).modelName(...).temperature(...).build()`
+     - 메시지 객체: `ChatMessage`, `UserMessage`, `AiMessage`, `SystemMessage` (`dev.langchain4j.data.message.*`).
+     - RAG 및 임베딩: `Content`, `ContentRetriever`, `Query` (`dev.langchain4j.rag.content.*`), `EmbeddingModel`, `TextSegment`.
+     - 구조화 출력(JSON): `ResponseFormat.builder().type(ResponseFormatType.JSON).build()`.
+     - HTTP 클라이언트 로더: `dev.langchain4j.http.client.HttpClientBuilderLoader`.
+  4. **Spring Boot 빈 배선 패턴 (`com.example.lms.config.LlmConfig`)**:
+     - 정립된 빈 이름: `@Primary @Bean(name = {"chatModel", "redChatModel"})`, `@Bean(name = {"fastChatModel", "greenChatModel"})`, `exploreChatModel`, `judgeChatModel`, `localChatModel`.
+     - OpenAI 호환 로컬 엔드포인트: Ollama (`http://localhost:11434/v1`), Vercel AI Gateway, DeepSeek 등 공통 지원.
+  5. **에이전트 할루시네이션 안티패턴 방어 (Zero-Search 가이드)**:
+     - 안티패턴 1: 0.3x 구버전의 `ChatLanguageModel.generate()` 작성 금지.
+     - 안티패턴 2: `build.gradle.kts`에 다른 랭체인 모듈 임의 추가 금지.
+     - 안티패턴 3: Python LangChain 메서드(`PromptTemplate.from_template()`, `LLMChain`) 혼용 금지.
+     - 안티패턴 4: Spring Boot 버전 업그레이드 또는 다운그레이드 시도 금지.
+  6. **공식 참조 링크 및 오프라인 탐색 가이드**:
+     - Spring Boot 3.3.4 Docs: `https://docs.spring.io/spring-boot/docs/3.3.4/reference/html/`
+     - Spring Framework 6.1.13: `https://docs.spring.io/spring-framework/reference/6.1/`
+     - LangChain4j 1.0.1 Official: `https://docs.langchain4j.dev/`
+     - LangChain4j GitHub 1.0.1 Release: `https://github.com/langchain4j/langchain4j/releases/tag/1.0.1`
+
+### WP2. [DEVIN] 카탈로그 인덱스 및 유효성 검증기 확장
+- 대상 파일: `docs/tri-agent-context/README.md`, `scripts/validate_agent_context_docs.py`
+- 작업 내용:
+  1. `docs/tri-agent-context/README.md`:
+     - 문서 내비게이션 매트릭스에 `06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md` 추가:
+       * doc_id: `TRI-CTX-06`, lifecycle: `INVARIANT`, ttl_days: `—`, expires_at: `PERPETUAL`.
+     - 에이전트별 추천 Pinning 세트에 반영:
+       * Codex: 01 + 02 + 03 + **06** (Spring Boot / LangChain4j 코드 작업 시 필수 Pin)
+       * Devin: 01 + 02 + 04 + **06**
+       * Grok CLI: 01 + 04 + **06**
+  2. `scripts/validate_agent_context_docs.py`:
+     - `REQUIRED_FILES` 리스트에 `"06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md"` 추가 (필수 파일 6 -> 7개로 확장).
+
+### WP3. [DEVIN] 로컬 오프라인 무결성 검증 ($0 local)
+- 검증 1: 컨텍스트 수명주기 및 링크 검증기 실행
+  ```powershell
+  python -B scripts/validate_agent_context_docs.py
+  ```
+  * 기대 결과: exitCode 0, filesChecked: 7, problems: [].
+- 검증 2: Gradle 버전 순수성 게이트 검증
+  ```powershell
+  .\gradlew.bat checkLangchain4jVersionPurity --no-daemon --console=plain
+  ```
+  * 기대 결과: BUILD SUCCESSFUL (exit 0).
+
+## HOLD 조건
+- `main/java/` 내 제품 코스 소스 수정이 필요하다고 판단되는 경우 즉시 HOLD.
+- `build.gradle.kts`의 의존성 버전을 수정해야 하는 상황 발생 시 즉시 HOLD.
+- `validate_agent_context_docs.py` 실행 시 frontmatter 오류 또는 링크 오류가 3회 이상 자가수정 후에도 해결되지 않는 경우 HOLD.
+
+## ASK_ONCE
+- U-1: Tri-Agent Pinning 권장 세트에 추가할 보조 프레임워크(예: Resilience4j 2.2.0 전용 가이드 분리 여부)
+  * (a) 권장: 현재 06 SSOT 문서 내 1개 섹션으로 충분히 포함되므로 단일 문서 유지.
+  * (b) 별도 `07_RESILIENCE4J_2_2_0_SSOT.md`로 분리 생성.
+
+## 절대 금지
+- git push, git commit -a, git add -A, git reset.
+- remote 추가 금지.
+- PROTO_OPEN 보안 모델 훼손 및 비밀값(토큰/키 실제 문자열) 로그 출력 금지.
+- 외부 유료 API 라이브 호출 금지 (0회 엄수).
+- `build.gradle.kts`의 LangChain4j 버전을 1.0.1 외 다른 값으로 변경하거나 스타터를 추가하는 행위.
+
+## Acceptance
+- [ ] WP1: `docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md` 파일 생성 완료 (UTF-8 no BOM, frontmatter 준수).
+- [ ] WP2: `docs/tri-agent-context/README.md`에 06 문서 링크 및 내비게이션 테이블 등록 완료, `scripts/validate_agent_context_docs.py`의 `REQUIRED_FILES`에 06 문서 추가 완료.
+- [ ] WP3: `python -B scripts/validate_agent_context_docs.py` 실행 결과 exit 0, filesChecked=7, problems=0 확인 및 `.\gradlew.bat checkLangchain4jVersionPurity --no-daemon --console=plain` exit 0 확인.
+- [ ] NOT_RUN 규칙: 실행하지 못한 검증 항목은 NOT_RUN + 사유를 표기하며 임의로 PASS로 바꾸지 않는다.
+
+## 보고 형식
+외부 API: 0회 ($0 local)
+- 산출물: `docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md`
+- 수정 파일: `docs/tri-agent-context/README.md`, `scripts/validate_agent_context_docs.py`
+- 검증 결과:
+  * `validate_agent_context_docs.py`: exit <코드> (filesChecked=7)
+  * `checkLangchain4jVersionPurity`: exit <코드>
+- 한 줄: Spring Boot 3.3.4 및 LangChain4j 1.0.1 고정 SSOT 문서 구축 및 검증 완료.
+
+[ANTI-STOP] 이 지시서는 위 Acceptance의 모든 항목과 검증 명령을 자체적으로 완료한 뒤 종료해야 한다.

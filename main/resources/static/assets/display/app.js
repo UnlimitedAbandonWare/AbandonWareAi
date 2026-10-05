@@ -56,6 +56,8 @@
   function act(fn){return async event=>{event?.preventDefault();if(busy)return;busy=true;$('error').textContent='';try{await fn();}catch(error){reportError(error);}finally{busy=false;}};}
   function showCaption(){$('caption-text').textContent=pages[page]||'폴드6에서 수음을 시작하면 대화가 표시됩니다.';$('caption-page').textContent=pages.length>1?(page+1)+'/'+pages.length:'';}
   function render(s){
+    const focusFont=s.testStatus?.lensDisplay?.hintFontPx;
+    if(standalone&&Number.isInteger(focusFont))$('nova-fold-answer')?.style.setProperty('--hint-font',focusFont+'px');
     focusControls?.update(s);
     const phone=s.role==='PHONE'||phoneMode;
     $('app').classList.toggle('phone',phone);$('phone-controls').hidden=!phone;
@@ -91,7 +93,8 @@
       if(voice?.isActive()&&relay&&!owned)void voice.stop('다른 Fold6가 이벤트 권한을 가져갔습니다. 이 기기는 읽기 전용입니다.');
       const ld=s.testStatus?.lensDisplay;
       if(ld&&$('ld-status')){
-        if(!lensPrefsSeen){lensPrefsSeen=true;const saved=settings.lensDisplay;const merged=saved&&typeof saved==='object'?{...ld,...saved}:ld;fillLensInputs(merged);fillContextInputs(merged);}
+        const scope=s.testStatus?.lensSettingsScope||'';
+        if(!lensPrefsSeen||lensPrefsScope!==scope){lensPrefsSeen=true;lensPrefsScope=scope;fillLensInputs(ld);fillContextInputs(ld);}
         $('ld-status').textContent='적용됨 · 전사 '+ld.transcriptFontPx+'px/'+ld.transcriptMaxLines+'줄·'+Math.round((ld.transcriptTtlMs??20000)/1000)+'초 · 힌트 '+ld.hintFontPx+'px/'+ld.hintPageLines+'줄·'+Math.round(ld.hintTtlMs/1000)+'초'+(ld.autoPageMs>0?'·자동 '+Math.round(ld.autoPageMs/1000)+'초':'·수동 넘김')+' · 조용 '+(ld.triggerQuietMs??2500)/1000+'초 · 쿨다운 '+(ld.cueCooldownMs??10000)/1000+'초 · 강제 '+(ld.forceAfterMs??180000)/1000+'초 · 목표 '+ld.hintTargetChars+'자';
         if($('hc-status')){
           const t=s.testStatus?.transcript||{},h=t.history||{},sel=t.lastContextSelection||{};
@@ -104,7 +107,8 @@
       void (async()=>{
         if(typeof settings.hints==='boolean'&&settings.hints!==s.hintsEnabled)await client.hints(settings.hints);
         if(standalone&&Number.isFinite(settings.segment)&&settings.segment>=0&&settings.segment<=60)await client.relaySettings(s.testStatus?.relay?.enabled!==false,settings.segment);
-        if(settings.lensDisplay&&typeof settings.lensDisplay==='object')await client.lensSettings(settings.lensDisplay,false);
+        // Legacy owner-less lens cache is preserved locally for manual import only.
+        // Server echoes are authoritative; reconnect never auto-posts cached lens preferences.
       })().catch(reportError);
     }
     const lensReady=s.connection==='READY'&&s.ready&&(!standalone||s.testStatus?.relay?.eventOwner==='THIS DEVICE');
@@ -228,8 +232,12 @@
     $('segment-preset').onchange=()=>{$('segment-custom').hidden=$('segment-preset').value!=='custom';};
     $('segment-apply').onclick=act(()=>{const seconds=Number($('segment-preset').value==='custom'?$('segment-custom').value:$('segment-preset').value);return client.relaySettings(client.state.testStatus?.relay?.enabled!==false,seconds).then(()=>saveSetting('segment',seconds));});
   }
-  let lensPrefsSeen=false;
-  function lensVal(id){const v=Number($(id).value);return Number.isFinite(v)?v:null;}
+  let lensPrefsSeen=false,lensPrefsScope='';
+  function lensVal(id){const raw=String($(id).value??'').trim();if(!raw||!/^[0-9]+$/.test(raw))throw Error('invalid_lens_settings');const v=Number(raw);if(!Number.isSafeInteger(v))throw Error('invalid_lens_settings');return v;}
+  function fontPreview(){const value=String($('ld-hint-font')?.value??'');if(!/^[0-9]+$/.test(value)||Number(value)<20||Number(value)>36)return;
+    if($('ld-hint-font-range'))$('ld-hint-font-range').value=value;if($('ld-font-preview'))$('ld-font-preview').style.fontSize=value+'px';}
+  if($('ld-hint-font'))$('ld-hint-font').oninput=fontPreview;
+  if($('ld-hint-font-range'))$('ld-hint-font-range').oninput=()=>{$('ld-hint-font').value=$('ld-hint-font-range').value;fontPreview();};
   function lensSeconds(id,allowOff,min,max){const raw=(($(id)&&$(id).value)||'').trim();if(!raw)return null;const v=Number(raw);const lo=min??0,hi=max??100;if(!Number.isFinite(v)||v<lo||v>hi||(!allowOff&&v===0))throw Error('lens_seconds_range');if(id!=='ld-quiet'&&!Number.isInteger(v))throw Error('lens_seconds_range');return v;}
   function readLensPatch(){
     const p={},font=lensVal('ld-cap-font'),hint=lensVal('ld-hint-font'),cap=lensVal('ld-cap-lines'),lines=lensVal('ld-hint-lines'),capTtl=lensSeconds('ld-cap-ttl'),ttl=lensSeconds('ld-hint-ttl'),auto=lensSeconds('ld-auto-page',true),chars=lensVal('ld-hint-chars');
@@ -248,6 +256,7 @@
     if($('ld-cooldown'))$('ld-cooldown').value=(d.cueCooldownMs??10000)/1000;
     if($('ld-force'))$('ld-force').value=(d.forceAfterMs??180000)/1000;
     $('ld-hint-chars').value=d.hintTargetChars??1000;
+    fontPreview();
   }
   function readContextPatch(){
     const p={historyEnabled:$('hc-history').checked,topicResetEnabled:$('hc-topic').checked};
@@ -263,7 +272,8 @@
     $('hc-window').value=(d.historyWindowMs??0)/1000;$('hc-chars').value=d.historyMaxChars??0;$('hc-tokens').value=d.historyMaxTokens??0;
   }
   if($('ld-apply')){
-    $('ld-apply').onclick=act(async()=>{const patch=readLensPatch();await client.lensSettings(patch,false);saveSetting('lensDisplay',{...(settings.lensDisplay||{}),...patch});});
+    $('ld-apply').onclick=act(async()=>{const patch=readLensPatch(),res=await client.lensSettings(patch,false);const applied=res?.testStatus?.lensDisplay;if(applied){fillLensInputs(applied);fontPreview();}});
+    if($('ld-hint-font-reset'))$('ld-hint-font-reset').onclick=act(async()=>{const res=await client.lensSettings({hintFontPx:26},false);const applied=res?.testStatus?.lensDisplay;if(applied){fillLensInputs(applied);fontPreview();}});
     $('ld-reset').onclick=act(async()=>{await client.lensSettings(null,true);saveSetting('lensDisplay',undefined);lensPrefsSeen=false;});
     if($('ld-preset-apply'))$('ld-preset-apply').onclick=act(async()=>{
       const preset=$('ld-preset')?.value;if(!preset)return;

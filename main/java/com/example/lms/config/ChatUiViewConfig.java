@@ -38,9 +38,11 @@ public class ChatUiViewConfig {
         private static final View SETTINGS = new ClasspathHtmlView("templates/settings.html");
         private static final View LOGIN = new ClasspathHtmlView("templates/login.html");
         private static final View INDEX = new ClasspathHtmlView("templates/index.html");
+        private static final View DASHBOARD = new ClasspathHtmlView("templates/dashboard.html");
         private static final View HARMONY_DASHBOARD = new ClasspathHtmlView("templates/harmony-dashboard.html");
         private static final View DEBUG_EVENTS = new ClasspathHtmlView("templates/debug-events.html");
         private static final View TRACE_SNAPSHOTS = new ClasspathHtmlView("templates/trace-snapshots.html");
+        private static final View PIPELINE_STATUS = new ClasspathHtmlView("templates/pipeline-status.html");
 
         @Override
         public View resolveViewName(String viewName, Locale locale) {
@@ -49,9 +51,11 @@ public class ChatUiViewConfig {
                 case "settings" -> SETTINGS;
                 case "login" -> LOGIN;
                 case "index" -> INDEX;
+                case "dashboard" -> DASHBOARD;
                 case "harmony-dashboard" -> HARMONY_DASHBOARD;
                 case "debug-events" -> DEBUG_EVENTS;
                 case "trace-snapshots" -> TRACE_SNAPSHOTS;
+                case "pipeline-status" -> PIPELINE_STATUS;
                 default -> null;
             };
         }
@@ -91,6 +95,8 @@ public class ChatUiViewConfig {
                 html = renderChatUiHtml(html, model, request);
             } else if ("templates/login.html".equals(path)) {
                 html = renderLoginHtml(html, model, request);
+            } else if ("templates/index.html".equals(path) || "templates/dashboard.html".equals(path)) {
+                html = html.replace("        <!-- CSRF_INPUT -->", csrfHiddenInput(model, request));
             } else if ("templates/debug-events.html".equals(path) || "templates/settings.html".equals(path)) {
                 html = renderCsrfMeta(html, model, request);
             }

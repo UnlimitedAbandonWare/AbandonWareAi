@@ -18,6 +18,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SelfAskHandlerTraceTest {
 
+    @Test void userStrikeSkipsFixedSelfAskWithoutForgingHealthSignals() {
+        SelfAskWebSearchRetriever retriever = org.mockito.Mockito.mock(SelfAskWebSearchRetriever.class);
+        var handler = new SelfAskHandler(retriever, new OrchestrationGate(null));
+        var query = com.example.lms.service.rag.QueryUtils.buildQuery("synthetic relation",
+                java.util.Map.of("executionMode", "STRIKE", "enableSelfAsk", true, "allowWeb", true));
+        handler.handle(query, new ArrayList<>());
+        org.mockito.Mockito.verifyNoInteractions(retriever);
+        org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("orch.strike"));
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

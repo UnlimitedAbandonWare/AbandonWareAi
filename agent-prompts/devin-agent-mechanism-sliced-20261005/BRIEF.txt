@@ -1,0 +1,119 @@
+[ANTI-STOP] 이 지시서는 단순 참고용 문서가 아니며, 데빈이 세션 진입 즉시 4대 에이전트 위계와 실행 경계를 장착하고 검증을 완수해야 합니다.
+@demo1-orchestra-synergy
+[DEVIN 지시서] 에이전트 협업 기전 맥락 슬라이싱 및 장착 가이드 — 2026-10-05 09:05 KST
+파일 ID: PASTE_DEVIN_AGENT_MECHANISM_SLICED_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 코어 소스 임의 수정 0 · git commit/push/add -A 0 · remote 추가 0 · 비밀값 출력 0 · PROTO_OPEN 위반 0
+
+0. 한 줄 목표
+Codex(주력 1위) > agy-cli(2위) > Devin(3위) > Grok CLI(4위)로 정의된 에이전트 기전의 핵심 맥락을 슬라이싱하여 데빈 런타임에 안전하게 장착하고 경계를 검증한다.
+
+# 1. 사실 (라이브 환경 확인, 2026-10-05 09:05 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src (단일 유효 원격 저장소: UnlimitedAbandonWare/AbandonWareAi)
+- 4대 에이전트 위계 체계 확정:
+  1) 1위 (주력/Primary): Codex — 메인 제품 소스(main/java/**, src/test/java/**, 코어 RAG/LLM/BFF)의 단독 오너이자 최우선 구현자.
+  2) 2위: agy-cli — 아키텍처 판단 및 지시서 증폭기(GrokBot 계승). STRICT_ZERO(제품 소스 직접 수정 0건) 원칙 준수.
+  3) 3위: Devin — 런타임 검증, 환경설정(application-*.yml), 스모크/진단 스크립트 실행, 서브시스템 검증, 샌드박스 테스팅.
+  4) 4위: Grok CLI — 보조 스크립트/도구/테스트 픽스처/목업 작성 및 백그라운드 리서치.
+- 동시성 제어 도구: scripts/agent_scope_lease.py, scripts/work_journal.py, scripts/agent_signal_digest.py
+- 멀티 세션 빌드 격리: AWX_SPLIT_BUILD_OUTPUTS=1, AWX_BUILD_HOST_ID=devin
+- 현재 활성 lease 4건 존재 (live leases: codex-temperature-selfask 등), 타 에이전트 소유 lease 탈취 불허(우회 불가).
+
+# 2. 공통 규칙 (컨텍스트 슬라이싱 핵심 요약)
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 위계 소유권: Codex가 주력이므로 main/java/** 및 코어 비즈니스 로직은 Codex 고유 영역. Devin은 런타임 검증/YML 설정/진단 도구에 집중하며 코어 변경은 `FOR_CODEX:`로 이관.
+- 동시성/Lease: 작업 전 `agent_scope_lease.py check`로 점유 확인. 타 에이전트 점유 파일은 BLOCKED_LEASE로 기록하고 독립 작업 속행.
+- 빌드/안전 가드: AWX_SPLIT_BUILD_OUTPUTS=1, AWX_BUILD_HOST_ID=devin으로 격리. 전체 clean/:test 금지, 타겟 focused test만 허용.
+- Git/보안: commit, push, add -A, remote 추가 금지. 비밀값 출력 금지(NAMES만), PROTO_OPEN 유지.
+
+# 3. 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| scripts/agent_scope_lease.py | F3F26766B683 | - | 읽기/실행 |
+| scripts/work_journal.py | D12FBBA18D0D | - | 읽기/실행 |
+| scripts/agent_signal_digest.py | EF9BCB16063A | - | 읽기/실행 |
+| docs/agents-rules/DEMO1-DEVIN-MULTI-SESSION.md | 65CDAAF66F99 | - | 읽기전용 |
+
+# 4. 항목 (DV 작업 패키지)
+
+### DV1 [데빈] 4대 에이전트 위계(Codex 1위 > agy-cli 2위 > Devin 3위 > Grok CLI 4위) 인지 및 스코프 경계 확인
+- 증거: AGENTS.md, docs/agents-rules/DEMO1-DEVIN-MULTI-SESSION.md
+- 실행 명령:
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+python -B scripts/agent_signal_digest.py; "exit=$LASTEXITCODE"
+```
+- 검증 및 수용 조건: 활성 lease 및 신호 목록을 확인하고, Devin이 제품 소스 침범 없이 런타임/설정/검증 역할에 집중함을 확인. exit=0.
+
+### DV2 [데빈] 동시성 제어(agent_scope_lease, work_journal) 및 멀티세션 격리 환경 확인
+- 증거: scripts/agent_scope_lease.py, scripts/work_journal.py
+- 실행 명령:
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+python -B scripts/agent_scope_lease.py who; "exit=$LASTEXITCODE"
+$env:AWX_SPLIT_BUILD_OUTPUTS = "1"
+$env:AWX_BUILD_HOST_ID = "devin"
+Get-ChildItem env:AWX_*; "exit=$LASTEXITCODE"
+```
+- 검증 및 수용 조건: active lease 목록 정상 조회 및 빌드 격리 환경변수 설정 완료. exit=0.
+
+### DV3 [데빈] 런타임/도구 검증 상태 수집 및 주력(Codex) 이관용 보고서 초안 생성
+- 증거: scripts/brief_save.py
+- 실행 명령:
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+python -B scripts/brief_save.py list; "exit=$LASTEXITCODE"
+```
+- 검증 및 수용 조건: 지시서 레지스트리 상태 확인 및 4대 위계 기반 보고/FOR_CODEX 인계 블록 준비 완료. exit=0.
+
+# 5. 검증 명령 블록 (Devin 실행 절차)
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+python -B scripts/agent_signal_digest.py; "exit=$LASTEXITCODE"
+python -B scripts/agent_scope_lease.py who; "exit=$LASTEXITCODE"
+```
+
+# 6. HOLD (중단 및 보류 조건)
+- core 대상 파일에 대해 타 에이전트(Codex 등)의 유효한 Live Lease가 걸려 있는 경우 (해당 파일만 HOLD, 타 파일 속행)
+- 제품 코어 소스(main/java/**)의 아키텍처 재작성이 요구되는 경우 (직접 수정 금지, FOR_CODEX로 이관)
+- 유료 API 크레딧 소진 또는 미승인 과금 호출 발생 시 즉시 중단
+
+# 7. ASK_ONCE (단일 질의 후 기본값 속행)
+- 질문: 에이전트 간 역할 충돌이나 미할당 파일 발생 시 기본 라우팅 방향은?
+  (a) 권장: 코어 제품 로직은 Codex(1순위)로 이관, 런타임/환경 검증은 Devin(3순위) 유지
+  (b) 사용자에게 직접 판단 요청
+  (기본값: (a) 자동 채택 후 속행)
+
+# 8. 절대 금지
+- git commit, git push, git add -A, git checkout, git reset 등 Git 조작 일체 금지
+- remote 추가 또는 원격 저장소 주소 변경 금지
+- API 키, 시크릿, 비밀 토큰 값을 화면이나 파일에 평문 출력 금지
+- PROTO_OPEN 원칙 훼손(임의의 로그인/인증 장벽 추가) 금지
+- 주력 에이전트(Codex)의 코어 소스를 상의 없이 덮어쓰거나 재작성하는 행위 금지
+- 빌드 시 clean 플래그 사용 또는 전체 :test sweep 실행 금지
+
+# 9. Acceptance (수용 기준)
+- 4대 에이전트 위계(Codex 1위 > agy-cli 2위 > Devin 3위 > Grok CLI 4위)가 데빈 런타임 지침에 명확히 반영되었는가?
+- Live Lease 확인 명령(agent_scope_lease.py who) 및 빌드 격리 변수가 정상 검증되었는가?
+- 타 에이전트(Codex)의 소유 영역 침범 없이 런타임 검증/도구 상태 조회가 exit=0으로 완료되었는가?
+- 미실행 항목이 있는 경우 합당한 사유와 함께 NOT_RUN으로 표기되었는가?
+
+# 10. 보고 형식
+외부 API: 호출 0회 (로컬 검증 전용, 비용 $0)
+종료 상태: DONE_OFFLINE (또는 ALREADY_COVERED / BLOCKED_LEASE)
+
+| 항목 | 결과 | 증거 (명령 및 exit code) |
+|---|---|---|
+| DV1 위계 인지 및 신호 다이제스트 | PASS | python -B scripts/agent_signal_digest.py (exit=0) |
+| DV2 동시성 lease 및 빌드 격리 확인 | PASS | python -B scripts/agent_scope_lease.py who (exit=0) |
+| DV3 지시서 레지스트리 및 인계 준비 | PASS | python -B scripts/brief_save.py list (exit=0) |
+
+- 관측된 핵심 사실:
+  * 주력 에이전트: Codex (제품 소스 구현 단독 책임)
+  * 기획/지시서: agy-cli (STRICT_ZERO: 코드 수정 0건)
+  * 런타임/검증: Devin (코덱스 코드 보호, 격리 빌드, 런타임 증거 수집)
+  * 도구/스크립트: Grok CLI (보조 도구 및 픽스처)
+- FOR_CODEX: 코어 비즈니스 로직 및 제품 메인 변경 건이 있을 시 상세 요구사항 기재
+- 남은 검증: 없음 (오프라인 로컬 확인 완료)
+
+[ANTI-STOP] 데빈은 위 지시서의 섹션 순서와 검증 절차를 생략하지 말고 모든 검증 명령을 실행한 후 보고 형식을 준수하여 응답하십시오.

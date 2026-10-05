@@ -1,5 +1,5 @@
 ---
-name: verify_boot
+name: verify-boot
 description: Use when deriving or running Desktop/Mac mini/Notebook boot
 ---
 

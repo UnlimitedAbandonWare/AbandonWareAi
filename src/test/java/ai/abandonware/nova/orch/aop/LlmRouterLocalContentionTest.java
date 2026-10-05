@@ -85,7 +85,8 @@ class LlmRouterLocalContentionTest {
             cloudRoute.setProvider("openai");
             var gateway = eligibleGateway(true);
             when(gateway.localFailoverEnabled()).thenReturn(true);
-            var aspect = aspect(routes(Map.of("primary", primary, "cloud", cloudRoute)), gateway);
+            var aspect = aspect(routes(Map.of("primary", primary, "cloud", cloudRoute)), gateway,
+                    Map.of("llmrouter.api-first.enabled", "true", "llmrouter.api-first.route-order", "cloud"));
 
             ChatModel routed = assertInstanceOf(ChatModel.class, aspect.aroundLcWithTimeout(
                     new FakePjp(null, "llmrouter.primary", null, null, null, null, 32, 2, 0)));
@@ -253,7 +254,12 @@ class LlmRouterLocalContentionTest {
                 .withProperty("llm.ollama-native.think-false.enabled", "false");
         extraProperties.forEach(environment::withProperty);
         ObjectProvider<KeyResolver> keyResolverProvider = mock(ObjectProvider.class);
-        when(keyResolverProvider.getIfAvailable()).thenReturn(null);
+        KeyResolver resolver = mock(KeyResolver.class);
+        when(resolver.resolveLocalLlmCredential()).thenReturn(new com.example.lms.guard.ProviderCredentialResolver.Resolution(
+                "local_llm", "ollama", true, true, "synthetic", 1, false, ""));
+        when(resolver.resolveOpenAiCredential()).thenReturn(new com.example.lms.guard.ProviderCredentialResolver.Resolution(
+                "openai", java.util.UUID.randomUUID().toString(), true, true, "synthetic", 1, false, ""));
+        when(keyResolverProvider.getIfAvailable()).thenReturn(resolver);
         NovaModelGuardProperties guard = new NovaModelGuardProperties();
         guard.setEnabled(false);
         return new LlmRouterAspect(

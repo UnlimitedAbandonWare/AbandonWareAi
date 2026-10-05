@@ -1,0 +1,86 @@
+[ANTI-STOP]
+[DEVIN 지시서] 네이버·브레이브 규격 보강, Auth 코덱스 크레딧 탐침 및 90일 만료 자동 갱신 — 2026-10-05 02:05 KST
+파일 ID: PASTE_DEVIN_PROVIDER_SPECS_AND_90D_AUTO_REFRESH_20261005
+@demo1-api-spec-drift-guard
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 Java 직접 수정 0 · git push / add -A 0 · remote 추가 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 변경 0
+
+# 한 줄 목표
+네이버(일 25,000회 무료)·브레이브(Free $5/월 소진 시 Base 유료) SSOT 문서를 보강하고, Auth 코덱스 크레딧(ChatGPT OAuth, Vercel AI Gateway) 및 LangChain4j 1.0.1 규격을 웹서치로 탐침·문서화하며, 90일 만료 시 웹서치 자동 갱신 도구와 프로토콜을 구축한다.
+
+# 사실 (읽기 전용 확인, 2026-10-05 02:00 KST)
+- `docs/provider-limits/`에 네이버 검색 API(`naver-search-limits.md`) 누락됨. 공식 네이버 검색 API(NCP/API Hub)는 일 25,000회 무료 쿼터 제공.
+- Brave 검색은 `BRAVE_API_KEY_FREE`(월 $5=1,000회) 소진 시 `BRAVE_API_KEY`(Base 종량제 $5/1,000건, 50 QPS) 승격 듀얼 키 정책이며 `NAVER_*` failover 금지 (`docs/agents-rules/DEMO1-BRAVE-DUAL-KEY.md:4`).
+- 본 프로젝트는 Auth 코덱스 크레딧(ChatGPT OAuth, Vercel AI Gateway) 최우선 활용. 비용 순서: Codex 크레딧 → 외부 유료 API → 무료 → 로컬 Ollama. Vercel AI Gateway 잔액은 ~$22 관측값, Jev evaluation 전용 (`docs/agents-rules/DEMO1-VERCEL-AI-GATEWAY-CREDIT.md:5-7`).
+- 라이브러리 규격: `dev.langchain4j` 의존성은 `1.0.1` 고정(AGENTS.md), Ollama 로컬 모델은 허용 목록만 사용.
+- `docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md:6-7`: 90일은 검토 주기일 뿐 로그인 퀴즈 사유 아님. 단, 90일 경과 시 자동 재검증·갱신 도구가 부재함.
+
+# 공통 규칙
+- 첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 고정).
+- 문서/스크립트 작업: Markdown(`.md`) 및 진단 스크립트(`scripts/*.py`) 변경은 소스 lease 불필요, `python -B scripts/work_journal.py` 기록.
+- 비밀값 은닉: 환경변수 이름(`NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`, `BRAVE_API_KEY_FREE`, `BRAVE_API_KEY`, `AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`)만 표기하고 실제 키/토큰/비밀번호 값 노출 금지.
+- PROTO_OPEN 유지: 인증 장벽/관리자 로그인 게이트 신설 금지.
+- Git 조작 금지: git push, add -A, commit -a, remote 추가 일체 금지.
+
+# 항목 (Work Packages)
+
+- WP1 [DEVIN] 네이버 검색 API SSOT 문서 작성 (`docs/provider-limits/naver-search-limits.md`) 및 README 등록
+  - 증거: `docs/provider-limits/README.md`
+  - 내용: 일 25,000회 무료 쿼터(월 775,000회), 환경변수 이름(`NAVER_CLIENT_ID`, `NAVER_CLIENT_SECRET`), 엔드포인트(`https://openapi.naver.com/v1/search/webkr.json`), Brave 격리 정책, 프런트매터(`capturedAt: "2026-10-05"`, `reviewedAt: "2026-10-05"`, `reviewAfterDays: 90`).
+  - README 갱신: `docs/provider-limits/README.md` 목록 및 Source URLs에 네이버 공식 URL 추가.
+  - GREEN: `Test-Path docs/provider-limits/naver-search-limits.md` 참 확인.
+
+- WP2 [DEVIN] 브레이브 검색(Brave Search) 듀얼 키 및 종량제 규격 문서 보강 (`docs/provider-limits/brave-search-limits.md`)
+  - 증거: `docs/provider-limits/brave-search-limits.md:34-60`, `docs/agents-rules/DEMO1-BRAVE-DUAL-KEY.md:4`
+  - 내용: Free 크레딧($5/월=1,000쿼리) 및 Base 종량제($5/1,000 reqs, 50 QPS) 듀얼 키(`BRAVE_API_KEY_FREE` -> `BRAVE_API_KEY`) 승격 관계, 프런트매터 `reviewedAt: "2026-10-05"` 갱신 및 90일 만료 재검토 가이드 보강.
+  - GREEN: `Select-String -Path docs/provider-limits/brave-search-limits.md -Pattern "reviewedAt: \"2026-10-05\""` 확인.
+
+- WP3 [DEVIN] Auth 코덱스 크레딧 & 핵심 규격 누락분 웹서치 탐침 및 문서화
+  - 증거: `docs/agents-rules/DEMO1-VERCEL-AI-GATEWAY-CREDIT.md`, `AGENTS.md` Safe Patch Rules
+  - 내용:
+    1) Vercel AI Gateway / Jev 문서(`docs/provider-limits/vercel-ai-gateway-limits.md`): 잔액 ~$22, AI_GATEWAY_API_KEY, Jev evaluation 전용, 자동 유료 전환 금지.
+    2) Codex Auth / OAuth 규격(`docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md`): ChatGPT OAuth 플로우, Codex 크레딧 최우선 활용, LangChain4j `1.0.1` 고정, Ollama 모델 잠금.
+  - GREEN: `Test-Path docs/provider-limits/vercel-ai-gateway-limits.md`, `Test-Path docs/specs/CODEX_OAUTH_AND_RUNTIME_SPECS.md` 참 확인.
+
+- WP4 [DEVIN] 90일 만료 점검 및 자동 웹서치 갱신 도구 작성 (`scripts/verify_provider_limits_freshness.py`)
+  - 증거: `docs/agents-rules/DEMO1-PROVIDER-LIMITS-SSOT.md:6-8`
+  - 내용:
+    - `docs/provider-limits/*.md` 파싱하여 `reviewAfterDays`(기본 90) 초과 여부 검사.
+    - CLI `--check`: 만료 목록, `sourceUrls`, 추천 웹서치 키워드 반환 (exit 0 유지).
+    - 90일 만료 갱신 프로토콜: 만료 감지 시 퀴즈 없이 공식 URL 웹서치 1회 -> 변동 없으면 `reviewedAt` 당일 갱신 (90일 자동 연장), 변동 시 본문 반영 후 `capturedAt` 갱신.
+  - GREEN: `python -B scripts/verify_provider_limits_freshness.py --check; "exit=$LASTEXITCODE"` 실행 시 exit 0 확인.
+
+# HOLD 조건
+- 외부 유료 API에 신용카드 결제나 크레딧 추가 구매 요구 시 즉시 HOLD.
+- `docs/` 및 `scripts/` 외 Java 백엔드 로직 대규모 재작성 필요 시 HOLD.
+- 로컬 파일에 실제 API 키나 토큰 원문 노출 발견 시 즉시 HOLD.
+
+# ASK_ONCE (자동 결정 기본값 포함)
+- U-1: 네이버 검색 API AI 연동 주의사항 반영 방식
+  - (a) 권장: 문서 내 `disclaimer`로 주의사항 명기 후 웹 검색 용도로 한정 규정 (AUTO 적용).
+  - (b) AI 연동 완전 배제.
+- U-2: 90일 만료 시 웹서치 자동 갱신 프로토콜
+  - (a) 권장: 단가/정책 변동 없으면 자율적으로 `reviewedAt` 갱신하여 90일 연장(AUTO 적용).
+  - (b) 매번 사용자 승인 요구.
+
+# 절대 금지
+- `push`, `add -A`, `commit -a`, `git reset`, `remote 추가` 절대 금지.
+- 실제 API Key, Secret 등 `비밀`값 평문 노출 및 저장 절대 금지.
+- 90일 만료 사유로 로그인, 결제 수단 등록, 플랜 변경 퀴즈를 내는 행위 절대 금지.
+- `PROTO_OPEN` 정책 훼손 및 관리자 로그인 장벽 신설 금지.
+- Brave 무료 쿼터 소진 시 네이버로 무단 라우팅 전환 금지.
+
+# Acceptance (완료 기준)
+- WP1: `docs/provider-limits/naver-search-limits.md` 생성 및 `docs/provider-limits/README.md` 링크 등록 완료.
+- WP2: `docs/provider-limits/brave-search-limits.md`에 Free vs Base 듀얼 키 규격 및 갱신일 반영 완료.
+- WP3: Auth 코덱스 크레딧(Vercel AI Gateway, ChatGPT OAuth) 및 고정 라이브러리 규격 문서 작성 완료.
+- WP4: `python -B scripts/verify_provider_limits_freshness.py --check` 실행 시 문서 유효성 검사 및 exit 0 통과.
+- 미실행 항목이 있을 경우 `NOT_RUN`과 합당한 사유를 보고에 명시함.
+
+# 보고 형식
+외부 API:
+- 작성/수정 문서 목록 (경로, sha12)
+- 신규 검증 스크립트 실행 결과 (exit 코드)
+- 90일 만료 자동 갱신 프로토콜 적용 상태
+
+[ANTI-STOP]

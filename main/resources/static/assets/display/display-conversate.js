@@ -83,6 +83,8 @@
     function apply(view) {
       if(transcription&&session?.assistId===view.assistId&&view.epoch<session.epoch)return;
       if (session?.assistId === view.assistId && session.epoch === view.epoch && Number.isSafeInteger(view.version) && view.version < seenVersion) return;
+      const currentLens=state.testStatus,incomingLens=view.testStatus;
+      const preserveLens=session?.assistId===view.assistId&&session?.epoch===view.epoch&&currentLens?.lensSettingsScope!=null&&currentLens.lensSettingsScope===incomingLens?.lensSettingsScope&&Number.isSafeInteger(currentLens.lensSettingsVersion)&&Number.isSafeInteger(incomingLens.lensSettingsVersion)&&incomingLens.lensSettingsVersion<currentLens.lensSettingsVersion;
       if (session?.assistId !== view.assistId || session.epoch !== view.epoch) seenVersion = -1;
       if (Number.isSafeInteger(view.version)) seenVersion = view.version;
       session = { assistId: view.assistId, epoch: view.epoch };
@@ -91,7 +93,7 @@
       state.audioAvailable = view.audioAvailable === true;
       state.audioState = view.audioState;
       state.audioFinished = view.audioFinished === true;state.audioRenewAfterMs=view.audioRenewAfterMs;
-      state.testStatus = view.testStatus || null;
+      state.testStatus = preserveLens?{...incomingLens,lensDisplay:currentLens.lensDisplay,lensSettingsVersion:currentLens.lensSettingsVersion,lensSettingsScope:currentLens.lensSettingsScope}:view.testStatus || null;
       state.focusProducer = view.focusProducer === true;
       // 생산자 폴링 응답에만 담기는 단발 촬영 명령 — 비생산자/구독자에게는 서버가 null을 돌려준다.
       state.focusControl = view.focusControl || null;
@@ -284,7 +286,14 @@
     function background(text){return action('context',{text});}
     function relaySettings(enabled,segmentSeconds){return action('relay/settings',{enabled,segmentSeconds});}
     /** patch: LensDisplayPrefs fields; restoreDefaults=true resets the owner's settings server-side. */
-    function lensSettings(patch,restoreDefaults){return action('relay/lens-settings',restoreDefaults===true?{restoreDefaults:true}:{display:patch});}
+    async function lensSettings(patch,restoreDefaults){
+      const bound=connection(),scope=state.testStatus?.lensSettingsScope;
+      const view=await post('relay/lens-settings',{...bound,...(restoreDefaults===true?{restoreDefaults:true}:{display:patch}),expectedSettingsVersion:state.testStatus?.lensSettingsVersion??null});
+      if(session?.assistId!==bound.assistId||session?.epoch!==bound.epoch||state.testStatus?.lensSettingsScope!==scope)throw Error('lens_settings_stale');
+      const currentVersion=state.testStatus?.lensSettingsVersion,responseVersion=view.testStatus?.lensSettingsVersion;
+      if(Number.isSafeInteger(currentVersion)&&Number.isSafeInteger(responseVersion)&&responseVersion<currentVersion)throw Error('lens_settings_stale');
+      apply(view);return view;
+    }
     function relayTest(number=1,fromFold=true){return action('relay/test',{number,fromFold});}
     function applyFocus(value){
       if(value&&state.focus?.serverInstanceId===value.serverInstanceId&&value.stateVersion<state.focus.stateVersion)return;

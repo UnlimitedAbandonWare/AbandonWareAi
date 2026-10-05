@@ -1,0 +1,20 @@
+{
+  "schemaVersion": "awx.server-trace-noise.v1",
+  "doc": "Noise rules for scripts/server_trace_digest.py. Matched against event text; noise rows count into counts.noise and leave top/verdict unless --include-noise. Add rules here only - no code change needed.",
+  "rules": [
+    {
+      "id": "boot_ddl",
+      "sourceKinds": ["console"],
+      "pattern": "GenerationTarget encountered exception accepting command|CommandAcceptanceException|JdbcSQLSyntaxErrorException[^\\n]{0,160}already exists",
+      "noise": "boot_ddl",
+      "note": "Hibernate DDL create-if-exists noise during boot (H2 index/table already exists; ~66 per boot, exits 4m+ before app failure)"
+    },
+    {
+      "id": "boot_retry",
+      "sourceKinds": ["console"],
+      "pattern": "o\\.h\\.engine\\.jdbc\\.spi\\.SqlExceptionHelper - SQL Warning",
+      "noise": "boot_sql_warn",
+      "note": "Hibernate SQL warnings surfaced as WARN during schema bootstrap"
+    }
+  ]
+}

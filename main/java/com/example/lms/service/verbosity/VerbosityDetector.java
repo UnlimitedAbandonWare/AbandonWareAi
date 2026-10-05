@@ -33,6 +33,9 @@ public class VerbosityDetector {
 	private static final Pattern BRIEF = Pattern.compile("(간단히|간단하게|짧게|한\\s*줄|(?:한|두)\\s*문장|요약만|(?:one|two)\\s+sentences?|single\\s+sentence|tldr|tl;dr|brief)", Pattern.CASE_INSENSITIVE);
     private static final Pattern DEV   = Pattern.compile("(개발자|코드|API|소스|예제)", Pattern.CASE_INSENSITIVE);
     private static final Pattern PM    = Pattern.compile("(기획|PM|로드맵)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern STANDARD_LENGTH = Pattern.compile(
+            "(?:표준|스탠다드)\\s*(?:길이|분량)|standard\\s+(?:length|detail|response)|^\\s*standard\\s*$",
+            Pattern.CASE_INSENSITIVE);
 
     @Value("${abandonware.answer.detail.min-words.brief:120}")   private int minBrief;
     @Value("${abandonware.answer.detail.min-words.standard:250}")private int minStd;
@@ -43,6 +46,19 @@ public class VerbosityDetector {
     @Value("${abandonware.answer.token-out.standard:1000}")private int tokStd;
     @Value("${abandonware.answer.token-out.deep:1500}")    private int tokDeep;
     @Value("${abandonware.answer.token-out.ultra:2200}")   private int tokUltra;
+
+    public VerbosityProfile detect(String query, String preferredLength) {
+        VerbosityProfile detected = detect(query);
+        boolean currentLengthInstruction = query != null && (STANDARD_LENGTH.matcher(query).find()
+                || BRIEF.matcher(query).find() || DEEP.matcher(query).find() || ULTRA.matcher(query).find()
+                || EXACT_COMPACT_OUTPUT.matcher(query).find() || NAME_OR_SINGLE_WORD_OUTPUT.matcher(query).find()
+                || conflictingCompactInstruction(query));
+        if (!"standard".equals(detected.hint()) || currentLengthInstruction
+                || !("brief".equals(preferredLength) || "deep".equals(preferredLength))) return detected;
+        VerbosityProfile preferred = detect(preferredLength);
+        return new VerbosityProfile(preferred.hint(), preferred.minWordCount(), preferred.targetTokenBudgetOut(),
+                detected.audience(), detected.citationStyle(), detected.sections());
+    }
 
     public VerbosityProfile detect(String query) {
         String hint = "standard";

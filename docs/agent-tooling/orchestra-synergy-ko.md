@@ -19,8 +19,12 @@
 | `data/agent-handoff/orchestra/` | 신호 저장소(`inbox/<agent>/`, `outbox/<agent>/`, `archive/`) |
 | `var/orchestra/` | 사람용 출력(BOARD.md, outbox/PASTE_*) |
 
-## 역할 분담 (사용자 지정 2026-10-03)
+## 역할 분담 (사용자 지정 2026-10-03, dot 줄 추가 2026-10-05)
 
+- **dot (ChatGPT "UnlimitedAbandon")**: **전체 컨트롤 타워.** 계획·우선순위,
+  Codex 소스수정 지시서 작성(`PASTE_CODEX_*.md`), Codex 세션에 직접 발송·
+  진행 감시, 패치 검증 후 룰·스킬·도구 갱신과 원복 방지(ratchet). 산출물
+  전달은 ChatGPT 파일 카드(`DEMO1-DOT-FILE-CARD`).
 - **Grok Bot**: 아이디어·신호 키움(긍정/부정/반례 → 중립 판정 연타). 결과를
   devin-signal / codex 후보 / research-question으로 쪼갬. PC 밖에서
   `Downloads\PASTE_*.txt`로 지시서를 넘긴다.
@@ -29,8 +33,21 @@
 - **Codex**: 제품 소스 수정. 고점 높은 일(설계 큼/멀티 seam/바깥 최신 정보
   필요)은 GPT Pro가 쓴 지시서를 받아 진행.
 - **GPT Pro**: ZIP 스냅샷 + 웹서치로 분석·지시서 초안 (사용자가 직접 업로드).
-- **agy**: 웹서치로 근거 수집 → web-evidence 신호로 회수. Grok Bot 부재 시
+- **agy**: **4대 특화 우선** — 문서 수집, 코덱스용 정제 전달(3-Pack), 지시서
+  작성, 서브 리포터 (`docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md`).
+  웹서치로 근거 수집 → web-evidence 신호로 회수. Grok Bot 부재 시
   `demo1-agy-grokbot-mode`로 서브 역할.
+
+위계 (2026-10-05):
+- dot = 지휘(무엇을·누가·언제). Codex = 제품 소스 작성자. Devin = 룰·도구·검증
+  지원(dot 결정을 도구로 굳힘, 뒤집지 않음). Grok Bot = 사용자 옆 분석·지시서
+  보조. agy·Grok CLI = 하위 작업자(조사·단건 위임).
+- 충돌 시 우선순위: **사용자 직접 지시 > dot 최신 지시서 > 기존 SSOT 문구**.
+  단 비밀값·PROTO_OPEN·lease 안전 규칙은 누구도 못 바꾼다.
+- dot이 PC에 못 붙을 때도 구조는 그대로: 사용자가 카드 파일을 받아 Codex에
+  붙여넣으면 같은 효력.
+- dot 대체 금지: 다른 에이전트가 "컨트롤 타워" 역할을 가져가지 않는다.
+  Grok Bot·Devin은 dot 지시서에 **보조 지시서**(companion)만 쓴다.
 
 ## lane 규칙 (route-rules.json 기본값)
 
@@ -39,7 +56,7 @@
 | DEVIN | 도구·스크립트·규칙·검증·정리·현황판, 제품 소스 수정 없음 | devin |
 | CODEX_DIRECT | 제품 소스, 범위 좁고 근거 PC 확인 | codex |
 | GPTPRO_THEN_CODEX | 고점 표지 ≥2: 제품 파일≥3 또는 멀티 seam / 설계 선택지≥2 / 바깥 최신 정보 필요 / 품질 상한 상향 / 이전 시도 2회 실패 | gptpro → codex |
-| AGY_RESEARCH | 사실 확인·최신 정보·비교 조사가 먼저 | agy |
+| AGY_RESEARCH | 사실 확인·최신 정보·비교 조사가 먼저 + 문서 수집·코덱스용 정제 전달 등 agy 4대 특화 | agy |
 | GROKBOT_AMPLIFY | 아이디어 흐릿함 | grokbot |
 | AGY_AS_GROKBOT | Grok Bot 부재 | agy |
 | ASK_USER | 되돌릴 수 없는 결정만 (공개 비용·데이터 삭제·권한 정책) | user |

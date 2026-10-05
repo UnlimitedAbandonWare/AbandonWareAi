@@ -18,7 +18,7 @@ description: "Use when designing or patching demo-1 RAG strategies: MoE, Self-As
 
 1. Identify the requested mode: safe, AP1/AP3/AP9, Brave, RuleBreak, FullScale, Hypernova, Side Train, Zero-100, prediction tree, thumbnail, or custom.
 2. Read `references/strategy-map.md` to map the concept to concrete files.
-3. Locate the current chain entrypoint with `rg -n "DynamicRetrievalHandlerChain|PlannerNexus|PlanDsl|SelfAskPlanner|QueryBurst|ExtremeZ|Overdrive|Dpp|RRF|Cvar|RiskK" main app/src/main/java_clean`.
+3. Locate the current chain entrypoint in the confirmed root sourceSets (`main/java`, `main/resources`); search only the relevant package/files. `:app` is empty, so legacy `app/src/main/java_clean` is reference-only. Read `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md` before adopting a parallel GraphHybrid, sampling/mode, or standard-memory change.
 4. Change the narrowest owner:
    - Plan shape: `main/resources/plans/*.yaml`
    - Branch generation: existing Self-Ask/query planner classes
@@ -26,7 +26,7 @@ description: "Use when designing or patching demo-1 RAG strategies: MoE, Self-As
    - Context compression: existing Overdrive/Anchor classes
    - Fusion/rerank: existing RRF, GRANDAS, DPP, Cross-Encoder, calibrator classes
 5. Add or update trace keys only with redacted, stable names. Do not log raw query, snippets, keys, or owner tokens.
-6. Verify with `compileJava` and, for behavior, a focused test or `/api/probe/search`/soak endpoint if already present.
+6. Verify the changed boundary with its focused root test and current source/test hashes. A separate probe or UnifiedRAG test does not prove main `/chat` wiring; use live endpoints only when explicitly authorized. Pending/zero-test output is not PASS.
 
 ## Guardrails
 

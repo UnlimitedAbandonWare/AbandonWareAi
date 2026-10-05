@@ -1,0 +1,14 @@
+﻿# PASTE_SHORT — Devin (AM-01 ChangeIntent reconcile)
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+SSOT: agent-prompts/devin-agent-mech-am01-reconcile-20260927/PASTE_TO_DEVIN.md
+Evidence: agent-prompts/_probe/agent-mechanisms-unnatural-20260927/
+
+THE ONE: sticky blocked ChangeIntents — 소유 journal은 closed인데 intents가 blocked로 남아 새 작업을 막음.
+
+1) scripts/agent_change_plane.py 에 `reconcile [--dry-run]` 추가 (또는 evaluate_open_intents 강화).
+   blocked + blocking owner journal closed/missing + live overlapping lock 없음 → superseded/expired 이벤트 append (이력 삭제 금지).
+2) status / admit / plan 경로에서 reconcile(또는 동등 live re-eval) 호출해 ghost block이 gate 못 하게.
+3) dry-run 영수증 → data/agent-handoff/change-plane/ ; test_agent_change_plane.py 최소 회귀.
+4) 제품 Java/SecurityConfig/PROTO_OPEN 변경 금지. 산 임대 force-end 금지. AM-02 스택 통합은 이번 범위 밖.
+보고: AM01_RECONCILE: DONE|PARTIAL + before/after blocked counts + NOT_RUN

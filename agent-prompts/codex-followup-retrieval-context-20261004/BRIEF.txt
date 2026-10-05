@@ -1,0 +1,77 @@
+[ANTI-STOP] 읽기=intake. Done=WP 수정+검증 증거까지. 읽고 멈추지 말 것.
+$demo1-rag-platform
+[CODEX 지시서] /chat RAG 후속 질문에 직전 답변 컨텍스트를 검색 계획·needle에 주입 — 2026-10-04 23:5x KST
+파일 ID: PASTE_CODEX_FOLLOWUP_RETRIEVAL_CONTEXT_20261004 · 계약: DEMO1-CODEX-FOLLOWUP-RETRIEVAL-CONTEXT-20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src · 첫 명령: Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'
+
+0. 한 줄 목표
+후속 질문(자체 엔티티 포함)도 직전 답변의 정규 엔티티·후보 답 엔티티를 검색 계획과 needle 2차 쿼리에 실어, "전무 이름이 뭐냐" 류 후속이 페어링 문서를 검색해 인용 답변하게 한다.
+
+## 1. 사실 (라이브 확인 2026-10-04 23:1x~23:4x KST)
+입력 영상: F:\CAM\2026-10-04 22-42-53.mkv | 57,753,056B | sha12 D72A87C80D26 | 183.8s 720p | 전체 개별 열람 아님(메타 전량+15프레임 샘플)
+- 재현(영상): kro.kr/chat 1턴 답변(Evidence 3: reddit·namu.wiki·tistory) 아래 "보댜나챠 전무 이름이 뭐냐" 후속 입력 → 2턴 검색 2건(둘 다 namu.wiki, 미인용) → 답변 "정보 없음". 같은 화면에 「파도의 찬송가」가 이미 있었음.
+- 트레이스: var\debug\chat-session-traces\20261004\s-0a2d643bfd24.json (sha12 757C43CC9797) — run ae911bc2b0bf(22:43)+3ff628026344(22:45), gpt-5.6-luna, rag, completed.
+- 웹 정답(5+ 출처 일치): 「파도의 찬송가」=보댜니차 전무(5성 법구). 「나비의 우화」=베스나 전무. vortexgaming.io/postdetail/1274490 · buffhub.com 보댜니차 가이드 · gamsgo.com · gameple.co.kr · gamey.kr.
+- 판정: 모델은 정직했다(현재 턴 근거 2건에 페어링 없어 "정보 없음"이 맞는 답). 결함은 후속 검색 컨텍스트 부재 — 생성측 아님. 게이트도 정상(GAME 도메인 증거 2개+ 무조건 통과, EvidenceGate.java:84-87).
+기준 해시(수정 권한 있는 것만 표기):
+| 경로 | sha12 | 권한 |
+| main/java/com/example/lms/service/ChatWorkflow.java | AA9A38C2316C | 수정 |
+| main/java/com/example/lms/probe/needle/NeedleProbeEngine.java | 02313242C7D2 | 수정 |
+| main/java/com/example/lms/probe/needle/NeedleProbeProperties.java | A58671F237D2 | 수정(WP3만) |
+| src/test/java/com/example/lms/service/FollowUpPlannerDraftTest.java | (신규) | 생성 |
+| src/test/java/com/example/lms/service/SessionTopicCarryTest.java | F1C6B0A9AE0C | 참조만 |
+| src/test/java/com/example/lms/service/ChatWorkflowAgentWebBudgetContractTest.java | 7BF1FB166C0E | 참조만 |
+| main/java/com/example/lms/api/ChatApiController.java | 79216C106F58 | 읽기만 |
+| main/java/com/example/lms/service/routing/plan/RoutingPlanService.java | 2B9A468AA5FA | 읽기만 |
+| main/java/com/example/lms/search/SmartQueryPlanner.java | 7824E474ACFB | 읽기만 |
+| main/java/com/example/lms/service/NaverSearchService.java | 1397CB77F9B1 | 읽기만 |
+| main/java/com/example/lms/service/rag/guard/EvidenceGate.java | 311818332603 | 읽기만(수정 금지) |
+lease(23:4x KST): 위 대상 파일 활성 lease 없음 — 만나면 BLOCKED_LEASE.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 실행 못 한 검증 항목은 NOT_RUN+사유 기록 — PASS로 바꾸지 않는다.
+- focused gradle test만 — clean·전체 스위프 금지.
+- 유료 API·실호출 0건 — 검색 재현은 로컬 18180 경유로 한정.
+
+## 작업
+- WP0 [Codex] RED 검사 + 계약 확인
+  - 증거: ChatWorkflowAgentWebBudgetContractTest.java(source.indexOf 계약 선례), SessionTopicCarryTest.java(carry 패턴)
+  - RED: 신규 FollowUpPlannerDraftTest.java — (a) lastAnswer에서 「…」후보·정규별칭 추출 헬퍼 단언 + (b) 후속 경로 planner 호출에 draft 전달 소스 계약. 추가 전 RED 기록: `.\gradlew.bat :test --tests com.example.lms.service.FollowUpPlannerDraftTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` → exit!=0 기대.
+  - 완료 조건: 추가 전 exit!=0(RED) 관측·기록
+- WP1 [Codex] 후속 턴 planner assistantDraft 주입 (주수정)
+  - 증거: ChatWorkflow.java:2021-2023 — topicCarryApplied 분기 후 `plan(finalQuery, /* assistantDraft */ null, maxBranches)` — draft 채널 설계돼 있으나 항상 null. planAnchored도 draft 파라미터 보유(RoutingPlanService.java:88-127)하나 turnSubjectMissing일 때만 호출(:2006-2022). lastAnswer는 :2890에서 계산 — recentHistory는 :1630에 이미 로드.
+  - 최소 수정: plan 단계 전에 plannerDraft를 결정론 유도 — conversationContext.recent() 마지막 answer 또는 recentHistory 마지막 "Assistant:" 라인을 ≤800자 클립, 「…」후보·정규표기 우선 포함 추출. 후속(비공백 lastAnswer 유도 가능)일 때만 plan/planAnchored의 assistantDraft 인자로 전달. trace: `plan.assistantDraft.injected`, `plan.assistantDraft.length`(값이 아니라 길이만).
+  - 완료 조건: WP0 테스트 GREEN + 후속 턴 planned 쿼리 ≥1개가 직전 답변 후보 엔티티 포함(trace 관측)
+- WP2 [Codex] needle 2차 쿼리에 컨텍스트 후보 주입
+  - 증거: NeedleProbeEngine.java:230-337 buildPlan — 현재 쿼리 term만 사용; maybeProbe(:110-204)에 컨텍스트 슬롯 없음; 호출부 ChatWorkflow.java:2655 부근.
+  - 최소 수정: maybeProbe에 선택적 contextTerms 추가(기본 null=기존 동작, 오버로드 허용). ChatWorkflow가 후속 시 lastAnswer 「…」상위 2개 + 정규별칭(`이름(영문)` 앞 토큰) + 게임 은어 별칭 "전무"→"전용 무기"(NaverSearchService.java:204 게임어휘 존재와 일치)를 전달. needle 쿼리 형태 `<정규주제> <후보>` 예: `보댜니차 파도의 찬송가`. 기존 maxExtraQueries(≤2)·webBudgetMs(1200) 준수. trace: `needle.contextTerms.count`(개수만).
+  - 완료 조건: WP0 테스트 GREEN + 약한 1차 근거 후속에서 needle 쿼리가 후보 엔티티 포함(trace needle.plan.* 관측)
+- WP3 [Codex·선택] needle GAME 사이트 풀
+  - 증거: NeedleProbeProperties.java:77-86 — GAME 프로필 없음(TECH/PRODUCT/EDUCATION/EDU/HEALTH만, fallback wikipedia/reuters/apnews는 게임에 무용).
+  - 최소 수정: "GAME" 프로필 추가 — namu.wiki·namu.moe·hoyolab.com·fandom.com·inven.co.kr·ruliweb.com. authorityMin 필터는 그대로(빈 결과 시 기존 fallback이 받음, NeedleProbeEngine.java:178-186).
+  - 완료 조건: GAME 프로필 존재 단언 테스트 GREEN(미적용 시 NOT_RUN 사유 기록)
+
+## 4. HOLD 조건
+- 대상 파일 활성 lease → 해당 파일 BLOCKED_LEASE, 우회 금지·나머지 WP 계속.
+- 수정 전 베이스라인 gradle 컴파일/테스트가 이미 빨강 → NOT_RUN_ENV 사실 기록, 우회 금지.
+- 로컬 18180 /chat 무응답 → 라이브 재현 NOT_RUN_ENV(오프라인 증거까지만).
+
+## 5. ASK_ONCE
+없음 — 전부 로컬·가역·계약 내 작업. AUTO 진행.
+
+## 6. 절대 금지
+push/pull/fetch/merge/rebase/reset/clean · add -A/add ./commit -a/--no-verify · git remote 추가·수정 · PROTO_OPEN 강화·admin harden · 비밀값/env 키값 출력 · npm/pip 패키지 설치·새 의존성 · EvidenceGate.java·ChatApiController.java·ChatOrchestrator/ChatServiceLegacy/patch 미러 4종(ChatWorkflow만 live — trace 키 chatWorkflow.* 확인) · 답변 생성/"정보 없음" 정직성 로직 변경 · 전역 clean·전체 :test · 유료 API 호출 · 서버 수동 kill·재기동(기존 DevWatch/ForceRestart만) · 프로젝트 밖 쓰기.
+
+## 7. Acceptance
+- [ ] WP0: 수정 전 RED(exit!=0) 기록 → 수정 후 `.\gradlew.bat :test --tests com.example.lms.service.FollowUpPlannerDraftTest --tests com.example.lms.service.SessionTopicCarryTest --tests com.example.lms.service.ChatWorkflowAgentWebBudgetContractTest --no-daemon --console=plain` exit=0
+- [ ] WP1+WP2: `.\gradlew.bat :compileJava -x test` 통과 + DevWatch/ForceRestart 반영 후 로컬 http://127.0.0.1:18180/chat 수동 재현 — T1 "원신에 최근에 보댜나챠라는 캐릭터 나왔다던데 어떤 캐릭터야?" → T2 "내가 최근에 보댜나챠 전무 뽑았는데 전무 이름이 뭐냐?" → T2 답변이 「파도의 찬송가」를 전무로 명시·인용. "정보 없음"이면 FAIL.
+- [ ] WP3(선택): GAME 프로필 단언 통과 — 미적용이면 NOT_RUN+사유
+- [ ] 대조군: 인사·단순 질의에서 needle 미발동·검색 계획 변화 없음(회귀 관측)
+- [ ] 보고: 첫 줄 `외부 API:` + run/target-verified/build-tests/fullVerification 분리 표기(awx.debug.verify.v2). 안 돌린 항목은 NOT_RUN.
+
+## 8. 보고 형식
+첫 줄 `외부 API:`(0건이면 "외부 API: 0건·로컬만") · WP별 결과(DONE/PARTIAL/HOLD)·변경 파일:줄·실행 명령+exit·NOT_RUN+사유 · 증거 경로(journal/checkpoint/테스트 로그).
+
+근거 SSOT: AGENTS.md DEMO1-WORK-LEDGER·DEMO1-SPRING-VIBE-RELOAD·DEMO1-GIT-LOCAL-FIRST, .agents/skills/demo1-rag-platform/SKILL.md, docs/PRIMARY_SURFACE.md
+[ANTI-STOP] Acceptance 전부 끝낼 때까지 멈추지 말 것. 막히면 해당 WP만 HOLD·나머지 계속.

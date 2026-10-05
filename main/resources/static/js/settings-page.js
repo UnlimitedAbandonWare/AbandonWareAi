@@ -8,9 +8,18 @@
   const retry=document.getElementById('local-retry'), revert=document.getElementById('local-revert'), undoButton=document.getElementById('local-undo');
   let saved={},undo=null,baseline=null,migration=false,saving=false;
   const saveButton=document.getElementById('local-save');
-  const names={model:'답변 AI',modelSelectionMode:'AI 사용 방식',searchMode:'웹 검색',useRag:'참고자료',temperature:'Temperature',topP:'Top P',frequencyPenalty:'Frequency penalty',presencePenalty:'Presence penalty',maxTokens:'Max tokens',ragAnswerPolicy:'근거 부족 시 답변'};
+  const names={model:'답변 AI',modelSelectionMode:'AI 사용 방식',executionMode:'실행 전략',searchMode:'웹 검색',useRag:'참고자료',temperature:'Temperature',topP:'Top P',frequencyPenalty:'Frequency penalty',presencePenalty:'Presence penalty',maxTokens:'Max tokens',ragAnswerPolicy:'근거 부족 시 답변',customInstructions:'추가 지침',responseTone:'말투',responseLength:'답변 길이',responseLanguage:'답변 언어',memoryMode:'대화 기억'};
   const describe=v=>v===undefined||v===''?'기본 설정 따르기':String(v);
   let catalog = [];
+  function temperatureSupport() {
+    if(['model','modelSelectionMode'].some(key=>drafts.has(key)&&drafts.get(key)===''))return 'UNKNOWN';
+    const model=drafts.get('model') || baseline?.overrides.model || baseline?.effective.model;
+    const selection=drafts.get('modelSelectionMode') || baseline?.overrides.modelSelectionMode || baseline?.effective.modelSelectionMode;
+    const capability=baseline?.sampling?.temperature;
+    if(!capability)return 'UNKNOWN';
+    return selection!=='auto' && capability?.model===model && capability?.modelSelectionMode===selection
+      ? capability.support : 'UNKNOWN';
+  }
   function renderModels(field, saved) {
     if(document.getElementById('modelBrowser')){
       if(![...field.options].some(o=>o.value==='')){const inherit=document.createElement('option');inherit.value='';inherit.textContent='기본 설정 따르기 · 채팅에서 선택';field.prepend(inherit);}
@@ -48,6 +57,14 @@
         else field.value=value;
         field.setAttribute('aria-invalid',String(drafts.has(key)));
       }
+      const temperature=fields.find(f=>f.dataset.preference==='temperature');
+      const support=temperatureSupport();
+      if(temperature)temperature.disabled=support!=='YES';
+      const temperatureStatus=document.getElementById('temperature-status');
+      if(temperatureStatus)temperatureStatus.textContent=support==='YES'
+        ?'선택 경로는 Temperature를 지원합니다. 실제 적용값은 모델·역할 제한과 최종 실행에 따라 달라집니다.'
+        :support==='NO'?'선택 경로에서 Temperature 미전송 · 저장값은 보존합니다.'
+        :'Temperature 적용 미확인 · 모델 설정을 저장하고 다시 확인하세요. 저장값은 보존합니다.';
       localStatus.textContent=drafts.size
         ?'아직 저장되지 않았습니다. '+[...drafts].map(([key,value])=>names[key]+' · 선택값: '+describe(value)+' / 마지막 저장값: '+describe(saved[key])).join(' · ')
         :baseline?'서버 개인 설정 · revision '+baseline.revision+' · 다음 새 대화부터 적용됩니다.':'서버 개인 설정 확인 중';
@@ -56,7 +73,8 @@
         for(const key of core.PREFERENCE_KEYS){
           const name=document.createElement('dt'),value=document.createElement('dd');
           name.textContent=key;
-          value.textContent=String(baseline.effective[key])+' · '+baseline.sources[key]+' · 공장값 '+String(baseline.factoryDefaults[key]);
+          value.textContent=String(baseline.effective[key])+' · '+baseline.sources[key]+' · 공장값 '+String(baseline.factoryDefaults[key])
+            +(key==='temperature'?' · 상속 계산값 · '+(support==='NO'?'선택 경로 미전송':support==='YES'?'실제 전송값 미관측':'적용 미확인'):'');
           list.append(name,value);
         }
       }
@@ -86,6 +104,8 @@
   async function persist(){
     if(!baseline||saving)return;
     const submitted=new Map(drafts);
+    if(temperatureSupport()!=='YES' && submitted.get('temperature')!=='')submitted.delete('temperature');
+    if(!submitted.size){render();return;}
     const set={},unset=[];
     for(const[key,value]of submitted){if(value==='')unset.push(key);else set[key]=fieldValue(key,value);}
     saving=true;saveButton.disabled=retry.disabled=true;
@@ -122,7 +142,15 @@
     if(!undo || !baseline)return;
     try{
       if(undo.revision!==baseline.revision || undo.hash!==baseline.hash)throw new Error('conflict');
-      baseline=await core.savePreferences(window,baseline,undo.values);undo=null;render();
+      const values={...undo.values};
+      const restoreTemperature=Object.hasOwn(values,'temperature') && (temperatureSupport()!=='YES'
+        || (Object.hasOwn(values,'model')&&values.model!==baseline.sampling?.temperature?.model)
+        || (Object.hasOwn(values,'modelSelectionMode')&&values.modelSelectionMode!==baseline.sampling?.temperature?.modelSelectionMode));
+      const deferredTemperature=values.temperature;
+      if(restoreTemperature)delete values.temperature;
+      if(Object.keys(values).length)baseline=await core.savePreferences(window,baseline,values);
+      if(restoreTemperature)drafts.set('temperature',String(deferredTemperature));
+      undo=null;render();
     }catch{localStatus.textContent='실행취소 실패 · 서버 값 확인 후 다시 시도하세요.';}
   });
   document.getElementById('local-migrate').addEventListener('click',()=>{

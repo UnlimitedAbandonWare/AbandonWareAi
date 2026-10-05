@@ -83,6 +83,7 @@ public class ClaimVerifierService {
     private static final Pattern SENTENCE_SPLIT = Pattern.compile("(?<=\\.|!|\\?|\\n)");
 
     public VerificationResult verifyClaims(String context, String draftAnswer, String model) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         TraceStore.put("claimVerifier.judge.disabledReason", null);
         JudgeCallObservation.notRun("claim_extraction", "extraction_not_run");
         JudgeCallObservation.notRun("claim_judgment", "judgment_not_run");
@@ -131,6 +132,7 @@ try {
         }
     }
 } catch (Exception ignore) {
+    TimedChatModelCaller.rethrowIfCancelledOrTerminal(ignore);
     // Temporal checker failures must never break the chat flow
     log.debug("[ClaimVerifier] temporal verification failed. errorHash={} errorLength={}",
             SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
@@ -155,6 +157,7 @@ try {
                     }
                 }
             } catch (Exception ignore) {
+                TimedChatModelCaller.rethrowIfCancelledOrTerminal(ignore);
                 log.debug("[ClaimVerifier] implicit positive update failed. errorHash={} errorLength={}",
                         SafeRedactor.hashValue(messageOf(ignore)), messageLength(ignore));
             }
@@ -165,6 +168,7 @@ try {
                     temporalOutcomeKnown,
                     temporalOutcomeKnown && temporalAcceptedForMemory);
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             log.error("Claim verification failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             traceJudgeFailSoft("judge_processing_failed");
@@ -307,6 +311,7 @@ try {
             }
             return new ParsedStringArray(List.copyOf(values), true);
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             log.warn("JSON array of strings parse failed rawHash={} rawLength={} errorHash={} errorLength={}",
                     SafeRedactor.hashValue(raw), raw == null ? 0 : raw.length(),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -335,6 +340,7 @@ try {
             }
             return new ParsedBooleanArray(List.copyOf(values), true);
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             log.warn("JSON array of booleans parse failed rawHash={} rawLength={} errorHash={} errorLength={}",
                     SafeRedactor.hashValue(raw), raw == null ? 0 : raw.length(),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -357,6 +363,7 @@ try {
     }
 
     private JudgeCallResult callChatModelDetailed(String claimVerifierPrompt, String lane) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         JudgeCallObservation observation = JudgeCallObservation.start(lane);
         if (chatModel == null || chatModel instanceof ExpectedFailureChatModel) {
             traceJudgeFailSoft("judge_model_unavailable");
@@ -395,6 +402,7 @@ try {
                         "claim_verifier_judge",
                         chatModel.getClass().getName(), observation);
             }
+            com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
             var ai = response == null ? null : response.aiMessage();
             if (ai == null) {
                 traceJudgeFailSoft("judge_empty_response");
@@ -409,6 +417,7 @@ try {
             }
             return new JudgeCallResult(text, true, observation);
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             observation.failed(e);
             observation.finish("none", false, "judge_call_failed");
             traceJudgeFailSoft("judge_call_failed");

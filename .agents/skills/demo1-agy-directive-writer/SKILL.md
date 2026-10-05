@@ -91,6 +91,11 @@ FOR_<owner>, or ASK — roles are the default convention, not fixed routing) ·
 AUTO for local reversible in-contract work · ≤ 6 user decisions, each with a recommended value.
 Verify every FQCN/path/script you cite exists (Test-Path / Select-String) before writing it.
 
+### 채팅 HOLD/검증 보류 지시서 체크 (2026-10-05 실수 재발 방지)
+- `applyEvidenceReleasePolicy`(근거 0 → 공개)와 `applyFinalVerificationReleaseGate`(검증 결과)를 분리해 적는다.
+- fail-soft/unknown(`markFailSoft`·`outcomeKnown=false`)은 "검증 실패"가 아니라 판정불능 — Codex 지시서에 `verification_unknown_release`(본문 유지·releaseAllowed=true·knowledgeWriteAllowed=false) 계약이 빠지면 반려. 상세 `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` fail-soft 절.
+- Codex 지시서는 Downloads + `scripts/brief_save.py` 경로로만 저장 — `src\agent-prompts\...\BRIEF.txt` 사본 금지, Devin용 lint 규격으로 Codex 브리프를 재저장하지 않는다.
+
 ## 6. Save and verify
 - Name: `PASTE_<TARGET>_<TOPIC>_<YYYYMMDD>.txt` (TARGET ∈ CODEX|DEVIN|GROK|CLEAN|GPTPRO|…, TOPIC UPPER_SNAKE).
   Never overwrite an existing file: if the name exists, add `_R2`, `_R3`.
@@ -117,4 +122,10 @@ Verify every FQCN/path/script you cite exists (Test-Path / Select-String) before
 
 ## Stop conditions
 - Core attachment unreadable → ask re-attach. Quota/credit error → record text, stop, no retry farm.
+
+## 8. 깊이 판단
+- 지시서 작업을 시작할 때 `demo1-agy-depth-router`로 L1~L3를 먼저 판정하고 첫 줄에 `[depth Lx: 이유]`를 쓴다.
+- 지시서 작성은 기본 L2 이상이다: 확인할 file:line 주장이 많고 다른 에이전트가 그대로 실행할 문서라서다.
+- L3이면 `fact-verifier`·`red-team-reviewer` 서브에이전트로 주장 묶음을 독립 재확인하고 초안을 적대 검토한다.
+- 점수 기준·상한은 `configs/agy-depth.json` — 읽고 적용한다.
 - Target file under a foreign lease → still write the directive, mark BLOCKED_LEASE for that file.

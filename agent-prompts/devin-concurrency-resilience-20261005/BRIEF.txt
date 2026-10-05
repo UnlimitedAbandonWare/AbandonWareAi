@@ -1,0 +1,84 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 산출물을 생성한 뒤 보고서를 작성하는 실행 지시서다.
+
+@demo1-devin-source-orchestrator
+# DEVIN 지시서 — 면접관 동시 접속 대비 RAG/SSE 스트리밍 장애내성(Resilience) 및 동시성 제어 아키텍처 수립
+파일 ID: PASTE_DEVIN_CONCURRENCY_RESILIENCE_20261005
+작성 일시: 2026-10-05 14:05 KST
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+대상: Devin (SWE-2 / Runtime Assistant) | 후속 구현: Codex (Java Source Owner)
+금지: 제품 소스 직접 수정 0 · git push/pull 금지 · add -A 금지 · 비밀값 출력 0 · remote 추가 금지 · PROTO_OPEN 준수 · 유료 API 실호출 0 · Gradle 빌드 0
+
+## 0. 한 줄 목표
+면접관 동시 접속 시 LLM API 지연·타임아웃·429·스레드 고갈 방어를 위한 Resilience4j Bulkhead·RateLimiter·SSE 스트리밍 폴백 설계서와 모의 부하 프로브를 작성하고 Codex용 패치 가이드를 인계한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 14:04 KST)
+- [Admission]: PublicChatAdmissionGuard 에 세마포어 기반 글로벌 64/사용자당 2 제한 구현됨(초과 시 429 throw).
+- [Resilience]: ResilienceConfig 에 CircuitBreaker(llm) 및 TimeLimiter(20초) Bean만 등록(Bulkhead/RateLimiter 부재).
+- [스트리밍]: ChatApiController#chatStream 은 Flux<ServerSentEvent<ChatStreamEvent>> 및 Sinks.Many(4096 버퍼)로 동작하며 스트리밍 도중 LLM 타임아웃 발생 시 자동 fallback 토큰 스트림 핸들러 미흡.
+- [동기 폴백]: FallbackAwareChatModel 은 동기 ChatModel에 한해 primary 60% 슬라이스 및 fallback 전환 로직 구비.
+- [Reranker 세마포어]: RerankerConcurrencyGuard 에서 세마포어로 동시 실행 제한 및 타임아웃 시 fallback 호출 가동 중.
+- [웹서치 표준]: LangChain4j 스트리밍은 모델 레벨 자동 폴백이 없어 TokenStream onError 콜백 및 Resilience4j Bulkhead/CircuitBreaker 조합 필수.
+
+### 기준 해시 표 (인용 파일)
+| 경로 | sha12 | git 상태 | 권한 |
+| --- | --- | --- | --- |
+| main/java/com/example/lms/config/ResilienceConfig.java | 82e2aeaab252 | - | 읽기 전용 |
+| main/java/com/example/lms/api/PublicChatAdmissionGuard.java | 24984f0fbd18 | - | 읽기 전용 |
+| main/java/com/example/lms/api/ChatApiController.java | ce28edb844ec | - | 읽기 전용 |
+| main/java/com/example/lms/llm/gateway/FallbackAwareChatModel.java | 55f713528ea5 | - | 읽기 전용 |
+| main/java/service/guard/RerankerConcurrencyGuard.java | d7ab9fe44a4c | - | 읽기 전용 |
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 항목 (WP1~WP3)
+- WP1 [Devin] 다중 세션 동시성·장애 시뮬레이션 프로브 작성
+  - 증거: PublicChatAdmissionGuard.java:58 tryAcquire 로직
+  - 작업: scripts/probe_concurrency_resilience.py 신규 작성 (표준 lib threading, urllib 활용, 1~20명 동시 SSE 모의 요청/429/타임아웃 감지, --dry-run 지원).
+  - RED: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -B scripts/probe_concurrency_resilience.py --dry-run; "exit=$LASTEXITCODE"
+  - GREEN: python -B scripts/probe_concurrency_resilience.py --dry-run (기대 exit=0)
+  - 완료: dry-run 실행 시 동시 세션 10개 모의 결과(정상/거절/지연) 요약 JSON 및 콘솔 표 출력.
+
+- WP2 [Devin] Bulkhead 및 스트리밍 장애격리 아키텍처 설계서 작성
+  - 증거: ResilienceConfig.java:19-38
+  - 작업: docs/design/CONCURRENCY_RESILIENCE_PLAN.md 신규 작성 (Semaphore Bulkhead vs ThreadPool, RateLimiter 설정, TokenStream.onError SSE 안내 이벤트 system_notice 및 백업 모델 전환 흐름, 429 시 대기열 안내).
+  - RED: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -c "import pathlib; p = pathlib.Path('docs/design/CONCURRENCY_RESILIENCE_PLAN.md'); assert p.exists() and len(p.read_text(encoding='utf-8')) > 1200"; "exit=$LASTEXITCODE"
+  - GREEN: python -c "import pathlib; p = pathlib.Path('docs/design/CONCURRENCY_RESILIENCE_PLAN.md'); assert p.exists() and len(p.read_text(encoding='utf-8')) > 1200" (기대 exit=0)
+  - 완료: 아키텍처 다이어그램(Mermaid), 설정 YAML 예시, 에러 처리 흐름 1200자 이상 완결.
+
+- WP3 [Devin] Codex용 Java 소스 패치 청사진 및 포커스 테스트 가이드 작성
+  - 증거: ChatApiController.java:1690-1715, ResilienceConfig.java:19-38
+  - 작업: data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md 신규 작성 (Codex 수정 대상 FQCN, ResilienceConfig Bulkhead Bean 코드, ChatApiController 최소 diff 가이드, 포커스 테스트 .\gradlew.bat :test --tests com.example.lms.config.ResilienceConfigTest --no-daemon 명시).
+  - RED: Set-Location C:\AbandonWare\demo-1\demo-1\src; python -c "import pathlib; p = pathlib.Path('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md'); assert p.exists() and 'FOR_CODEX' in p.read_text(encoding='utf-8')"; "exit=$LASTEXITCODE"
+  - GREEN: python -c "import pathlib; p = pathlib.Path('data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md'); assert p.exists() and 'FOR_CODEX' in p.read_text(encoding='utf-8')" (기대 exit=0)
+  - 완료: Codex가 질의 없이 즉시 패치 가능한 구체적 diff 명세 완성.
+
+## 4. HOLD 조건
+- 제품 소스(main/java, main/resources, src/test/java, frontend) 쓰기 권한 요구나 lease 시도 시 중단.
+- 외부 유료 API 실호출이나 외부 패키지 설치 시도 시 중단.
+
+## 5. ASK_ONCE
+- U-1 [동시성 한도]: 면접 시연 최대 동시 LLM 슬롯 수?
+  - (a) 권장: 글로벌 16개 (VRAM 및 외부 API 보호), 세션당 1개
+  - (b) 글로벌 32개
+  - (c) 기존 기본값 유지 (글로벌 64, 세션당 2)
+
+## 6. 절대 금지
+- 제품 소스 파일 수정 및 신규 Java 생성 금지 (docs/, scripts/, data/agent-handoff/ 만 허용).
+- Git 커밋, 푸시, 브랜치 변경, remote 추가 금지. 비밀값 출력 금지. 실서버 외부 부하 금지. PROTO_OPEN 규칙 준수.
+
+## 7. Acceptance (완료 기준)
+- WP1: scripts/probe_concurrency_resilience.py 생성 및 --dry-run exit 0 확인.
+- WP2: docs/design/CONCURRENCY_RESILIENCE_PLAN.md 에 Bulkhead·RateLimiter·SSE 스트리밍 폴백 설계 완비.
+- WP3: data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md 에 FQCN, diff 가이드, 포커스 테스트 명령어 완비.
+- NOT_RUN: 실행하지 못한 항목은 사유와 함께 NOT_RUN 표기하며 PASS 조작 금지.
+
+## 8. 보고 형식
+외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+| 항목 | 결과 | 증거 경로 |
+| --- | --- | --- |
+| WP1 다중 세션 부하 프로브 | PASS / NOT_RUN | scripts/probe_concurrency_resilience.py |
+| WP2 아키텍처 설계서 | PASS / NOT_RUN | docs/design/CONCURRENCY_RESILIENCE_PLAN.md |
+| WP3 Codex 패치 청사진 | PASS / NOT_RUN | data/agent-handoff/for-codex/FOR_CODEX_RESILIENCE_PATCH.md |
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 3개 패키지(WP1, WP2, WP3) 산출물을 생성하고 dry-run 검증까지 마친 뒤 종료 상태를 보고하는 실행 지시서다.

@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 title AbandonWare Meta Display RAG Launcher
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_rag_stack.ps1" -MetaDisplay -ForceRestart -DevWatch -OpenBrowser %*
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_rag_stack.ps1" -MetaDisplay -ForceRestart -DevWatch -OpenBrowser -Preload %*
 set "RAG_EXIT=%ERRORLEVEL%"
 echo.
 if not "%RAG_EXIT%"=="0" echo [FAILED] Launcher exit code: %RAG_EXIT%. See the stage and log path above.

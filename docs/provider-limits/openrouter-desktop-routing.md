@@ -4,8 +4,16 @@
 capturedAt: "2026-09-24"
 timezone: "Asia/Seoul"
 reviewedAt: "2026-09-24"
+ttlDays: 365
+expiresAt: "2027-09-24"
+status: "ACTIVE"
+expiryAction: "archive"
 sourceType: "official_public_documentation_and_user_directive"
-reviewAfterDays: 90
+reviewAfterDays: 365
+cadence: "evergreen"
+stability: "high"
+decayRate: "low"
+stabilityReason: "Desktop 앱 전용 라우팅 역할 및 보안 가이드라인(Space Bunny 격리)으로 외부 API 단가와 무관한 상시 정책"
 runtimeEnforcement: "unchanged"
 disclaimer: >
   OpenRouter limits, free-model caps, pricing, and model IDs change without notice.

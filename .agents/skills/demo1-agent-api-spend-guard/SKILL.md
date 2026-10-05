@@ -26,7 +26,11 @@ and purpose-fit parallel lanes, not savings-first:
 4. **local_ollama** — local Ollama on the RTX 3090.
 
 Product runtime routing is NOT governed here — `configs/api-routing.yaml`
-`policy.order` (free_local → low_cost → paid_quality) stays untouched.
+`policy.order` (free_local → low_cost → paid_quality) stays untouched. That
+value is still the old local-first order and differs from the user direction
+(product main chat = API/OAuth-first, local Ollama last — user decision
+2026-10-02); changing it is Codex product work (Plan9 / `FOR_CODEX`), never a
+rules-session edit.
 
 **Paid is ON by default** for agent sessions. `AWX_AGENT_ALLOW_PAID_MODELS`
 is a **kill switch**, not an opt-in: `=0`/`false`/`no`/`off` blocks paid

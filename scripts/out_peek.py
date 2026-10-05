@@ -65,6 +65,11 @@ def json_key_lines(text, keys):
 
 
 def main():
+    # cp949 콘솔에서 UTF-8 문장부호(— 등) 출력 시 UnicodeEncodeError로 죽지 않게 치환
+    try:
+        sys.stdout.reconfigure(errors="replace")
+    except (AttributeError, OSError):
+        pass
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("file")
     ap.add_argument("--grep", dest="grep", default=None)

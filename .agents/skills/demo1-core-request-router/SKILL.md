@@ -22,6 +22,26 @@ Too many docs already exist. Do **not** create another long guide. Classify once
 | Debug from logs / duplicate actions / hidden triggers | `$demo1-evidence-debugging` or `$demo1-debugging-with-two-tools` | `$demo1-invisible-eye` when unexplained |
 | Post-change skill/family cleanup | `$demo1-skill-family-postprocessor` / `$demo1-agentic-chat-postprocess` | — |
 
+## Tri-System Disambiguation Matrix
+
+Three systems share one pipeline (`ChatWorkflow` → `StandardPromptBuilder`). Classify the
+**surface** first — same words ("answer length", "search off") mean different owners per
+system. Invariants: `docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md` +
+`docs/design/TRI_SYSTEM_ISOLATION_SPEC.md`.
+
+| System | Signals | Primary | Optional guard |
+|---|---|---|---|
+| Meta Display / Nova Focus | Ray-Ban, 안경, 렌즈, Fold6 caption, Nova Focus, 노바, Display | `$demo1-meta-display-simple-caption` (Nova Focus 계약은 `$demo1-nova-focus`) | `$demo1-evidence-debugging` |
+| Dynamic RAG platform | RAG, 검색, 임베딩, GraphRAG, 벡터, 인용, rerank | `$demo1-rag-platform` | `$demo1-api-routing-inventory` |
+| Main `/chat` chatbot | 챗봇, /chat, 세션 목록, 스트리밍, 모바일 레이아웃 | `$demo1-api-first-routing-assist` | `$demo1-codex-browser-agent` |
+
+- One primary skill per phase is binding here too — a brief touching two systems is two
+  phases via `$demo1-devin-source-orchestrator`, never one mixed patch.
+- Surface check before patching: Display prompt/flags live inside
+  `NovaFocusAnswerService` + `PromptContext.focusAnswerLengthChars`; they must never
+  mask ordinary `/chat` `minWordCount`/`sectionSpec` or global RAG defaults.
+- `/interview` screen failures are auxiliary evidence, never a main-surface verdict.
+
 ## Hard rules
 
 1. **One primary skill per phase.** Do not stack Display + DAT + custom relay + Web App fixes in one change. Independent seams from one pasted brief are sequential phases from `$demo1-devin-source-orchestrator`, not one mixed patch.

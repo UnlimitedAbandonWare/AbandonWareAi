@@ -1,0 +1,116 @@
+[DEVIN 지시서] Grok CLI에 Agy-cli UAW 투영 웹서치 스킬 및 인용 체계 조화로운 이식 — 2026-10-02 20:58 KST
+@demo1-devin-directive-loop
+파일 ID: PASTE_DEVIN_GROK_CLI_UAW_WEBSEARCH_20261002
+[ANTI-STOP] 본 지시서는 읽기 전용 접수로 끝나지 않으며, DV0~DV5 구현 및 검증 통과 후 종료한다.
+
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1(세미콜론 ; 사용, && 금지). Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+Agy-cli에 구축된 UAW.txt 기반 웹서치 파이프라인(6종 플레이트, 2-Pass 본문 검증, T1~T4 권위 가중, 인용 게이트, 브레드크럼) 중 Grok CLI 환경과 조화로운 핵심 인지 워크플로만을 Grok CLI의 내장 도구(web_search, web_fetch) 및 규칙/스킬/Stop 훅 체계로 이식한다.
+
+## 1. 사실과 근거 (2026-10-02 20:58 KST 확인)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- UAW 설계 원본: C:\Users\nninn\Downloads\UAW.txt (317,296 B, sha12: 4C6F29EE7474) 및 레포 사본 UAW.txt (317,295 B, sha12: A6510189A7DC).
+  - 해당 문서 2086~2762줄의 Anchor 압축, MoE 플레이트(AP1_AUTH_WEB/AP9_COST_SAVER), 2-Pass 재랭킹, DPP 다양성, CitationGate 등을 설계 비유로 참조.
+  - 무거운 제품 딥러닝/ML 파이프라인(CrossEncoder 모델, BodeClamp, Vector store, ExtremeZ)은 CLI 어시스턴트에 부조화하므로 철저히 배제(조화로운 것만 채택).
+- Agy 웹서치 기구축 자산:
+  - .agents/skills/awx-uaw-web-research/SKILL.md (4,813 B, sha12: E551DE294445)
+  - references/agy-web/UAW_WEB_PROJECTION.md (5,420 B, sha12: 2D804F65454E)
+  - references/agy-web/authority_tiers.json (3,756 B, sha12: 823D775783B7)
+  - scripts/agy_web_fuse.py (14,050 B, sha12: B0B7C1EAB4FB, 12개 테스트 0.4초 ALL PASS)
+- Grok CLI 환경 관측 (C:\Users\nninn\.grok\docs\user-guide\):
+  - 내장 도구: web_search (웹 검색), web_fetch (URL 본문 조회) 기본 탑재 (01-getting-started.md:169, 05-configuration.md:238).
+  - 스킬 탐색 경로: .agents/skills/ (레포 공통 자동 탐색), ~/.grok/skills/ (사용자 전역), .grok/skills/ (08-skills.md:19-29).
+  - 규칙 시스템: AGENTS.md 및 ~/.grok/rules/*.md, .grok/rules/*.md (12-project-rules.md:30-46).
+  - 훅 시스템: Stop 훅은 JSON {"decision": "block", "reason": "..."} 및 stopHookActive 플래그 지원 (10-hooks.md).
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 작업 시작 전 agent_scope_lease.py claim 으로 대상 파일 소유권 획득.
+- 미실행 항목은 반드시 NOT_RUN 및 구체적 사유 기재 (PASS 간주 금지).
+
+## 3. 작업 항목 (DV0 ~ DV5)
+- DV0 [Devin] 기준선 확인 및 레퍼런스 무결성 점검
+  - UAW.txt (4C6F29EE7474), awx-uaw-web-research 스킬 (E551DE294445), authority_tiers.json (823D775783B7), agy_web_fuse.py (B0B7C1EAB4FB) 무결성 확인.
+  - Grok CLI 설정(~/.grok/config.toml) 및 ~/.grok/rules, ~/.grok/skills 디렉터리 상태 점검.
+
+- DV1 [Devin] Grok CLI 전용 UAW 웹서치 규칙 작성 및 배포
+  - 레포 원본: references/grok-web/GROK_UAW_WEB_RULE.md 작성.
+  - 전역 배포: ~/.grok/rules/uaw-web-research.md (기존 파일 존재 시 .bak-20261002 백업 필수).
+  - 규칙 내용:
+    1) 플레이트 선택: W1_AUTH (공식/정책), W2_FRESH (최신/출시), W3_TECH (기술/에러), W4_LOCAL (로컬 확인), W9_LITE (단순 1-2회), WB_BRAVE (심층 6-10회).
+    2) Self-Ask: 복잡 질의 시 2~3개 하위 질문 분해.
+    3) QueryBurst: 한국어 + 영어 + site:공식도메인 질의 조합.
+    4) 도구 매핑: 검색 시 Grok 내장 web_search 호출, 2-Pass 본문 검증 시 상위 2~3개 URL에 web_fetch 호출!
+    5) T1~T4 권위 가중: T1 공식 문서/기관 > T2 GitHub/표준 > T3 IT미디어/언론 > T4 블로그/커뮤니티.
+    6) GRA-NΔ-AS 및 DPP: 12개월 초과 STALE 표시, 복제 기사 통합(독립 출처 2개 이상 또는 공식 1개).
+    7) Critic 루프: 희소/저권위/모순 시 구체적 타깃 재검색(최대 2회).
+    8) 출력 및 브레드크럼: 결론 -> 근거 [n] -> 상충/불확실성 -> 출처: 목록 -> 웹: <플레이트> · 검색 n회 · 본문확인 n · 출처 n(T1 n) · 모순 유/무.
+
+- DV2 [Devin] Grok 스킬 연동 및 글로벌 호환성 확보
+  - awx-uaw-web-research 스킬이 Grok CLI discovery 요건(YAML frontmatter name/description)을 충족하는지 검증.
+  - Grok 전역 스킬 디렉터리 ~/.grok/skills/awx-uaw-web-research/ 생성 및 SKILL.md 동기화 (전역 세션에서도 즉시 로드 가능).
+
+- DV3 [Devin] 범용 결정적 융합 도구 호환성 및 연동
+  - scripts/agy_web_fuse.py 가 Grok CLI 터미널(Bash/PowerShell)에서도 원활히 호출될 수 있도록 scripts/awx_web_fuse.py 래퍼 또는 공용 별칭 제공.
+  - python -B scripts/test_agy_web_fuse.py 실행으로 12개 테스트 완전 PASS 유지 확인.
+
+- DV4 [Devin] Grok 규격 Stop Hook (Citation Gate) 구현
+  - scripts/grok_websearch_hook.py 작성:
+    - Grok 10-hooks.md 규격에 따라 stdin으로 전달되는 JSON (lastAssistantMessage, stopHookActive 등) 수신.
+    - 회로 차단기: stopHookActive==true 이면 즉시 exit 0 (턴당 최대 1회 블록, 무한 루프 원천 차단).
+    - 이번 턴에 web_search를 호출했거나 외부 웹 근거를 제시한 경우, 답변 끝에 '출처:' 및 '웹:' 브레드크럼이 없으면:
+      {"decision": "block", "reason": "[AWX-UAW] 답변 끝에 '출처:'(번호·제목·날짜·T등급)와 '웹: <플레이트> · 검색 n회 · 출처 n' 브레드크럼을 붙여 마무리하십시오."} 반환.
+    - Fail-soft: 모든 파싱/실행 오류 시 빈 출력 exit 0 (작업 중단 방지).
+  - scripts/grok_websearch_install.py 작성 (--apply, --uninstall, --check 모드 지원).
+  - ~/.grok/hooks/uaw-citation-gate.json 에 안전하게 등록 (기존 파일 있을 시 백업).
+
+- DV5 [Devin] 단위 테스트 및 통합 검증
+  - scripts/test_grok_websearch_hook.py 작성 및 실행:
+    1) 인용 및 브레드크럼 완비 답변 -> allow (exit 0)
+    2) 인용 누락 답변 -> decision: block 반환
+    3) stopHookActive==true 시 강제 allow (회로 차단기 동작)
+    4) 비(非)웹 일반 답변 -> allow
+    5) JSON 오류/예외 상황 fail-soft allow
+  - python -B scripts/grok_websearch_install.py --check 실행 결과 ALL_OK 확인.
+  - 문서화: docs/grok/GROK_UAW_WEB_KO.md 에 Grok CLI 웹서치 사용 가이드 정리.
+
+## 4. HOLD 조건
+- H-1: Grok CLI의 ~/.grok/config.toml 에 기존 충돌 설정이 존재하여 자동 병합이 위험할 때.
+- H-2: ~/.grok 디렉터리 접근 권한 오류 발생 시.
+
+## 5. ASK_ONCE (기본값 포함)
+- Q-1: Stop 훅 활성화 수준: (a) 권장: Stop 훅 설치(회로 차단기 턴당 1회 제한으로 안전), (b) 규칙 및 스킬만 적용하고 Stop 훅은 비활성화.
+- Q-2: 범용 융합 도구 명칭: (a) 권장: awx_web_fuse.py 공용 래퍼 제공, (b) 기존 agy_web_fuse.py 그대로 호출.
+
+## 6. 절대 금지
+- UAW의 대형 CrossEncoder ML 모델이나 무거운 외부 의존성(PyTorch, Transformers 등)을 CLI에 억지로 이식하는 행위 금지.
+- Grok auth.json, 세션 파일, API 토큰 설정의 임의 변경 또는 평문 노출 금지.
+- git push, git add -A, 원격 저장소 변이 금지, AbandonWare3 임의 경로 접근 금지, PROTO_OPEN 금지.
+- 비밀값 및 토큰 문자열 출력 금지.
+- 제품 Java 소스 수정 금지 (STRICT_ZERO).
+
+## 7. Acceptance Criteria (완료 기준)
+- [ ] DV0: UAW 및 기구축 레퍼런스 sha12 무결성 대조 PASS.
+- [ ] DV1: references/grok-web/GROK_UAW_WEB_RULE.md 및 ~/.grok/rules/uaw-web-research.md 배포 완료.
+- [ ] DV2: ~/.grok/skills/awx-uaw-web-research/SKILL.md 동기화 완료 및 프론트매터 호환 확인.
+- [ ] DV3: scripts/awx_web_fuse.py 동작 및 python -B scripts/test_agy_web_fuse.py 12/12 PASS.
+- [ ] DV4: scripts/grok_websearch_hook.py 및 grok_websearch_install.py 작성 및 hook 등록 완료.
+- [ ] DV5: python -B scripts/test_grok_websearch_hook.py 단위 테스트 전체 통과 및 grok_websearch_install.py --check 통과.
+- 미실행 항목 발생 시 NOT_RUN 및 합당한 사유 명시.
+
+## 8. 보고 형식
+외부 API: 사용 안 함 ($0 로컬 스크립트 및 Grok 기본 도구 구성)
+| 항목 | 결과 (PASS/NOT_RUN/HOLD) | 실행 명령 / 증거 |
+| DV0 | PASS/NOT_RUN | python -B scripts/agent_preflight.py |
+| DV1 | PASS/NOT_RUN | Test-Path ~/.grok/rules/uaw-web-research.md |
+| DV2 | PASS/NOT_RUN | Test-Path ~/.grok/skills/awx-uaw-web-research/SKILL.md |
+| DV3 | PASS/NOT_RUN | python -B scripts/test_agy_web_fuse.py |
+| DV4 | PASS/NOT_RUN | python -B scripts/grok_websearch_install.py --check |
+| DV5 | PASS/NOT_RUN | python -B scripts/test_grok_websearch_hook.py |
+
+PLUGIN_USAGE:
+- demo1-devin-directive-loop: active
+
+[ANTI-STOP] 모든 검증 명령의 exit 코드를 확인하고 단일 최종 요약 보고를 제출할 때까지 작업을 지속한다.

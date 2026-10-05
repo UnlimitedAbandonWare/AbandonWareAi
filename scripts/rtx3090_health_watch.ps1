@@ -363,6 +363,21 @@ function Invoke-WatchPass {
     paths           = @{ latest = 'var/debug/rtx3090-watch/latest.json'; alerts = 'var/debug/rtx3090-watch/'; handoff = 'data/agent-handoff/rtx3090-watch/LATEST.md' }
   }
 
+  if ($isAlert) {
+    # 사고 플래그 갱신 — 읽기 전용 관측 + var/incident/gpu.json 플래그만 씀.
+    # gpu_incident probe 실패/exit3이 감시 결과에 영향을 주지 않는다.
+    try {
+      $incScript = Join-Path $RootResolved 'scripts\gpu_incident.py'
+      if (Test-Path -LiteralPath $incScript) {
+        $null = & python -B $incScript probe 2>&1
+        $report['incident'] = [ordered]@{ probe = 'scripts/gpu_incident.py probe'
+                                          exitCode = $LASTEXITCODE }
+      }
+    } catch {
+      $report['incident'] = [ordered]@{ probe = 'scripts/gpu_incident.py probe'
+                                       error = (Cut $_.Exception.Message 120) }
+    }
+  }
   Write-Utf8Json -Path $LatestPath -Obj $report
   if ($isAlert -and -not $suppressed) {
     Write-Utf8Json -Path (Join-Path $WatchDir $alertFile) -Obj $report

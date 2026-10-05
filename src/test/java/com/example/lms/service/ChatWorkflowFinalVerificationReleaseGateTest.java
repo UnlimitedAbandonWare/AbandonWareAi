@@ -61,7 +61,9 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -625,6 +627,43 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         }
     }
 
+    @Test
+    void finalVerifierReceivesTheSameSessionFactsUsedByGeneration() {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        MemoryHandler memory = (MemoryHandler) ReflectionTestUtils.getField(fixture.workflow(), "memoryHandler");
+        String facts = "코드워드 바람; 가운데 단계 검토; 제한 2개; 형식 짧은 표.";
+        when(memory.loadForSession(nullable(Long.class))).thenReturn(facts);
+        when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from(facts)).build());
+        clearWorkflowState();
+        try {
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("이 대화의 최신 설정 네 가지를 표로 알려주세요.")
+                    .model("release-gate-recording-fake")
+                    .maxTokens(256).mode("FACT").memoryMode("SESSION")
+                    .searchMode(SearchMode.AUTO).useWebSearch(false).useRag(false)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(null, true))
+                    .useVerification(true).attachmentIds(List.of("release-gate-local")).build();
+            request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+
+            fixture.workflow().continueChat(request, ignored -> List.of());
+
+            ArgumentCaptor<List<ChatMessage>> generation = ArgumentCaptor.forClass(List.class);
+            verify(fixture.model(), atLeastOnce()).chat(generation.capture());
+            assertTrue(generation.getAllValues().stream().flatMap(List::stream)
+                    .map(message -> message instanceof UserMessage user ? user.singleText()
+                            : message instanceof dev.langchain4j.data.message.SystemMessage system ? system.text() : "")
+                    .anyMatch(text -> text.contains(facts)));
+            ArgumentCaptor<String> verifiedMemory = ArgumentCaptor.forClass(String.class);
+            verify(fixture.verifier()).verifyDetailed(anyString(), nullable(String.class),
+                    verifiedMemory.capture(), anyString(), anyString(), eq(false));
+            assertEquals(facts, verifiedMemory.getValue(),
+                    "final verification must retain the session facts already used to generate its draft");
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(strings = {"Blue.", "안녕하세요."})
     void shortNonblankAnswerSurvivesEmptyRagWithoutDurableMemory(String answer) {
@@ -779,6 +818,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
             com.example.lms.prompt.PromptBuilder builder = mock(com.example.lms.prompt.PromptBuilder.class);
             when(builder.build(any(com.example.lms.prompt.PromptContext.class))).thenReturn(context);
             when(builder.buildInstructions(any(com.example.lms.prompt.PromptContext.class))).thenReturn(instruction);
+            when(builder.buildUserPreferences(any(com.example.lms.prompt.PromptContext.class))).thenReturn("");
             ReflectionTestUtils.setField(fixture.workflow(), "promptBuilder", builder);
 
             var captured = new java.util.concurrent.CopyOnWriteArrayList<

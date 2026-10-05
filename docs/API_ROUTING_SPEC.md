@@ -126,7 +126,6 @@ Loader: `. ./scripts/use_project_keys.ps1` (prints **names**, not values). Canon
 | `qwen3.6:27b` | 17 GB | Judge/chat alt |
 | `gemma4:31b` | 19 GB | High-quality chat / judge alt |
 | `gemma4:26b` | 17 GB | **Default chat** |
-| `gemma4:latest` | 9.6 GB | Chat mid |
 | `gemma4:12b` | 7.6 GB | Fast/chat mid |
 | `qwen3.5:9b` | 6.6 GB | **Default fast/light/hints** |
 | `qwen3-vl:8b` | 6.1 GB | **Vision** |
@@ -134,6 +133,8 @@ Loader: `. ./scripts/use_project_keys.ps1` (prints **names**, not values). Canon
 | `qwen3-embedding:latest` | 4.7 GB | Embed |
 | `nomic-embed-text:latest` | 274 MB | Embed alt |
 | `bge-m3:latest` | 1.2 GB | Embed alt |
+| `qwen2.5:32b` | 19 GB | All-rounder chat/coder/judge alt (Q4_K_M, 3090 lane, installed 2026-10-05) |
+| `qwen2.5:14b` | 9.0 GB | All-rounder fast/chat alt (Q4_K_M, 3060 lane, installed 2026-10-05) |
 
 **Role defaults (Spring / routing):** fast=`qwen3.5:9b` · chat=`gemma4:26b` · judge/coder=`smtek/Qwen3.8-27B:Q3_K_XL` · vision=`qwen3-vl:8b` · embed=`qwen3-embedding:4b`.
 

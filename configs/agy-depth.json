@@ -1,0 +1,16 @@
+{
+  "schemaVersion": "awx.agy-depth.v1",
+  "lBands": { "l1Max": 2, "l2Max": 5 },
+  "l3": {
+    "maxRounds": 3,
+    "deepCallsPerSession": 3,
+    "adviseEffortOnce": true
+  },
+  "deep": {
+    "modelPickCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agy_model_latest.ps1 -Pick",
+    "effortCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/agy_model_latest.ps1 -FlashMaxEffort"
+  },
+  "seedPath": "var/agy-seed/latest.md",
+  "callsLog": "var/agy-depth/calls.jsonl",
+  "notes": "Flash max effort = high (verified 2026-10-05: the flash family rejects xhigh/max). Depth comes from behavior, not a bigger effort flag."
+}

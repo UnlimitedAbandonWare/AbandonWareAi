@@ -218,5 +218,18 @@ class AgentScopeLeaseTests(unittest.TestCase):
         self.assertTrue(all(c["claim"]["released"] for c in shown["claims"]))
 
 
+
+    def test_help_cp949_does_not_crash(self):
+        env = os.environ.copy()
+        env['PYTHONIOENCODING'] = 'cp949'
+        env.pop('PYTHONUTF8', None)
+        proc = subprocess.run(
+            [sys.executable, '-B', str(TOOL), '--help'],
+            env=env, capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn(b'UnicodeEncodeError', proc.stderr)
+        self.assertNotIn(b'UnicodeEncodeError', proc.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()

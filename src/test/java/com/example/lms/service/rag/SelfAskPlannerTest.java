@@ -30,6 +30,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SelfAskPlannerTest {
 
     @Test
+    void verifiedSamplingModelsKeepLanePreferenceUntilFactoryResolvesEndpointAndEffort() {
+        java.util.List<Double> received = new java.util.ArrayList<>();
+        DynamicChatModelFactory factory = new DynamicChatModelFactory(null, null) {
+            @Override
+            public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+                    Integer maxTokens, int timeoutSeconds) {
+                received.add(temperature);
+                return new StubModel("synthetic query");
+            }
+        };
+        SelfAskPlanner planner = new SelfAskPlanner(null, provider(factory));
+        for (String model : List.of("gpt-5.1", "gpt-5.2", "gpt-5")) {
+            for (double requested : new double[]{0.2d, 0.5d, 0.8d}) {
+                ReflectionTestUtils.invokeMethod(planner, "modelFor", model, 1000L, requested);
+                assertEquals(Math.min(0.55d, requested), received.get(received.size() - 1),
+                        "Only the factory knows the endpoint and final reasoning effort");
+            }
+        }
+    }
+
+    @Test
     void fallbackLogsDoNotWriteRawModelIdentifiers() throws Exception {
         String source = Files.readString(Path.of("main/java/com/example/lms/service/rag/SelfAskPlanner.java"));
 

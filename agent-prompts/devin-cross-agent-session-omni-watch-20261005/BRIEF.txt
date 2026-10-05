@@ -1,0 +1,114 @@
+@agent-session-watchdog
+# [ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 아래 작업을 실제로 수행하고 검증 결과를 도출해야 합니다.
+[DEVIN 지시서] 3대 에이전트(Codex, AGY-CLI, Devin) 세션 통합 관제 옴니 워치독 구축 및 scan_generic 크래시 긴급 패치 — 2026-10-05 00:00 KST
+파일 ID: PASTE_DEVIN_cross_agent_session_omni_watch_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+`scripts/agent_session_watch.py`의 `scan_generic` 비딕셔너리 JSON 파싱 크래시(AttributeError)를 긴급 패치하고, 미등록된 AGY-CLI(~/.gemini/antigravity-cli) 세션 스토어를 신규 연동하며, 3대 에이전트(Codex, AGY, Devin)의 세션 상태·자주 쓰는 도구 Top 10·장애 패턴을 1초 내에 종합 출력하는 `summary` 모드를 구축하고 단위 테스트를 전건 통과시킨다.
+
+## 1. 사실 (2026-10-05 00:00 KST 확인)
+1. 세션 워치독 크래시 실측:
+   `python -B scripts/agent_session_watch.py scan --agent all --since-hours 6` 실행 시,
+   `scripts/agent_session_watch.py` line 591 `scan_generic`에서 `json.loads` 결과가 `str`일 때 `rec.get(...)` 호출로 인해 `AttributeError: 'str' object has no attribute 'get'` 예외가 발생하며 즉시 비정상 종료됨.
+2. AGY-CLI 스토어 누락:
+   현재 `agent_homes()`와 `discover_stores()`는 codex(~/.codex), grok(~/.grok), devin(%APPDATA%\devin), cline(0건) 4개만 등록되어 있으며, 정작 활발히 사용 중인 AGY-CLI(`~/.gemini/antigravity-cli`, history.jsonl 및 brain transcript)가 스토어에서 완전히 빠져 있음.
+3. 세션 및 도구 사용 실측 데이터:
+   - Codex: ~/.codex (2,912개 세션 파일, exec_command, apply_patch, spawn_agent 등 사용, P1/P7/P11 주 장애)
+   - Devin: %APPDATA%\devin (sessions.db 2.9GB, cli/summaries/*.md, PowerShell 및 파일 조작 위주)
+   - AGY-CLI: ~/.gemini/antigravity-cli (conversation_summaries.db, history.jsonl, view/replace/run_command/search_web 위주)
+4. 기준 파일 정보 (SHA12):
+   - `scripts/agent_session_watch.py` (36,566 B, 64DC9E06EF08, 대상)
+   - `scripts/test_agent_session_watch.py` (16,836 B, 0DDD9F0FAEE1, 대상)
+   - `Watch-Agents.bat` (659 B, 28714DC36CE6, 연동)
+   - 기존 단위 테스트 26건 정상 통과 확인: `python -B -m unittest scripts/test_agent_session_watch.py` (0.66s)
+
+## 2. 공통 규칙
+1. 작업 시작 전 반드시 `Set-Location C:\AbandonWare\demo-1\demo-1\src`를 실행한다.
+2. 제품 소스(Java/Spring/UI) 수정 금지 (STRICT_ZERO). `scripts/` 및 배치 파일만 수정/추가한다.
+3. Git 불허: push, add -A, add ., commit, remote 추가 불허. 로컬 파일과 테스트 결과로 검증한다.
+4. 보안: 환경변수 및 비밀값(Secret/Key/Token)을 노출하지 않는다.
+5. 인증: PROTO_OPEN 원칙 준수, 신규 권한 게이트를 만들지 않는다.
+6. lease: 작업 전 `python -B scripts/agent_scope_lease.py check --path scripts/agent_session_watch.py` 확인 후 진행.
+
+## 3. 세부 작업 항목 (DV1 ~ DV4)
+
+### DV1: scan_generic 비딕셔너리 JSON 파싱 크래시 긴급 패치
+- 대상: `scripts/agent_session_watch.py` (`scan_generic` 함수)
+- 내용:
+  1. `json.loads(line)` 직후 `if not isinstance(rec, dict): continue` 방어 로직 추가.
+  2. JSON 파싱 실패(`except Exception: continue`)뿐만 아니라, 파싱 결과가 `str`, `list`, `int` 등 딕셔너리가 아닌 경우에도 안전하게 건너뛰도록 보장.
+  3. `rec.get("type")` 호출 전 안전성 확보로 `AttributeError` 원천 차단.
+
+### DV2: AGY-CLI 세션 스토어 신규 등록 및 탐색기 확장
+- 대상: `scripts/agent_session_watch.py` (`agent_homes`, `discover_stores`, `cmd_scan`)
+- 내용:
+  1. `agent_homes()`에 `agy` 등록:
+     - `Path(os.environ.get("AGY_HOME", str(USER_HOME / ".gemini" / "antigravity-cli")))`
+  2. `discover_stores()`에 `agy` 탐색 패턴 추가:
+     - `history.jsonl` 존재 여부 확인
+     - `conversations/*.json`, `brain/**/transcript.jsonl` 글로브 탐색
+     - `notes`: `history=True`, `summaries_db=True` 등 상태 표기
+  3. `cmd_scan`에서 `--agent agy` 및 `--agent all` 지원:
+     - `history.jsonl` 및 `transcript.jsonl`을 `scan_generic`으로 스트리밍 파싱
+     - 도구 사용 통계(`tools`) 및 에러 마커(G1) 정상 집계
+
+### DV3: 3대 에이전트 교차 도구 통계 및 세션 종합 요약(summary) 모드 신규 셋업
+- 대상: `scripts/agent_session_watch.py`
+- 내용:
+  1. 서브커맨드 `summary` (또는 플래그 `--summary`) 추가:
+     - `python -B scripts/agent_session_watch.py summary [--since-hours 24] [--json]`
+  2. 출력 데이터 구조:
+     - `stores`: Codex, AGY, Devin 각각의 세션 수, 최근 활동 시각(KST/UTC), 활성 여부
+     - `topToolsOverall`: 3대 에이전트가 호출한 전체 도구 중 빈도 Top 10 집계 (예: exec_command, view_file, replace_file_content, run_command, apply_patch 등)
+     - `toolsByAgent`: 에이전트별(Codex / Devin / AGY) 상위 5대 도구
+     - `anomalies`: 최근 감지된 장애 패턴(P1 apply-patch miss, P7 goal conflict, P11 in-output failure, P15 lock pileup, G1 generic error)
+  3. CLI 화면 출력: 사람이 보기 편한 깔끔한 Markdown 표 및 ASCII 요약 출력. `--json` 시 정형화된 JSON 반환.
+
+### DV4: 단위 테스트 보강 및 전건 실행 검증
+- 대상: `scripts/test_agent_session_watch.py`
+- 내용:
+  1. `test_scan_generic_skips_non_dict_json`:
+     - 파일 내 `"just a string\n{"type": "valid"}\n123\n[1, 2]"`가 섞여 있을 때 `scan_generic`이 예외 없이 통과하고 정상 라인만 카운트하는지 검증.
+  2. `test_discover_stores_includes_agy`:
+     - `discover_stores()` 반환 목록에 `agent == "agy"`가 포함되어 있는지 검증.
+  3. `test_omni_summary_contract`:
+     - `summary` 커맨드가 에러 없이 정상 exit(0)하고 필요한 필수 키(`stores`, `topToolsOverall`)를 포함하는지 검증.
+  4. 검증 실행:
+     - 단위 테스트: `python -B -m unittest scripts/test_agent_session_watch.py` -> 26건 + 신규 3건 = 29건 이상 ALL PASS 확인.
+     - 실환경 스캔 검증: `python -B scripts/agent_session_watch.py scan --agent all --since-hours 6` 실행 후 크래시(exit 1) 없이 정상 완료(exit 0, 3, 4) 확인.
+     - 요약 모드 검증: `python -B scripts/agent_session_watch.py summary` 실행 후 3대 에이전트 통계 및 Top 10 도구 출력 확인.
+
+## 4. HOLD (즉시 중단 및 보고 조건)
+1. `scripts/test_agent_session_watch.py`의 기존 26개 단위 테스트 중 하나라도 깨지는 경우.
+2. `agent_homes()` 수정으로 인해 기존 `codex`, `grok`, `devin`의 스토어 탐색 경로가 왜곡되는 경우.
+3. 작업 대상 외 파일(특히 Java 제품 소스, `configs/` 파일 등)을 수정하려 하는 경우.
+
+## 5. ASK_ONCE (결정 필요 사항)
+- 없음. 본 작업은 내부 도구 스크립트의 버그 픽스 및 기능 확장이므로 자동(AUTO)으로 진행합니다.
+
+## 6. 절대 금지
+1. Git 커밋, 푸시, add ., add -A 금지.
+2. 세션 원본 파일(JSONL, SQLite DB)을 수정·이동·삭제하는 행위 절대 금지 (워치독은 전적으로 READ-ONLY).
+3. 외부 유료 API 호출 및 신규 의존성 패키지(pip install) 설치 금지 (표준 라이브러리만 사용).
+
+## 7. Acceptance Criteria (수락 기준)
+- [ ] `scan_generic`에서 비딕셔너리 JSON 라인 입력 시 크래시 없이 통과하는 단위 테스트가 PASS할 것.
+- [ ] `scripts/test_agent_session_watch.py` 전체 테스트가 29건 이상 ALL PASS할 것.
+- [ ] `python -B scripts/agent_session_watch.py scan --agent all --since-hours 6`가 AttributeError 없이 정상 완료될 것.
+- [ ] `python -B scripts/agent_session_watch.py summary`가 3대 에이전트(Codex, Devin, AGY)의 도구 빈도 Top 10을 포함한 요약을 깔끔하게 출력할 것.
+- [ ] 실행되지 않은 항목은 명확한 사유와 함께 `NOT_RUN`으로 표기할 것.
+
+## 8. 보고 형식
+반드시 아래 형식으로 최종 보고를 작성하세요:
+```
+외부 API: 0 call ($0 local)
+1. 결과 요약: [성공 / 실패]
+2. 버그 수정: scan_generic isinstance 방어 코드 적용 (AttributeError 해소)
+3. AGY 연동: ~/.gemini/antigravity-cli 스토어 정상 탐색 확인 (세션 수, 최근 UTC)
+4. 옴니 요약: summary 모드 출력 결과 (3대 에이전트 도구 Top 10 요약)
+5. 테스트 결과: python -B -m unittest scripts/test_agent_session_watch.py (통과 건수 / 소요 시간)
+6. 실환경 검증: agent_session_watch.py scan --agent all 실행 결과 (Exit code)
+```
+
+# [ANTI-STOP] 이 지시서는 읽고 멈추지 마세요. 위 작업을 순서대로 직접 구현하고 테스트까지 완수해야 합니다.

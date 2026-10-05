@@ -46,7 +46,7 @@ final class ChatSessionAccessGuard {
                 .body(new ChatResponseDto("session_forbidden", sessionId, "forbidden", false));
     }
 
-    private static boolean canAccess(ChatSession session, String username, String ownerKey) {
+    static boolean canAccess(ChatSession session, String username, String ownerKey) {
         var owner = session.getAdministrator();
         if (owner != null) {
             return username != null && owner.getUsername().equals(username);

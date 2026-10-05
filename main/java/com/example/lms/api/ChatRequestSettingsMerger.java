@@ -48,6 +48,7 @@ public final class ChatRequestSettingsMerger {
         Map<String, Object> valid = com.example.lms.service.ChatPreferenceService.validate(values);
         ChatRequestDto normalized = ui.toBuilder().model((String) valid.get("model"))
                 .modelSelectionMode((String) valid.get("modelSelectionMode"))
+                .executionMode(com.example.lms.domain.enums.ExecutionMode.valueOf((String) valid.get("executionMode")))
                 .strictModelSelection("strict".equals(valid.get("modelSelectionMode")))
                 .temperature(((Number) valid.get("temperature")).doubleValue())
                 .topP(((Number) valid.get("topP")).doubleValue())
@@ -57,6 +58,11 @@ public final class ChatRequestSettingsMerger {
                 .useRag((Boolean) valid.get("useRag")).useWebSearch((Boolean) valid.get("useWebSearch"))
                 .searchMode(com.example.lms.gptsearch.dto.SearchMode.valueOf((String) valid.get("searchMode")))
                 .ragAnswerPolicy((String) valid.get("ragAnswerPolicy"))
+                .customInstructions((String) valid.get("customInstructions"))
+                .responseTone((String) valid.get("responseTone"))
+                .responseLength((String) valid.get("responseLength"))
+                .responseLanguage((String) valid.get("responseLanguage"))
+                .memoryMode((String) valid.get("memoryMode"))
                 .retrievalRequestIntent(ui.getRetrievalRequestIntent() != null ? ui.getRetrievalRequestIntent()
                         : new ChatRequestDto.RetrievalRequestIntent(ui.getUseWebSearch(), ui.getUseRag()))
                 .build();
@@ -92,6 +98,7 @@ public final class ChatRequestSettingsMerger {
     public static Map<String, Object> requestValues(ChatRequestDto ui) {
         Map<String, Object> values = new java.util.LinkedHashMap<>();
         put(values, "model", ui.getModel());
+        put(values, "executionMode", ui.getExecutionMode() == null ? null : ui.getExecutionMode().name());
         put(values, "modelSelectionMode", ui.getModelSelectionMode() != null ? ui.getModelSelectionMode()
                 : ui.getStrictModelSelection() != null ? ui.isStrictModelSelection() ? "strict" : "preferred" : null);
         put(values, "temperature", ui.getTemperature()); put(values, "topP", ui.getTopP());
@@ -100,6 +107,12 @@ public final class ChatRequestSettingsMerger {
         put(values, "useWebSearch", ui.getUseWebSearch());
         if (ui.isSearchModeExplicit()) values.put("searchMode", ui.getSearchMode().name());
         put(values, "ragAnswerPolicy", ui.getRagAnswerPolicy());
+        // An explicit empty instruction clears the session value rather than inheriting it.
+        if (ui.getCustomInstructions() != null) values.put("customInstructions", ui.getCustomInstructions());
+        put(values, "responseTone", ui.getResponseTone()); put(values, "responseLength", ui.getResponseLength());
+        put(values, "responseLanguage", ui.getResponseLanguage());
+        if (ui.getMemoryMode() != null) values.put("memoryMode",
+                com.example.lms.domain.enums.MemoryMode.fromString(ui.getMemoryMode()).name().toLowerCase(java.util.Locale.ROOT));
         return Map.copyOf(values);
     }
     private static void put(Map<String, Object> values, String key, Object value) {

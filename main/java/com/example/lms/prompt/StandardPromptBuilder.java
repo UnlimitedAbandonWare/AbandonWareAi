@@ -526,15 +526,16 @@ public class StandardPromptBuilder implements PromptBuilder {
         boolean retrievalOffDirectMode = ctx != null
                 && Boolean.FALSE.equals(ctx.ragEnabled())
                 && !hasPromptEvidence(ctx);
-        boolean boundedOutput = ctx != null && "brief".equals(ctx.verbosityHint())
-                && Integer.valueOf(0).equals(ctx.minWordCount());
+        boolean focusOutput = ctx != null && ctx.focusAnswerLengthChars() != null;
+        boolean boundedOutput = focusOutput || (ctx != null && "brief".equals(ctx.verbosityHint())
+                && Integer.valueOf(0).equals(ctx.minWordCount()));
 
         // [NEW] AnswerMode / MemoryMode 결정 (null 방어)
         AnswerMode answerMode = (ctx != null && ctx.answerMode() != null) ? ctx.answerMode() : AnswerMode.ALL_ROUNDER;
         MemoryMode memoryMode = (ctx != null && ctx.memoryMode() != null) ? ctx.memoryMode() : MemoryMode.HYBRID;
 
         String sectionSpecBlock = "";
-        if (ctx != null
+        if (ctx != null && !focusOutput
                 && (ctx.minWordCount() == null || ctx.minWordCount() > 0)
                 && ctx.sectionSpec() != null
                 && !ctx.sectionSpec().isEmpty()) {
@@ -619,7 +620,10 @@ public class StandardPromptBuilder implements PromptBuilder {
         appendLearningRoleBlock(sb, ctx);
 
         // AnswerMode별 지침
-        if (boundedOutput) {
+        if (focusOutput) {
+            sb.append("\n### DISPLAY FOCUS OUTPUT\n안경에서 읽을 한국어 답변. 전체 ").append(ctx.focusAnswerLengthChars())
+                .append("자 이내를 목표로 핵심부터 간결하게. 질문을 해결하면 더 짧아도 됨. 부정·조건·숫자·단위·필요 출처를 완결. 길이 맞춤 padding 금지.\n");
+        } else if (boundedOutput) {
             sb.append("""
                     ### REQUESTED OUTPUT SHAPE
                     - Return only the output requested by the user; the answer mode does not add sections.
@@ -725,7 +729,7 @@ public class StandardPromptBuilder implements PromptBuilder {
             sb.append("\n### OUTPUT BUDGET\n");
             if (vh != null && !vh.isBlank()) sb.append("- verbosity: ").append(vh).append("\n");
             if (aud != null && !aud.isBlank()) sb.append("- audience: ").append(aud).append("\n");
-            if (minWords != null && minWords > 0) sb.append("- minimum words: ").append(minWords).append("\n");
+            if (!focusOutput && minWords != null && minWords > 0) sb.append("- minimum words: ").append(minWords).append("\n");
             if (tokBudget != null && tokBudget > 0) sb.append("- target output tokens: ").append(tokBudget).append("\n");
             sb.append(boundedOutput
                     ? "- Use only the tokens needed for the requested output; no minimum length or additional sections.\n"

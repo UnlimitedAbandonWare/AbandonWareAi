@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
 const { createPicker } = require("../main/resources/static/js/chat-model-picker.js");
+const { installBridge } = require("../main/resources/static/js/chat-settings-bridge.js");
 
 function element(tag) {
   const node = {
@@ -191,6 +194,205 @@ function jsonResponse(rows) {
 function choiceButtons(list) {
   return list.querySelectorAll("button.model-choice-select").filter(button => button.getAttribute("data-model-more") !== "1");
 }
+
+const firstSessionModel = fs.readFileSync(require.resolve("../main/resources/templates/chat-ui.html"), "utf8")
+  .match(/data-first-session-model="([^"]+)"/)?.[1]?.split(",")[0].trim() || "first-session-candidate";
+const chatSource = fs.readFileSync(require.resolve("../main/resources/static/js/chat.js"), "utf8");
+
+function firstSessionHarness(settings = { source: "factory" }) {
+  const ui = harness();
+  ui.select.dataset.firstSessionModel = firstSessionModel;
+  const option = ui.doc.createElement("option"); option.value = "id-2"; option.selected = true;
+  ui.select.appendChild(option);
+  const mode = ui.doc.createElement("select"); mode.setAttribute("id", "modelSelectionMode"); mode.value = "strict";
+  ui.doc.append(mode);
+  const values = new Map(settings ? [["chat.controlSettings", JSON.stringify(settings)]] : []);
+  const session = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
+  const context = vm.createContext({
+    dom: { modelSelect: ui.select, modelSelectionMode: mode }, window: { sessionStorage: session },
+    CONTROL_SETTINGS_STORAGE_KEY: "chat.controlSettings", controlHydrationPhase: "READY",
+    ControlHydrationPhase: { READY: "READY" }, localControlOverrideActive: false,
+    setStatusRailValue() {}, setCurrentModelBadge() {}, searchModeRailValue: value => value
+  });
+  vm.runInContext(chatSource.slice(chatSource.indexOf("function currentControlSettings("), chatSource.indexOf("function storedControlSettings("))
+    + chatSource.slice(chatSource.indexOf("function syncControlStatus("), chatSource.indexOf("function syncSendButtonState(")), context);
+  ui.select.addEventListener("change", context.handleControlChange);
+  mode.addEventListener("change", context.handleControlChange);
+  return { ...ui, mode, session, context };
+}
+
+test("first-session model applies once when only factory init settings exist", async () => {
+  const ui = firstSessionHarness();
+  const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([
+    row(1, { id: firstSessionModel }), row(2), row(3, { defaultChoice: true })
+  ]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+  await picker.refresh(false);
+  assert.equal(ui.select.value, firstSessionModel);
+  assert.equal(ui.mode.value, "preferred");
+  const saved = JSON.parse(ui.session.getItem("chat.controlSettings"));
+  assert.equal(saved.model, firstSessionModel);
+  assert.equal(saved.modelSelectionMode, "preferred");
+  assert.notEqual(saved.source, "user");
+  assert.notEqual(saved.source, "factory");
+  assert.equal(ui.context.localControlOverrideActive, false);
+  await picker.refresh(false);
+  assert.equal(ui.select.value, firstSessionModel);
+});
+
+test("first-session list picks the first selectable candidate", async () => {
+  const ui = firstSessionHarness();
+  ui.select.dataset.firstSessionModel = " chatgpt-oauth:gpt-5.6-sol , chatgpt-oauth:gpt-5.5 ";
+  const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([
+    row(1, { id: "chatgpt-oauth:gpt-5.5" }), row(2), row(3, { defaultChoice: true }),
+    row(4, { id: "chatgpt-oauth:gpt-5.6-sol" })
+  ]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+  await picker.refresh(false);
+  assert.equal(ui.select.value, "chatgpt-oauth:gpt-5.6-sol");
+  assert.equal(ui.mode.value, "preferred");
+  const saved = JSON.parse(ui.session.getItem("chat.controlSettings"));
+  assert.equal(saved.model, "chatgpt-oauth:gpt-5.6-sol");
+  assert.equal(saved.modelSelectionMode, "preferred");
+  assert.equal(saved.source, "catalog-default");
+});
+
+test("first-session list falls through to 5.5", async () => {
+  for (const solPresent of [false, true]) {
+    const ui = firstSessionHarness();
+    ui.select.dataset.firstSessionModel = "chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5";
+    const rows = [row(1, { id: "chatgpt-oauth:gpt-5.5" }), row(2), row(3, { defaultChoice: true })];
+    if (solPresent) rows.push(row(4, { id: "chatgpt-oauth:gpt-5.6-sol", selectable: false }));
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse(rows),
+      storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, "chatgpt-oauth:gpt-5.5", String(solPresent));
+    assert.equal(ui.mode.value, "preferred");
+    assert.equal(JSON.parse(ui.session.getItem("chat.controlSettings")).source, "catalog-default");
+  }
+});
+
+test("first-session list with no candidate keeps server default", async () => {
+  for (const serverDefault of [false, true]) {
+    const ui = firstSessionHarness();
+    ui.select.dataset.firstSessionModel = "chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5";
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([
+      row(2), row(3, { defaultChoice: serverDefault }), row(4, { id: "gpt-5.6-sol" }),
+      row(5, { id: "chatgpt-oauth:gpt-5.5-extra" })
+    ]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, serverDefault ? "id-3" : "id-2");
+    assert.equal(ui.mode.value, serverDefault ? "auto" : "strict");
+  }
+});
+
+test("first-session list survives factory preferences arriving before catalog", async () => {
+  const ui = firstSessionHarness();
+  ui.select.dataset.firstSessionModel = "chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5";
+  Object.defineProperty(ui.select, "options", { get: () => walk(ui.select).filter(node => node.tag === "option") });
+  ui.mode.options = ["auto", "strict", "preferred"].map(value => ({ value }));
+  const search = ui.doc.createElement("select"); search.setAttribute("id", "searchModeSelect"); search.options = [{ value: "OFF" }];
+  const rag = ui.doc.createElement("input"); rag.setAttribute("id", "useRagToggle");
+  rag.addEventListener("change", ui.context.handleControlChange);
+  ui.doc.append(search, rag);
+  const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([
+    row(1, { id: "chatgpt-oauth:gpt-5.5" }), row(2), row(3, { id: "chatgpt-oauth:gpt-5.6-sol" })
+  ]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+  installBridge({ document: ui.doc, sessionStorage: ui.session, localStorage: ui.storage,
+    Event, CustomEvent, addEventListener() {}, fetch: async () => ({ ok: true, redirected: false,
+      json: async () => ({ revision: 0, hash: null, defaultsVersion: "test", overrides: {},
+        effective: { model: "chatgpt-oauth:gpt-5.5", modelSelectionMode: "preferred", useRag: true },
+        factoryDefaults: {}, sources: { model: "FACTORY", modelSelectionMode: "FACTORY", useRag: "FACTORY" } }) }) });
+  await new Promise(resolve => setImmediate(resolve));
+  await picker.refresh(false);
+  assert.equal(ui.select.value, "chatgpt-oauth:gpt-5.6-sol");
+  assert.equal(ui.mode.value, "preferred");
+  assert.equal(JSON.parse(ui.session.getItem("chat.controlSettings")).model, "chatgpt-oauth:gpt-5.6-sol");
+  assert.equal(JSON.parse(ui.session.getItem("chat.controlSettings")).source, "catalog-default");
+  assert.equal(rag.checked, true);
+  assert.equal(ui.select.dataset.awxSettingsReady, "ready");
+});
+
+test("chat factory initialization marks only newly created settings", () => {
+  const init = chatSource.slice(chatSource.indexOf("if (!restoreStoredControlSettings()) {"), chatSource.indexOf("setComposerBusy(false);", chatSource.indexOf("if (!restoreStoredControlSettings()) {")));
+  for (const restored of [false, true]) {
+    const calls = [];
+    vm.runInNewContext(init, { restoreStoredControlSettings: () => restored,
+      resetControlSettingsToDefaults() {}, applySmokeProofControlDefaults: () => false,
+      syncControlStatus: options => calls.push(options) });
+    assert.equal(calls.length, restored ? 0 : 1);
+    if (!restored) assert.equal(calls[0].source, "factory");
+  }
+});
+
+test("first-session model never overrides saved selections or existing sessions", async () => {
+  for (const scenario of ["user", "", "missing-source", "malformed", "chat.currentSessionId", "chat.activeRun"]) {
+    const ui = firstSessionHarness(["user", ""].includes(scenario) ? { source: scenario } : scenario === "missing-source" ? {} : { source: "factory" });
+    if (scenario.startsWith("chat.")) ui.session.setItem(scenario, "present");
+    if (scenario === "malformed") ui.session.setItem("chat.controlSettings", "present");
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([row(1, { id: firstSessionModel, defaultChoice: true }), row(2)]),
+      storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, "id-2", scenario);
+    assert.equal(ui.mode.value, "strict", scenario);
+  }
+});
+
+test("first-session model skipped when missing or unselectable with existing default fallback", async () => {
+  for (const present of [false, true]) for (const serverDefault of [false, true]) {
+    const ui = firstSessionHarness();
+    const rows = [row(2), row(3, { defaultChoice: serverDefault })];
+    if (present) rows.push(row(1, { id: firstSessionModel, selectable: false }));
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse(rows), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, serverDefault ? "id-3" : "id-2");
+    assert.equal(ui.mode.value, serverDefault ? "auto" : "strict");
+  }
+});
+
+test("user change during catalog fetch wins", async () => {
+  const ui = firstSessionHarness();
+  const option = ui.doc.createElement("option"); option.value = "id-4"; ui.select.appendChild(option);
+  let resolve;
+  const picker = createPicker(ui.doc, { fetch: () => new Promise(done => { resolve = done; }), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+  const pending = picker.refresh(false);
+  ui.select.value = "id-4"; ui.select.dispatchEvent({ type: "change" });
+  resolve(jsonResponse([row(1, { id: firstSessionModel }), row(2), row(4)]));
+  await pending;
+  assert.equal(ui.select.value, "id-4");
+  assert.equal(JSON.parse(ui.session.getItem("chat.controlSettings")).source, "user");
+});
+
+test("stored personal default blocks first-session model", async () => {
+  const ui = firstSessionHarness();
+  const oldCore = globalThis.AwxSettingsCore;
+  globalThis.AwxSettingsCore = { readSettings: () => ({ model: "id-2" }) };
+  try {
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([row(1, { id: firstSessionModel }), row(2)]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, "id-2");
+  } finally { globalThis.AwxSettingsCore = oldCore; }
+});
+
+test("new chat keeps explicit selection through server preference reapplication", async () => {
+  const ui = firstSessionHarness();
+  const option = ui.doc.createElement("option"); option.value = "id-1"; ui.select.appendChild(option);
+  Object.defineProperty(ui.select, "options", { get: () => walk(ui.select).filter(node => node.tag === "option") });
+  ui.mode.options = ["auto", "strict", "preferred"].map(value => ({ value }));
+  const search = ui.doc.createElement("select"); search.setAttribute("id", "searchModeSelect"); search.options = [{ value: "OFF" }];
+  const rag = ui.doc.createElement("input"); rag.setAttribute("id", "useRagToggle");
+  ui.doc.append(search, rag);
+  installBridge({ document: ui.doc, sessionStorage: ui.session, localStorage: ui.storage,
+    Event, CustomEvent, addEventListener() {}, fetch: async () => ({ ok: true, redirected: false,
+      json: async () => ({ revision: 0, hash: null, defaultsVersion: "test", overrides: {},
+        effective: { model: "id-1", modelSelectionMode: "auto" }, factoryDefaults: {}, sources: {} }) }) });
+  ui.doc.dispatchEvent({ type: "chat:model-catalog", detail: { ready: true } });
+  await new Promise(resolve => setImmediate(resolve));
+  ui.select.value = "id-2"; ui.select.dispatchEvent({ type: "change" });
+  ui.mode.value = "strict"; ui.mode.dispatchEvent({ type: "change" });
+  ui.doc.dispatchEvent({ type: "brain-state:session", detail: {} });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.select.value, "id-2");
+  assert.equal(ui.mode.value, "strict");
+});
 
 test("server cloud default applies once to an untouched fresh chat", async () => {
   const ui=harness();

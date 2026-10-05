@@ -8,22 +8,22 @@
   위험도: 낮음 (pull + 소량 warm-up 생성만). 미설치 모델은 확인 후 pull.
   전제 : ollama 서버 동작 중(권장: 3090 고정 serve), ollama CLI in PATH
   롤백 : ollama stop <model> 로 unload / ollama rm <model> 로 삭제 가능
-  TODO : 임베딩 모델명은 영상에 안 보여서 PLACEHOLDER — `ollama list`로 실제 태그 확인 후 채울 것
+  비고 : 임베딩 모델은 설치 확인된 qwen3-embedding:4b (2.5GB, api-routing embed pref[0]) 기본값
   주의 : 모델 태그는 mutable spec — 쓰기 전 `ollama ls` / docs/API_ROUTING_SPEC.md
          의 installed allowlist와 대조하고 banned 태그는 alias 매핑을 따를 것.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
   [string[]]$ChatModels = @('qwen3.5:9b'),     # 영상에서 확인된 유일한 경량 모델
-  [string]$EmbeddingModel = 'PLACEHOLDER-EMBED-MODEL',   # TODO: ollama list 에서 실제 태그로 교체
+  [string]$EmbeddingModel = 'qwen3-embedding:4b',   # ollama ls 실측 태그 (2.5GB)
   [int]$Port = 11434,
-  [string]$KeepAlive = '30m',
+  [string]$KeepAlive = '60m',
   [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
 
 $installed = (ollama list 2>$null) -join "`n"
-$want = @($ChatModels) + @($EmbeddingModel | Where-Object { $_ -notmatch '^PLACEHOLDER' })
+$want = @($ChatModels) + @($EmbeddingModel | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
 foreach ($m in $want) {
   if ($installed -notmatch [regex]::Escape(($m -split ':')[0])) {
@@ -33,10 +33,16 @@ foreach ($m in $want) {
     } else { continue }
   }
   if ($PSCmdlet.ShouldProcess($m, "warm-up keep_alive=$KeepAlive @ $Port")) {
-    Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$Port/api/generate" -TimeoutSec 60 `
-      -ContentType 'application/json' `
-      -Body (@{ model=$m; prompt='ping'; stream=$false; keep_alive=$KeepAlive
-                options=@{ num_predict=1 } } | ConvertTo-Json) | Out-Null
+    # Embedding-only models reject /api/generate; warm them via /api/embed.
+    $warmUri = "http://127.0.0.1:$Port/api/generate"
+    $warmBody = @{ model=$m; prompt='ping'; stream=$false; keep_alive=$KeepAlive
+                   options=@{ num_predict=1 } }
+    if ($m -eq $EmbeddingModel) {
+      $warmUri = "http://127.0.0.1:$Port/api/embed"
+      $warmBody = @{ model=$m; input='ping'; keep_alive=$KeepAlive }
+    }
+    Invoke-RestMethod -Method Post -Uri $warmUri -TimeoutSec 60 `
+      -ContentType 'application/json' -Body ($warmBody | ConvertTo-Json) | Out-Null
     Write-Host "warmed: $m" -ForegroundColor Green
   }
 }

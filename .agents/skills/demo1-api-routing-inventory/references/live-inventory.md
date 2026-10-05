@@ -12,7 +12,6 @@ Machine: DESKTOP-M5NOV6K (`7dd2c567-8c78-46c0-8732-b129fbc48cae`) · Root: `<rep
 | qwen3.6:27b | a50eda8ed977 | 17 GB | 7 weeks ago |
 | gemma4:12b | 4eb23ef187e2 | 7.6 GB | 7 weeks ago |
 | qwen3.5:9b | 6488c96fa5fa | 6.6 GB | 7 weeks ago |
-| gemma4:latest | c6eb396dbd59 | 9.6 GB | 7 weeks ago |
 | gemma4:26b | 5571076f3d70 | 17 GB | 4 months ago |
 | nomic-embed-text:latest | 0a109f422b47 | 274 MB | 10 months ago |
 | qwen3-embedding:latest | 64b933495768 | 4.7 GB | 10 months ago |

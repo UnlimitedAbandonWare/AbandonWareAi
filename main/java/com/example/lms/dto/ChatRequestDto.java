@@ -53,6 +53,11 @@ public class ChatRequestDto {
         @JsonProperty("memoryMode")
         @JsonAlias({ "memory_mode" })
         private String memoryMode;
+        /** Owner-scoped user preferences; never literal system instructions or provider parameters. */
+        private String customInstructions;
+        private String responseTone;
+        private String responseLength;
+        private String responseLanguage;
 
         /* ────────── ② 모델 & 샘플링 ────────── */
 
@@ -66,6 +71,8 @@ public class ChatRequestDto {
         private Boolean strictModelSelection;
         public boolean isStrictModelSelection() { return Boolean.TRUE.equals(strictModelSelection); }
         private String modelSelectionMode;
+        /** Null inherits defaults/session; explicit AUTO remains an override. */
+        private com.example.lms.domain.enums.ExecutionMode executionMode;
         @JsonIgnore @Setter(AccessLevel.NONE)
         private transient ChatSettingsSnapshot chatSettingsSnapshot;
         public record ChatSettingsSnapshot(java.util.Map<String, Object> user,

@@ -1,6 +1,9 @@
 package com.example.lms.service.rag.fusion;
 
 import com.example.lms.search.TraceStore;
+import com.example.lms.assist.MemoryEvidence;
+import com.example.lms.service.rag.graph.GeneralGraphSourceAuthority;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.nova.protocol.fusion.NovaNextFusionService;
 import com.nova.protocol.properties.NovaNextProperties;
 import dev.langchain4j.data.document.Metadata;
@@ -21,6 +24,57 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static java.util.Map.entry;
 
 class WeightedReciprocalRankFuserTest {
+
+    @Test
+    void authorizedGraphSourcesSurviveFusionAndDeduplicateAcrossLanes() {
+        var fuser = new WeightedReciprocalRankFuser(60, null, "");
+        Content first = graphEvidence("chat-message:11", 3, "same reported fact");
+        Content second = graphEvidence("chat-message:12", 3, "same reported fact");
+        Content vectorCopy = graphEvidence("chat-message:11", 3, "same reported fact");
+
+        var fused = fuser.fuse(List.of(List.of(first, second), List.of(vectorCopy)), 10);
+
+        assertEquals(List.of(first, second), fused);
+        assertEquals("chat-message:11", fused.get(0).textSegment().metadata().getString("sourceId"));
+        assertEquals("chat-message:12", fused.get(1).textSegment().metadata().getString("sourceId"));
+        assertEquals(3L, fused.get(0).textSegment().metadata().getLong("sourceRevision"));
+    }
+
+    @Test
+    void graphSourceRevisionsRemainDistinct() {
+        var fuser = new WeightedReciprocalRankFuser(60, null, "");
+        Content original = graphEvidence("chat-message:11", 3, "same reported fact");
+        Content revised = graphEvidence("chat-message:11", 4, "same reported fact");
+
+        assertEquals(List.of(original, revised), fuser.fuse(List.of(List.of(original, revised)), 10));
+    }
+
+    @Test
+    void graphSourceIdentityIsCaseSensitive() {
+        var fuser = new WeightedReciprocalRankFuser(60, null, "");
+        Content first = graphEvidence("source:A", 3, "same reported fact");
+        Content second = graphEvidence("source:a", 3, "same reported fact");
+
+        assertEquals(List.of(first, second), fuser.fuse(List.of(List.of(first, second)), 10));
+    }
+
+    @Test
+    void graphLabelWithoutCompleteIdentityFallsBackToText() {
+        var fuser = new WeightedReciprocalRankFuser(60, null, "");
+        Content first = contentWithMetadata("first reported fact", Map.of(
+                "source", "general_graph_evidence", "sourceId", "chat-message:11"));
+        Content second = contentWithMetadata("second reported fact", Map.of(
+                "source", "general_graph_evidence", "sourceId", "chat-message:11"));
+
+        assertEquals(List.of(first, second), fuser.fuse(List.of(List.of(first, second)), 10));
+    }
+
+    private static Content graphEvidence(String sourceId, long revision, String text) {
+        var authority = new GeneralGraphSourceAuthority(null, null, new ObjectMapper());
+        var evidence = new MemoryEvidence("synthetic", sourceId, revision, "synthetic-owner", "USER",
+                "USER_REPORTED", text, null, null, null, null, null, null, null);
+        return authority.evidenceContent(evidence);
+    }
 
     @Test
     void tiedScoresKeepFirstSeenOrderAndTopKCandidate() {

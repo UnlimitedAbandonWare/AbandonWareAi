@@ -262,6 +262,17 @@ private record SearchAttemptMeta(String lane, String query, double weight, int r
         String qText = (query != null) ? query.text() : null;
         java.util.Map<String, Object> meta = new java.util.HashMap<>(toMetaMap(query));
         meta.putIfAbsent("purpose", "WEB_SEARCH");
+        SelfAskSearchBudget requestSearchBudget = SelfAskSearchBudget.current();
+        com.example.lms.domain.enums.ExecutionMode executionMode = requestSearchBudget == null ? null : requestSearchBudget.requested();
+        if (executionMode == null && meta.get("executionMode") instanceof String mode) {
+            try { executionMode = com.example.lms.domain.enums.ExecutionMode.valueOf(mode); }
+            catch (IllegalArgumentException ignored) { /* Unknown legacy metadata retains its old path. */ }
+            if (executionMode != null) requestSearchBudget = SelfAskSearchBudget.beginRequest(executionMode);
+        }
+        if (requestSearchBudget != null && !selfAskEnabled) {
+            requestSearchBudget.skip("global-disabled");
+            return List.of();
+        }
         boolean explicitPlanSelfAskOverride = explicitPlanSelfAskOverride(meta);
         if (!selfAskEnabled && !explicitPlanSelfAskOverride) {
             TraceStore.put("selfask.disabled.reason", "global-disabled-no-plan-override");
@@ -341,6 +352,29 @@ private record SearchAttemptMeta(String lane, String query, double weight, int r
         }
         if (!enableSelfAskHint || nightmareMode) {
             enableSelfAsk = false;
+        }
+        if (executionMode != null) {
+            var directEvidence = toSelfAskContents(firstSnippets, qText, "direct", qText, overallTopK);
+            var parentBudget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+            String safetyGateDetail = !enableSelfAskHint ? "hint_disabled"
+                    : nightmareMode ? "nightmare_mode"
+                    : auxLlmDown ? "aux_llm_down"
+                    : cheapSearchMode ? "cheap_search_mode"
+                    : Thread.currentThread().isInterrupted() ? "interrupted"
+                    : parentBudget != null && parentBudget.expired() ? "budget_expired"
+                    : null;
+            boolean permitted = safetyGateDetail == null;
+            enableSelfAsk = permitted && executionMode != com.example.lms.domain.enums.ExecutionMode.STRIKE
+                    && (executionMode == com.example.lms.domain.enums.ExecutionMode.SELF_ASK
+                        || SelfAskSearchBudget.needsExpansion(qText, directEvidence));
+            if (!enableSelfAsk) {
+                if (!permitted) TraceStore.put("selfask.safetyGate.detail", safetyGateDetail);
+                requestSearchBudget.skip(executionMode == com.example.lms.domain.enums.ExecutionMode.STRIKE
+                        ? "user-strike" : !permitted ? "safety-gate:" + safetyGateDetail : "evidence-sufficient");
+                return directEvidence;
+            }
+            requestSearchBudget.allowExpansion(executionMode == com.example.lms.domain.enums.ExecutionMode.SELF_ASK
+                    ? "user-self-ask" : "evidence-gap");
         }
         final boolean useLlmSeedsHere = this.useLlmSeeds && enableSelfAskHint && !nightmareMode && !auxLlmDown;
         final boolean useLlmFollowupsHere = this.useLlmFollowups && enableSelfAskHint && !nightmareMode && !auxLlmDown;
@@ -2167,7 +2201,7 @@ private record SearchAttemptMeta(String lane, String query, double weight, int r
                         new SearchAttempt(List.of(), "executor-saturated", true));
             }
         }
-        FutureTask<SearchAttempt> task = new FutureTask<>(() -> safeSearchAttempt(keyword, topK)) {
+        FutureTask<SearchAttempt> task = new FutureTask<>(com.example.lms.infra.exec.ContextPropagation.wrapCallable(() -> safeSearchAttempt(keyword, topK))) {
             @Override protected void done() { completed.run(); }
         };
         try {
@@ -2361,6 +2395,8 @@ private record SearchAttemptMeta(String lane, String query, double weight, int r
             if (webSearchProvider == null || !webSearchProvider.isEnabled()) {
                 return new SearchAttempt(List.of(), "provider-disabled", true);
             }
+            SelfAskSearchBudget shared = SelfAskSearchBudget.current();
+            if (shared != null && !shared.tryQuery(q)) return new SearchAttempt(List.of(), "search-budget", true);
             List<String> out = webSearchProvider.search(q, k);
             if (Thread.currentThread().isInterrupted()) {
                 return new SearchAttempt(List.of(), "cancelled", true);

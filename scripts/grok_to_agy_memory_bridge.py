@@ -374,6 +374,10 @@ def build_memory_index_doc(sessions, topics, obs, prompts):
 def build_rule_content(sessions, topics, obs, prompts):
     now_str = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     lines = [
+        "---",
+        "trigger: always_on",
+        "---",
+        "",
         "<!-- BEGIN GROKBOT-SESSION-MEMORY-FOR-AGY -->",
         "# GrokBot Session Memory Bridge for Antigravity CLI",
         f"<!-- Synced: {now_str} | Sessions: {len(sessions)} | Topics: {len(topics)} -->",

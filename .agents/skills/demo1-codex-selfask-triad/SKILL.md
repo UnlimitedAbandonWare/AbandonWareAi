@@ -1,6 +1,6 @@
 ---
 name: demo1-codex-selfask-triad
-description: Use when a demo-1 Codex decision needs three read-only subagent axes (UAW self-ask): definer=contract/definition, aliaser=alias/omission, challenger=counterexample. Auto-attach on verdict-splitting RED/GREEN, second failed hypothesis, P0/P1 "done" claim, or conflicting evidence; never for typos or clear single edits.
+description: 'Use when a demo-1 Codex decision needs three read-only subagent axes (UAW self-ask): definer=contract/definition, aliaser=alias/omission, challenger=counterexample. Auto-attach on verdict-splitting RED/GREEN, second failed hypothesis, P0/P1 "done" claim, or conflicting evidence; never for typos or clear single edits.'
 ---
 
 # demo1-codex-selfask-triad
@@ -58,6 +58,25 @@ hints; computes tier-weighted consensus; emits exactly one verdict —
 `AUTO` | `ASK_ONCE` | `HOLD` — plus JSON (exit 0/3/4, same as
 `agent_vibe_auto_decision.py`). Optional: on conflict the parent may run ONE
 cross-query round, then re-judge.
+
+## Rewrite & Bypass (UAW Self-Ask)
+
+```
+python -B scripts/selfask_triad.py rewrite --question "<q>" \
+  [--trigger zero_hit|unexpected_red|ambiguous_goal|multi_hop|force] \
+  [--paths "a,b"] [--json]
+```
+
+- 일상 바이브 작업: `--trigger` 없이 유효 `--paths`를 주면
+  `bypass=strong_evidence`·`rewritten=false`·`verdict=AUTO` — FinalSigmoidGate
+  strong-evidence bypass와 같은 결론으로 승인 퀴즈 없이 진행한다.
+- 특수 상황(검색 0-hit, 예상 밖 RED·가설 연쇄 실패, 모호·다중 홉 질문):
+  `--trigger`를 붙여 `analyze.selfAsk` 3축(`expand.selfAsk.count: 3`)
+  재작성 질의를 받고 그 질의로 자율 탐색을 계속한다 — 질의는 `packet`/spawn의
+  입력으로도 그대로 쓸 수 있다.
+- 트리거도 유효 경로도 없으면 `ambiguous_goal`로 자동 분류된다
+  (`triggerSource=auto`). 항상 오프라인·결정론적·exit 0; 재작성 자체는
+  판정이 아니므로 최종 AUTO/ASK_ONCE/HOLD는 여전히 `judge`의 몫이다.
 
 ## Journal (always, even AUTO)
 

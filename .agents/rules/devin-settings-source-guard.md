@@ -1,3 +1,8 @@
+---
+trigger: model_decision
+description: 'activate only for settings or model-routing product-source edit boundaries'
+---
+
 # DEVIN_SETTINGS_SOURCE_GUARD — 설정·라우팅 구현 시 소스 수정 절대 경계
 
 Plan6 설정·역할별 모델 라우팅의 **제품 소스 구현 단계**에서 Devin(또는

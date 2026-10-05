@@ -5,6 +5,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.example.lms.llm.ModelRuntimeHealthTracker;
+import com.example.lms.llm.OpenAiEndpointCompatibility;
 import com.example.lms.llm.gateway.LlmGatewayException;
 import com.example.lms.llm.gateway.LlmFailureClass;
 import com.example.lms.search.TraceStore;
@@ -44,6 +45,37 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OpenAiResponsesChatModelTest {
+
+    @Test
+    void oauthPayloadRetainsMemoryBeforeTheCurrentQuestion() throws Exception {
+        List<dev.langchain4j.data.message.ChatMessage> messages = List.of(
+                dev.langchain4j.data.message.SystemMessage.from("SYNTHETIC_SYSTEM_GUIDANCE"),
+                UserMessage.from("기억: 코드워드 바람; 가운데 단계 검토; 제한 2개; 형식 짧은 표."),
+                dev.langchain4j.data.message.AiMessage.from("OLDER_ASSISTANT_MARKER"),
+                UserMessage.from("CURRENT_QUESTION_MARKER"));
+        java.lang.reflect.Method serialize = OpenAiResponsesChatModel.class
+                .getDeclaredMethod("responsesInput", List.class);
+        serialize.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> input = (List<Map<String, Object>>) serialize.invoke(null, messages);
+        Map<String, Object> payload = OpenAiEndpointCompatibility
+                .chatGptResponsesPayload("synthetic-model", input);
+        var wire = new ObjectMapper().readTree(new ObjectMapper().writeValueAsString(payload));
+
+        assertEquals(4, wire.path("input").size());
+        assertEquals(List.of("developer", "user", "assistant", "user"),
+                java.util.stream.IntStream.range(0, 4)
+                        .mapToObj(i -> wire.path("input").get(i).path("role").asText()).toList());
+        assertEquals("SYNTHETIC_SYSTEM_GUIDANCE", wire.path("input").get(0).path("content").asText());
+        String memory = wire.path("input").get(1).path("content").get(0).path("text").asText();
+        assertTrue(memory.contains("코드워드 바람"));
+        assertTrue(memory.contains("가운데 단계 검토"));
+        assertTrue(memory.contains("제한 2개"));
+        assertTrue(memory.contains("형식 짧은 표"));
+        assertEquals("OLDER_ASSISTANT_MARKER", wire.path("input").get(2).path("content").asText());
+        assertEquals("CURRENT_QUESTION_MARKER",
+                wire.path("input").get(3).path("content").get(0).path("text").asText());
+    }
 
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"", ": heartbeat\n\n", ": heartbeat\r\n\r\n"})
@@ -174,6 +206,47 @@ class OpenAiResponsesChatModelTest {
             appender.stop();
             server.stop(0);
         }
+    }
+
+    @Test
+    void oauthUpstreamHttpErrorKeepsStatusInTerminalTrace() throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            calls.incrementAndGet();
+            exchange.getRequestBody().readAllBytes();
+            byte[] bytes = "{\"error\":{\"message\":\"slow down\"}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(503, bytes.length);
+            try (OutputStream output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        try {
+            var model = new OpenAiResponsesChatModel("http://127.0.0.1:" + server.getAddress().getPort() + "/v1",
+                    "gpt-5.6-luna", 5_000L, () -> "synthetic-oauth-bearer");
+            var failure = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> model.chat(List.of(UserMessage.from("synthetic probe"))));
+            assertEquals("chatgpt_oauth_http_503", failure.reasonCode());
+            assertEquals(503, ((Number) TraceStore.get("chatgpt.oauth.upstreamHttpStatus")).intValue());
+            assertTrue(String.valueOf(TraceStore.get("chatgpt.oauth.rootCause")).contains("Unavailable"));
+        } finally { server.stop(0); }
+    }
+
+    @Test
+    void oauthWrappedUpstreamHttpErrorPreservesStatusAndRootCause() {
+        var model = new OpenAiResponsesChatModel("http://127.0.0.1:1/v1",
+                "gpt-5.6-luna", 5_000L, () -> "synthetic-oauth-bearer");
+        var wcre = org.springframework.web.reactive.function.client.WebClientResponseException.create(
+                503, "Service Unavailable",
+                org.springframework.http.HttpHeaders.EMPTY, new byte[0], StandardCharsets.UTF_8);
+        var wrapped = new RuntimeException("reactor-wrapped", wcre);
+        var terminal = org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                OpenAiResponsesChatModel.class, "oauthFailure",
+                "chatgpt_oauth_request_failed", LlmFailureClass.PROVIDER_ERROR, (String) null);
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                model, "observeOauthTerminal", terminal, wrapped);
+        assertEquals(503, ((Number) TraceStore.get("chatgpt.oauth.upstreamHttpStatus")).intValue());
+        assertEquals(wcre.getClass().getSimpleName(), String.valueOf(TraceStore.get("chatgpt.oauth.rootCause")));
     }
 
     private static String oauthCompletedSse() {

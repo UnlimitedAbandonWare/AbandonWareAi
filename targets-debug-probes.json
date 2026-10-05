@@ -1,0 +1,20 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "7d46a176f47c899b3986392b19792cc7bd772a2d8f17c00749cafb1f3d7b5635",
+                        "path":  "scripts/agent_session_watch.py"
+                    },
+                    {
+                        "sha256":  "ef024a8ac8af6ec52bfd7a7f5805837d56885e1c503df92faa6aa615318c02aa",
+                        "path":  "scripts/agent_work_guard.py"
+                    },
+                    {
+                        "sha256":  "83325e72e42ee4ad6406b7d526ec7e49087383fccc248b8cbaf72555b4050848",
+                        "path":  "main/java/ai/abandonware/nova/orch/aop/LlmRouterAspect.java"
+                    },
+                    {
+                        "sha256":  "5b17a6f14c3d4593bf43418403b167f0ec9db6ae7253239a356e6b0c346a4cb4",
+                        "path":  "scripts/devin_pre_edit_guard.ps1"
+                    }
+                ]
+}

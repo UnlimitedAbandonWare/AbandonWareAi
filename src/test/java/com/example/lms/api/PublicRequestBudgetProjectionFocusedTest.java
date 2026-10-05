@@ -20,6 +20,37 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class PublicRequestBudgetProjectionFocusedTest {
 
+    @Test
+    void historicalDeepWorkIsCausedBySearchOptionsRatherThanExecutionPreference() {
+        var plan = new com.example.lms.plan.PlanHints("budget-replay", null, null,
+                java.util.List.of(), 8, 8, null, java.util.List.of(), null, null, null,
+                true, true, null, null, null, null, null, null, 2, true, java.util.Map.of());
+        for (var mode : java.util.List.of(com.example.lms.domain.enums.ExecutionMode.AUTO,
+                com.example.lms.domain.enums.ExecutionMode.SELF_ASK)) {
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("Spring Security 6.3에서 POST 로그아웃과 CSRF 토큰 처리의 관계를 "
+                            + "docs.spring.io 공식 자료로 확인하고 핵심 두 가지를 짧게 알려 주세요.")
+                    .executionMode(mode).useRag(true).useWebSearch(true).webTopK(8)
+                    .searchQueries(0).searchMode(SearchMode.FORCE_DEEP).build();
+            PublicRequestBudgetGuard diagnostic = guardWithPlans();
+            diagnostic.validateChatProjected(request, plan, true, true);
+            assertEquals(14L, TraceStore.get("public.request.budget.plannedQueries"));
+            assertEquals(2, TraceStore.get("public.request.budget.extremeZQueries"));
+            assertEquals(672L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(4_224L, TraceStore.get("public.request.budget.providerWork"));
+
+            var defaults = new PublicRequestBudgetGuard();
+            var rejection = org.junit.jupiter.api.Assertions.assertThrows(
+                    PublicRequestBudgetGuard.Rejection.class,
+                    () -> defaults.validateChatProjected(request, plan, true, true));
+            assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
+            assertDoesNotThrow(() -> defaults.validateChatProjected(
+                    request.toBuilder().searchMode(SearchMode.AUTO).build(), plan, true, true));
+            assertEquals(128L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(768L, TraceStore.get("public.request.budget.providerWork"));
+        }
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

@@ -199,6 +199,59 @@ class BraveSearchServiceResponseShapeTest {
         assertFalse(trace.contains("results"));
     }
 
+    @Test
+    void providerHttpErrorResponseMarksReceiptObserved() {
+        BraveSearchService service = enabledService();
+        RestTemplate restTemplate =
+                (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        server.expect(org.springframework.test.web.client.ExpectedCount.manyTimes(),
+                        request -> assertFalse(request.getURI().toString().isBlank()))
+                .andRespond(org.springframework.test.web.client.response.MockRestResponseCreators.withServerError());
+
+        BraveSearchResult result = service.searchWithMeta("receipt probe server error", 1);
+
+        server.verify();
+        assertEquals(BraveSearchResult.Status.HTTP_ERROR, result.status());
+        var runs = TraceStore.get("web.brave.attempt.runs");
+        assertFalse(runs == null);
+        java.util.List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
+        if (runs instanceof java.util.List<?> list) {
+            for (Object item : list) if (item instanceof java.util.Map<?, ?> row) rows.add((java.util.Map<String, Object>) row);
+        }
+        assertFalse(rows.isEmpty());
+        java.util.Map<String, Object> row = rows.get(rows.size() - 1);
+        assertEquals(Boolean.TRUE, row.get("providerReceiptObserved"));
+        assertEquals(500, ((Number) row.get("httpStatus")).intValue());
+    }
+
+    @Test
+    void transportFailureLeavesProviderReceiptUnobserved() {
+        BraveSearchService service = enabledService();
+        RestTemplate restTemplate =
+                (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        server.expect(org.springframework.test.web.client.ExpectedCount.manyTimes(),
+                        request -> assertFalse(request.getURI().toString().isBlank()))
+                .andRespond(request -> {
+                    throw new java.io.IOException("synthetic transport refusal");
+                });
+
+        BraveSearchResult result = service.searchWithMeta("receipt probe transport failure", 1);
+
+        server.verify();
+        assertEquals(BraveSearchResult.Status.EXCEPTION, result.status());
+        var runs = TraceStore.get("web.brave.attempt.runs");
+        assertFalse(runs == null);
+        java.util.List<java.util.Map<String, Object>> rows = new java.util.ArrayList<>();
+        if (runs instanceof java.util.List<?> list) {
+            for (Object item : list) if (item instanceof java.util.Map<?, ?> row) rows.add((java.util.Map<String, Object>) row);
+        }
+        assertFalse(rows.isEmpty());
+        java.util.Map<String, Object> row = rows.get(rows.size() - 1);
+        assertEquals(Boolean.FALSE, row.get("providerReceiptObserved"));
+    }
+
     private static BraveSearchService enabledService() {
         BraveSearchService service = new BraveSearchService(new BraveSearchProperties(
                 true,

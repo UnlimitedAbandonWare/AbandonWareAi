@@ -12,6 +12,7 @@ public final class SettingsExposurePolicy {
             SettingsService.KEY_TEMPERATURE, SettingsService.KEY_TOP_P,
             SettingsService.KEY_FREQUENCY_PENALTY, SettingsService.KEY_PRESENCE_PENALTY,
             SettingsService.KEY_OPENAI_MODEL, SettingsService.KEY_FINE_TUNED_MODEL,
+            SettingsService.KEY_EXECUTION_MODE,
             "chat.defaults.useWebSearch", "chat.ragAnswerPolicy");
     private SettingsExposurePolicy() {}
     public static Set<String> publicKeys() { return PUBLIC_KEYS; }

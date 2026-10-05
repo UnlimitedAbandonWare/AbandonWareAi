@@ -13,6 +13,8 @@ description: Use when demo-1 debugging starts from logs or a reproducible sympto
 
 읽기·분석 요청은 분석 범위를 지킨다. 수정 요청은 기존 권한 안에서 최소 패치와 검증까지 이어간다. 원인이 이미 입증된 작은 수정은 기존 증거를 확인해 바로 수정 진입점으로 넘긴다. 기술 단서가 없는 경우 필요한 관찰 하나를 요청하고 추측을 사실로 채우지 않는다.
 
+흩어진 서버 추적의 첫 집계는 `Debug-RAG.bat -Action digest` → `var/agent-trace/latest.md`다 — raw 로그 전에 이 다이제스트부터 읽는다.
+
 ## 사건에서 검증까지
 
 1. **의도를 고정한다.** 원래 증상, 같은 입력의 기대 동작, 재현 조건, 허용 범위, 보존할 계약, 완료 조건과 예산을 `DebugCasePacket`에 담는다. 로그 원문은 복사하지 않고 위치·허용된 요약·식별값을 사용한다.

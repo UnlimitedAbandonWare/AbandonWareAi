@@ -54,6 +54,52 @@ class SearchProviderHttpContractTest {
         com.example.lms.service.guard.GuardContextHolder.clear();
     }
 
+    @Test void requestQuerySlotsAndSixAttemptsReachBothActualHttpClients() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(com.example.lms.domain.enums.ExecutionMode.SELF_ASK);
+            budget.allowExpansion("user-self-ask");
+            var brave = brave(wire);
+            var naver = naver(wire, "fixtureid:fixturesecret");
+            for (String q : List.of("original", "supplement one", "supplement two")) {
+                brave.search(q, 3);
+                naver.searchWithTraceSync(q, 3);
+            }
+            int admitted = wire.requests.size();
+            assertTrue(admitted > 0 && admitted <= 6);
+            brave.search("fourth query", 3);
+            naver.searchWithTraceSync("fourth query", 3);
+            assertEquals(admitted, wire.requests.size());
+            assertEquals(3, TraceStore.get("executionMode.queryCount"));
+            assertEquals(admitted, TraceStore.get("executionMode.httpAttempts"));
+        }
+    }
+
+    @Test void providerTruncationKeepsOneLogicalOriginalSlot() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(com.example.lms.domain.enums.ExecutionMode.AUTO);
+            String original = "synthetic ".repeat(24);
+            assertTrue(budget.tryQuery(original));
+            brave(wire).search(original, 3);
+            assertEquals(1, wire.requests.size());
+            assertEquals(1, TraceStore.get("executionMode.queryCount"));
+            assertEquals(1, TraceStore.get("executionMode.httpAttempts"));
+        }
+    }
+
+    @Test void reactiveRetryConsumesLastSharedAttemptAndCannotSendSeventhHttp() throws Exception {
+        try (Fixture wire = new Fixture(500, BRAVE_BODY, "{}", Map.of())) {
+            com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(com.example.lms.domain.enums.ExecutionMode.AUTO);
+            for (int i=0; i<5; i++) assertTrue(com.example.lms.service.rag.SelfAskSearchBudget.tryReserveHttp(TraceStore.context(), "original"));
+            var naver = naver(wire, "fixtureid:fixturesecret");
+            ReflectionTestUtils.setField(naver, "retryMaxAttempts", 1);
+            ReflectionTestUtils.setField(naver, "retryInitialBackoffMs", 1L);
+            ReflectionTestUtils.setField(naver, "retryMaxBackoffMs", 1L);
+            assertTrue(naver.searchWithTraceSync("original", 3).snippets().isEmpty());
+            assertEquals(1, wire.requests.size());
+            assertEquals(6, TraceStore.get("executionMode.httpAttempts"));
+        }
+    }
+
     @Test void actualHybridEntryUsesBothRealClientsThenMergesParsedResults() throws Exception {
         try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
             var workers = Executors.newFixedThreadPool(2);

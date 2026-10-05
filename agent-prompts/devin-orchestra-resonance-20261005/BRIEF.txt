@@ -1,0 +1,83 @@
+[DEVIN 지시서] agy-cli 1차 증폭 → 데빈 연타(서브딜러) → 코덱스 피니셔 에이전트 공명 사이클 실행 지침 — 2026-10-05 10:25 KST
+파일 ID: PASTE_DEVIN_ORCHESTRA_RESONANCE_20261005
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 완수할 때까지 멈추지 않는다.
+@demo1-orchestra-synergy
+
+금지 (이 작업 전체): 제품 소스 임의 수정 0 · commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0 · PROTO_OPEN 준수
+
+첫 명령:
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+agy-cli가 증폭한 1차 신호를 인계받아 10월 13일까지의 무제한 파워를 활용해 도구·룰·스크립트·검증기를 신속히 연타 준비하고, 충돌 없는 경기장을 구축하여 메인 딜러 Codex에게 정확한 타이밍으로 바톤을 넘기는 3자 공명 오케스트레이션 사이클을 가동한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-05 10:20~10:25 KST)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- Agent Signal Digest: leases 5 active, git 383 dirty (head=8420b8977c25), journals 5 active.
+- Codex active journals: codex-interview-standard-6f27f6ab, codex-temperature-selfask-c239331f, graph-answer-provenance-c468450b (자바 코어/UI 메인 딜러 작업 진행 중).
+- Devin active journal: devin-agy-session-health-262dd009 (룰/스킬/스크립트 서브딜러 작업 진행 중).
+- Devin 무제한 이벤트 기간: 2026-10-13까지 무제한 런 가능 (스크립트/도구/검증기/지침 연타 대량 생산에 최적화).
+- 신호 버스 인프라: scripts/Agent-Signal.bat (sha12: 79380B9FA8CA), scripts/agent_quick_signal.py (sha12: 12F25655E592), scripts/orchestra_board.py (sha12: 2250C0A9FCCF), scripts/agent_scope_lease.py (sha12: F3F26766B683) 정상 동작 확인.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- 가드레일: git push / add -A / commit -a / reset / clean 금지, remote 추가 금지, 비밀값 출력 금지, PROTO_OPEN 개방 유지.
+- 검증 및 실행: 유료 실호출 0, gradle 전체 스위프 금지(단위 focused 검증만), 미실행 항목은 사유와 함께 NOT_RUN 기록.
+
+## DV1 [DEVIN] 공명 수신함 점검 및 신호 체인 동기화
+- 증거: scripts/Agent-Signal.bat:1, scripts/orchestra_board.py:1
+- RED 검사: `powershell -Command "cmd /c scripts\Agent-Signal.bat inbox --agent devin; exit=$LASTEXITCODE"`
+- 최소 실행: 수신 대기 중인 신호 확인 및 `python -B scripts/orchestra_board.py --md`로 현재 에이전트 현황판 확인.
+- GREEN: 수신함 정상 출력 및 현황판 마크다운 출력 확인 (exit=0).
+- 완료 조건: Devin의 대기 신호(inbox) 확인 및 현황판 동기화 완료.
+
+## DV2 [DEVIN] 서브딜러 도구 & 스크립트 연타 세팅 (도구 무결성 점검)
+- 증거: scripts/agent_quick_signal.py:1, scripts/agent_scope_lease.py:1
+- RED 검사: `python -B scripts/agent_quick_signal.py --help; "exit=$LASTEXITCODE"`
+- 최소 실행: Codex가 작업 후 즉시 활용할 수 있는 검증 스크립트 및 신호 전달 도구 정상 작동 여부 검사.
+- GREEN: 도구 실행 결과 정상 exit 0 확인.
+- 완료 조건: 서브딜러 스크립트 및 헬퍼가 준비 완료되어 Codex의 병목을 방지함.
+
+## DV3 [DEVIN] 3자 공명 및 타이밍 동기화 룰 수립 (가이드라인 정비)
+- 증거: docs/agents-rules/DEMO1-CODEX-PARALLEL-LANES.md, .agents/skills/demo1-orchestra-synergy
+- RED 검사: `powershell -Command "Test-Path .agents/skills/demo1-orchestra-synergy/references/resonance-timing-guide.md"` (초기 미존재)
+- 최소 수정: `.agents/skills/demo1-orchestra-synergy/references/resonance-timing-guide.md` 신규 생성. 내용: agy(1차 증폭/지시서 발신) → Devin(서브딜러: 도구·룰·검증기 연타 무제한 활용) → Codex(메인딜러: 핵심 자바 소스 피니시)의 바톤 터치 타이밍, 파일 분리(disjoint) 규칙, lease 충돌 방지 절차 기술.
+- GREEN: `powershell -Command "Test-Path .agents/skills/demo1-orchestra-synergy/references/resonance-timing-guide.md; exit=$LASTEXITCODE"` (True, exit=0).
+- 완료 조건: 3대 에이전트 간 역할 분담과 타이밍 가이드라인이 명문화됨.
+
+## DV4 [DEVIN] 메인 딜러 Codex 인계 신호 발신 테스트 (바톤 터치 실증)
+- 증거: scripts/Agent-Signal.bat:24
+- RED 검사: `powershell -Command "cmd /c scripts\Agent-Signal.bat counts; exit=$LASTEXITCODE"`
+- 최소 실행: Devin 준비 완료 후 Codex에게 인계할 신호 발행: `cmd /c scripts\Agent-Signal.bat emit --from devin --to codex --summary "[공명] 서브딜러 도구/환경 세팅 완료, Codex 메인 구현 준비 완료" --files .agents/skills/demo1-orchestra-synergy/references/resonance-timing-guide.md`
+- GREEN: emit 실행 후 `var/orchestra/outbox/`에 신호 정상 생성 (exit=0).
+- 완료 조건: Codex가 즉시 이어받을 수 있는 신호 생성 확인.
+
+## 4. HOLD
+- Codex가 현재 작업 중인 핵심 소스(main/java/**, chat-ui.html, chat.js)를 수정하려 하거나 lease 충돌이 발생하는 경우 즉시 HOLD하고 해당 파일 제외.
+- 외부 유료 API 결제/크레딧 발생 상황 시 HOLD.
+
+## 5. ASK_ONCE
+- Q-1: 서브딜러 작업 중 보조 소스(예: 설정 yml/헬퍼) 수정이 필요할 때 Codex와 파일 충돌이 없으면 즉시 자동 lease 후 수정할 것인가?
+  - (a) 권장: 예 (AUTO: 파일 비경합 조건 확인 후 자동 lease 수정)
+  - (b) 아니오 (스크립트 및 문서만 작성하고 소스 수정은 전면 보류)
+
+## 6. 절대 금지
+- git push, git pull, git add -A, git commit -a, git reset, git clean
+- remote 추가 및 원격 저장소 변조
+- 비밀값(API 키, 토큰, 암호 등) 화면/로그 출력
+- Codex가 lease 획득한 파일 건드리기
+- PROTO_OPEN 가드라인 훼손 (임의의 권한 차단 추가 금지)
+
+## 7. Acceptance
+- [DV1] Agent-Signal.bat inbox --agent devin 및 orchestra_board.py 실행 결과 확인.
+- [DV2] 서브딜러 핵심 스크립트 실행 점검 완료 (exit=0).
+- [DV3] .agents/skills/demo1-orchestra-synergy/references/resonance-timing-guide.md 문서 생성 및 3자 공명 규칙 반영 완료.
+- [DV4] Codex 바톤 터치용 신호 emit 정상 완료 및 outbox 확인.
+- [NOT_RUN] 실제 유료 API 호출 및 전체 통합 테스트는 비용 및 간섭 방지를 위해 NOT_RUN.
+
+## 8. 보고 형식
+외부 API: 호출 0건 / $0.00
+진행 결과: DV1~DV4 완료 상태 및 산출물 파일 경로
+차기 바톤: Codex 인계 신호 ID 및 명령줄 요약
+
+[ANTI-STOP] 모든 DV 항목의 실행과 검증이 완료되고 차기 바톤 터치 신호가 생성될 때까지 작업을 멈추지 않는다.

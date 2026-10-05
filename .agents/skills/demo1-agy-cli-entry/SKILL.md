@@ -68,6 +68,14 @@ root `<repo>`.
 - `scripts\agy_model_latest.ps1` — launcher one-liner `[agy-model] LATEST_OK|NEWER_AVAILABLE|CHECK_SKIPPED update=…` (`AWX_AGY_MODEL_CHECK=0` skips it).
 - `AWX_AGY_MODEL=latest` → `--model <newest same family+tier>`; `AWX_AGY_MODEL=<id>` pins; unset keeps the /config pick (default). Self-update is the built-in `auto_updater.go` — never force `agy update` live.
 
+## 계정 전환 (Agy-Auth.bat, 2026-10-05)
+
+토큰은 Windows 자격 증명 관리자(`gemini:antigravity`)에 있고 저장본은 DPAPI(CurrentUser)라 다른 윈도우 사용자나 다른 PC에서는 못 연다. 전환 전에 agy 창을 닫는다(`use`는 agy 실행 중이면 거부).
+
+- 명령: `Agy-Auth.bat status | list | save <name> | use <name> | login | forget <name>`
+- 처음 설정 3단계(계정마다 한 번): ① `Agy-Auth.bat save A` ② `Start-Agy-CLI.bat` → `/logout` → `/login`(브라우저에서 B 계정) → 종료 → `Agy-Auth.bat save B` ③ 이후 `Agy-Auth.bat use A|B` 또는 `set AWX_AGY_ACCOUNT=B` 후 `Start-Agy-CLI.bat`.
+- `use`는 현재 자격을 `_autobackup-<ts>`로 먼저 저장하고 쓴 뒤 재읽기 MATCH를 확인한다.
+
 ## demo-1 hard constraints (still binding on agy)
 
 - Project root is `<repo>`; minimal diff; no secret
@@ -76,3 +84,39 @@ root `<repo>`.
   (`awx.debug.verify.v2`).
 - Global operating principles live in the `awx-agy-operating` skill (user-global);
   demo-1-specific rules live in the root `AGENTS.md` and the other demo1-* skills.
+
+## agy health check
+
+- `python -B scripts/agy_log_health.py` — newest `cli-*.log` counters → `var/agy-health/latest.json`.
+- `python -B scripts/skill_frontmatter_lint.py` — exit 0 = all `.agents/skills` parse OK.
+- AGENTS.md sections past agy's ~24,000 B cut are indexed by `scripts/agy_rules_overflow_index.py`
+  into `.agents/rules/agents-md-overflow-index.md`; `agent_context_preamble.ps1` rewrites it on agy
+  start, `--check` verifies freshness. Do not shrink AGENTS.md for agy.
+- `.agents/rules/*.md` need `---` frontmatter with `trigger: always_on|model_decision` or they
+  load as UNSPECIFIED and are skipped.
+
+## 프로필 (depth profile, 2026-10-05)
+
+- `AWX_AGY_PROFILE=depth` (기본): `agy_model_latest.ps1 -Pick`의 최신 같은 티어 Flash id가
+  `--model`로 붙고 effort는 Flash 최고값(`high`)이다. `lite`/`off`는 예전 동작 그대로.
+- `AWX_AGY_DRYRUN=1`: 최종 명령줄만 출력하고 agy를 띄우지 않는다.
+- 대화 중 `/effort <level>`로 조정 가능 — Flash는 `high`가 최대(xhigh/max 없음).
+- 시작 시 `scripts/agy_session_seed.py`가 `var/agy-seed/latest.md`를 쓴다 (L2/L3 작업이 읽는다).
+- 효과 측정: `python -B scripts/agy_depth_bench.py` (3과제 × 2프로필 × 2회, `var/agy-depth/`).
+
+## 4대 특화 레인 (specialized lanes, 2026-10-05)
+
+멀티에이전트 협업에서 agy에 1순위로 배정되는 주특기 프로필 — SSOT:
+`docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md`. 특화는 우선 배정이지 역량
+배제가 아니다(범용 보조 작업 계속 가능, STRICT_ZERO 그대로).
+
+1. 문서 수집: 공식 문서(T1)·GitHub 릴리스(T2)·최신 스펙/에러 원인 신속
+   리서치 → web-evidence 신호 회수.
+2. 코덱스 최적화 전달 (Context Curation for Codex): 3-Pack = 결론 3줄 +
+   `file:line` 앵커 + diff 10줄 이내.
+3. 지시서 작성: WP≤5·RED check·`[ANTI-STOP]`·lease 분담 `PASTE_*` 스캐폴딩
+   (`demo1-agy-directive-writer` + `scripts/brief_save.py`).
+4. 서브 리포터: `agent_signal_digest.py` 플릿 점검·활성 저널/리스 확인·
+   보고서 교차 검증(`demo1-agy-report-review`).
+
+orchestra 라우팅에서는 `lanes.AGY_RESEARCH.for`가 이 4축을 반영한다.

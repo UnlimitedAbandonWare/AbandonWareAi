@@ -1,0 +1,133 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 수행하고 검증 증거를 산출하는 실행 지시서다.
+@demo1-gpu-power-fallback
+
+[DEVIN 지시서] RTX 3090 오라마 장애 대응: 즉시 캔슬링 및 API/Auth 1순위(코덱스 62500 크레딧) 페일오버 — 2026-10-05 13:40 KST
+파일 ID: PASTE_DEVIN_RTX3090_OAUTH_FAILOVER_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스(main/java) 수정 0 · git push/pull 0 · git add -A/. 0 · remote 추가 0 · 비밀값 출력 0 · PROTO_OPEN 유지
+
+# 0. 한 줄 목표
+로컬 RTX 3090(Ollama) 장애 감지 시 대기/재시도를 즉시 캔슬(fail-fast)하고, auth(코덱스 62,500 크레딧 chatgpt_oauth) 1순위 및 경량 모델 API로 자동 전환되는 도구/라우팅/감시 체계를 완성한다.
+
+# 1. 사실 (2026-10-05 13:40 KST)
+- lease: devin이 `devin-rtx3090-lost-oauth-failover-78af31c5`로 10개 파일 lease 및 cycle-01 준비 완료.
+- 정책: auth 코덱스 62,500 크레딧(`configs/agent-api-spend-guard.yaml`) 1순위, 가벼운 모델(fast)은 고속/저비용 API, 장애 시 즉시 캔슬(retry 0) 후 API failover.
+- 코드: `configs/api-routing.yaml` llm에 `chatgpt_oauth` 미등록, `gpu_power_fallback.py` subscription 미분리, `gpu_incident.py` 미작성.
+
+## 기준 해시 표
+| 경로 | sha12 | 권한 |
+| :--- | :--- | :--- |
+| `configs/api-routing.yaml` | `FD32AFD2888E` | 수정 (chatgpt_oauth 등록) |
+| `scripts/gpu_incident.py` | (신규) | 생성 (인시던트 CLI) |
+| `scripts/test_gpu_incident.py` | (신규) | 생성 (테스트 >= 10건) |
+| `scripts/gpu_power_fallback.py` | `A8B410E31637` | 수정 (subscription/캔슬) |
+| `scripts/test_gpu_power_fallback.py` | `7B86F84D5B4C` | 수정 (auth 1순위 테스트) |
+| `scripts/rtx3090_health_watch.ps1` | `AF7C43440C08` | 수정 (이상 시 record 연동) |
+| `docs/agents-rules/DEMO1-RTX3090-WATCH.md` | `ADC618B84F75` | 수정 (인시던트/auth 명시) |
+| `.windsurf/rules/demo1-gpu-power-fallback.md` | `FE95D5E7452F` | 수정 (규칙 동기화) |
+
+## 입력 판정표
+| 지시 | 판정 | 근거 및 조치 |
+| :--- | :---: | :--- |
+| rtx3090 장애 빈발 | RIGHT | `rtx3090_health_watch.ps1` 감시 대상, TDR/전력/타임아웃 감지 |
+| 바로 캔슬 및 api 전환 | RIGHT | hang 차단 -> fail-fast (retry 0) 및 즉각 API failover |
+| auth 62500 크레딧 1순위 | RIGHT | spend-guard budget 62500 확인. `chatgpt_oauth` 1순위 등록 |
+| 가벼운 모델은 api로 | RIGHT | `fast` 라우팅은 `groq`/`gemini` 등 low_cost API 매핑 |
+
+# 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 제품 소스(`main/java/**`, `templates/**`, `frontend/**`) 수정 금지 (FOR_CODEX 인계).
+- Git 금지: `push`, `pull`, `fetch`, `merge`, `rebase`, `add -A`, `add .`, `commit -a`, remote 추가 금지.
+- 비밀값(키, 토큰) 노출 금지 (환경변수 이름만 참조).
+- 실호출 0원칙: 외부 유료 API 실호출 없이 synthetic/mock 100% 오프라인 검증.
+
+# 3. 작업 항목 (DV1~DV4)
+
+### DV1 [Devin] `configs/api-routing.yaml` 라우팅 명세 갱신
+- `routes.llm` 맨 앞에 `chatgpt_oauth` 등록:
+  ```yaml
+  routes:
+    llm:
+      - id: chatgpt_oauth
+        tier: subscription
+        env: [CHATGPT_OAUTH_ENABLED, CHATGPT_ACCESS_TOKEN]
+        model_default: "gpt-4o"
+        notes: "auth 1순위 (코덱스 62,500 크레딧)"
+  ```
+- RED: `python -B scripts/gpu_power_fallback.py route --purpose llm` 시 `chatgpt_oauth` 부재.
+- GREEN: `python -B -c "import sys; sys.path.insert(0, 'scripts'); import gpu_power_fallback as g; c = g.load_routing('.'); print([r['id'] for r in c['routes']['llm']])"` -> 포함 확인.
+
+### DV2 [Devin] `scripts/gpu_incident.py` 및 단위 테스트 구현
+- 상태 파일 `var/incident/gpu.json` 관리 CLI (`awx.gpu-incident.v1`):
+  - `probe`: `nvidia-smi` 3090 확인. 부재/에러 시 exit 3 + `state: "GPU3090_LOST"`, 정상이면 exit 0 + `state: "OK"`.
+  - `record --reason <reason> [--text "<msg>"]`: 인시던트 기록.
+  - `status`: 현재 인시던트 JSON 출력. `clear`: `probe` exit 0 시에만 클리어.
+- RED: `python -B scripts/test_gpu_incident.py` -> 파일 없음 error.
+- GREEN: `python -B scripts/test_gpu_incident.py` -> exit 0 (mock 기반 >= 10건 통과).
+
+### DV3 [Devin] `scripts/gpu_power_fallback.py` 및 테스트 확장
+- 1) `TIER_ORDER = ("free_local", "subscription", "low_cost", "paid_quality")` 확장.
+- 2) `suggest_fallback_route`: subscription 티어는 disabled 없으면 allowed=True. llm 1순위로 `chatgpt_oauth` 반환.
+- 3) `decide`: `--from-incident` 또는 `var/incident/gpu.json` 감지 시:
+  - `localRetryBudget = 0` (즉시 캔슬, retry 0 fail-fast).
+  - action: `fallback_to_api`, nextRoute: `chatgpt_oauth` (auth 1순위).
+  - fast/경량: low_cost API(`groq`, `gemini`) 매핑.
+- RED: `python -B scripts/test_gpu_power_fallback.py` -> subscription 미지원/groq 우선 반환.
+- GREEN: `python -B scripts/test_gpu_power_fallback.py` -> exit 0 (신규 케이스 통과).
+
+### DV4 [Devin] 감시 연동, 문서 갱신, FOR_CODEX 3-Pack
+- `scripts/rtx3090_health_watch.ps1`: 이상 감지 시 `python -B scripts/gpu_incident.py record --reason <anomalyId>` 호출.
+- `docs/agents-rules/DEMO1-RTX3090-WATCH.md` & Windsurf: 3090 인시던트 캔슬링/auth 1순위 명시.
+- FOR_CODEX 3-Pack: 제품 Java 소켓 타임아웃(10초) 및 cancel 후 failover 사양 정리.
+
+# 4. HOLD
+- 물리적 GPU 하드웨어 설정 변경 요구 시 -> HOLD.
+- 자바 제품 소스(`main/java/**`) 수정 요구 시 -> HOLD (FOR_CODEX 인계).
+- 외부 유료 API 실호출 결제 발생 시 -> HOLD (오프라인 테스트만 허용).
+
+# 5. ASK_ONCE
+- A-1: chatgpt_oauth 기본 모델: (a) 권장: `gpt-4o` (b) `gpt-5.5` (c) `o3-mini`
+- A-2: 3090 복구 판단: (a) 권장: `probe` 1회 성공(exit 0) 시 클리어 (b) 연속 3회 성공 시 클리어
+
+# 6. 절대 금지
+- `git push`, `git pull`, `git fetch`, `git merge`, `git rebase` 일체 금지.
+- `git add -A`, `git add .`, `git commit -a`, remote 추가 일체 금지.
+- API 키/토큰 원문 출력 및 커밋 일체 금지.
+- PROTO_OPEN 완화 원칙 훼손 또는 어드민 로그인 강제 금지.
+- 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`) 수정 일체 금지.
+
+# 7. Acceptance (완료 기준)
+- [ ] `configs/api-routing.yaml`에 `chatgpt_oauth` 등록 완료.
+- [ ] `scripts/gpu_incident.py` 및 테스트 통과 (`exit=0`).
+- [ ] `scripts/gpu_power_fallback.py` subscription 티어 및 인시던트 연동 반영.
+- [ ] `python -B scripts/gpu_power_fallback.py decide --purpose llm --text "gpu lost"` -> `localRetryBudget: 0`, `nextRoute.id: "chatgpt_oauth"` 확인.
+- [ ] `python -B scripts/test_gpu_power_fallback.py` 전체 통과 (`exit=0`).
+- [ ] `scripts/rtx3090_health_watch.ps1` 연동 및 rules 문서 갱신 완료.
+- [ ] 미실행 항목은 `NOT_RUN + 사유` 명시.
+
+# 8. 보고 형식
+Devin 시작 명령:
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+```
+보고 템플릿:
+```text
+외부 API: 0건 (실호출 0)
+비밀 열람: 0건 (환경변수명만)
+제품 소스 diff: 0건 (main/java 변경 0)
+Gradle 빌드: 0건 (도구/스크립트 한정)
+종료 시 lease: 0건 (완료 시 lease 해제)
+
+[결과 요약]
+- DV1: api-routing.yaml chatgpt_oauth(auth 1순위, 62500 크레딧) 등록
+- DV2: gpu_incident.py 구현 및 test_gpu_incident.py 통과 (exit 0)
+- DV3: gpu_power_fallback.py 캔슬링(retry=0) 및 auth 1순위 페일오버 검증 (exit 0)
+- DV4: rtx3090_health_watch.ps1 연동 및 DEMO1-RTX3090-WATCH.md 갱신
+
+[FOR_CODEX 3-Pack]
+1) 결론: 3090 장애 시 Ollama hang 방지 소켓 타임아웃 10초 적용 및 cancel 후 chatgpt_oauth failover Java 연동 필요.
+2) 근거: configs/api-routing.yaml:llm, scripts/gpu_power_fallback.py:decide, main/java/com/example/lms/llm/LlmRouterAspect.java
+3) 스펙: OllamaChatModel 타임아웃 예외 시 catch -> LlmRouterAspect에서 chatgpt_oauth(OpenAiResponsesChatModel) 위임.
+```
+
+[ANTI-STOP] 지시서 수행 중 임의 중단 금지. 위 모든 검증을 완료하고 최종 보고 형식으로 출력할 것.

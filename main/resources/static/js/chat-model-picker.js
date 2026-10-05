@@ -35,8 +35,9 @@
       if (modelTouched || defaultApplied) return false;
       try {
         const session = env.sessionStorage || root.sessionStorage;
-        if (session && (session.getItem("chat.currentSessionId") || session.getItem("chat.activeRun")
-            || session.getItem("chat.controlSettings"))) return false;
+        if (session && (session.getItem("chat.currentSessionId") || session.getItem("chat.activeRun"))) return false;
+        const settings = session?.getItem("chat.controlSettings");
+        if (settings && JSON.parse(settings)?.source !== "factory") return false;
         const defaults = root.AwxSettingsCore?.readSettings(storage);
         return !defaults?.model;
       } catch { return false; }
@@ -274,8 +275,12 @@
         publicCatalogLoaded = Boolean(discover);
         catalogCurrent = true;
         const serverDefault = choices.find(row => row.defaultChoice === true && row.selectable);
-        const applyDefault = serverDefault && untouchedFreshChat();
-        const previous = applyDefault ? serverDefault.id : select.value;
+        const firstSessionDefault = (select.dataset.firstSessionModel || "").split(",")
+          .map(id => id.trim()).map(id => choices.find(row => row.id === id && row.selectable))
+          .find(Boolean);
+        const defaultChoice = firstSessionDefault || serverDefault;
+        const applyDefault = defaultChoice && untouchedFreshChat();
+        const previous = applyDefault ? defaultChoice.id : select.value;
         select.replaceChildren();
         if (isDefaults) {
           const inherit = doc.createElement("option");
@@ -311,11 +316,12 @@
           defaultApplied = true;
           automaticDefaultActive = true;
           applyingDefault = true;
+          select.dataset.applyingDefault = "true";
           try {
             const mode = doc.getElementById("modelSelectionMode");
-            if (mode) { mode.value = "auto"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-          } finally { applyingDefault = false; }
+            if (mode) { mode.value = firstSessionDefault ? "preferred" : "auto"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
+            select.dispatchEvent(new Event("change", { bubbles: true })); ready();
+          } finally { applyingDefault = false; delete select.dataset.applyingDefault; }
         }
         render();
         ready();
@@ -364,7 +370,7 @@
         const mode = doc.getElementById("modelSelectionMode");
         if (mode) { mode.value = "strict"; mode.dispatchEvent(new Event("change", { bubbles: true })); }
       }
-      modelTouched = true; if (select.value) remember(select.value); ready(); render();
+      modelTouched = true; if (select.value) remember(select.value); if (!applyingDefault) ready(); render();
     });
     doc.addEventListener("keydown", event => {
       if (event.key !== "Escape" || !panel.open) return;

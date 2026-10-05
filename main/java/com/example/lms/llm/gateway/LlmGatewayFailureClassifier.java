@@ -41,6 +41,13 @@ public class LlmGatewayFailureClassifier {
             "subscription_sharing_user_unavailable",
             "chatpass_v2_scope_not_authorized",
             "invalid_authorization_context");
+    /** Provider-side model removal: the named model no longer exists upstream. */
+    static final Set<String> MODEL_MISSING_ERROR_CODES = Set.of(
+            "model_not_found",
+            "model_deprecated",
+            "model_decommissioned",
+            "model_retired",
+            "model_not_supported");
     private static final ObjectReader ERROR_READER = new ObjectMapper()
             .enable(JsonParser.Feature.STRICT_DUPLICATE_DETECTION)
             .reader().with(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
@@ -237,6 +244,9 @@ public class LlmGatewayFailureClassifier {
             return LlmFailureClass.HEALTH_DOWN;
         }
         if (status >= 400) {
+            if (hasErrorCode(responseText, MODEL_MISSING_ERROR_CODES)) {
+                return LlmFailureClass.MODEL_MISSING;
+            }
             LlmFailureClass bodyClass = classifyMessage(responseText);
             return bodyClass == LlmFailureClass.UNKNOWN
                     ? LlmFailureClass.BAD_REQUEST
@@ -273,7 +283,16 @@ public class LlmGatewayFailureClassifier {
                 || m.contains("missing key") || m.contains("owner token")) {
             return LlmFailureClass.AUTH_MISSING;
         }
-        if (m.contains("model_not_found") || m.contains("model not found") || m.contains("not found")) {
+        // 단종·퇴역 시그니처는 model 문맥을 요구한다 — 파라미터 deprecated 류의
+        // 일반 400 응답이 MODEL_MISSING으로 오인되지 않게 한다.
+        if (m.contains("model_not_found") || m.contains("model not found") || m.contains("not found")
+                || m.contains("decommissioned")
+                || m.contains("no longer supported")
+                || m.contains("not supported for api version")
+                || m.contains("not supported for the api version")
+                || (m.contains("model")
+                        && (m.contains("deprecat") || m.contains("retire")
+                                || m.contains("does not exist")))) {
             return LlmFailureClass.MODEL_MISSING;
         }
         if ((m.contains("main_gpu") && m.contains("available devices: 0"))

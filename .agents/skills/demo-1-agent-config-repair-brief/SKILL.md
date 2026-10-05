@@ -1,5 +1,5 @@
 ---
-name: demo-1 Agent Config Repair Brief
+name: demo-1-agent-config-repair-brief
 description: >-
   Use this when an agent tool (Codex/Devin/agy/Grok
   CLI/GLM/MCP/instructions/approvals/web search/cwd) misbehaves or its settings

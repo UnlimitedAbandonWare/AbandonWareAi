@@ -50,23 +50,18 @@ public class BanditSelector {
     /* ────────────────────────────── Public API ───────────────────────────── */
 
     /** ❶ “가장 좋은 TM 후보” 한 개 반환 (없으면 empty) */
+    @SuppressWarnings("deprecation")
     public Optional<TranslationMemory> pickBestMemoryCandidate(String srcText, String srcHash) {
 
-        /* 1) 일치 해시가 있으면 바로 반환 */
+        /* 1) 일치 해시가 있으면 바로 반환 — 해시 히트는 전수 스캔 없이 즉시 반환 */
         Optional<TranslationMemory> exact = memoryRepo.findBySourceHash(srcHash);
         if (exact.isPresent()) return exact;
 
-        /* 2) top-K 후보 선별 */
+        /* 2) top-K 후보 선별 (격리된 레거시 인메모리 레일) */
         int k            = hp.getInt("memory.k-top", 5);
         double threshold = dynThreshold.get();        // 매번 변할 수 있음
 
-        List<TranslationMemory> topK = memoryRepo.findAll().stream()
-                .peek(tm -> tm.setCosineSimilarity(
-                        simUtil.calculateSimilarity(srcText, tm.getCorrected())))
-                .filter(tm -> tm.getCosineSimilarity() >= threshold)
-                .sorted(Comparator.comparingDouble(TranslationMemory::getCosineSimilarity).reversed())
-                .limit(k)
-                .collect(Collectors.toList());
+        List<TranslationMemory> topK = legacyMemoryScanTopK(srcText, k, threshold);
 
         if (topK.isEmpty()) return Optional.empty();
 
@@ -86,6 +81,27 @@ public class BanditSelector {
 
         int idx = softmaxSample(logits);
         return Optional.of(topK.get(idx));
+    }
+
+    /**
+     * 레거시 전수 메모리 스캔 레일 — 테이블 전체를 JVM 메모리로 퍼올려 코사인
+     * 유사도를 계산한다. DB-side 후보 선별 쿼리로 이관되기 전까지의 안전
+     * Fallback이며, 이 경계 밖으로 확장하지 않는다.
+     *
+     * @deprecated legacy in-memory fallback — 쿼리 기반 후보 선별로 대체 예정
+     */
+    @Deprecated /* legacy in-memory fallback */
+    private List<TranslationMemory> legacyMemoryScanTopK(String srcText, int k, double threshold) {
+        List<TranslationMemory> all = memoryRepo.findAll();
+        if (all == null || all.isEmpty()) return List.of();
+
+        return all.stream()
+                .peek(tm -> tm.setCosineSimilarity(
+                        simUtil.calculateSimilarity(srcText, tm.getCorrected())))
+                .filter(tm -> tm.getCosineSimilarity() >= threshold)
+                .sorted(Comparator.comparingDouble(TranslationMemory::getCosineSimilarity).reversed())
+                .limit(k)
+                .collect(Collectors.toList());
     }
 
     /** ❷ 선택한 TM 을 실제로 “쓸지 말지” 결정하는 볼츠만 정책 */

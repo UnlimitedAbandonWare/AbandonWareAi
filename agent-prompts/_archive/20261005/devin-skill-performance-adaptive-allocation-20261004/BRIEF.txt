@@ -1,0 +1,136 @@
+[ANTI-STOP] 읽고 멈추지 마세요. WP1부터 WP4까지 순서대로 끝까지 실행하고 자율 완료 보고를 제출합니다.
+[DEVIN 지시서] 코덱스 고성능 스킬 적응형 자동 승격(Auto-Promote) 및 3티어 토큰 예산 배분 엔진 — 2026-10-04 16:45 KST
+@demo1-devin-source-orchestrator
+파일 ID: PASTE_DEVIN_skill-performance-adaptive-allocation_20261004
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+0. 한 줄 목표
+코덱스 최근 7일간 160개 세션 로그(900MB, 출력 잘림 낭비 3,681만 토큰, 컴팩션 182회, 패치 실패 269건)를 바탕으로, 작업 복잡도·위험도에 따라 고비용·고성능 스킬(Triad Deliberation, Counter-Evidence, Evidence Debugging, Subsystem Patch, Web Research)을 자동으로 승격 발동하면서도, 출력 예산(Output-Budget)과 체크포인트 가드로 토큰 폭주를 차단하는 "적응형 3티어 스킬 배분 엔진 및 성능 계측기"를 구축한다.
+
+# 1. 사실 (2026-10-04 16:42 KST 실측 세션 데이터)
+1. **코덱스 최근 7일간 160개 세션 실측 (`scripts/codex_session_friction.py --days 7`)**:
+   - 세션 파일: 총 160개 세션, 900.2MB(900,266,509B) 스캔 완료.
+   - 단일 세션 최대 누적 토큰: `rollout-2026-10-03T12-58`에서 **142,047,399 토큰(1억 4,200만 토큰)**, 컨텍스트 컴팩션(compaction) 11회 발생. 1억 토큰 초과 세션 3건.
+   - **출력 잘림(Truncated Output) 토큰 누수**: 총 2,718건에서 **36,814,550 토큰(3,681만 토큰)**이 터미널 덤프로 버려짐(중앙값 8,105 토큰, 최대 742,754 토큰).
+   - **패치 불일치 및 마찰**: `applypatch_expected_lines` 137건, `applypatch_invalid_hunk` 132건(총 269건 패치 실패), `source_lease_drift` 1,644건, `secret_pattern_any` 3,114건.
+   - **서브에이전트 호출 편중**: 총 97회 중 단순 `explorer`(79회), `glm_worker`(15회)에 편중되었으며, 설계 오류를 선제 차단하는 고성능 스킬(`triad`, `counter-evidence`)은 0회.
+2. **고성능 스킬의 과도한 잠금 (`.agents/skills-intent-index.yaml`)**:
+   - L63 `default_forbid_families: [counter-evidence, macsrc-patchdrop, triad]`로 인해 `triad-deliberation`, `positive-negative-neutral-judge`, `demo1-triangulating-counter-evidence`가 기본 차단됨.
+   - 사용자가 "삼자 심의", "교차 검증", "반증"을 명시하지 않으면 발동하지 않아, 복잡한 서브시스템 패치 시 코덱스가 단견으로 접근하다 턴 낭비 및 컴팩션 지옥에 빠짐.
+3. **사용자 요구사항**:
+   - 토큰을 많이 잡아먹더라도 성능(정확도, 한 번에 맞추는 능력, 심층 추론)을 올리는 스킬을 자동으로 쓰게 할 것.
+   - 향후 쓰면서 개량화(Tuning)할 수 있도록 계측점을 둘 것.
+   - 무차별 낭비가 되지 않도록 개량(고성능)과 경량(토큰 절약)을 적절히 섞어 3티어로 배분할 것.
+
+# 2. 공통 규칙
+- 시작 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 준수.
+- Git 안전: git commit, git push, git add -A, git reset, git clean, remote 추가 일체 금지.
+- 제품 소스 보호: `main/**` 제품 코드는 일체 수정하지 않음 (오직 에이전트 라우팅, 스킬 인덱스, 룰 문서, 계측 스크립트 및 테스트만 수정).
+- 보안 및 상태: 시크릿 노출 금지 (환경변수 이름만 사용), PROTO_OPEN 유지, 외부 유료 API 호출 0회.
+- 보고 첫 줄: 반드시 `외부 API: 0회 (라이브 API 미사용)`로 시작.
+
+# 3. 항목 (WP1~WP4)
+### WP1 [Devin] 복잡도/위험도 기반 '고성능 스킬 자동 승격(Auto-Promote)' 라우팅 구현
+- 증거: `scripts/demo1_vibe_skill_router.py`:1 및 `.agents/skills-intent-index.yaml`:63
+- RED:
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  python -B scripts/demo1_vibe_skill_router.py resolve "Overdrive랑 ExtremeZ 복합 서브시스템 충돌 해결해줘"; "exit=$LASTEXITCODE"
+  (현재는 triad/counter-evidence가 forbid_families에 의해 배제됨)
+- 최소 수정:
+  1) `.agents/skills-intent-index.yaml`:
+     - 고성능 인텐트에 `auto_promote` 속성 및 고난도 시그널 패턴 추가:
+       복합 서브시스템(ExtremeZ, Overdrive, CFVM, MoE), 2회 이상 실패/재시도(loop), 아키텍처 재설계, "정교히/완벽히/근본적으로" 감지 시:
+       - `primary_skill: demo1-triad-deliberation` 또는 `demo1-rag-strategy-orchestration` 자동 승격.
+       - `optional_skill: demo1-triangulating-counter-evidence` 또는 `demo1-evidence-debugging` 자동 페어링.
+       - 해당 조건 부합 시 `forbid_families`에서 `triad` 및 `counter-evidence`를 자율 해금(auto-unlock).
+  2) `scripts/demo1_vibe_skill_router.py`:
+     - `resolve` 함수에 질의 난이도 판정 및 티어링(`tier0_light`, `tier1_tactical`, `tier2_strategic`) 지원 추가.
+     - 단순 가역 작업은 Tier 0(경량) 유지, 고위험/복합 작업은 Tier 1/2로 자동 승격하여 고성능 스킬 매핑.
+- GREEN: python -B scripts/test_demo1_vibe_skill_router_cases.py; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 기존 라우터 테스트 100% 통과 및 고난도 질의 시 고성능 스킬이 자동으로 승격 반환됨.
+
+### WP2 [Devin] 토큰 폭주 방지 경량화 배분 가드 (Lean Quota & Output-Budget 상시화)
+- 증거: `docs/agents-rules/DEMO1-OUTPUT-BUDGET.md`:1, `scripts/codex_question_classifier.py`:1
+- RED:
+  python -B scripts/codex_question_classifier.py --options "1) 경량 패스 2) 3축 심의"; "exit=$LASTEXITCODE"
+- 최소 수정:
+  1) 3,680만 토큰이 낭비된 콘솔 출력 덤프(Truncated Output) 방어:
+     - 고성능 스킬 발동 시에도 `demo1-output-budget` 원칙을 불변 가드로 바인딩: 도구/스크립트 콘솔 출력은 30줄/1KB 이내로 요약하고 상세 데이터는 `var/diagnostics/` 임시 파일로 저장 후 경로만 참조.
+  2) `scripts/codex_question_classifier.py`:
+     - Tier 0/1 작업에서는 불필요한 서브에이전트 스폰이나 1/2/3 선택 퀴즈를 100% 인라인 AUTO로 자동 결정하여 문답 턴 및 토큰 소모 차단.
+  3) 세션 140,000 토큰 초과 시 `demo1-session-state-checkpoint`를 자동 권고하여 182회 발생한 컴팩션(Compaction) 시의 문맥 유실 방어.
+- GREEN: python -B scripts/test_codex_question_classifier.py; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 분류기 테스트 전체 통과 및 콘솔 출력 상한 가드 명문화.
+
+### WP3 [Devin] 난이도별 3티어 적응형 스킬-예산 배분 규칙 SSOT 문서화 (`DEMO1-SKILL-PERFORMANCE-TIERING.md`)
+- 증거: `docs/agents-rules/` 디렉터리, `AGENTS.md`:1, `scripts/agents_md_budget.py`
+- RED:
+  Select-String -Path docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md -Pattern "TIER-2" -SimpleMatch; "exit=$LASTEXITCODE"
+  (미존재 exit!=0)
+- 최소 수정:
+  1) `docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md` 신규 작성:
+     - **Tier 0 (Light / Fast Lane, 예산 ~15k 토큰)**: 단일 파일, 오타/주석/가역적 로컬 작업 -> `demo1-codex-auto-decide` + `safe-source-edit` + `demo1-output-budget`. Triad 스폰 금지.
+     - **Tier 1 (Performance / Tactical Lane, 예산 30k~60k 토큰)**: 복합 로직, 서브시스템 패치, 1차 테스트 실패 -> `demo1-evidence-debugging` + `demo1-subsystem-patch-directive` + `awx-uaw-web-research` 자동 활성화.
+     - **Tier 2 (Deep Reasoning / Strategic Lane, 예산 80k~120k 토큰)**: 아키텍처 변경, 2회 이상 동일 실패 재발(Loop), 보안/시크릿 경계 -> `demo1-triad-deliberation`(3축 심의) + `demo1-triangulating-counter-evidence` 자동 발동.
+  2) `AGENTS.md`에 2줄 포인터 스텁 등록:
+     - `docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md` 연결.
+     - `python -B scripts/agents_md_budget.py check`로 35KB 예산 한도 통과 검증.
+- GREEN:
+  python -B scripts/agents_md_budget.py check; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 3티어 룰 문서 작성 및 AGENTS.md 35KB 예산 준수.
+
+### WP4 [Devin] 성능-토큰 모니터 및 점진적 개량 계측기 (`codex_skill_performance_monitor.py`) 구현
+- 증거: `scripts/codex_session_friction.py`:1
+- RED:
+  python -B scripts/codex_skill_performance_monitor.py --help; "exit=$LASTEXITCODE"
+  (미생성 exit!=0)
+- 최소 수정:
+  1) `scripts/codex_skill_performance_monitor.py` 구현:
+     - 최신 코덱스 세션을 분석하여:
+       - 세션에 부여된 스킬 티어 (Tier 0 / Tier 1 / Tier 2) 판정
+       - 소모된 토큰 총량 및 출력 잘림(truncated output) 발생 여부
+       - 고성능 스킬(Triad, Strategy, Evidence-Debug 등) 자동 호출 횟수
+       - 패치 마찰 지표 (hunk error, lease drift 여부)
+     - 한 줄 요약(`--brief`) 및 상세 JSON 출력 지원.
+     - 사용자가 향후 임계값(Threshold)을 미세 조정(개량화)할 수 있도록 설정 상수(`TIER_THRESHOLDS`)를 상단에 명확히 선언.
+  2) `scripts/test_codex_skill_performance_monitor.py`:
+     - 티어 판정, 토큰 계측, 마찰 지표 추출에 대한 단위 테스트 4개 이상 작성.
+- GREEN: python -B scripts/test_codex_skill_performance_monitor.py; "exit=$LASTEXITCODE" (exit=0)
+- 완료 조건: 모니터 스크립트 구현 및 테스트 100% PASS.
+
+# 4. HOLD (중단 조건)
+- `main/**` 프로덕트 자바/웹 소스 코드 변경이 요구되는 경우.
+- `AGENTS.md` 수정 후 `scripts/agents_md_budget.py check`가 실패(35,000B 초과)하는 경우.
+- `test_demo1_vibe_skill_router_cases.py`의 핵심 6개 계약 스킬 sha256이 변형되는 경우.
+
+# 5. ASK_ONCE
+- A-1: 고성능 스킬(Triad/Counter-evidence) 자동 승격 기준 중 '동일 에러 반복' 임계값을 2회로 할지 3회로 할지?
+  - 권장 기본값: 2회 (1회 실패 후 재시도 시 즉시 3축 심의/반대증거를 가동하여 3회차 헛바퀴 및 1억 토큰 낭비를 사전 차단).
+- A-2: 세션 토큰 경고 시점(체크포인트 권고)을 140,000 토큰(78%)으로 할지 150,000 토큰(83%)으로 할지?
+  - 권장 기본값: 140,000 토큰 (컴팩션 발생 전 안전하게 20줄 상태 압축 파일 생성).
+
+# 6. 절대 금지
+- git push, git pull, git commit, git add -A, git reset, git clean, remote 추가 실행 금지.
+- PROTO_OPEN 상태 변경 및 인증/권한 레이어 임의 추가 금지.
+- API 키, 시크릿 토큰 등 비밀값 노출 금지.
+- 전체 `:test` 스위트 실행 금지 (지정된 파이썬 검증 스크립트만 실행).
+
+# 7. Acceptance (수용 기준)
+- [ ] WP1: `scripts/demo1_vibe_skill_router.py`에 티어링 로직이 추가되고, `python -B scripts/test_demo1_vibe_skill_router_cases.py`가 전체 PASS한다.
+- [ ] WP1: 복합 서브시스템 또는 고난도 질문 입력 시 `demo1-triad-deliberation` 등이 자동으로 승격 판정된다.
+- [ ] WP2: `scripts/codex_question_classifier.py`가 Tier 0/1 작업에서 인라인 AUTO로 즉시 판정되며, `python -B scripts/test_codex_question_classifier.py`가 PASS한다.
+- [ ] WP3: `docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md`가 생성되고, `python -B scripts/agents_md_budget.py check`가 exit=0을 반환한다.
+- [ ] WP4: `scripts/codex_skill_performance_monitor.py`가 구현되고 `python -B scripts/test_codex_skill_performance_monitor.py`가 전체 PASS한다.
+- [ ] 실행하지 못한 항목은 반드시 NOT_RUN과 구체적 사유가 명시되어 있으며, PASS로 바꾸지 않는다.
+
+# 8. 보고 형식
+외부 API: 0회 (라이브 API 미사용)
+| 항목 | 결과 | 증거 경로 / 테스트 결과 |
+|---|---|---|
+| WP1 고성능 스킬 자동 승격 라우팅 | PASS/FAIL/NOT_RUN | `scripts/test_demo1_vibe_skill_router_cases.py` |
+| WP2 토큰 폭주 방지 경량화 가드 | PASS/FAIL/NOT_RUN | `scripts/test_codex_question_classifier.py` |
+| WP3 3티어 적응형 배분 룰 문서화 | PASS/FAIL/NOT_RUN | `docs/agents-rules/DEMO1-SKILL-PERFORMANCE-TIERING.md`, `agents_md_budget.py check` |
+| WP4 성능-토큰 모니터 및 계측기 | PASS/FAIL/NOT_RUN | `scripts/test_codex_skill_performance_monitor.py` |
+
+[ANTI-STOP] 읽고 멈추지 마세요. 0번 한 줄 목표부터 8번 보고 형식까지 중간 중단 없이 완수합니다.

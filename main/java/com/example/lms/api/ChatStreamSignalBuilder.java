@@ -170,8 +170,41 @@ final class ChatStreamSignalBuilder {
                 planWhenState(safeMeta.get("plan.when.post")),
                 safeMeta.get("plan.when.lateActivation") instanceof Boolean late ? late : null,
                 planStages(safeMeta),
-                agentWebSearchSnapshot(safeMeta));
+                agentWebSearchSnapshot(safeMeta),
+                contextUsageSnapshot(safeMeta),
+                executionModeSnapshot(safeMeta));
         return isEmptyPipelineSnapshot(snapshot) ? null : snapshot;
+    }
+
+    static ChatStreamEvent.ExecutionModeSnapshot executionModeSnapshot(Map<String, Object> meta) {
+        String requested = safeString(meta.get("executionMode.requested"));
+        if (!java.util.Set.of("AUTO", "STRIKE", "SELF_ASK").contains(requested == null ? "" : requested)) return null;
+        return new ChatStreamEvent.ExecutionModeSnapshot(requested, safeString(meta.get("executionMode.effective")),
+                safeString(meta.get("executionMode.reason")), observedCount(meta.get("executionMode.queryCount")),
+                observedCount(meta.get("executionMode.httpAttempts")),
+                meta.get("executionMode.expanded") instanceof Boolean expanded ? expanded : null);
+    }
+
+    private static ChatStreamEvent.ContextUsageSnapshot contextUsageSnapshot(Map<String, Object> meta) {
+        Integer input = "multimodal_unobserved".equals(meta.get("llm.call.inputCountMethod")) ? null
+                : observedCount(meta.get("llm.call.approxInputTokens"));
+        Integer limit = "model_spec_snapshot".equals(meta.get("llm.call.contextLimitSource"))
+                ? observedCount(meta.get("llm.call.contextLimitTokens")) : null;
+        Integer before = observedCount(meta.get("prompt.memory.compressor.inputLen"));
+        Integer after = observedCount(meta.get("prompt.memory.compressor.outputLen"));
+        Boolean activated = meta.get("prompt.memory.compressor.activated") instanceof Boolean value ? value : null;
+        Boolean included = meta.get("llm.call.memoryIncluded") instanceof Boolean value ? value : null;
+        if (input == null && limit == null && before == null && after == null && activated == null && included == null) return null;
+        return new ChatStreamEvent.ContextUsageSnapshot(input, limit, input == null ? null : "char_estimate",
+                "model_spec_snapshot", before, after, activated,
+                meta.get("prompt.memory.compressor.reason") instanceof String reason ? reason : null, included);
+    }
+
+    private static Integer observedCount(Object value) {
+        if (!(value instanceof Number number)) return null;
+        double count = number.doubleValue();
+        return Double.isFinite(count) && count >= 0 && count <= Integer.MAX_VALUE && count == Math.rint(count)
+                ? (int) count : null;
     }
 
     private static ChatStreamEvent.AgentWebSearchSnapshot agentWebSearchSnapshot(Map<String, Object> meta) {
@@ -1529,7 +1562,9 @@ final class ChatStreamSignalBuilder {
                 snapshot.planWhenPost(),
                 snapshot.planLateActivation(),
                 snapshot.planStages(),
-                snapshot.agentWebSearch());
+                snapshot.agentWebSearch(),
+                snapshot.contextUsage(),
+                snapshot.executionMode());
     }
 
     @SuppressWarnings("unchecked")
@@ -1587,7 +1622,9 @@ final class ChatStreamSignalBuilder {
                 && snapshot.planWhen() == null
                 && snapshot.planWhenPost() == null
                 && snapshot.planStages() == null
-                && snapshot.agentWebSearch() == null);
+                && snapshot.agentWebSearch() == null
+                && snapshot.contextUsage() == null
+                && snapshot.executionMode() == null);
     }
 
     private static ChatStreamEvent.TransformerBlockSignal block(

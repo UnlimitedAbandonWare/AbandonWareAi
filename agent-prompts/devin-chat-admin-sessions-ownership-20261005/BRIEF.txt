@@ -1,0 +1,106 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 끝까지 수행하고 포커스 검증을 완료한 뒤 최종 보고서를 작성하는 실행 지시서다.
+
+# DEVIN 실행 지시서: Main /chat GET /sessions 관리자 전체 목록 누락(O3/O3a) 수리
+
+@demo1-devin-directive-loop
+참조 스킬: .agents/skills/demo1-devin-directive-loop/SKILL.md
+
+## 0. 한 줄 목표
+`ChatApiController.java`의 `GET /sessions` 엔드포인트에 demo1-session-ownership O3/O3a 규칙(메인 모드 실제 관리자의 전체 세션 조회)을 최소 diff로 반영하여 `ChatApiControllerMainModeOwnershipTest:165` 실패를 해결하고 포커스 및 회귀 테스트를 완전 통과시킨다.
+
+## 1. 사실 (2026-10-05 18:25 KST 기준)
+- HEAD: `8420b8977c250e60ea9ea73e3de06d9dbaf6b8ff`, Project Root: `C:\AbandonWare\demo-1\demo-1\src`.
+- 코덱스의 2026-10-05 오후 6시 다중 사용자 패치(`Documents\Codex\2026-10-05\task-7\REPORT.md`)는 23개 클래스 223개 테스트 중 222개 통과, 1개 실패로 PARTIAL/HOLD 상태로 멈췄다.
+- 유일한 실패 지점: `ChatApiControllerMainModeOwnershipTest.java:165`
+  - 테스트: `admin_mainMode_canListAndReadOthers_keepsAdminException`
+  - 에러: `org.opentest4j.AssertionFailedError: main-mode admin keeps the all-session list ==> expected: <true> but was: <false>`
+- 결함 원인: `ChatApiController.java:5054-5076`의 `sessions()` 메서드가 `isRealAdmin` 여부 및 `interviewDemo` 모드를 전혀 판별하지 않고, 무조건 `historyService.getSessionsForUser(user, clientIp, limit)`만 호출하며 필터에서 타인 세션을 일괄 제거함.
+- SSOT 규칙: `.windsurf/rules/demo1-session-ownership.md`
+  - O3: "관리자 예외(타인 세션·run 열람, `GET /sessions` 전체 목록)는 메인 모드(`demo.interview.enabled=false`)에서 실제 관리자에게만 유지한다. 면접 모드에서는 실제 관리자에게도 예외가 없다."
+  - O3a: "실제 관리자 = `isAdmin(authentication)` 이고 principal 이름이 `proto-open`이 아닌 호출자 (`isRealAdmin = isAdmin && principal != 'proto-open'`)."
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- git commit/push/reset 금지, add -A 금지, 유료 API 호출 0, .secrets/.env* 열람 금지.
+- 작업 시작 시 `source_edit_session.ps1` 또는 `agent_scope_lease.py`로 타깃 lease 확인/획득, 종료 시 lease 0.
+
+## 3. 작업 항목 (DV)
+
+### DV-1. ChatApiController.java `sessions()` 수정
+- 파일: `main/java/com/example/lms/api/ChatApiController.java:5054-5076`
+- 수정 내용:
+  1. `principal`로부터 `isRealAdmin` 판정 로직 추가:
+     ```java
+     boolean isRealAdmin = !interviewDemo
+             && principal != null
+             && principal.getAuthorities() != null
+             && principal.getAuthorities().stream().anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()))
+             && !"proto-open".equals(principal.getUsername());
+     ```
+  2. `isRealAdmin`이 `true`인 경우:
+     - `historyService.getAllSessionsForAdmin(limit)`를 호출.
+     - 필터링 없이 목록 전체를 `SessionInfo`로 매핑하여 반환:
+       ```java
+       if (isRealAdmin) {
+           java.util.List<ChatSession> list = historyService.getAllSessionsForAdmin(limit);
+           return list.stream()
+                   .map(s -> new SessionInfo(
+                           s.getId(),
+                           s.getTitle(),
+                           ChatModelMetaSupport.safeTrim(s.getLastAnswerMode()),
+                           s.getLastTraceTurnId()))
+                   .toList();
+       }
+       ```
+  3. `isRealAdmin`이 `false`인 경우:
+     - 기존의 일반 사용자/익명 격리 조회 로직 유지:
+       - `isSharedFallbackOwnerKey(currentKey)` 체크 → 빈 리스트 반환.
+       - `historyService.getSessionsForUser(user, clientIp, limit)` 호출 및 `ownerKey`/`username` 일치 필터링 유지.
+- diff 목표: +15줄 내외의 최소 수정.
+
+### DV-2. 포커스 테스트 및 단위 검증
+- PowerShell에서 아래 명령을 순서대로 실행하고 결과를 확인한다:
+  ```powershell
+  Set-Location C:\AbandonWare\demo-1\demo-1\src
+  .\gradlew.bat :test --tests com.example.lms.api.ChatApiControllerMainModeOwnershipTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+  ```
+  - 기대 결과: 8 tests completed, 0 failed, exit=0 (`admin_mainMode_canListAndReadOthers_keepsAdminException` 통과).
+  ```powershell
+  .\gradlew.bat :test --tests com.example.lms.api.ChatApiControllerInterviewOwnershipTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+  ```
+  - 기대 결과: 면접 모드 소유권 격리 테스트 전원 통과, exit=0.
+
+### DV-3. 회귀 검증
+- task-7에서 통과했던 소유권 관련 focused suite들을 함께 검증:
+  ```powershell
+  .\gradlew.bat :test --tests "com.example.lms.api.ChatApiController*" --no-daemon --console=plain; "exit=$LASTEXITCODE"
+  ```
+  - exit code 0 확인.
+
+## 4. HOLD
+- `ChatSessionTraceRecorderTest`의 `SecretFixtures` 의존성 관련 컴파일 문제는 이번 작업 범위 밖이므로 손대지 않고 HOLD 유지.
+- `ChatWorkflow` outer RetryAfter/fixed350ms backoff는 Display 세션 영역과 연관되므로 수정 0(HOLD).
+
+## 5. ASK_ONCE
+- 없음 (로컬 가역적인 명확한 버그 수정이므로 AUTO 진행).
+
+## 6. 절대 금지
+- `git commit`, `git push`, `git checkout`, `git reset`, `git add -A` 금지.
+- 외부 유료 API 실호출 0.
+- `.secrets`, `.env*` 파일 열람/출력 금지.
+- `ChatApiController.java` 이외의 불필요한 제품 소스 파일 수정 금지.
+
+## 7. Acceptance (통과 기준)
+- [ ] `ChatApiControllerMainModeOwnershipTest` 8/8 통과 (특히 `admin_mainMode_canListAndReadOthers_keepsAdminException` 성공).
+- [ ] `ChatApiControllerInterviewOwnershipTest` 통과.
+- [ ] 미실행된 항목은 `NOT_RUN + 사유` 명시.
+- [ ] 작업 완료 시 변경된 파일의 lease 해제(종료 시 lease 0).
+
+## 8. 보고 형식
+최종 보고서 상단은 반드시 아래 포맷으로 시작할 것:
+```text
+외부 API: 0, 비밀 열람: 0, 제품 소스 diff: <N>줄, Gradle exit: 0, 종료 시 lease: 0
+```
+- 수정된 파일 및 라인 수, 테스트 실행 결과(실행 수, 실패 수, 소요 시간), 잔여 HOLD 사항을 간결히 요약.
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 위 작업을 실제로 끝까지 수행하고 검증 결과를 보고서로 작성하는 실행 지시서다.

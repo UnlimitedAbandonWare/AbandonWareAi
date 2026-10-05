@@ -1,18 +1,25 @@
 package com.example.lms.service;
 
 import com.example.lms.dto.ChatRequestDto;
+import com.example.lms.config.CacheConfig;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import com.example.lms.trace.SafeRedactor;
 import org.junit.jupiter.api.Test;
 import org.springframework.aop.framework.ProxyFactory;
 import org.springframework.cache.annotation.AnnotationCacheOperationSource;
+import org.springframework.cache.CacheManager;
+import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.cache.concurrent.ConcurrentMapCacheManager;
 import org.springframework.cache.interceptor.CacheOperation;
 import org.springframework.cache.interceptor.CacheInterceptor;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.lang.reflect.Method;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -82,7 +89,9 @@ class ChatServiceCacheKeyRedactionTest {
                                 .content("prior turn")
                                 .build()))
                         .build(),
-                cacheSafeRequest().toBuilder().understandingEnabled(true).build());
+                cacheSafeRequest().toBuilder().understandingEnabled(true).build(),
+                cacheSafeRequest().toBuilder().contextPreparationRequested(true).build(),
+                cacheSafeRequest().toBuilder().contextSourceCheck(() -> {}).build());
 
         for (int index = 0; index < unsafeRequests.size(); index++) {
             AtomicInteger invocations = new AtomicInteger();
@@ -111,6 +120,106 @@ class ChatServiceCacheKeyRedactionTest {
     }
 
     @Test
+    @SuppressWarnings("unchecked")
+    void configuredResponseCacheHitsBeforeFiveMinutesAndExpiresAtTheBoundary() {
+        CaffeineCacheManager manager = (CaffeineCacheManager) new CacheConfig().cacheManager();
+        Caffeine<Object, Object> configuredBuilder = (Caffeine<Object, Object>)
+                ReflectionTestUtils.getField(manager, "cacheBuilder");
+        AtomicLong tickerNanos = new AtomicLong();
+        var nativeCache = configuredBuilder.ticker(tickerNanos::get).build();
+        manager.registerCustomCache("chatResponses", nativeCache);
+        assertEquals(300_000L, nativeCache.policy().expireAfterWrite().orElseThrow()
+                .getExpiresAfter(TimeUnit.MILLISECONDS));
+        assertEquals(500L, nativeCache.policy().eviction().orElseThrow().getMaximum());
+        AtomicInteger invocations = new AtomicInteger();
+        ChatWorkflow cached = cachedWorkflow(invocations, manager);
+        ChatRequestDto request = cacheSafeRequest();
+        ChatResult first = cached.continueChat(request);
+
+        tickerNanos.set(TimeUnit.MILLISECONDS.toNanos(299_999L));
+        assertEquals(first, cached.continueChat(request));
+        assertEquals(1, invocations.get());
+
+        tickerNanos.set(TimeUnit.MILLISECONDS.toNanos(300_000L));
+        ChatResult expired = cached.continueChat(request);
+        assertNotEquals(first, expired);
+        assertEquals(2, invocations.get());
+        assertEquals(expired, cached.continueChat(request));
+        assertEquals(2, invocations.get());
+    }
+
+    @Test
+    void unverifiedOwnerRequestsBypassResponseCache() {
+        AtomicInteger invocations = new AtomicInteger();
+        ChatWorkflow cached = cachedWorkflow(invocations);
+        ChatRequestDto request = unboundCacheSafeRequest();
+
+        assertFalse(ChatService.isCacheSafe(request));
+        assertNotEquals(cached.continueChat(request), cached.continueChat(request));
+        assertEquals(2, invocations.get());
+    }
+
+    @Test
+    void sameQuestionIsIsolatedByServerVerifiedOwner() {
+        AtomicInteger invocations = new AtomicInteger();
+        ChatWorkflow cached = cachedWorkflow(invocations);
+        ChatRequestDto firstOwner = cacheSafeRequest("owner-a");
+        ChatRequestDto secondOwner = cacheSafeRequest("owner-b");
+
+        ChatResult first = cached.continueChat(firstOwner);
+        ChatResult second = cached.continueChat(secondOwner);
+
+        assertNotEquals(ChatService.cacheKey(firstOwner), ChatService.cacheKey(secondOwner));
+        assertNotEquals(first, second);
+        assertEquals(first, cached.continueChat(firstOwner));
+        assertEquals(second, cached.continueChat(secondOwner));
+        assertEquals(2, invocations.get());
+        assertFalse(ChatService.cacheKey(firstOwner).contains(firstOwner.getVerifiedRequestOwnerHash()));
+    }
+
+    @Test
+    void sameOwnerDifferentQueryAndExecutionPreferencesNeverReuseAnAnswer() {
+        ChatRequestDto base = cacheSafeRequest();
+        List<ChatRequestDto> variations = List.of(
+                base.toBuilder().message("different question").build(),
+                base.toBuilder().customInstructions("prefer concise answers").build(),
+                base.toBuilder().responseTone("friendly").build(),
+                base.toBuilder().responseLength("short").build(),
+                base.toBuilder().responseLanguage("ko").build(),
+                base.toBuilder().strictModelSelection(true).build(),
+                base.toBuilder().modelSelectionMode("manual").build(),
+                base.toBuilder().executionMode(com.example.lms.domain.enums.ExecutionMode.SELF_ASK).build(),
+                base.toBuilder().ragAnswerPolicy("evidence_only").build());
+        AtomicInteger invocations = new AtomicInteger();
+        ChatWorkflow cached = cachedWorkflow(invocations);
+        ChatResult first = cached.continueChat(base);
+
+        for (ChatRequestDto request : variations) {
+            assertNotEquals(ChatService.cacheKey(base), ChatService.cacheKey(request));
+            assertNotEquals(first, cached.continueChat(request));
+        }
+        assertEquals(variations.size() + 1, invocations.get());
+    }
+
+    @Test
+    void revisionDependentSettingsSnapshotsBypassResponseCache() {
+        AtomicInteger invocations = new AtomicInteger();
+        ChatWorkflow cached = cachedWorkflow(invocations);
+        ChatRequestDto first = cacheSafeRequest();
+        ChatRequestDto revised = cacheSafeRequest();
+        first.bindChatSettingsSnapshot(new ChatRequestDto.ChatSettingsSnapshot(
+                java.util.Map.of(), java.util.Map.of("defaultsVersion", "revision-a"), java.util.Map.of()));
+        revised.bindChatSettingsSnapshot(new ChatRequestDto.ChatSettingsSnapshot(
+                java.util.Map.of(), java.util.Map.of("defaultsVersion", "revision-b"), java.util.Map.of()));
+
+        assertFalse(ChatService.isCacheSafe(first));
+        assertFalse(ChatService.isCacheSafe(revised));
+        assertNotEquals(cached.continueChat(first), cached.continueChat(first));
+        assertNotEquals(cached.continueChat(revised), cached.continueChat(revised));
+        assertEquals(4, invocations.get());
+    }
+
+    @Test
     void cacheKeyIsBoundedAndDoesNotExposeRawIdentityInputs() {
         String rawMessage = "private-query-a12";
         String rawSystemPrompt = "private-system-a12";
@@ -136,12 +245,26 @@ class ChatServiceCacheKeyRedactionTest {
     }
 
     private static ChatRequestDto cacheSafeRequest() {
+        return cacheSafeRequest("owner-a");
+    }
+
+    private static ChatRequestDto cacheSafeRequest(String owner) {
+        ChatRequestDto request = unboundCacheSafeRequest();
+        request.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forAnonymous(owner));
+        return request;
+    }
+
+    private static ChatRequestDto unboundCacheSafeRequest() {
         return ChatRequestDto.builder()
                 .message("same cache-safe question")
                 .model("model-a")
                 .mode("balanced")
                 .memoryMode("ephemeral")
                 .temperature(0.2d)
+                .topP(1.0d)
+                .frequencyPenalty(0.0d)
+                .presencePenalty(0.0d)
+                .maxTokens(256)
                 .useRag(Boolean.FALSE)
                 .useWebSearch(Boolean.FALSE)
                 .useVerification(Boolean.FALSE)
@@ -149,6 +272,10 @@ class ChatServiceCacheKeyRedactionTest {
     }
 
     private static ChatWorkflow cachedWorkflow(AtomicInteger invocations) {
+        return cachedWorkflow(invocations, new ConcurrentMapCacheManager("chatResponses"));
+    }
+
+    private static ChatWorkflow cachedWorkflow(AtomicInteger invocations, CacheManager manager) {
         ChatWorkflow target = mock(ChatWorkflow.class);
         when(target.continueChat(any(ChatRequestDto.class))).thenAnswer(call -> {
             ChatRequestDto request = call.getArgument(0);
@@ -159,7 +286,7 @@ class ChatServiceCacheKeyRedactionTest {
         });
 
         CacheInterceptor interceptor = new CacheInterceptor();
-        interceptor.setCacheManager(new ConcurrentMapCacheManager("chatResponses"));
+        interceptor.setCacheManager(manager);
         interceptor.setCacheOperationSources((method, targetClass) -> cacheOperations());
         interceptor.afterPropertiesSet();
         interceptor.afterSingletonsInstantiated();

@@ -1,0 +1,20 @@
+{
+    "targets":  [
+                    {
+                        "sha256":  null,
+                        "path":  "data/agent-handoff/for-codex/FOR_CODEX_TRI_SYSTEM_ISOLATION.md"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/test_tri_system_frontend_isolation.cjs"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/probe_tri_system_isolation.py"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/test_probe_tri_system_isolation.py"
+                    }
+                ]
+}

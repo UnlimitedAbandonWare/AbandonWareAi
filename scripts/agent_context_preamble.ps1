@@ -166,6 +166,7 @@ if ($SelfTest) {
 try {
     $root = Split-Path -Parent $PSScriptRoot
     $journals = Join-Path $root 'data/agent-handoff/codex-autonomy'
+    if ($Agent -eq 'agy') { try { $null = & python.exe -B (Join-Path $PSScriptRoot 'agy_rules_overflow_index.py') --write --quiet 2>&1 } catch { } }
     $output = Read-ContextOutput $root $journals $TaskId 0 $entryClock
     if ($output -and $entryClock.ElapsedMilliseconds -lt 1700) { [Console]::Out.WriteLine($output) }
 } catch { }

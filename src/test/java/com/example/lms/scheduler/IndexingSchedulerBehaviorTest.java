@@ -3,6 +3,9 @@ package com.example.lms.scheduler;
 import com.example.lms.search.TraceStore;
 import com.example.lms.service.MemoryReinforcementService;
 import com.example.lms.service.VectorStoreService;
+import com.example.lms.service.VectorMetaKeys;
+import com.example.lms.service.vector.VectorShadowMergeDlqService;
+import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -26,6 +29,8 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
@@ -183,6 +188,140 @@ class IndexingSchedulerBehaviorTest {
         assertEquals(1, store.addAllCalls);
     }
 
+    @Test
+    void preservesFetcherProvenanceThroughEveryChunkWithoutMutatingInput() {
+        Document document = syntheticDocument();
+        RecordingStore store = indexDocuments(document);
+
+        assertTrue(store.persistedSegments.size() > 1);
+        for (TextSegment segment : store.persistedSegments) {
+            Map<String, Object> metadata = segment.metadata().toMap();
+            assertAll(document.metadata().toMap().entrySet().stream()
+                    .filter(entry -> !entry.getKey().equals(VectorMetaKeys.META_VERIFIED))
+                    .map(entry -> (org.junit.jupiter.api.function.Executable)
+                            () -> assertEquals(entry.getValue(), metadata.get(entry.getKey()), entry.getKey())));
+        }
+        assertEquals("true", document.metadata().getString(VectorMetaKeys.META_VERIFIED));
+        assertEquals("2026-01-01T00:00:00", document.metadata().getString("fetchedAt"));
+    }
+
+    @Test
+    void fetcherVerifiedTrueStillRequiresIndependentVerification() {
+        RecordingStore store = indexDocuments(syntheticDocument());
+
+        assertTrue(store.persistedSegments.size() > 1);
+        for (TextSegment segment : store.persistedSegments) {
+            assertEquals("false", segment.metadata().getString(VectorMetaKeys.META_VERIFIED));
+            assertEquals("true", segment.metadata().getString(VectorMetaKeys.META_VERIFICATION_NEEDED));
+        }
+    }
+
+    @Test
+    void stableSourceIdentityStagesUnverifiedChunksInShadowAndRemainsStableOnRetry() {
+        RecordingStore store = new RecordingStore(-1);
+        VectorStoreService vectors = newService(store);
+        VectorShadowMergeDlqService dlq = mock(VectorShadowMergeDlqService.class);
+        ReflectionTestUtils.setField(vectors, "shadowWriteEnabled", true);
+        ReflectionTestUtils.setField(vectors, "shadowRequireExplicitId", true);
+        ReflectionTestUtils.setField(vectors, "vectorShadowMergeDlqService", dlq);
+        IndexingScheduler.DocumentFetcher fetcher = mock(IndexingScheduler.DocumentFetcher.class);
+        when(fetcher.fetchNewDocumentsSince(any(LocalDateTime.class)))
+                .thenReturn(List.of(syntheticDocument()));
+        IndexingScheduler scheduler = new IndexingScheduler(new FixedEmbeddingModel(), store, fetcher,
+                mock(MemoryReinforcementService.class), vectors);
+
+        MDC.put("trace", "synthetic-indexing-run");
+        scheduler.scheduleIndexing();
+        List<String> firstIds = List.copyOf(store.attemptedIds.get(0));
+        int chunkCount = store.persistedSegments.size();
+        scheduler.scheduleIndexing();
+
+        assertEquals(firstIds, store.attemptedIds.get(1));
+        assertEquals(chunkCount, new HashSet<>(firstIds).size());
+        for (TextSegment segment : store.persistedSegments) {
+            assertEquals("unverified", segment.metadata().getString(VectorMetaKeys.META_SHADOW_REASON));
+            assertTrue(segment.metadata().getString(VectorMetaKeys.META_SID).startsWith("0~S"));
+            assertEquals("0", segment.metadata().getString(VectorMetaKeys.META_SHADOW_TARGET_SID));
+            assertFalse(segment.metadata().getString(VectorMetaKeys.META_ORIGINAL_ID).isBlank());
+        }
+        verify(dlq, times(2 * chunkCount)).recordStaged(anyString(), anyString(), eq("0"), eq("0"),
+                anyString(), anyString(), eq("unverified"), anyString(), anyMap());
+    }
+
+    @Test
+    void fetcherCannotBypassShadowAdmission() {
+        RecordingStore store = new RecordingStore(-1);
+        VectorStoreService vectors = newService(store);
+        VectorShadowMergeDlqService dlq = mock(VectorShadowMergeDlqService.class);
+        ReflectionTestUtils.setField(vectors, "shadowWriteEnabled", true);
+        ReflectionTestUtils.setField(vectors, "shadowRequireExplicitId", true);
+        ReflectionTestUtils.setField(vectors, "vectorShadowMergeDlqService", dlq);
+        Document document = syntheticDocument();
+        document.metadata().put(VectorMetaKeys.META_SHADOW_BYPASS, "true");
+        IndexingScheduler.DocumentFetcher fetcher = mock(IndexingScheduler.DocumentFetcher.class);
+        when(fetcher.fetchNewDocumentsSince(any(LocalDateTime.class)))
+                .thenReturn(List.of(document));
+        IndexingScheduler scheduler = new IndexingScheduler(new FixedEmbeddingModel(), store, fetcher,
+                mock(MemoryReinforcementService.class), vectors);
+
+        MDC.put("trace", "synthetic-bypass-run");
+        scheduler.scheduleIndexing();
+
+        assertTrue(store.persistedSegments.size() > 1);
+        for (TextSegment segment : store.persistedSegments) {
+            assertEquals("unverified", segment.metadata().getString(VectorMetaKeys.META_SHADOW_REASON));
+            assertTrue(segment.metadata().getString(VectorMetaKeys.META_SID).startsWith("0~S"));
+            assertFalse(segment.metadata().toMap().containsKey(VectorMetaKeys.META_SHADOW_BYPASS));
+            assertEquals("false", segment.metadata().getString(VectorMetaKeys.META_VERIFIED));
+            assertEquals("true", segment.metadata().getString(VectorMetaKeys.META_VERIFICATION_NEEDED));
+        }
+        verify(dlq, times(store.persistedSegments.size())).recordStaged(anyString(), anyString(), eq("0"),
+                eq("0"), anyString(), anyString(), eq("unverified"), anyString(), anyMap());
+        assertEquals("true", document.metadata().getString(VectorMetaKeys.META_SHADOW_BYPASS));
+    }
+
+    @Test
+    void sourceIdFallbackUsesExplicitIdentityAndMissingIdentityStaysUnverified() {
+        VectorStoreService vectors = mock(VectorStoreService.class);
+        IndexingScheduler.DocumentFetcher fetcher = mock(IndexingScheduler.DocumentFetcher.class);
+        String identified = "Synthetic source ID document.";
+        String anonymous = "Synthetic document without a source identifier.";
+        when(fetcher.fetchNewDocumentsSince(any(LocalDateTime.class))).thenReturn(List.of(
+                Document.from(identified, Metadata.from(Map.of("source_id", "fixture-source-1"))),
+                Document.from(anonymous)));
+        IndexingScheduler scheduler = new IndexingScheduler(new FixedEmbeddingModel(), mock(EmbeddingStore.class),
+                fetcher, mock(MemoryReinforcementService.class), vectors);
+
+        scheduler.scheduleIndexing();
+
+        verify(vectors).enqueue(anyString(), eq("0"), eq(identified), anyMap());
+        ArgumentCaptor<Map<String, Object>> metadata = ArgumentCaptor.forClass(Map.class);
+        verify(vectors).enqueue(eq("0"), eq(anonymous), metadata.capture());
+        assertEquals("false", metadata.getValue().get(VectorMetaKeys.META_VERIFIED));
+        assertEquals("true", metadata.getValue().get(VectorMetaKeys.META_VERIFICATION_NEEDED));
+    }
+
+    private static Document syntheticDocument() {
+        String text = java.util.stream.IntStream.range(0, 16)
+                .mapToObj(i -> "Synthetic fixture paragraph " + i + " describes independently sourced provenance and safe indexing.")
+                .collect(java.util.stream.Collectors.joining("\n\n"));
+        return Document.from(text, Metadata.from(Map.of(
+                "url", "https://example.invalid/fixture", "revision", "fixture-r1",
+                "content_hash", "synthetic-content-hash", "license", "synthetic-license",
+                "owner", "synthetic-owner", "locale", "ko-KR", "consent", "fixture-consent",
+                "source", "SYNTHETIC_FETCHER", "fetchedAt", "2026-01-01T00:00:00",
+                VectorMetaKeys.META_VERIFIED, "true")));
+    }
+
+    private static RecordingStore indexDocuments(Document document) {
+        RecordingStore store = new RecordingStore(-1);
+        IndexingScheduler.DocumentFetcher fetcher = mock(IndexingScheduler.DocumentFetcher.class);
+        when(fetcher.fetchNewDocumentsSince(any(LocalDateTime.class))).thenReturn(List.of(document));
+        new IndexingScheduler(new FixedEmbeddingModel(), store, fetcher,
+                mock(MemoryReinforcementService.class), newService(store)).scheduleIndexing();
+        return store;
+    }
+
     private static VectorStoreService newService(RecordingStore store) {
         VectorStoreService service = new VectorStoreService(new FixedEmbeddingModel(), store);
         configure(service);
@@ -216,13 +355,18 @@ class IndexingSchedulerBehaviorTest {
 
         @Override
         public void enqueue(String sessionId, String text, Map<String, Object> extraMeta) {
+            enqueue(null, sessionId, text, extraMeta);
+        }
+
+        @Override
+        public void enqueue(String explicitId, String sessionId, String text, Map<String, Object> extraMeta) {
             String oldTrace = MDC.get("traceId");
             String oldRequest = MDC.get("x-request-id");
             int group = sequence.incrementAndGet();
             MDC.put("traceId", "indexing-test-trace-" + group);
             MDC.put("x-request-id", "indexing-test-request-" + group);
             try {
-                super.enqueue(sessionId, text, extraMeta);
+                super.enqueue(explicitId, sessionId, text, extraMeta);
             } finally {
                 restoreMdc("traceId", oldTrace);
                 restoreMdc("x-request-id", oldRequest);
@@ -252,6 +396,7 @@ class IndexingSchedulerBehaviorTest {
         private final List<List<String>> acceptedIds = new ArrayList<>();
         private final List<List<String>> attemptedIds = new ArrayList<>();
         private final Set<String> persistedIds = new HashSet<>();
+        private final List<TextSegment> persistedSegments = new ArrayList<>();
         private int addAllCalls;
 
         private RecordingStore(int failOnAddAllCall) {
@@ -286,6 +431,7 @@ class IndexingSchedulerBehaviorTest {
             }
             acceptedIds.add(List.copyOf(ids));
             persistedIds.addAll(ids);
+            persistedSegments.addAll(embedded);
         }
 
         @Override

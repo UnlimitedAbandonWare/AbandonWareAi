@@ -87,6 +87,18 @@ class PreflightScenarios(unittest.TestCase):
         path.write_text(json.dumps(doc), encoding="utf-8")
         return path
 
+    def write_lease(self, topic, task, targets):
+        lock = (self.root / "__patch_drop__" / "source-edit-locks"
+                / f"{topic}.lock")
+        lock.mkdir(parents=True)
+        (lock / "lease.json").write_text(json.dumps({
+            "leaseId": "0" * 32, "topic": topic,
+            "taskIdHash": hashlib.sha256(str(task).encode("utf-8")).hexdigest(),
+            "ownerProcessId": 0,
+            "expiresAtUtc": iso(now() + timedelta(hours=1)),
+            "targetPaths": targets}), encoding="utf-8")
+        return lock
+
     def write_plan(self, plan_id="plan-test0001", lanes=None):
         d = self.root / PLAN_BASE / plan_id
         d.mkdir(parents=True, exist_ok=True)
@@ -272,6 +284,30 @@ class PreflightScenarios(unittest.TestCase):
         self.assertEqual(row["verdict"], "LANE_VIOLATION")
         self.assertTrue(row["laneViolation"])
 
+
+
+    def test_own_live_lease_is_excluded_from_overlapping_claims(self):
+        # Caller taskIdHash == sha256(task) must not be reported as overlap.
+        task = "self-lease-aaaabbbb"
+        topic = "self-lease-topic"
+        self.write_lease(topic, task, ["scripts/mine.py"])
+        proc, row = self.call("--goal-key", GOAL, "--task", task,
+                              "--scope", "scripts/mine.py")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        self.assertNotIn(topic, [c.get("lease") for c in row["overlappingClaims"]])
+        self.assertNotIn(topic, [c.get("lease") for c in row["blockingClaims"]])
+        self.assertEqual(row["verdict"], "CLEAR")
+
+    def test_foreign_live_lease_remains_foreign_claim_overlap(self):
+        task = "self-lease-aaaabbbb"
+        topic = "foreign-lease-topic"
+        self.write_lease(topic, "other-lease-ccccdddd", ["scripts/theirs.py"])
+        proc, row = self.call("--goal-key", GOAL, "--task", task,
+                              "--scope", "scripts/theirs.py")
+        self.assertEqual(proc.returncode, 0, proc.stderr[-400:])
+        self.assertEqual(row["verdict"], "FOREIGN_CLAIM_OVERLAP")
+        self.assertIn(topic, [c.get("lease") for c in row["overlappingClaims"]])
+        self.assertIn(topic, [c.get("lease") for c in row["blockingClaims"]])
 
 if __name__ == "__main__":
     unittest.main()

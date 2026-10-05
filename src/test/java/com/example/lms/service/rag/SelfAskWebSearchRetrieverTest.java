@@ -249,6 +249,39 @@ class SelfAskWebSearchRetrieverTest {
                 () -> "missing SelfAskWebSearchRetriever invalid_number fail-soft stage: " + stage);
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"STRIKE,true,1", "AUTO,true,1", "SELF_ASK,false,1"})
+    void executionPreferenceCannotCreateOptionalSearchWhenFastOrSafetyDisabled(String mode, boolean allowed, int expected) {
+        CountingProvider provider = new CountingProvider();
+        SelfAskWebSearchRetriever retriever = newRetriever(provider);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        ReflectionTestUtils.setField(retriever, "searchExecutor", executor);
+        ReflectionTestUtils.setField(retriever, "selfAskEnabled", true);
+        ReflectionTestUtils.setField(retriever, "maxDepth", 2);
+        try {
+            retriever.retrieve(QueryUtils.buildQuery("hello please write a friendly short greeting using simple words only",
+                    Map.of("executionMode", mode, "enableSelfAsk", allowed)));
+            assertEquals(expected, provider.calls.get());
+            org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("orch.strike"));
+        } finally { executor.shutdownNow(); }
+    }
+
+    @Test void selfAskUsesOriginalAndAtMostTwoExistingSupplementSeeds() {
+        CountingProvider provider = new CountingProvider();
+        SelfAskWebSearchRetriever retriever = newRetriever(provider);
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(3);
+        ReflectionTestUtils.setField(retriever, "searchExecutor", executor);
+        ReflectionTestUtils.setField(retriever, "selfAskEnabled", true);
+        ReflectionTestUtils.setField(retriever, "maxDepth", 3);
+        try {
+            retriever.retrieve(QueryUtils.buildQuery("Compare official Python creator and foundation roles with sources",
+                    Map.of("executionMode", "SELF_ASK", "enableSelfAsk", true)));
+            assertTrue(provider.calls.get() > 1);
+            assertTrue(provider.queries.stream().distinct().count() <= 3, provider.queries.toString());
+            assertEquals("SELF_ASK", TraceStore.get("executionMode.effective"));
+        } finally { executor.shutdownNow(); }
+    }
+
     @Test
     void globalDisabledWithoutExplicitPlanOverrideDoesNotCallProvider() {
         CountingProvider provider = new CountingProvider();
@@ -357,6 +390,22 @@ class SelfAskWebSearchRetrieverTest {
             executor.shutdownNow();
             assertTrue(executor.awaitTermination(2, TimeUnit.SECONDS), "owned search worker must terminate");
         }
+    }
+
+    @Test
+    void safetyGateSkipReportsFailedConditionDetail() {
+        CountingProvider provider = new CountingProvider();
+        SelfAskWebSearchRetriever retriever = newRetriever(provider);
+        var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+        ReflectionTestUtils.setField(retriever, "searchExecutor", executor);
+        ReflectionTestUtils.setField(retriever, "selfAskEnabled", true);
+        try {
+            retriever.retrieve(QueryUtils.buildQuery(
+                    "compare official roles and responsibilities across projects for evidence",
+                    Map.of("executionMode", "AUTO", "enableSelfAsk", true, "nightmareMode", true)));
+            assertEquals("nightmare_mode", TraceStore.get("selfask.safetyGate.detail"));
+            assertEquals("safety-gate", TraceStore.get("executionMode.reason"));
+        } finally { executor.shutdownNow(); }
     }
 
     private static GuardContext completeWildCreativeContext() {

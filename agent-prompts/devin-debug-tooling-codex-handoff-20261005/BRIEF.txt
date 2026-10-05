@@ -1,0 +1,98 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 디버깅 도구 개량 및 코덱스 자립화 작업을 실제로 완수하고 검증해야 합니다.
+@demo1-evidence-debugging
+
+[DEVIN 지시서] 디버깅 도구 개량 및 10월 13일 데빈 종료 대비 코덱스 중심 자립화 — 2026-10-05 00:30 KST
+파일 ID: PASTE_DEVIN_DEBUG_TOOLING_CODEX_HANDOFF_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 소스 파괴적 삭제 0 · 기능 손실 0 · git push/pull/commit/add -A 0 · remote 추가 0 · 비밀값/토큰 출력 0 · 유료 외부 API 호출 0 · PROTO_OPEN 준수
+
+## 0. 한 줄 목표
+10월 13일 데빈 지원 종료 이후 코덱스가 단독으로 디버깅·검증할 수 있도록 디버깅 도구를 코덱스 맞춤형(토큰 절약·컴팩트 진단)으로 개량하고, 기능 손실 없이 안전한 진단 체계를 구축한다.
+
+## 1. 사실 (2026-10-05 00:25 KST 읽기 전용 확인)
+- Project Root: `C:\AbandonWare\demo-1\demo-1\src` (헤드 8420b897, 115 dirty 유지).
+- 핵심 디버깅 스크립트 및 테스트 실존:
+  * `scripts/chat_session_debug_export.py` (22,278 B, sha12: 2A1B26433755, 테스트 30/30 PASS).
+  * `scripts/test_chat_session_debug_export.py` (27,782 B, sha12: 358969A8F450).
+  * `scripts/read_rag_debug_trail.ps1` (32,892 B, sha12: 130B7435AE04, 테스트 14/14 PASS).
+  * `scripts/read_rag_debug_trail_tests.ps1` (6,261 B, sha12: EC224B84038B).
+  * `scripts/debug_rag_stack.ps1` (76,945 B, sha12: C49C470ED640).
+  * `Debug-RAG.bat` (1,523 B, sha12: B62120009D40, `-JsonStdout` 지원).
+- 2026-10-13 이후 데빈 사용 종료: 10월 13일까지 풀 가동하며, 이후 코덱스가 단독으로 디버깅·검증할 수 있도록 도구를 코덱스 중심 구조로 정비.
+- 손실 최소화 및 경량화 수위: "기능 손실 최소화하되 개선", "경량은 심하게 안 해도 됨(10월 13일까지 풀 가동)". 코드 삭제나 기능 폐기는 금지하며 비침습적 Fast-path 및 Safe fallback 적용.
+- 코덱스 제약: 컨텍스트 윈도우 및 토큰 예산(`demo1-output-budget`, 2~3KB) 한정으로 대용량 로그 대신 핵심 원인·조치를 담은 컴팩트 요약 카드가 필수적임.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용.
+- lease/journal: 소스 수정 시 `agent_scope_lease.py check/claim/done` 및 `work_journal.py open/note/close` 절차 준수.
+- 실행 못한 항목은 `NOT_RUN` + 구체적 이유를 명시하며 PASS로 바꾸지 않는다.
+- PROTO_OPEN 정책을 준수하며 추가 로그인이나 권한 게이트를 요구하지 않는다.
+
+## 3. 항목 (작업 패키지 WP1 ~ WP4)
+
+### WP1 [DEVIN] 디버깅 도구의 코덱스 친화적 컴팩트 요약 출력 보강
+- 대상: `scripts/chat_session_debug_export.py`, `scripts/test_chat_session_debug_export.py`
+- 목표: 코덱스가 컨텍스트에 한 번에 담을 수 있도록 2~3KB 이하 컴팩트 진단 카드 및 요약 JSON 옵션(`--summary` / `--compact-json`) 보강.
+- 최소 수정: 기존 30개 테스트 영향 없이 코덱스용 간결 요약(세션 ID, 원인, 핵심 에러 1줄, 추천 액션) 추출 옵션 추가. 기존 상세 덤프 기능 100% 보존 (기능 손실 0).
+- RED 검사: `python -B scripts/test_chat_session_debug_export.py; "exit=$LASTEXITCODE"`
+- GREEN 기대: 기존 30개 테스트 및 신규 컴팩트 옵션 테스트 전체 PASS, exit=0.
+
+### WP2 [DEVIN] 런타임 진단 진입점(Debug-RAG & Trail)의 코덱스 원터치 CLI 안정화
+- 대상: `scripts/read_rag_debug_trail.ps1`, `scripts/read_rag_debug_trail_tests.ps1`, `Debug-RAG.bat`
+- 목표: 코덱스가 단일 명령으로 RAG 상태 및 에러 트레일을 판별할 수 있도록 원터치 CLI 점검 및 안정화.
+- 최소 수정: PowerShell 환경에서 파이프라인 에러 없이 안정적으로 원인 요약을 반환하고 JSON 출력 모드(`-JsonStdout`) 규격 유지.
+- RED 검사: `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/read_rag_debug_trail_tests.ps1; "exit=$LASTEXITCODE"`
+- GREEN 기대: 14개 테스트 전체 PASS, exit=0.
+
+### WP3 [DEVIN] 기존 기능 손실 없는(Zero-loss) 안전한 점진적 경량화 및 핫스팟 점검
+- 대상: 디버깅 및 진단 스크립트 내부의 대용량 로그 스캔/파일 순회 로직
+- 목표: 대용량 파일 전체 로딩 대신 최근 N줄 탐색 Fast-path를 제공해 메모리 부하를 줄이되 기존 기능 100% 보존.
+- 최소 수정: 분기/기능 삭제 없이 대용량 로그 탐색 시 경량 스트리밍 경로 제공. 기존 시그니처 100% 유지.
+- RED 검사: `python -B scripts/test_chat_session_debug_export.py; "exit=$LASTEXITCODE"`
+- GREEN 기대: 테스트 통과 및 지연 감소 확인, exit=0.
+
+### WP4 [DEVIN] 10월 13일 데빈 종료 대비 '코덱스 단독 디버깅 가이드' 문서화 및 셀프 체크
+- 대상: `docs/agent-tooling/codex-standalone-debug-guide.md` (신규 작성)
+- 목표: 데빈 없이 코덱스 홀로 레포를 진단·수리할 수 있도록 원터치 디버깅 커맨드북 완성.
+- 최소 작성 내용: 1줄 진단 명령 모음 (RAG 스택, 세션 트레이스, DB 상태, H2 락), 토큰 절약형 옵션 사용법, 코덱스 자가 검증(Self-check) 명령어 블록.
+- 검증: 가이드에 작성된 모든 명령어가 로컬 환경에서 정상 작동하는지 데빈이 직접 실행 검증.
+
+## 4. HOLD 조건
+- 기존 공개 API, 클래스 시그니처, 핵심 데이터 구조를 파괴하거나 변경해야만 경량화가 가능한 경우 (즉시 HOLD 후 기존 구조 보존).
+- 유료 외부 API 결제나 크레딧 충전, 결제 설정 변경이 요구되는 경우.
+- 다른 에이전트가 선점 중인 활성 lease 충돌이 해결되지 않는 경우.
+
+## 5. ASK_ONCE
+- U-1 디버깅 도구의 기본 출력 모드 결정:
+  * (a) 권장: 기존 호환성을 위해 기본 출력은 유지하고, 코덱스용 호출 시에만 `--summary` / `--compact` 플래그를 붙여 토큰을 절약한다 (기능 손실 0 보장).
+  * (b) 기본 출력을 컴팩트로 전환하고, 상세 로그가 필요할 때 `--verbose` 플래그를 요구한다.
+
+## 6. 절대 금지
+- `git push`, `git pull`, `git add -A`, `git commit`, `git checkout`, `git reset`, `git clean` 등 VCS 조작 금지.
+- remote 추가 금지.
+- 기능 축소를 위한 임의의 클래스/메서드/옵션 삭제(Deprecation/Drop) 금지.
+- `.secrets`, 비밀번호, 인증 토큰, 비밀 문자열 노출 금지.
+- 유료 API 실호출 및 비용 발생 행위 금지.
+- PROTO_OPEN 보안 규칙 임의 강화 금지.
+
+## 7. Acceptance (완료 기준)
+- A1 (대응 WP1): `scripts/chat_session_debug_export.py`에 코덱스 친화적 컴팩트 요약 출력이 추가되고 단위 테스트 전체 PASS (exit=0).
+- A2 (대응 WP2): `scripts/read_rag_debug_trail.ps1` 단위 테스트 14건 전체 PASS (exit=0).
+- A3 (대응 WP3): 기존 디버깅 도구 및 런타임의 기능 손실(Breaking Change) 0건 확인.
+- A4 (대응 WP4): 10월 13일 데빈 종료 대비 `docs/agent-tooling/codex-standalone-debug-guide.md` 작성 및 기재된 커맨드의 로컬 실행 검증 완료.
+- A5: 실행하지 못한 항목은 반드시 `NOT_RUN` + 구체적 이유를 명시하며 임의로 PASS로 바꾸지 않는다.
+
+## 8. 보고 형식
+첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+보고 첫 줄은 반드시 아래 규격으로 시작한다:
+```
+외부 API: 0원 (로컬 검증 완료)
+```
+
+보고 본문 포함 사항:
+1. 수정 및 생성된 파일 목록과 sha12 해시 표.
+2. 실행한 각 검증 명령과 실제 exit code (`exit=$LASTEXITCODE`).
+3. 기존 기능 대비 손실 유무(Zero-loss 확인 증거).
+4. 10월 13일 이후 코덱스에게 인계될 주요 커맨드 요약.
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 위 작업 패키지(WP1~WP4)를 실제로 실행하고 검증 보고서를 제출해야 합니다.

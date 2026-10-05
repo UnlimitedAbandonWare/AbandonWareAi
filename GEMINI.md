@@ -25,3 +25,4 @@
 - Directive-writer mode edits NO product source; it only writes the directive file (and evidence copies).
 - Unsure or destructive → stop and ask with a recommended option.
 <!-- END AGY-PROJECT-POINTERS -->
+- AGENTS.md 24,000B 이후 절 목록(자동 생성): .agents/rules/agents-md-overflow-index.md

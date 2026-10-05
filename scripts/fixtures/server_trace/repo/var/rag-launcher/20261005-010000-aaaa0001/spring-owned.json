@@ -1,0 +1,12 @@
+{
+    "schemaVersion":  "awx.chat_ui_owned_runtime.v1",
+    "runId":  "awx-chat-runtime-fake-fixture-aaaa0001",
+    "launcher":  {"processId": 4000, "processName": "cmd.exe"},
+    "listener":  {"processId": 4242, "processName": "java.exe"},
+    "springProfile":  "local,meta-display",
+    "runtimeRole":  "dev",
+    "ports":  {"server": 18180, "management": 18181, "netty": 18182},
+    "startedAt":  "2026-10-04T16:00:02.0000000+00:00",
+    "readyAt":  "2026-10-04T16:00:50.0000000Z",
+    "logs":  {"out": "var/rag-launcher/20261005-010000-aaaa0001/chat-ui-vibe-listener-18180.out.log"}
+}

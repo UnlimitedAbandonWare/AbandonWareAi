@@ -4,7 +4,7 @@
 - AUTO (Self-Ask) is the default for reversible local work — ASK_ONCE only for irreversible/cost/policy-owned asks, HOLD only for real blockers. 상세: `docs/agents-rules/DEMO1-VIBE-SELFASK-JUDGE-AUTO.md`
 - 선택 카드(request_user_input*) 전 `scripts/codex_question_classifier.py --options` 필수: AUTO면 묻지 말고 picked로 진행, ASK_ONCE도 기본값 표시 후 다음 작업 계속·무응답이면 안전 기본값으로 넥스트(상세 `$demo1-codex-auto-decide` NO-WAIT).
 - Auth stays PROTO_OPEN: no extra role gates or login requirements; an admin-login-block check is never a completion condition. 상세: `docs/agents-rules/DEMO1-PROTOTYPE-AUTH-LIGHT.md`
-- Agent-work cost order: Codex credits → external paid API → free → local Ollama (last). Separate scope: product runtime RAG keeps 3090-local-first per `$demo1-agent-api-spend-guard`/`configs/api-routing.yaml`. 상세: `docs/agents-rules/DEMO1-RTX3090-WATCH.md`
+- Agent-work cost order: Codex credits → external paid API → free → local Ollama (last). Separate scope: product main chat is API/OAuth-first, Ollama last (user 2026-10-02); RAG·embed keep 3090-local. 상세: `docs/agents-rules/DEMO1-RTX3090-WATCH.md`
 - Several chats may share this tree: take the file/target lease before edits; intentional parallel chats need a lane plan + quota first. 상세: `docs/agents-rules/DEMO1-CODEX-PARALLEL-LANES.md`
 - Forbidden: push/pull/fetch/merge/rebase, `add -A`/`add .`/`commit -a`, reset/checkout/restore/stash/clean, remote mutation, history rewrite, secret reads, blanket `:test` suites, skip-permissions advocacy. Sole commit path: `agent_git_vibe_commit.py`. 상세: `docs/agents-rules/DEMO1-GIT-LOCAL-FIRST.md`
 - New rule blocks: write the detail in `docs/agents-rules/<BLOCK-ID>.md` and keep only a 2-line pointer stub here, then run `python -B scripts/agents_md_budget.py check`. 상세: `docs/agent-tooling/agents-md-budget-ko.md`
@@ -86,6 +86,10 @@
 ## Core Request Entry (Display / RAG / LLM)
 - Display/RAG/LLM/API 코어 요청의 단일 primary 스킬 분류 — 코어 작업 진입. — 상세: `docs/agents-rules/DEMO1-CORE-REQUEST-ROUTER.md`
 <!-- END DEMO1-CORE-REQUEST-ROUTER -->
+<!-- BEGIN DEMO1-TRI-SYSTEM-SEAM-ISOLATION -->
+## Tri-System Seam Isolation (Display / RAG / Main Chat)
+- 삼중 시스템 표면·프롬프트·검색·모델 라우팅 혼동 원천 격리 5대 불변 — 상세: `docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md`
+<!-- END DEMO1-TRI-SYSTEM-SEAM-ISOLATION -->
 <!-- BEGIN DEMO1-CODEX-PLUGIN-ROLES -->
 ## Codex plugin roles (per work type)
 - 작업 유형별 Codex 플러그인 활성화 표와 보고서 PLUGIN_USAGE 의무. — 상세: `docs/agents-rules/DEMO1-CODEX-PLUGIN-ROLES.md`
@@ -122,6 +126,7 @@
 <!-- BEGIN DEMO1-EVIDENCE-ZERO-RELEASE -->
 ## Answer release: zero citable evidence = publish, not HOLD
 - 근거 0 = 본문 공개(HOLD 아님) — 답변 보류/공개 판정. — 상세: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md`
+- 검증기 fail-soft(판정불능) ≠ HOLD — unknown/fail-soft는 본문 유지+메모리 금지. — 상세: 동 문서 fail-soft 절
 <!-- END DEMO1-EVIDENCE-ZERO-RELEASE -->
 <!-- BEGIN DEMO1-NOVA-FOCUS -->
 ## Nova Focus ('노바' wake-word focused conversation)
@@ -254,7 +259,7 @@
 
 <!-- BEGIN DEMO1-LOCAL-FIRST-RAG -->
 ## Local-First RAG Repair Overlay
-- RAG 수리·채택 설정 보존·안전 복구 범위. — 상세: `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md`
+- RAG 수리·검증된 채택 보존·진행 중 패치의 승격 조건·정상 rollback 범위. — 상세: `docs/agents-rules/DEMO1-LOCAL-FIRST-RAG.md`
 <!-- END DEMO1-LOCAL-FIRST-RAG -->
 <!-- BEGIN DEMO1-GIT-LOCAL-FIRST -->
 ## Local Source First; Conditional Local Git (this canonical root only)
@@ -288,7 +293,7 @@
 <!-- END DEMO1-PROTOTYPE-LIGHT -->
 <!-- BEGIN DEMO1-PROTOTYPE-AUTH-LIGHT -->
 ## Prototype auth-light mode (PROTO_OPEN)
-- PROTO_OPEN 인증 경량 모드 — 운영 인증 강제 금지 조건. — 상세: `docs/agents-rules/DEMO1-PROTOTYPE-AUTH-LIGHT.md`
+- 바이브 코딩은 로컬 PROTO_OPEN에서 Codex 로그인 없이 접근; 계정 재요청·추가 인증 강제 금지. — 상세: `docs/agents-rules/DEMO1-PROTOTYPE-AUTH-LIGHT.md`
 <!-- END DEMO1-PROTOTYPE-AUTH-LIGHT -->
 <!-- BEGIN DEMO1-GOAL-FOOTER-THE-ONE -->
 ## Codex goal footer (THE ONE protocol)

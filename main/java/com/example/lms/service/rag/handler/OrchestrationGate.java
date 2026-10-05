@@ -31,6 +31,7 @@ public final class OrchestrationGate {
     /** Self-Ask(LLM + Web) 단계는 aux 상태/strike/compression에서 우선적으로 차단한다. */
     public boolean allowSelfAsk(Query q) {
         Map<String, Object> md = q == null ? Map.of() : QueryUtils.metadata(q);
+        if ("STRIKE".equals(md.get("executionMode"))) return false;
         if (!metaBool(md, "enableSelfAsk", true)) {
             return false;
         }
@@ -54,6 +55,7 @@ public final class OrchestrationGate {
     /** Analyze(LLM + Web) 단계는 aux 상태/strike/compression에서 우선적으로 차단한다. */
     public boolean allowAnalyze(Query q) {
         Map<String, Object> md = q == null ? Map.of() : QueryUtils.metadata(q);
+        if ("STRIKE".equals(md.get("executionMode"))) return false;
         if (!metaBool(md, "enableAnalyze", true)) {
             return false;
         }

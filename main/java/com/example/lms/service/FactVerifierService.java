@@ -154,6 +154,7 @@ public class FactVerifierService {
             String draft,
             String model,
             boolean isFollowUp) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         VerificationState state = new VerificationState();
         String answer = verifyInternal(question, context, memory, draft, model, isFollowUp, 0, state);
         return new DetailedVerificationResult(
@@ -236,6 +237,7 @@ public class FactVerifierService {
                 return "웹에서 찾은 정보는 공식 발표가 아니거나, 커뮤니티의 추측일 가능성이 높습니다. 이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
             }
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             state.markFailSoft();
             log.debug("[Meta-Verify] Source analysis failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -273,6 +275,7 @@ public class FactVerifierService {
                 }
             }
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             state.markFailSoft();
             log.debug("[Verify] META-CHECK failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -370,6 +373,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                             finalResult.acceptedForMemory() && StringUtils.hasText(finalAns));
                     return finalAns;
                 } catch (Exception e) {
+                    TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
                     log.error("Correction generation failed, falling back to '정보 없음'. errorHash={} errorLength={}",
                             SafeRedactor.hashValue(messageOf(e)), messageLength(e));
                     state.reject("unknown");
@@ -449,6 +453,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
     }
 
     private String callChatModel(String factVerifierPrompt) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         try {
             TimeBudget requestBudget = TimeBudgetContext.get();
             if (requestBudget != null && requestBudget.expired()) return "";
@@ -467,9 +472,11 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                         "fact_verifier_judge",
                         verifier.getClass().getName());
             }
+            com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
             if (ai == null) return "";
             return ai.text() == null ? "" : ai.text();
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             log.debug("[FactVerifier] ChatModel call failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return "";
@@ -504,12 +511,16 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                 String acceptedStatus,
                 boolean knownOutcome,
                 boolean positiveOutcome) {
-            if (!knownOutcome || failSoft) {
+            if (!knownOutcome) {
                 reject("unknown");
                 return;
             }
             if (!positiveOutcome) {
                 reject("rejected");
+                return;
+            }
+            if (failSoft) {
+                reject("unknown");
                 return;
             }
             status = acceptedStatus;
@@ -521,7 +532,8 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             String safeStatus = rejectedStatus == null || rejectedStatus.isBlank()
                     ? "unknown"
                     : rejectedStatus;
-            if (failSoft || "unknown".equals(safeStatus)) {
+            if ("unknown".equals(safeStatus) || (failSoft
+                    && !"rejected".equals(safeStatus) && !"insufficient".equals(safeStatus))) {
                 status = "unknown";
                 outcomeKnown = false;
                 acceptedForMemory = false;
@@ -582,6 +594,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             msgs.add("위 지시를 따르고, 미지원 주장을 제거·수정하여 정답을 한국어로 다시 작성하세요.");
             return callChatModel(new java.util.ArrayList<>(msgs));
         } catch (Exception e) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
             log.warn("[Self-Healing] correctiveRegenerate failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return draft;

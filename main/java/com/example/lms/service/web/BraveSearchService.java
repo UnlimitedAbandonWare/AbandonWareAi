@@ -1026,12 +1026,18 @@ public class BraveSearchService implements WebSearchProvider {
             catch (RuntimeException unavailableContext) { return null; }
         }
 
-        private void received(int httpStatus) { row.put("httpStatus", httpStatus); }
+        private void received(int httpStatus) {
+            row.put("httpStatus", httpStatus);
+            row.put("providerReceiptObserved", true);
+        }
 
         private void completed(BraveSearchResult result, String failureReason) {
             row.put("outcome", result.status().name());
             row.put("failureReason", failureReason);
-            if ("unknown".equals(row.get("httpStatus")) && result.httpStatus() != null) row.put("httpStatus", result.httpStatus());
+            if (result.httpStatus() != null) {
+                if ("unknown".equals(row.get("httpStatus"))) row.put("httpStatus", result.httpStatus());
+                row.put("providerReceiptObserved", true);
+            }
             if (result.status() == BraveSearchResult.Status.OK) {
                 int count = result.snippets() == null ? 0 : result.snippets().size();
                 row.put("returnedCount", count);
@@ -1060,6 +1066,7 @@ public class BraveSearchService implements WebSearchProvider {
 
     private BraveSearchResult searchWithMetaSingle(String query, int limit, long t0Ns) {
         String safeQuery = sanitizeQuery(query);
+        if (!com.example.lms.service.rag.SelfAskSearchBudget.tryQueryAlias(query, safeQuery)) return requestBudgetExhaustedResult(safeQuery, Math.max(1, limit), t0Ns);
         int requestedTopK = (limit > 0 ? limit : 5);
         int topK = Math.min(requestedTopK, BRAVE_MAX_TOPK);
         if (safeQuery.isBlank()) {
@@ -1246,6 +1253,12 @@ public class BraveSearchService implements WebSearchProvider {
                 return requestBudgetExhaustedResult(safeQuery, topK, t0Ns);
             }
 
+            if (!com.example.lms.service.rag.SelfAskSearchBudget.tryReserveHttp(TraceStore.context(), safeQuery)) {
+                releaseFreeTierQuota(quotaReservation);
+                quotaSettled = true;
+                if (permit != null) { permit.completeAbandoned("wire", "request_search_budget"); permit = null; }
+                return requestBudgetExhaustedResult(safeQuery, topK, t0Ns);
+            }
             attempt = BraveAttemptObservation.start(safeQuery);
             ResponseEntity<String> res = requestTemplate.exchange(uri, HttpMethod.GET, entity, String.class);
             if (attempt != null) attempt.received(res.getStatusCode().value());
@@ -1435,7 +1448,9 @@ public class BraveSearchService implements WebSearchProvider {
 
     private static boolean isBoundedHybridRoute() {
         Object marker = TraceStore.get("web.boundedRoute");
-        return Boolean.TRUE.equals(marker) || "true".equalsIgnoreCase(String.valueOf(marker));
+        var budget = com.example.lms.service.rag.SelfAskSearchBudget.current();
+        return (budget != null && !budget.expansionAllowed())
+                || Boolean.TRUE.equals(marker) || "true".equalsIgnoreCase(String.valueOf(marker));
     }
 
     private boolean waitForBraveAdaptivePermitWindow(long lastCallNs, long deadlineNs) {

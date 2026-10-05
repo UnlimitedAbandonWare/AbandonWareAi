@@ -15,6 +15,7 @@ import java.util.Map;
 public class ChatDefaultsProperties {
     @NotBlank private String model;
     @NotBlank @Pattern(regexp = "preferred|strict|auto") private String modelSelectionMode;
+    @NotNull private com.example.lms.domain.enums.ExecutionMode executionMode = com.example.lms.domain.enums.ExecutionMode.AUTO;
     @NotNull @DecimalMin("0") @DecimalMax("2") private Double temperature;
     @NotNull @DecimalMin("0") @DecimalMax("1") private Double topP;
     @NotNull @DecimalMin("-2") @DecimalMax("2") private Double frequencyPenalty;
@@ -25,6 +26,11 @@ public class ChatDefaultsProperties {
     @NotBlank @Pattern(regexp = "AUTO|OFF|FORCE_LIGHT|FORCE_DEEP") private String searchMode;
     @NotBlank @Pattern(regexp = "adaptive|evidence_only") private String ragAnswerPolicy;
     @NotBlank private String defaultsVersion;
+    private String customInstructions = "";
+    private String responseTone = "neutral";
+    private String responseLength = "standard";
+    private String responseLanguage = "auto";
+    private String memoryMode = "hybrid";
 
     @AssertTrue(message = "sampling defaults must be finite")
     public boolean isFinite() {
@@ -35,11 +41,15 @@ public class ChatDefaultsProperties {
     public Map<String, Object> values() {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("model", model); values.put("modelSelectionMode", modelSelectionMode);
+        values.put("executionMode", executionMode.name());
         values.put("temperature", temperature); values.put("topP", topP);
         values.put("frequencyPenalty", frequencyPenalty); values.put("presencePenalty", presencePenalty);
         values.put("maxTokens", maxTokens); values.put("useRag", useRag);
         values.put("useWebSearch", useWebSearch); values.put("searchMode", searchMode);
         values.put("ragAnswerPolicy", ragAnswerPolicy);
+        values.put("customInstructions", customInstructions); values.put("responseTone", responseTone);
+        values.put("responseLength", responseLength); values.put("responseLanguage", responseLanguage);
+        values.put("memoryMode", memoryMode);
         return Map.copyOf(values);
     }
 }

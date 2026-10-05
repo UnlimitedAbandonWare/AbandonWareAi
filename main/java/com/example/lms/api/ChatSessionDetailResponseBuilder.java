@@ -51,6 +51,8 @@ final class ChatSessionDetailResponseBuilder {
 
         List<ChatApiController.MessageDto> messages = new ArrayList<>();
         Map<Long, ChatApiController.TurnTraceDto> tracesByAssistant = new LinkedHashMap<>();
+        Map<Long, String> snapshotIdsByAssistant = new LinkedHashMap<>();
+        Map<Long, com.example.lms.dto.ChatStreamEvent.ExecutionModeSnapshot> executionModesByAssistant = new LinkedHashMap<>();
         Set<Long> ambiguousTraceOwners = new HashSet<>();
         Set<Long> assistantMessageIds = new HashSet<>();
         for (var message : raw) {
@@ -72,28 +74,34 @@ final class ChatSessionDetailResponseBuilder {
                         lastModelMeta = modelMeta;
                         continue;
                     }
-                    if (exposeTrace) {
+                    {
                         var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(content, m.getId());
                         if (pointer.isPresent()) {
                             Long assistantId = pointer.get().assistantMessageId();
-                            if (assistantId == null && pointer.get().legacyFallbackAllowed()
+                            if (exposeTrace && assistantId == null && pointer.get().legacyFallbackAllowed()
                                     && !legacyAssistantAmbiguous) {
                                 assistantId = legacyAssistantCandidate;
                             }
                             if (assistantId != null && assistantMessageIds.contains(assistantId)
                                     && !ambiguousTraceOwners.contains(assistantId)) {
-                                ChatApiController.TurnTraceDto existing = tracesByAssistant.get(assistantId);
-                                if (existing != null && !existing.snapshotId().equals(pointer.get().snapshotId())) {
+                                String existing = snapshotIdsByAssistant.get(assistantId);
+                                if (existing != null && !existing.equals(pointer.get().snapshotId())) {
                                     tracesByAssistant.remove(assistantId);
+                                    executionModesByAssistant.remove(assistantId);
                                     ambiguousTraceOwners.add(assistantId);
                                 } else if (existing == null) {
-                                    tracesByAssistant.put(assistantId, new ChatApiController.TurnTraceDto(
+                                    snapshotIdsByAssistant.put(assistantId, pointer.get().snapshotId());
+                                    if (pointer.get().assistantMessageId() != null) {
+                                        var mode = ChatStreamSignalBuilder.executionModeSnapshot(pointer.get().diagnostics());
+                                        if (mode != null) executionModesByAssistant.put(assistantId, mode);
+                                    }
+                                    if (exposeTrace) tracesByAssistant.put(assistantId, new ChatApiController.TurnTraceDto(
                                             assistantId,
                                             pointer.get().snapshotId(),
                                             mergeModelMetaField(pointer.get().projection(), lastModelMeta, session.getId())));
                                 }
                             }
-                            lastModelMeta = null;
+                            if (exposeTrace) lastModelMeta = null;
                         }
                     }
                     Optional<ChatApiController.MessageDto> traceMeta =
@@ -121,6 +129,11 @@ final class ChatSessionDetailResponseBuilder {
             }
             messages.add(new ChatApiController.MessageDto(m.getId(), role, content, m.getCreatedAt()));
         }
+
+        messages.replaceAll(message -> "assistant".equals(message.role())
+                && executionModesByAssistant.containsKey(message.turnId())
+                ? new ChatApiController.MessageDto(message.turnId(), message.role(), message.content(),
+                        message.timestamp(), executionModesByAssistant.get(message.turnId())) : message);
 
         Map<String, Object> savedSettings = Collections.emptyMap();
         String meta = session.getSessionMeta();
