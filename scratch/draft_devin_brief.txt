@@ -1,124 +1,76 @@
-[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 작업을 실제로 수행하고 검증 증거를 산출하는 실행 지시서다.
-@demo1-devin-task-fit
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+# [ANTI-STOP] 본 지시서는 최종 검증을 통과하고 종료 시 lease 0이 될 때까지 스스로 멈추지 않고 완료한다.
+# 첫 실행 명령:
+# Set-Location C:\AbandonWare\demo-1\demo-1\src
 
-[DEVIN 지시서] agy-cli 특화 레인 공식화: 문서수집·코덱스최적화전달·지시서작성·서브리포터 — 2026-10-05 14:10 KST
-파일 ID: PASTE_DEVIN_AGY_SPECIALIZATION_20261005
-Project Root: C:\AbandonWare\demo-1\demo-1\src
-금지: 제품 소스(main/java) 수정 0 · git push/pull 0 · git add -A/. 0 · remote 추가 0 · 비밀값 출력 0 · PROTO_OPEN 유지
+## 0. 한 줄 목표
+Codex 세션의 반복적 목표 충돌(P7: cannot create a new goal because this thread has an active/unfinished goal)과 메모리 꼬임을 방지하기 위해, 목표 수명주기 사전 점검(preflight) 도구 및 안전 목표 등록 프로토콜을 구축한다.
 
-# 0. 한 줄 목표
-agy-cli의 범용 보조 역량을 유지하면서, 멀티에이전트 내 4대 주특기(문서수집, 코덱스최적화전달, 지시서작성, 서브리포터)를 규칙·스킬·라우팅에 공식 특화 프로필로 확립한다.
+## 1. 사실 (2026-10-06 16:00 KST 기준)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 최근 24시간 내 Codex 세션 분석 결과, 세션 시작부에서 `create_goal` 호출 시 `Script error: cannot create a new goal because this thread has an active goal` (P7 goal-conflict) 실패가 다수 세션(`01a10ff8`, `01a10fcd`, `01a10fad`, `01a10f28` 등)에서 지속 관측됨.
+- 원인: 이전 지시서/작업의 목표가 완료 처리되지 않고 열려 있는 상태에서 새 지시서를 수신할 때, Codex가 기존 목표를 확인(get_goal)하거나 갱신(update_goal)하지 않고 무조건 `create_goal`을 재호출하여 플랫폼 레벨에서 충돌 발생.
+- 결과: 새 목표 미등록, 이전 목표 상태와 새 목표의 메모리 꼬임(Cognitive State Pollution), 불필요한 에러 streak 및 서브에이전트 폭주 유발.
+- 현재 `scripts/demo1_goal_switch_barrier.py`는 journal 및 lease 회수만 다루며, Codex 플랫폼의 Goal Tool(get_goal/update_goal/create_goal) 수명주기 회복 및 가이드 기능이 부재함.
 
-# 1. 사실 (2026-10-05 14:10 KST)
-- 배경: agy-cli는 웹서치 문서 조사, 코덱스용 정제(3-Pack), 지시서 작성, 상태 보고에 강점이 있으나 기존 문서는 단순 "웹서치 조사"로만 축소 기재됨.
-- 원칙: "특화라는 것이지 다른 걸 못하는 건 아니다" — 범용 보조 유연성을 보존하며, 협업 시 1순위 주특기 레인으로 우선 매핑함.
-
-## 기준 해시 표
-| 경로 | sha12 | 권한 |
-| :--- | :--- | :--- |
-| `docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md` | (신규) | 생성 |
-| `AGENTS.md` | `F6DF56C064F3` | 수정 |
-| `.agents/rules/agy-korean-grokbot-role.md` | `24D6CC23F244` | 수정 |
-| `.agents/skills/demo1-agy-cli-entry/SKILL.md` | `0B9834EAD1FC` | 수정 |
-| `docs/AGY_CLI_CAPABILITIES_CHEATSHEET.md` | `0B18C5BBE7FA` | 수정 |
-| `scripts/fixtures/orchestra/route-rules.json` | `148E3D62843A` | 수정 |
-| `.agents/skills/demo1-orchestra-synergy/SKILL.md` | `047FD969AD7F` | 수정 |
-
-## 입력 판정표
-| 지시 | 판정 | 조치 |
-| :--- | :---: | :--- |
-| agy 특화 | RIGHT | 문서수집·코덱스정제전달·지시서작성·서브리포터 4대 축 공식화 |
-| 범용 유지 | RIGHT | "특화는 우선 배정이지 역량 배제 아님" 보존 원칙 명시 |
-| 코덱스 전달 | RIGHT | 3-Pack(결론 3줄, file:line, diff 10줄) 컨텍스트 큐레이션 규격화 |
-| 지시서 작성 | RIGHT | WP≤5, RED check, [ANTI-STOP], lease 분담 지시서 스캐폴딩 |
-| 서브 리포터 | RIGHT | agent_signal_digest 플릿 점검 및 보고서 교차 검증 공식화 |
-
-# 2. 공통 규칙
+## 2. 공통 규칙
 - COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
-- 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`, `chat.js`) 수정 0 (FOR_CODEX).
-- Git 금지: `push`, `pull`, `fetch`, `merge`, `rebase`, `add -A`, `add .`, `commit -a`, remote 추가/변경 금지.
-- 비밀값(키, 토큰, 암호) 노출 금지 (환경변수 이름만 참조).
-- 실호출 0원칙: 외부 유료 API 실호출 없이 로컬 스크립트/린트 100% 오프라인 검증.
-- 룰 크기 한도 준수: AGENTS.md 수정 후 반드시 `python -B scripts/agents_md_budget.py check` 통과.
+- 제품 소스(main/java, main/resources, src/test, chat.js) 수정 0 — 본 작업은 스크립트·문서·테스트 도구 레인에 한정함.
+- 실행하지 못한 항목은 NOT_RUN + 사유를 표기하며 임의로 PASS로 바꾸지 않는다.
 
-# 3. 작업 항목 (DV1~DV4)
+## 3. 항목 (Work Packages)
 
-### DV1 [Devin] agy 특화 규칙 SSOT 신설 및 AGENTS.md 스텁 등록
-- 1) `docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md` 신규 생성:
-  - 4대 특화 영역 정의:
-    - ① 문서 수집: 공식 문서(T1), GitHub 릴리스(T2), 최신 스펙/에러 원인 신속 리서치.
-    - ② 코덱스 최적화 전달: 3-Pack(결론 3줄, file:line 앵커, diff 10줄) 고밀도 정제 전달.
-    - ③ 지시서 작성: WP≤5, RED check, [ANTI-STOP], lease 분담 실행 지시서(PASTE_*) 작성.
-    - ④ 서브 리포터: 플릿 신호(`agent_signal_digest.py`), 활성 저널/리스 점검, 타 보고서 교차 검증.
-  - 유연성 보존: "특화는 협업 시 1순위 주특기 레인 부여이며, 범용 보조 역량을 배제/금지하지 않음."
-- 2) `AGENTS.md`에 2줄 스텁 등록:
-  ```markdown
-  <!-- BEGIN DEMO1-AGY-SPECIALIZATION -->
-  ## agy specialized lanes (doc gathering, context curation, directive writer, sub-reporter)
-  - agy 특화 4대 축: 문서수집·코덱스 최적화 전달·지시서 작성·서브 리포터 — 상세: `docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md`
-  <!-- END DEMO1-AGY-SPECIALIZATION -->
-  ```
-- RED: `docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md` 부재.
-- GREEN: 생성 확인 + `python -B scripts/agents_md_budget.py check` exit 0 + `python -B scripts/agy_rules_overflow_index.py --check` exit 0.
+### WP1. `scripts/demo1_goal_switch_barrier.py`에 Codex 목표 충돌 사전 점검/회복 CLI 추가
+- 대상: `scripts/demo1_goal_switch_barrier.py`
+- 내용:
+  - `check-goal` 서브커맨드 구현:
+    - 현재 세션 또는 전달된 스레드/목표 인자 기반으로 Safe Registration 안내 JSON 출력.
+    - 활성 목표가 감지되거나 충돌 가능성이 있을 때 `action`: `UPDATE_EXISTING` (기존 목표 update_goal 호출 권고) vs `CREATE_NEW` (create_goal 안전 호출 권고) 판정.
+  - P7 회복 스니펫:
+    `const g = await tools.get_goal(); if (g && g.id) { await tools.update_goal({status: "completed"}); } await tools.create_goal({objective: ...});`
+    형태의 정형화된 코드 스니펫 및 가이드 문자열 반환.
 
-### DV2 [Devin] agy 운영 규칙 및 진입 스킬·치트시트 갱신
-- 1) `.agents/rules/agy-korean-grokbot-role.md`: 4대 특화 및 유연성 보존 명시.
-- 2) agy 진입 스킬(`demo1-agy-cli-entry`): 4대 특화 프로필 가이드 추가.
-- 3) `docs/AGY_CLI_CAPABILITIES_CHEATSHEET.md`: 섹션 9 "agy 4대 특화 영역" 추가.
-- RED: `Select-String -Path .agents/rules/agy-korean-grokbot-role.md -Pattern "Context Curation"` 결과 없음.
-- GREEN: 3개 파일 갱신 확인 + `node tools/agents/skill-lint.mjs` exit 0.
+### WP2. Codex Safe Goal Registration Protocol 규칙 SSOT 명문화
+- 대상: `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`
+- 내용:
+  - `[P7 방지: Safe Goal Registration Protocol]` 섹션 추가:
+    1) 무조건적 `create_goal` 호출 금지: 새 목표 등록 전 반드시 `get_goal` 확인.
+    2) 기존 미완료 목표 존재 시: `update_goal`로 목표 내용을 덮어쓰거나, 이전 목표를 `status="completed"` 처리 후 `create_goal` 호출.
+    3) P7 에러 발생 시 즉각 회복 프로토콜: `create_goal` 재시도 금지, 즉시 `update_goal`로 전환.
 
-### DV3 [Devin] 오케스트라 라우팅 규칙 및 시너지 스킬 갱신
-- 1) `scripts/fixtures/orchestra/route-rules.json`: `lanes.AGY_RESEARCH.for`에 "공식 문서 수집 및 코덱스용 컨텍스트 정제 전달(Context Curation for Codex)" 반영.
-- 2) 시너지 스킬(`demo1-orchestra-synergy`): 역할표 agy 행에 "문서 수집, 코덱스용 정제 전달(3-Pack), 지시서 작성, 서브 리포터. 4대 특화 우선" 반영.
-- 3) `docs/agent-tooling/orchestra-synergy-ko.md` 동기화.
-- RED: `route-rules.json` 내 "Context Curation" 또는 "정제" 키워드 부재.
-- GREEN: `python -B -c "import json; d=json.load(open('scripts/fixtures/orchestra/route-rules.json', encoding='utf-8')); assert '정제' in d['lanes']['AGY_RESEARCH']['for']"` exit 0.
+### WP3. `scripts/agent_session_watch.py` P7 경고에 자율 복구 처방 바인딩
+- 대상: `scripts/agent_session_watch.py`
+- 내용:
+  - `P7 goal-conflict` 감지 시 summary/evidence에 `next_action: "Call update_goal or close previous active goal first, never retry create_goal"` 및 `remedy_cmd: "python -B scripts/demo1_goal_switch_barrier.py check-goal"` 처방 명시.
 
-### DV4 [Devin] 전체 정합성 검증 및 리포트 산출
-- 파이프라인 검증:
-  1) `python -B -c "import json; json.load(open('scripts/fixtures/orchestra/route-rules.json', encoding='utf-8'))"`
-  2) `node tools/agents/skill-lint.mjs`
-  3) `python -B scripts/agents_md_budget.py check`
-  4) `python -B scripts/agy_rules_overflow_index.py --check`
-- 리포트 작성: 제품 소스 diff 0, git 무변형, 검증 결과 요약.
+### WP4. 단위 테스트 추가 및 검증
+- 대상: `scripts/test_demo1_goal_switch_barrier.py`
+- 내용:
+  - 신규 `check-goal` 서브커맨드 정상 동작, P7 방어 JSON 반환, 에러 핸들링을 검증하는 독립 파이썬 테스트 작성 및 실행 (exit code 0 통과 확인).
 
-# 4. HOLD
-- 자바 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`) 수정 요구 시 -> HOLD.
-- Git push, merge, remote 조작 필요 시 -> HOLD.
-- AGENTS.md 크기 초과로 budget 체크 실패 시 -> HOLD.
+## 4. HOLD
+- `scripts/demo1_goal_switch_barrier.py` 파일이 타 에이전트의 live lease로 잠겨 있어 수정 불가능한 경우.
+- 제품 소스(`main/java` 등) 수정을 요구하는 상황 발생 시 (도구 작업 범위를 벗어남).
 
-# 5. ASK_ONCE
-- A-1: 라우팅 표기: (a) 권장: 기존 `AGY_RESEARCH` 설명 확장 (b) 독립 레인 신설 (권장: (a)).
-- A-2: 코덱스 전달 규격: (a) 권장: 3-Pack(결론 3줄, file:line, diff 10줄) 공식 지정 (b) 별도 스키마 (권장: (a)).
+## 5. ASK_ONCE
+- 본 작업은 도구 및 문서 가이드 보강으로 가역적(reversible)이며, 사용자 확인 퀴즈 없이 AUTO로 진행한다.
 
-# 6. 절대 금지
-- `git push`, `git pull`, `git fetch`, `git merge`, `git rebase` 금지.
-- `git add -A`, `git add .`, `git commit -a`, remote 추가/변경 금지.
-- API 키/토큰 원문 출력 및 커밋 금지.
-- PROTO_OPEN 완화/어드민 로그인 강제 금지.
-- 제품 소스(`main/java/**`, `src/test/**`, `frontend/**`) 수정 금지.
-- agy 범용 역량 배제 금지 (특화는 주특기 우선 부여임).
+## 6. 절대 금지
+- `git push`, `git add -A`, `git commit -a`, `git remote 추가` 절대 금지.
+- `.secrets` 및 환경변수 비밀값 열람/출력 금지.
+- `PROTO_OPEN` 정책 임의 변경 금지.
+- 제품 소스 코드(Java/JS) 임의 변경 금지.
 
-# 7. Acceptance (완료 기준)
-- [ ] `docs/agents-rules/DEMO1-AGY-SPECIALIZATION.md` 생성 및 4대 특화/유연성 보존 기술.
-- [ ] `AGENTS.md`에 2줄 스텁 등록 및 `python -B scripts/agents_md_budget.py check` exit 0.
-- [ ] `.agents/rules/agy-korean-grokbot-role.md`에 4대 특화 프로필 반영.
-- [ ] agy 진입 스킬 및 치트시트에 4대 특화 기술 반영.
-- [ ] `scripts/fixtures/orchestra/route-rules.json` 및 시너지 스킬 역할표 갱신.
-- [ ] `node tools/agents/skill-lint.mjs` 검증 0 error.
-- [ ] 제품 소스(`main/**`, `src/test/**`, `frontend/**`) 수정 0줄.
+## 7. Acceptance
+1. `python -B scripts/demo1_goal_switch_barrier.py check-goal` 실행 시 정상 JSON(exit 0) 및 Safe Registration 스니펫 반환.
+2. `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`에 P7 Safe Protocol이 반영됨.
+3. `python -B scripts/test_demo1_goal_switch_barrier.py` 실행 결과 exit 0 확인. 미실행 항목은 NOT_RUN 표기.
+4. 작업 완료 후 소유한 모든 lease 해제 (종료 시 lease 0).
 
-# 8. 보고 형식
-외부 API: 실호출 0회 ($0 로컬 검증)
-비밀 열람: 0건
-제품 소스 diff: 0건
-Gradle 빌드: 0회
-종료 시 lease: 0건
+## 8. 보고 형식
+외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- 결론 (3줄 이내): P7 goal-conflict 차단을 위한 Safe Goal Registration Protocol 및 CLI 구현 완료.
+- 변경 파일 목록 및 sha12.
+- 테스트 실행 결과 (명령어 및 exit code).
 
-1. 작업 결과: DV1~DV4 완료 상태 및 4대 특화 공식화 내역
-2. 실행한 검증 명령 및 결과 (exit code 포함)
-3. 파일 목록 및 sha12 해시 표
-4. 미수행 항목 및 사유 (NOT_RUN)
-
-[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 위 작업을 실제로 수행하고 검증 증거를 산출하는 실행 지시서다.
+# [ANTI-STOP] 모든 작업 단계를 검증하고 테스트 exit 0을 확인한 후 lease 0 상태로 완료 보고를 작성한다.

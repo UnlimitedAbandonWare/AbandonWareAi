@@ -1,0 +1,83 @@
+# [ANTI-STOP] 본 지시서는 자동화 완료까지 멈추지 않고 순차 실행한다.
+# DEVIN 지시서: common_verifier.py Windows 백슬래시 경로 탈락 버그 수리
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+첫 실행 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+---
+
+# 0. 한 줄 목표
+common_verifier.py의 run_command 및 CLI --argv에서 Windows 백슬래시 경로가 shlex.split에 의해 탈락(scriptstest.py)하여 검증 실패(exitCode 2)가 발생하는 결함을 수리하고 회귀 테스트를 고정한다.
+
+---
+
+# 1. 사실 (2026-10-06 15:58 KST)
+- scripts/common_verifier.py (sha12: AB2EB1EF6ADE) L157에서 `argv = shlex.split(str(spec["command"]))`가 기본 posix=True로 동작하여 Windows 경로의 백슬래시(`\`)를 이스케이프 문자로 소모함.
+- 재현 증거: `python -B scripts/common_verifier.py verify --argv "python -B scripts\test_common_verifier.py"` 실행 시 `scriptstest_common_verifier.py`를 호출하여 Errno 2(No such file or directory)로 실패(exitCode=2, verdict=FAIL).
+- scripts/test_common_verifier.py (sha12: 979072C24EE7)는 오직 배열형 `argv`만 테스트하고 있어, 문자열 `command` 파싱 및 Windows 백슬래시 경로 케이스가 누락되어 있었음.
+- 제품 Java 소스 수정 0, scripts/ 도구 수정 범위 한정.
+
+---
+
+# 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- git push, add -A, commit -a, remote 추가 금지.
+- 비밀(.secrets, .env, 토큰) 열람 및 출력 금지.
+- PROTO_OPEN 개방 상태 유지.
+- 실행하지 않은 검증은 반드시 NOT_RUN + 사유로 보고하며, 임의로 PASS 전환 금지.
+
+---
+
+# 3. 항목 (작업 패키지)
+
+### WP1. common_verifier.py의 command 분할 로직 Windows 백슬래시 보호 수리
+- 파일: `scripts/common_verifier.py`
+- L156~158의 command 파싱 및 CLI의 `--argv` 파싱 함수에서 Windows 환경(`os.name == "nt"`)을 지원하도록 분기 처리.
+- `shlex.split(s, posix=(os.name != "nt"))` 또는 Windows 전용 안전 분할 함수를 적용하여 `scripts\test_foo.py`가 `scriptstest_foo.py`로 훼손되지 않도록 보장.
+- 검증: `python -c "import os, shlex; print(shlex.split(r'python -B scripts\test.py', posix=(os.name != 'nt')))"`가 `['python', '-B', 'scripts\\test.py']`를 보존하는지 확인.
+
+### WP2. test_common_verifier.py에 Windows 백슬래시 경로 및 command 문자열 회귀 테스트 추가
+- 파일: `scripts/test_common_verifier.py`
+- `spec` 딕셔너리에 `"command": "python -B scripts\\fake_runner.py green"` 형태의 문자열 spec 검증 케이스 추가.
+- CLI 인자 `--argv "python -B scripts\fake_runner.py green"` 검증 케이스 추가.
+- 둘 다 `VERIFIED_PENDING_APPROVAL` (exit 0)으로 정상 완주함을 단언.
+- 실행 검증: `python -B scripts/test_common_verifier.py`가 기존 9개 케이스 + 신규 케이스 모두 정상(cases behaved) exit 0 통과.
+
+---
+
+# 4. HOLD
+- scripts/ 외의 제품 Java 소스(`main/java`, `src/test/java`) 수정 요구 발생 시: 즉시 HOLD 후 보고.
+- git 변경사항 유실 위험이나 외부 API 유료 결제 요구 발생 시: 즉시 HOLD.
+
+---
+
+# 5. ASK_ONCE
+- 본 작업은 로컬 도구 스크립트 결함 수리 작업이므로 묻지 않고 AUTO로 진행한다. (기본값: 수리 완료 후 자체 테스트 exit 0 검증)
+
+---
+
+# 6. 절대 금지
+- git push, add -A, git commit -a 금지.
+- remote 추가 또는 원격 브랜치 변경 금지.
+- 비밀값(API 키, 토큰) 출력 및 커밋 금지.
+- PROTO_OPEN 설정 변경 금지.
+- 실행하지 않은 테스트 항목을 PASS로 표기 금지 (미실행은 NOT_RUN 표기).
+
+---
+
+# 7. Acceptance (완료 기준)
+- WP1 Acceptance: common_verifier.py의 command 분할이 Windows 백슬래시를 탈락시키지 않으며, `python -B scripts/common_verifier.py verify --argv "python -B scripts\test_common_verifier.py"` 실행 시 `scriptstest_common_verifier.py` 경로 오류 없이 정상 실행되어 exit 0 및 `VERIFIED_PENDING_APPROVAL` 관측.
+- WP2 Acceptance: test_common_verifier.py에 백슬래시 경로 및 문자열 command spec 회귀 테스트가 추가되어, `python -B scripts/test_common_verifier.py` 실행 시 0 에러로 전체 통과 (`cases behaved`, exit 0).
+- 공통 Acceptance: 제품 소스 diff 0, git 상태는 scripts/common_verifier.py 및 scripts/test_common_verifier.py만 최소 수정.
+
+---
+
+# 8. 보고 형식
+외부 API: 0건, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- 수정 파일 목록 및 sha12
+- 테스트 실행 결과: `python -B scripts/test_common_verifier.py` exit code 및 출력 요약
+- 실측 검증 결과: `python -B scripts/common_verifier.py verify --argv "python -B scripts\test_common_verifier.py"` exit code 및 verdict 요약
+- 미실행 항목이 있다면 NOT_RUN + 사유 기재
+
+# [ANTI-STOP] 본 지시서의 모든 수용 기준(Acceptance)을 만족할 때까지 멈추지 않는다.

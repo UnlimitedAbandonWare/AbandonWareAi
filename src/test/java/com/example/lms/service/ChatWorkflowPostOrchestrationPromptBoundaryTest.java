@@ -147,7 +147,7 @@ class ChatWorkflowPostOrchestrationPromptBoundaryTest {
                 "out = emptyAnswerGuard(out, finalQuery, topDocs, vectorDocs);",
                 fallbackFlag);
         int modelSuffix = source.indexOf("modelUsed = modelUsed + \":fallback:empty-answer\";", guard);
-        int result = source.indexOf("return ChatResult.of(out, modelUsed, ragUsed", modelSuffix);
+        int result = source.indexOf("return new ChatResult(out, modelUsed, ragUsed", modelSuffix);
 
         assertTrue(fallbackFlag >= 0 && fallbackFlag < guard,
                 "empty-answer provenance must be captured before the guard synthesizes visible text");

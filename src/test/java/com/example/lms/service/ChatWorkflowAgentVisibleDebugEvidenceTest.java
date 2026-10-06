@@ -918,7 +918,7 @@ class ChatWorkflowAgentVisibleDebugEvidenceTest {
         List<Content> webDocs = List.of(content(
                 "OpenAI Responses API official source",
                 Map.of("title", "OpenAI Responses API",
-                        "url", "https://developers.openai.com/api/docs/guides/tools-web-search?secret=redact#frag")));
+                        "url", "https://developers.openai.com/api/docs/guides/tools-web-search?utm_source=synthetic#frag")));
 
         String withReferences = invokeAppendEvidenceReferencesIfNeeded(answer, webDocs, List.of());
 
@@ -926,10 +926,19 @@ class ChatWorkflowAgentVisibleDebugEvidenceTest {
                 "fallback evidence references should use a stable literal heading the browser proof can detect");
         assertTrue(withReferences.contains("https://developers.openai.com/api/docs/guides/tools-web-search"),
                 "fallback evidence references should expose sanitized public source URLs");
-        assertFalse(withReferences.contains("secret=redact"),
-                "fallback evidence references must strip query strings from public URLs");
+        assertFalse(withReferences.contains("utm_source=synthetic"),
+                "fallback evidence references must strip tracking parameters from public URLs");
         assertFalse(withReferences.contains("??"),
                 "fallback evidence references should not render mojibake delimiters");
+    }
+
+    @Test
+    void fallbackReferenceAppenderRejectsUnknownOrSensitiveQueryInsteadOfChangingSourceIdentity() throws Exception {
+        String answer = "Answer cites [W1].";
+        List<Content> webDocs = List.of(content("synthetic public source",
+                Map.of("url", "https://example.org/document?secret=redact#frag")));
+        assertEquals(answer, invokeAppendEvidenceReferencesIfNeeded(answer, webDocs, List.of()),
+                "an unsafe query must reject the reference, not publish a different document URL");
     }
 
     @Test

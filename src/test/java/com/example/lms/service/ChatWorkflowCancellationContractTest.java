@@ -151,10 +151,12 @@ class ChatWorkflowCancellationContractTest {
         String cancellationBlock = source.substring(cancellationCatch, exceptionCatch);
 
         int classification = cancellationBlock.indexOf("ce instanceof ClientCancellationException");
-        int rethrow = cancellationBlock.indexOf("throw ce;");
+        int rethrow = cancellationBlock.indexOf("throw ce;", classification);
         int normalReturn = cancellationBlock.indexOf("ChatResult.of(");
         assertTrue(source.contains("class ClientCancellationException extends CancellationException"));
         assertTrue(classification >= 0, "client cancellation must have an explicit subtype");
+        assertTrue(cancellationBlock.contains("if (!(ce instanceof ClientCancellationException) && !isCancelled(sessionIdLong)) {"),
+                "only typed client cancellation or a live session cancel flag may return cancelled content");
         assertTrue(rethrow > classification && rethrow < normalReturn,
                 "autolearn/provider cancellation must propagate before cancelled content is returned");
         assertTrue(source.contains("throw new ClientCancellationException(\"cancelled by client\")"));
