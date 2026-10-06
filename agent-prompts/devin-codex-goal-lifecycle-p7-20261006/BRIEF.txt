@@ -1,0 +1,77 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+# [ANTI-STOP] 본 지시서는 최종 검증을 통과하고 종료 시 lease 0이 될 때까지 스스로 멈추지 않고 완료한다.
+# 첫 실행 명령:
+# Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+Codex 세션의 반복적 목표 충돌(P7: cannot create a new goal because this thread has an active/unfinished goal)과 메모리 꼬임을 방지하기 위해, 목표 수명주기 사전 점검(preflight) 도구 및 안전 목표 등록 프로토콜을 구축한다.
+
+## 1. 사실 (2026-10-06 16:00 KST 기준)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 최근 24시간 내 Codex 세션 분석 결과, 세션 시작부에서 `create_goal` 호출 시 `Script error: cannot create a new goal because this thread has an active goal` (P7 goal-conflict) 실패가 다수 세션(`01a10ff8`, `01a10fcd`, `01a10fad`, `01a10f28` 등)에서 지속 관측됨.
+- 원인: 이전 지시서/작업의 목표가 완료 처리되지 않고 열려 있는 상태에서 새 지시서를 수신할 때, Codex가 기존 목표를 확인(get_goal)하거나 갱신(update_goal)하지 않고 무조건 `create_goal`을 재호출하여 플랫폼 레벨에서 충돌 발생.
+- 결과: 새 목표 미등록, 이전 목표 상태와 새 목표의 메모리 꼬임(Cognitive State Pollution), 불필요한 에러 streak 및 서브에이전트 폭주 유발.
+- 현재 `scripts/demo1_goal_switch_barrier.py`는 journal 및 lease 회수만 다루며, Codex 플랫폼의 Goal Tool(get_goal/update_goal/create_goal) 수명주기 회복 및 가이드 기능이 부재함.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 제품 소스(main/java, main/resources, src/test, chat.js) 수정 0 — 본 작업은 스크립트·문서·테스트 도구 레인에 한정함.
+- 실행하지 못한 항목은 NOT_RUN + 사유를 표기하며 임의로 PASS로 바꾸지 않는다.
+
+## 3. 항목 (Work Packages)
+
+### WP1. `scripts/demo1_goal_switch_barrier.py`에 Codex 목표 충돌 사전 점검/회복 CLI 추가
+- 대상: `scripts/demo1_goal_switch_barrier.py`
+- 내용:
+  - `check-goal` 서브커맨드 구현:
+    - 현재 세션 또는 전달된 스레드/목표 인자 기반으로 Safe Registration 안내 JSON 출력.
+    - 활성 목표가 감지되거나 충돌 가능성이 있을 때 `action`: `UPDATE_EXISTING` (기존 목표 update_goal 호출 권고) vs `CREATE_NEW` (create_goal 안전 호출 권고) 판정.
+  - P7 회복 스니펫:
+    `const g = await tools.get_goal(); if (g && g.id) { await tools.update_goal({status: "completed"}); } await tools.create_goal({objective: ...});`
+    형태의 정형화된 코드 스니펫 및 가이드 문자열 반환.
+
+### WP2. Codex Safe Goal Registration Protocol 규칙 SSOT 명문화
+- 대상: `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`
+- 내용:
+  - `[P7 방지: Safe Goal Registration Protocol]` 섹션 추가:
+    1) 무조건적 `create_goal` 호출 금지: 새 목표 등록 전 반드시 `get_goal` 확인.
+    2) 기존 미완료 목표 존재 시: `update_goal`로 목표 내용을 덮어쓰거나, 이전 목표를 `status="completed"` 처리 후 `create_goal` 호출.
+    3) P7 에러 발생 시 즉각 회복 프로토콜: `create_goal` 재시도 금지, 즉시 `update_goal`로 전환.
+
+### WP3. `scripts/agent_session_watch.py` P7 경고에 자율 복구 처방 바인딩
+- 대상: `scripts/agent_session_watch.py`
+- 내용:
+  - `P7 goal-conflict` 감지 시 summary/evidence에 `next_action: "Call update_goal or close previous active goal first, never retry create_goal"` 및 `remedy_cmd: "python -B scripts/demo1_goal_switch_barrier.py check-goal"` 처방 명시.
+
+### WP4. 단위 테스트 추가 및 검증
+- 대상: `scripts/test_demo1_goal_switch_barrier.py`
+- 내용:
+  - 신규 `check-goal` 서브커맨드 정상 동작, P7 방어 JSON 반환, 에러 핸들링을 검증하는 독립 파이썬 테스트 작성 및 실행 (exit code 0 통과 확인).
+
+## 4. HOLD
+- `scripts/demo1_goal_switch_barrier.py` 파일이 타 에이전트의 live lease로 잠겨 있어 수정 불가능한 경우.
+- 제품 소스(`main/java` 등) 수정을 요구하는 상황 발생 시 (도구 작업 범위를 벗어남).
+
+## 5. ASK_ONCE
+- 본 작업은 도구 및 문서 가이드 보강으로 가역적(reversible)이며, 사용자 확인 퀴즈 없이 AUTO로 진행한다.
+
+## 6. 절대 금지
+- `git push`, `git add -A`, `git commit -a`, `git remote 추가` 절대 금지.
+- `.secrets` 및 환경변수 비밀값 열람/출력 금지.
+- `PROTO_OPEN` 정책 임의 변경 금지.
+- 제품 소스 코드(Java/JS) 임의 변경 금지.
+
+## 7. Acceptance
+- WP1: `python -B scripts/demo1_goal_switch_barrier.py check-goal` 실행 시 정상 JSON(exit 0) 및 Safe Registration 스니펫 반환.
+- WP2: `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`에 P7 Safe Protocol이 반영됨.
+- WP3: `scripts/agent_session_watch.py` 실행 시 P7 감지 결과에 `next_action`/`remedy_cmd` 처방이 정상 출력됨.
+- WP4: `python -B scripts/test_demo1_goal_switch_barrier.py` 실행 결과 exit 0 확인. 미실행 항목은 NOT_RUN 표기.
+- 종료 시 lease 0 확인.
+
+## 8. 보고 형식
+외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- 결론 (3줄 이내): P7 goal-conflict 차단을 위한 Safe Goal Registration Protocol 및 CLI 구현 완료.
+- 변경 파일 목록 및 sha12.
+- 테스트 실행 결과 (명령어 및 exit code).
+
+# [ANTI-STOP] 모든 작업 단계를 검증하고 테스트 exit 0을 확인한 후 lease 0 상태로 완료 보고를 작성한다.

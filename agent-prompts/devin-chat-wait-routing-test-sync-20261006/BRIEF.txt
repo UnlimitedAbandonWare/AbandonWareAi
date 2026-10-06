@@ -1,0 +1,77 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라, 아래 명시된 WP를 끝까지 수행하고 지정된 테스트를 통과한 뒤 결과 리포트로 회신하는 자율 실행 지시서입니다.
+[DEVIN 지시서] chat_wait_routing_tests.cjs의 streamServerBudgetMs 기본 예산 기대값(600,000ms) 동기화 및 대기 라우팅 계약 회귀 복구 — 2026-10-06 16:00 KST
+파일 ID: PASTE_DEVIN_CHAT_WAIT_ROUTING_TEST_SYNC_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): git push · git commit/push/add -A · 비밀값 출력 · 제품 자바 소스 수정 금지(main/java 수정 0) · chat.js 제품 소스 수정 금지 · 실제 유료 API 호출 0
+
+## 0. 한 줄 목표
+chat.js의 streamServerBudgetMs 기본 예산(600,000ms)과 불일치하여 실패하는 scripts/chat_wait_routing_tests.cjs의 구버전 기대값(120,000ms)을 동기화하여 대기 라우팅 계약 검사를 즉시 GREEN으로 복구한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-06 16:00 KST)
+- 제품 파일 상태: `main/resources/static/js/chat.js`의 `streamServerBudgetMs(payload)` 함수는 `meta[name="chat-request-budget-ms"]` 미설정 시 기본값으로 `600000`(10분)을 반환함.
+- 현재 테스트 실패: `scripts/chat_wait_routing_tests.cjs:29` 및 라인 36에서 구버전 값 `120000`을 기대하여 `AssertionError: 600000 !== 120000` 발생 (exit code 1).
+- 연관 계약 통과 확인: `scripts/chat_wait_progress_contract_tests.cjs` (6/6 PASS), `src/test/js/chat-stream-boundaries.test.cjs` (23/23 PASS)는 이미 정상 통과 상태임.
+- 수정 범위: 테스트 스크립트 `scripts/chat_wait_routing_tests.cjs` 1개 파일만 좁게 수정. 제품 소스(`main/java/**`, `main/resources/**`)는 절대 수정하지 않음.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 항목
+- WP1 [Devin 직접] scripts/chat_wait_routing_tests.cjs의 streamServerBudgetMs 기본 기대값 수정
+  - 증거: `scripts/chat_wait_routing_tests.cjs:29`, `scripts/chat_wait_routing_tests.cjs:35-37`
+  - 작업:
+    1) 라인 29: `assert.equal(context.streamServerBudgetMs({useRag: true}), 120000);` -> `assert.equal(context.streamServerBudgetMs({useRag: true}), 600000);` 로 기대값 수정.
+    2) 라인 35-37 루프: `for (cap of ['NaN', '-1', '3600001', '1.5', '']) { assert.equal(context.streamServerBudgetMs({useRag: true}), 120000); }` -> 기대값을 `600000`으로 수정.
+    3) meta 태그가 정상 숫자일 때(`cap = '240000'`, `cap = '30000'`)의 우선순위 테스트는 유지.
+  - 완료 조건: `node scripts/chat_wait_routing_tests.cjs; "exit=$LASTEXITCODE"` 실행 시 exit 0 및 `PASS chat wait budget, model selection and completed response state` 출력.
+
+- WP2 [Devin 직접] 관련 프론트엔드 대기/스트림 계약 회귀 교차 검증
+  - 증거: `scripts/chat_wait_progress_contract_tests.cjs`, `src/test/js/chat-stream-boundaries.test.cjs`
+  - 실행:
+    1) `node --test scripts/chat_wait_progress_contract_tests.cjs; "exit=$LASTEXITCODE"` (6/6 PASS 확인)
+    2) `node --test src/test/js/chat-stream-boundaries.test.cjs; "exit=$LASTEXITCODE"` (23/23 PASS 확인)
+  - 완료 조건: 2개 스위트 모두 실패 0건, exit 0.
+
+- WP3 [Devin 직접] 잔여 리스 확인 및 최종 보고
+  - 증거: `python -B scripts/agent_scope_lease.py who`
+  - 실행: 작업 후 본인 점유 리스가 남아있지 않은지 점검.
+  - 완료 조건: 잔여 lease 0건, 제품 소스 diff 0건.
+
+## 4. HOLD
+- `main/resources/static/js/chat.js`의 `streamServerBudgetMs` 함수 기본값이 `600000`이 아닌 다른 값으로 변경되어 있을 경우 즉시 HOLD.
+- `scripts/chat_wait_routing_tests.cjs` 외에 `main/java/**` 백엔드 소스 수정이 필요하다고 판단될 경우 즉시 HOLD.
+
+## 5. ASK_ONCE
+- A-1: 기본 대기 예산이 향후 환경 설정으로 변경될 때를 대비해 `meta[name="chat-request-budget-ms"]` 기본값 주입 테스트를 추가할지 여부 (기본값: (a) 현재 chat.js 하드코딩 fallback 600000ms 계약 일치만 유지).
+
+## 6. 절대 금지
+- `git push`, `git pull`, `git add -A`, `git commit -a`, `git reset`, `git clean` 절대 금지.
+- 백엔드 자바 소스(`main/java/**`) 수정 절대 금지.
+- 제품 자바스크립트(`main/resources/static/js/chat.js`) 수정 절대 금지 (테스트 스크립트만 수정).
+- `.secrets`, `.env*` 파일 열람 또는 비밀값 출력 절대 금지.
+- 실제 유료 외부 API 호출 절대 금지 (0회).
+- 전체 Gradle 테스트(`:test`) 수행 금지.
+- PROTO_OPEN 보안 모드 해제 또는 관리자 로그인 게이트 추가 금지.
+- remote 추가 금지.
+
+## 7. Acceptance
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- WP1: `scripts/chat_wait_routing_tests.cjs` 실행 시 exit 0 및 `PASS chat wait budget, model selection and completed response state` 관측.
+- WP2: `scripts/chat_wait_progress_contract_tests.cjs` 6/6 PASS 및 `src/test/js/chat-stream-boundaries.test.cjs` 23/23 PASS 통과.
+- WP3: 백엔드 자바 소스 diff 0 (`main/java` 수정 0), 제품 JS diff 0 (`chat.js` 수정 0), 종료 시 활성 lease 0건 정상 유지.
+
+## 8. 보고 형식
+외부 API: 0회 호출
+비밀값 열람: 0회
+제품 백엔드(main/java) diff: 0건
+프론트엔드 제품 소스(chat.js) diff: 0건
+스크립트 수정: scripts/chat_wait_routing_tests.cjs
+테스트 결과:
+- node scripts/chat_wait_routing_tests.cjs: exit 0 (PASS)
+- scripts/chat_wait_progress_contract_tests.cjs: 6 PASS / 0 FAIL
+- src/test/js/chat-stream-boundaries.test.cjs: 23 PASS / 0 FAIL
+종료 시 lease: 0건
+
+[ANTI-STOP] 지시서의 모든 검증이 PASS될 때까지 중단 없이 완료하고 최종 결과를 보고하라.

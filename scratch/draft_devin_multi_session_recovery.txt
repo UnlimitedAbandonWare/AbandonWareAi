@@ -1,0 +1,78 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 다중 세션 고착 해제 및 잔재 정리, dot 하위 에이전트 빈틈 완결 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+# DEVIN — 다중 세션 고착 리스·저널 해제, P15 CLI Lock 정리 및 dot 하위 에이전트 빈틈(W1~W6) 완결 지시서 (20261006)
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src
+환경: Windows PowerShell 5.1, git = F:\git\cmd\git.exe, $env:GIT_OPTIONAL_LOCKS='0'
+역할: 도구·스크립트·룰·스킬·정리만 (제품 Java/JS 추가 변경 없음, fold6 마이크는 이미 구현 통과)
+
+## 0. 한 줄 목표
+최근 40분간 Devin 다중 세션 실행으로 발생한 Lease self-overlap 충돌, 방치된 in_progress 저널 3건, 루트 잔재 파일, 324개 P15 CLI lock 누적을 일괄 해소하고, 중단된 dot 하위 에이전트 빈틈 W1~W6을 완결한다.
+
+## 1. 사실 (2026-10-06 18:15 KST 관찰 확인)
+- [사실 1] 세션 충돌 및 Lease 고착: devin-dot-subagent-gaps-714b2131이 checkpoint 시작 시 선언 범위(17개)와 초기 lease(11개) 불일치로 source-lease-scope HOLD 발생 후, 기존 lease 미해제 상태로 재호출하여 exitCode: 7, reason: source-target-overlap으로 스톨됨.
+- [사실 2] 미닫힌 저널 3건: fold6-mic-start-fail-7767e1f1(중단 방치), devin-de8ac642(수정 및 테스트 45개 PASS 완료 후 미종료), devin-dot-subagent-gaps-714b2131(스톨 방치).
+- [사실 3] 루트 잔재: targets-fold6-mic.json이 저장소 루트에 방치됨.
+- [사실 4] P15 Lock Pileup: C:\Users\nninn\AppData\Roaming\devin\cli\session_locks에 324개의 종료된 CLI .lock 파일이 누적되어 watchdog AUTO 경보 발령 중.
+- [사실 5] dot 빈틈 잔여: D38 분류기 및 brief_save cover는 부분 적용되었으나 W3(가독성 lint), W4(SUB_REPORT_V1 & --sub-report), W5(assist 스킬 수명), W6(ratchet INV-G1~G3) 미완료.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 수정 허용: scripts/brief_save.py, scripts/test_brief_save.py, scripts/dot_brief_check.py, scripts/test_dot_brief_check.py, scripts/dot_card_check.py, scripts/test_dot_card_check.py, scripts/dot_session_hygiene.py, scripts/test_dot_session_hygiene.py, scripts/codex_question_classifier.py, scripts/test_codex_question_classifier.py, configs/dot-tower-ratchet.json, docs/agents-rules/DEMO1-DOT-FILE-CARD.md, docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md, .agents/skills/dot-brief-save/SKILL.md, .agents/skills/demo1-dot-control-tower/SKILL.md, .agents/skills/demo1-dot-control-tower/references/sub-report-contract.md, targets-fold6-mic.json.
+- 변경 금지: main/java/**, main/resources/** (display 자산 재수정 금지), src/test/java/**, .secrets, remote 추가.
+- 비용 및 호출: 외부 유료 API 실호출 0회, 서버 재기동 0회.
+
+## 3. 작업 항목 (WP1~WP4)
+- WP1 [정리] 다중 세션 고착 해제 및 잔재 청소:
+  - 루트 임시 파일 targets-fold6-mic.json 삭제 (또는 data/agent-handoff/codex-autonomy/devin-de8ac642/로 이동).
+  - fold6 디스플레이 세션 정상 종결: display 테스트 45개 PASS 재확인 후, python -B scripts/work_journal.py close --task-id devin-de8ac642 --result verified 실행, lease 해제 powershell -NoProfile -ExecutionPolicy Bypass -File __patch_drop__/source_edit_session.ps1 -Action end -Topic devin-de8ac642.
+  - 중복 저널 정리: python -B scripts/work_journal.py close --task-id fold6-mic-start-fail-7767e1f1 --result abandoned.
+  - devin-dot-subagent-gaps-714b2131 충돌 lease 해제: powershell -NoProfile -ExecutionPolicy Bypass -File __patch_drop__/source_edit_session.ps1 -Action end -Topic devin-dot-subagent-gaps-714b2131. 이후 수정 대상 전체에 대해 정상 단일 claim 획득.
+
+- WP2 [watchdog] P15 devin-lock-pileup 일괄 정리:
+  - C:\Users\nninn\AppData\Roaming\devin\cli\session_locks의 고아 .lock 파일 324개 삭제.
+  - python -B scripts/agent_session_watch.py scan --agent devin --since-hours 24 재실행하여 P15 auto 경보 0건 확인.
+
+- WP3 [도구] dot 하위 에이전트 빈틈(W1~W6) 구현 완결:
+  - W1: DEMO1-DOT-FILE-CARD.md 및 dot-brief-save/SKILL.md에 Library 입력 폴백(Downloads 동명 파일 우선) 명시, codex_question_classifier.py D38 및 test_codex_question_classifier.py PASS 확인.
+  - W2: brief_save.py cover 서브커맨드 및 test_brief_save.py PASS 확인.
+  - W3: dot_brief_check.py에 가독성 lint (DISPATCH_GLUED, DISPATCH_WALL, DISPATCH_MULTI_GOAL) 추가 및 test_dot_brief_check.py PASS.
+  - W4: demo1-dot-control-tower에 SUB_REPORT_V1 6칸 계약 문서화(references/sub-report-contract.md), dot_card_check.py에 --sub-report 추가 및 test_dot_card_check.py PASS.
+  - W5: dot_session_hygiene.py에 -YYYYMMDD 스킬 만료 검사 추가(retire_after 확인, 삭제 0) 및 test_dot_session_hygiene.py PASS.
+  - W6: configs/dot-tower-ratchet.json에 INV-G1~G3 등록 및 ratchet 검사 통과.
+
+- WP4 [검증] 회귀 검증 및 세션 완전 종결 (Zero Lease / Zero Orphan):
+  - 단위 테스트 일괄 실행: python -B scripts/test_brief_save.py; python -B scripts/test_dot_brief_check.py; python -B scripts/test_dot_card_check.py; python -B scripts/test_dot_session_hygiene.py; python -B scripts/test_codex_question_classifier.py.
+  - 저널 종결: python -B scripts/work_journal.py close --task-id devin-dot-subagent-gaps-714b2131 --result verified.
+  - 리스 해제: powershell -NoProfile -ExecutionPolicy Bypass -File __patch_drop__/source_edit_session.ps1 -Action end -Topic devin-dot-subagent-gaps-714b2131.
+  - 최종 검증: agent_scope_lease.py who 및 work_journal.py list --active 실행하여 devin 소유 활성 lease 0, journal 0 확인.
+  - 완결 보고서 작성: data/agent-handoff/devin-dot-subagent-gaps-714b2131/REPORT.md.
+
+## 4. HOLD
+- 정리 중 다른 에이전트(Codex 등) 소유 chat-browser10-* lease는 절대 건드리지 않고 보존.
+- 동일 원인의 단위 테스트 실패 2회 이상 발생 시 해당 단계만 HOLD하고 원인 기록.
+
+## 5. ASK_ONCE
+- 없음 (가역적 정리, 미완료 W1~W6 완결 및 단위 테스트 통과 중심).
+
+## 6. 절대 금지
+push · add -A · 비밀값 출력 · remote 추가 · PROTO_OPEN 약화 · chat.js 수정 · 제품 Java/JS 추가 수정 · 다른 세션(chat-browser10)의 lease/journal 침범 · 삭제 허용(targets-fold6-mic.json 및 session_locks/*.lock) 외의 소스/스킬 삭제.
+
+## 7. Acceptance (미실행은 NOT_RUN)
+- A1 WP1: targets-fold6-mic.json 제거 확인, devin-de8ac642 및 fold6-mic-start-fail-7767e1f1 저널 closed 및 lease 해제 확인.
+- A2 WP2: agent_session_watch.py scan --agent devin --since-hours 24 실행 결과 P15 auto 경보 0건 확인.
+- A3 WP3: W1~W6 관련 5개 단위 테스트 전부 PASS.
+- A4 WP4: 종료 시 agent_scope_lease.py who 결과 devin 소유 lease 0개, work_journal.py list --active 결과 devin 소유 journal 0개 확인.
+- A5 공통: 외부 API 실호출 0회, 제품 Java/JS 임의 변조 0건, 비밀값 노출 0건.
+
+## 8. 보고 형식
+외부 API: 0회
+상태: DONE | PARTIAL | HOLD
+A1~A5: PASS/FAIL/NOT_RUN + 근거 (명령, exit, 출력 요약)
+정리된 자원: 해제된 lease 목록, 닫힌 journal 목록, 삭제된 lock 수
+종료 시점 own lease 잔존 수: 0
+종료 시점 own journal 잔존 수: 0
+
+[ANTI-STOP] 모든 작업 및 Acceptance 확인이 완료되기 전까지 세션을 임의로 중단하지 마세요.

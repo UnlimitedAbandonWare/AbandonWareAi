@@ -1,0 +1,75 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니다. 아래 작업을 실제로 끝까지 수행하고 인수 항목(WP1~WP3)을 모두 충족한 뒤 지정된 회신 포맷에 따라 리포트하라.
+
+# DEVIN — brief_save.py 레거시 레포 사본 폐기 및 Downloads 단일 진입점 클린화
+
+첫 명령:
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+```
+
+## 0) 한 줄 목표
+2026-10-03 R6 사용자 결정(BRIEF.txt 레포 사본 폐기, Downloads의 PASTE_*.txt 단독 유지)에 맞추어 `scripts/brief_save.py`의 기본 `agent-prompts/` 사본 생성을 비활성화하고, Git untracked dirt 누적을 차단하며 `test_brief_save.py` 회귀 테스트를 100% 통과시킨다.
+
+## 1) 사실 (2026-10-06 16:00 KST)
+1. Project Root는 `C:\AbandonWare\demo-1\demo-1\src`이다.
+2. `SKILL.md` (demo1-agy-directive-writer L115-117)에 "agent-prompts\<agent>-<topic>-<date>\BRIEF.txt 사본은 2026-10-03 사용자 결정(R6)으로 폐기 — 산출물은 Downloads의 PASTE 파일 하나다"라고 명시되어 있다.
+3. 그러나 `scripts/brief_save.py` L244-248에서 매 저장마다 `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt`를 강제로 생성하여 레포지토리에 untracked 파일이 145개 이상 누적되는 Git Dirt의 주원인이 되고 있다.
+4. `scripts/test_brief_save.py` L84-86의 `test_1_pass_saves_two_copies_and_registry`가 `repo/agent-prompts/.../BRIEF.txt` 존재를 assert하고 있어 구버전 동작에 묶여 있었다.
+5. 제품 Java 소스 및 Spring Boot는 절대 수정하지 않으며, 작업 범위는 `scripts/brief_save.py`와 `scripts/test_brief_save.py`에 한정된다.
+
+## 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## WP1 — scripts/brief_save.py 레포 사본 기본 생성 중단 및 선택 플래그화
+- `scripts/brief_save.py`의 `cmd_save()` 함수 수정:
+  1. 기본 저장 시 `repo_root / "agent-prompts"` 디렉토리 및 `BRIEF.txt` 사본 생성을 건너뛴다.
+  2. `--repo-copy` CLI 플래그(action="store_true", 기본값 False)를 추가하여, 명시적으로 요구할 때만 `agent-prompts/.../BRIEF.txt`를 쓰도록 한다.
+  3. `repo_copy` 변수를 `--repo-copy` 미사용 시 `None`으로 설정한다.
+
+## WP2 — scripts/brief_save.py 레지스트리 및 CLI 출력 정제
+- `briefs.jsonl` 기록 시:
+  - `repo_copy`가 None인 경우 `row["repoPath"] = None`으로 기록한다.
+- 콘솔 출력 메시지 정제:
+  - 레포 사본이 없을 때는 `Downloads: {paste}` 및 `바이트 {nbytes} / sha12 {sha12}`만 깔끔하게 출력하고, `두 사본 일치` 검증은 레포 사본이 존재할 때만 비교/출력한다.
+
+## WP3 — scripts/test_brief_save.py 회귀 테스트 정합성 갱신
+- `scripts/test_brief_save.py` 수정:
+  1. `test_1_pass_saves_two_copies_and_registry` -> `test_1_pass_saves_downloads_only_by_default`로 개편하여, 기본 저장이 Downloads 파일만 생성하고 `agent-prompts` 디렉토리는 생성하지 않음을 assert한다 (`self.assertFalse(brief.exists())`).
+  2. `--repo-copy` 플래그 전달 시 레포 사본이 정상 생성되는지 검증하는 신규 테스트 `test_1b_pass_saves_repo_copy_when_flagged` 추가.
+  3. 나머지 기존 테스트(R2 넘버링, lint 에러 차단 등)가 모두 깨지지 않고 정상 통과하는지 확인.
+  4. 실행 명령: `python -B scripts/test_brief_save.py` (종료 코드 0, OK 확인).
+
+## HOLD
+- 제품 Java/Resources/Frontend/Gradle 파일 변경 금지 (오직 `scripts/brief_save.py`, `scripts/test_brief_save.py` 2개 파일만 대상).
+- `data/agent-handoff/brief-registry/briefs.jsonl`의 기존 이력 삭제 금지 (append-only 유지).
+- Git push, add -A, commit -a 금지.
+
+## ASK_ONCE
+- 없음 (되돌릴 수 있는 로컬 도구 개선이므로 AUTO 진행).
+
+## 절대 금지
+- push 금지, git add -A 금지, remote 추가 금지, PROTO_OPEN 임의 변경 금지.
+- 외부 유료 API 호출 0.
+- Gradle 전체 빌드 및 테스트 금지 (Python 단위 테스트만 실행).
+- `.secrets` 또는 비밀 환경변수 열람/출력 금지.
+- 미실행 항목을 PASS로 허위 보고 금지 (실제 실행 결과만 표기, 미실행은 NOT_RUN+사유).
+
+## Acceptance
+- [ ] WP1: `python -B scripts/brief_save.py save --draft <임시파일> --agent DEVIN --topic test-single-target` 실행 시 Downloads 파일만 생성되고 `agent-prompts/` 하위에는 사본이 생성되지 않는다.
+- [ ] WP2: `briefs.jsonl`에 `repoPath: null`이 기록되며, `--repo-copy` 옵션 사용 시에만 레포 사본이 생성 및 기록된다.
+- [ ] WP3: `python -B scripts/test_brief_save.py` 실행 시 모든 테스트(11건 이상)가 100% OK(종료 코드 0)로 통과한다.
+
+## 보고 형식
+보고는 아래 5줄 요약으로 시작하라:
+```text
+외부 API: 0회
+비밀 열람: 0회
+제품 소스 diff: 0
+테스트: python -B scripts/test_brief_save.py (11+ passed, exit=0)
+종료 시 lease: 0
+```
+이후 각 WP별 변경 내용과 테스트 출력 로그를 첨부하라.
+
+[ANTI-STOP] 완료 = Acceptance WP1~WP3가 모두 실제로 검증되어 PASS인 상태다. 임의 중단 없이 끝까지 완료하라.

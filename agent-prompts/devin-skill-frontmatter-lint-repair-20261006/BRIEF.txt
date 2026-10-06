@@ -1,0 +1,117 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 읽기는 intake일 뿐, 완료 = 최종 검증 통과(PASS). 즉시 DV0부터 차례로 실행하세요.
+
+# DEVIN — 스킬 Frontmatter 규격 위반 3건 및 테스트 러너 임포트 오류 원천 수리
+[Contract: DEMO1-DEVIN-SKILL-FRONTMATTER-LINT-REPAIR-20261006]
+
+## 0. 한 줄 목표
+스킬 디렉터리의 YAML Frontmatter 구문 결함 3건을 수리하고 scripts/test_skill_frontmatter_lint.py의 단독 실행 임포트 누락을 보강하여 skill_frontmatter_lint.py 및 테스트가 100% 클린 PASS하도록 만든다.
+
+## 1. 사실 (2026-10-06 15:55 KST 확인)
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- `python -B scripts/skill_frontmatter_lint.py` 실행 시 148개 스킬 중 3개 파일 위반 발생:
+  1) `.agents/skills/demo1-staged-method/SKILL.md`: `yaml-error: mapping values are not allowed here` (설명 내 따옴표 없는 `SSOT: ` 콜론+공백 오류)
+  2) `.agents/skills/demo1-dot-control-tower/SKILL.md`: `missing-frontmatter: line 1 is not '---'`
+  3) `.agents/skills/dot-brief-save/SKILL.md`: `missing-frontmatter: line 1 is not '---'`
+- `python -B scripts/test_skill_frontmatter_lint.py` 단독 실행 시:
+  `ImportError: cannot import name 'skill_frontmatter_lint' from 'scripts'` (단독 실행 시 sys.path에 repo root 누락)
+- 제품 자바/리소스 소스(`main/java`, `main/resources`, `src/test/java`, `chat-ui.html`): 변경 대상 아님 (0건).
+- 활성 lease: `chat-browser10-followup` (Codex 전용, ChatWorkflow 담당). 본 작업의 4개 파일과 겹치지 않음.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 작업 항목 (DV)
+
+### DV0. 사전 기준선 확인
+- 첫 명령: `Set-Location C:\AbandonWare\demo-1\demo-1\src`
+- `python -B scripts/skill_frontmatter_lint.py` 실행하여 위반 3건 재확인.
+- `python -B scripts/test_skill_frontmatter_lint.py` 실행하여 ImportError 발생 재확인.
+
+### DV1. test_skill_frontmatter_lint.py standalone 임포트 보강
+- 파일: `scripts/test_skill_frontmatter_lint.py`
+- 상단(docstring 직후)에 repo root를 `sys.path`에 보장하는 표준 코드 추가:
+  ```python
+  from pathlib import Path
+  import sys
+  ROOT = Path(__file__).resolve().parent.parent
+  if str(ROOT) not in sys.path:
+      sys.path.insert(0, str(ROOT))
+  ```
+- 검증: `python -B scripts/test_skill_frontmatter_lint.py` 단독 실행 시 ImportError 없이 테스트 실행되는지 확인 (`Ran 8 tests in ... OK`).
+
+### DV2. demo1-staged-method description 인용 부호 수리
+- 대상 파일: `demo1-staged-method` 폴더 내 SKILL.md
+- 3행의 `description:` 값을 작은따옴표 `'...'`로 감싸 YAML 매핑 오류(`SSOT: `) 방지:
+  ```yaml
+  description: 'Use when starting any new PASTE/directive on demo-1 or when work looks wild/random (스킬 없이·단계 없이·감으로 휘두르기) — enforces the STAGED_METHOD 6-gate order (지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음). SSOT: docs/agents-rules/DEMO1-STAGED-METHOD.md'
+  ```
+- 검증: `python -B scripts/skill_frontmatter_lint.py --path .agents/skills/demo1-staged-method/SKILL.md` -> `OK`
+
+### DV3. demo1-dot-control-tower Frontmatter 블록 추가
+- 대상 파일: `demo1-dot-control-tower` 폴더 내 SKILL.md
+- 파일 최상단(1행)에 표준 YAML Frontmatter 블록 삽입:
+  ```yaml
+  ---
+  name: demo1-dot-control-tower
+  description: "dot(사용자의 ChatGPT UnlimitedAbandon) = 지시서 작성 + Downloads 배달 역할. 각 에이전트 세션에서 수신·충돌·원복 방지 관점으로 실행."
+  ---
+  ```
+- 검증: `python -B scripts/skill_frontmatter_lint.py --path .agents/skills/demo1-dot-control-tower/SKILL.md` -> `OK`
+
+### DV4. dot-brief-save Frontmatter 블록 추가
+- 대상 파일: `dot-brief-save` 폴더 내 SKILL.md
+- 파일 최상단(1행)에 표준 YAML Frontmatter 블록 삽입:
+  ```yaml
+  ---
+  name: dot-brief-save
+  description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF] 태그와 함께 들어온 경우 Downloads + agent-prompts 저장 경로 실행."
+  ---
+  ```
+- 검증: `python -B scripts/skill_frontmatter_lint.py --path .agents/skills/dot-brief-save/SKILL.md` -> `OK`
+
+### DV5. 전체 회귀 검증
+- `python -B scripts/skill_frontmatter_lint.py` 실행하여 148개 스킬 전체 violations=0 확인.
+- `python -B scripts/test_skill_frontmatter_lint.py` 실행하여 8개 테스트 전체 통과 확인.
+- `python -m unittest scripts/test_skill_frontmatter_lint.py` 실행하여 모듈 방식 통과도 확인.
+
+## 4. HOLD
+- 다른 에이전트가 위 4개 대상 파일에 대해 활성 live lease를 점유한 경우 즉시 작업을 HOLD한다.
+
+## 5. ASK_ONCE
+- 스킬 삭제, 대규모 구조 변경, 다른 스킬 추가 편집 등 비가역 작업은 ASK_ONCE이나, 본 4개 파일 국소 수정은 100% 가역적이므로 질문 없이 AUTO로 완료한다. (기본값: AUTO)
+
+## 6. 절대 금지
+- git push, pull, commit, git add -A, reset --hard, checkout, restore 절대 금지
+- .secrets, .env 파일 열람 및 비밀 값 출력 절대 금지
+- remote 추가·변경 금지 (origin 유일)
+- PROTO_OPEN 해제 또는 보안/로그인 강화 시도 금지
+- 다른 세션의 lease 점유 대상 건드리기 금지
+- 제품 자바/리소스 소스 수정 절대 금지 (대상 4개 파일 외 수정 0건)
+- 외부 유료 API 실호출 금지
+
+## 7. Acceptance
+- [ ] `python -B scripts/skill_frontmatter_lint.py` 실행 시 exit 0 및 `[skill-lint] files=148 violations=0` 관측
+- [ ] `python -B scripts/test_skill_frontmatter_lint.py` 단독 실행 시 exit 0 및 `Ran 8 tests in ... OK` 관측
+- [ ] `python -m unittest scripts/test_skill_frontmatter_lint.py` 실행 시 exit 0 및 `Ran 8 tests in ... OK` 관측
+- [ ] 제품 소스(`main/java`, `main/resources`, `src/test/java`) diff 0건
+- [ ] git push, add -A, commit 기록 0건, 비밀값 노출 0건
+
+## 8. 보고 형식
+보고 시작 줄: `외부 API: 0 (로컬 도구·스킬 규격 검증 전용)`
+형식:
+DEVIN: DONE
+FILES_TOUCHED:
+- .agents/skills/demo1-staged-method/SKILL.md
+- .agents/skills/demo1-dot-control-tower/SKILL.md
+- .agents/skills/dot-brief-save/SKILL.md
+- scripts/test_skill_frontmatter_lint.py
+EVIDENCE_COMMANDS:
+- python -B scripts/skill_frontmatter_lint.py (violations=0)
+- python -B scripts/test_skill_frontmatter_lint.py (exit=0, 8 passed)
+- python -m unittest scripts/test_skill_frontmatter_lint.py (exit=0, 8 passed)
+NOT_RUN: none
+HARD_STOP_CHECK: PASS (제품 소스 diff 0, git 커밋 0, 비밀 0)
+
+[ANTI-STOP] 완료는 모든 검증 체크박스가 PASS될 때입니다. 결과 보고 후 깔끔하게 종료하세요.
