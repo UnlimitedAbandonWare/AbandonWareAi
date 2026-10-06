@@ -14,6 +14,38 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
 class ChatModelCatalogServiceTest {
+    @Test void googleSearchCapabilityUsesConfiguredNativeReadinessWithoutGenerationProbe() {
+        for (String scenario : List.of("supported", "unknown-model", "disabled-search")) {
+            String model = scenario.equals("unknown-model") ? "gemini-unverified" : "gemini-3.8-flash";
+            var row = mock(CloudModelRouteClassifier.CloudModelRouteRow.class);
+            when(row.routeKey()).thenReturn("gemini-pro"); when(row.provider()).thenReturn("gemini");
+            when(row.modelId()).thenReturn(model); when(row.eligible()).thenReturn(true);
+            var cloud = mock(CloudModelRouteClassifier.class);
+            when(cloud.classifyDefaultCatalog("chat")).thenReturn(List.of(row));
+            var env = new org.springframework.mock.env.MockEnvironment()
+                .withProperty("GEMINI_API_KEY", "synthetic-focus-key")
+                .withProperty("gemini.gateway.enabled", "true")
+                .withProperty("gemini.gateway.purpose.router.enabled", "true")
+                .withProperty("gemini.gateway.grounding.enabled", String.valueOf(!scenario.equals("disabled-search")));
+            var exchanges = new java.util.concurrent.atomic.AtomicInteger();
+            var gateway = new com.example.lms.learning.gemini.GeminiGateway(
+                org.springframework.web.reactive.function.client.WebClient.builder().exchangeFunction(request -> {
+                    exchanges.incrementAndGet(); return reactor.core.publisher.Mono.error(new AssertionError("no generation probe"));
+                }), new com.example.lms.guard.ProviderCredentialResolver(env), env);
+            var config = new ai.abandonware.nova.config.LlmRouterProperties.ModelConfig();
+            config.setProvider("gemini"); config.setName(model);
+            config.setBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai");
+            var props = new ai.abandonware.nova.config.LlmRouterProperties(); props.getModels().put("gemini-pro", config);
+            var catalog = new ChatModelCatalogService(cloud, null, new RestTemplateBuilder(), "https://remote.invalid", true);
+            org.springframework.test.util.ReflectionTestUtils.setField(catalog, "routerConfig", props);
+            org.springframework.test.util.ReflectionTestUtils.setField(catalog, "geminiGateway", gateway);
+            var choice = catalog.resolve("llmrouter.gemini-pro").orElseThrow();
+            assertThat(choice.metadata().get("googleSearchSupported")).isEqualTo(scenario.equals("supported"));
+            assertThat(choice.metadata().get("googleSearchReason")).isEqualTo(scenario.equals("supported") ? "supported"
+                : scenario.equals("unknown-model") ? "focus_search_capability_unknown" : "focus_search_disabled");
+            assertThat(exchanges.get()).isZero();
+        }
+    }
     @Test void preservesPolicyAndRouteReasonsInJsonWithLegacyPrimaryReason() {
         var row = remoteCatalog("", false, "route_disabled").resolve("llmrouter.api3").orElseThrow();
         var json = new ObjectMapper().valueToTree(row);

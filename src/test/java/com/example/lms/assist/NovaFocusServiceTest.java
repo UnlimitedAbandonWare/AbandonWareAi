@@ -10,6 +10,45 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusServiceTest {
+    private static NovaFocusAnswer typedAdapter(){
+        var adapter=mock(NovaFocusAnswer.class);
+        doCallRealMethod().when(adapter).answerResult(any(),any(),any(),any(),any(),any(),any());
+        doCallRealMethod().when(adapter).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+        return adapter;
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"completed","failed","changed","closed"})
+    void earlyFoldSentenceWaitsForTerminalAndCannotPersistFailedRevision(String outcome) throws Exception {
+        try(var f=new EpochFixture()){
+            var first=new CountDownLatch(1);var finish=new CountDownLatch(1);
+            doAnswer(call->{
+                java.util.function.Consumer<String> partial=call.getArgument(7);
+                partial.accept("첫 문장입니다.");first.countDown();assertTrue(finish.await(3,TimeUnit.SECONDS));
+                if(outcome.equals("failed"))throw new IllegalStateException("synthetic_provider_failed");
+                if(outcome.equals("closed"))partial.accept("첫 문장입니다. 늦은 문장입니다.");
+                return new NovaFocusAnswer.Result(outcome.equals("changed")?"최종 본문이 달라졌습니다.":"첫 문장입니다. 최종 문장입니다.",null);
+            }).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                f.ask(1,"early");assertTrue(first.await(3,TimeUnit.SECONDS));
+                var early=f.service.view(f.owner,"assist",1);
+                assertEquals("THINKING",early.phase());assertEquals("첫 문장입니다.",early.forTarget("fold").answerText());
+                assertEquals("",early.forTarget("lens").answerText());
+                verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
+                if(outcome.equals("closed"))f.service.close(f.owner,"assist",1,"user_closed");
+                finish.countDown();
+                long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+                while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy"))&&System.nanoTime()<until)Thread.sleep(5);
+                assertFalse(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy")));
+                if(outcome.equals("completed")){
+                    assertEquals(early.answerVersion(),f.service.view(f.owner,"assist",1).answerVersion());
+                    verify(f.history).terminal(any(),any(),any(),eq("COMPLETED"),eq("첫 문장입니다. 최종 문장입니다."));
+                }else{
+                    assertEquals("",f.service.view(f.owner,"assist",1).forTarget("fold").answerText());
+                    verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
+                }
+            }finally{finish.countDown();}
+        }
+    }
     @Test void workerDiagnosticsAreOwnerBoundAllowlistedAndClearedOnClose() throws Exception {
         try(var f=new EpochFixture()){
             when(f.answer.answer(anyLong(),anyString(),any(),any(),any())).thenAnswer(call->{
@@ -73,7 +112,7 @@ class NovaFocusServiceTest {
         final String owner="a".repeat(64);
         final Time time=new Time();
         final NovaFocusHistoryService history=mock(NovaFocusHistoryService.class);
-        final NovaFocusAnswer answer=mock(NovaFocusAnswer.class);
+        final NovaFocusAnswer answer=typedAdapter();
         final NovaFocusService service;
         EpochFixture(){
             @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
@@ -126,7 +165,7 @@ class NovaFocusServiceTest {
         volatile long now;public ZoneId getZone(){return ZoneOffset.UTC;}public Clock withZone(ZoneId z){return this;}public Instant instant(){return Instant.ofEpochMilli(now);}
     }
     @Test void independentWorkerAndCloseFenceLateProviderCompletion() throws Exception {
-        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        var history=mock(NovaFocusHistoryService.class);var answer=typedAdapter();
         when(answer.answer(anyLong(),anyString(),any(),any())).thenCallRealMethod();
         when(answer.answer(anyLong(),anyString(),any(),any(),any())).thenCallRealMethod();
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
@@ -148,7 +187,7 @@ class NovaFocusServiceTest {
         }finally{release.countDown();}
     }
     @Test void persistedManualRetryDoesNotQueueAndConflictingPayloadFailsSynchronously(){
-        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        var history=mock(NovaFocusHistoryService.class);var answer=typedAdapter();
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(answer);
         when(history.settings(anyString(),anyString())).thenReturn(new NovaFocusHistoryService.Settings(0,NovaFocusSettings.defaults()));
@@ -187,7 +226,7 @@ class NovaFocusServiceTest {
         }
     }
     @Test void snapshotLifecycleClaimsOnceAndFeedsGenerateWithOneImage() throws Exception {
-        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        var history=mock(NovaFocusHistoryService.class);var answer=typedAdapter();
         when(answer.answer(anyLong(),anyString(),any(),any())).thenCallRealMethod();
         when(answer.answer(anyLong(),anyString(),any(),any(),any())).thenCallRealMethod();
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
@@ -221,7 +260,7 @@ class NovaFocusServiceTest {
         }
     }
     @Test void snapshotErrorReportFailsQuestionButKeepsIt() {
-        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        var history=mock(NovaFocusHistoryService.class);var answer=typedAdapter();
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);
         var d=NovaFocusSettings.defaults();
         var snap=new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation(),false,false,new NovaFocusSettings.Snapshot(true,"META_GLASSES"));
@@ -245,7 +284,7 @@ class NovaFocusServiceTest {
         }
     }
     @Test void turningVoiceWakeOffCancelsFocusWorkAndPreservesBinding() throws Exception {
-        var history=mock(NovaFocusHistoryService.class);var answer=mock(NovaFocusAnswer.class);
+        var history=mock(NovaFocusHistoryService.class);var answer=typedAdapter();
         when(answer.answer(anyLong(),anyString(),any(),any())).thenCallRealMethod();
         when(answer.answer(anyLong(),anyString(),any(),any(),any())).thenCallRealMethod();
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);

@@ -30,6 +30,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class TimedChatModelCaller {
 
+    // Bounded application policy, not a claim about a provider's model limits.
+    public static final int ANSWER_MIN_OUTPUT_TOKENS = 4096;
+    private static final int ANSWER_CONTINUATION_MAX_OUTPUT_TOKENS = 8192;
+
     private static final AtomicLong THREAD_IDS = new AtomicLong();
     private static final long WORKER_TERMINATION_GRACE_MS = 100L;
     private static final int DEFAULT_WORKERS = 4;
@@ -100,6 +104,13 @@ public final class TimedChatModelCaller {
             String stage, String modelId, ChatUsageLedger.ModelAttempt usageAttempt,
             java.util.concurrent.CompletableFuture<Boolean> modelWarmup) throws Exception {
         return callResponse(model, messages, timeout, stage, modelId, usageAttempt, modelWarmup, null).aiMessage();
+    }
+
+    /** Same timeout/cancellation/usage boundary, preserving the provider response receipt. */
+    public static ChatResponse chatResponse(ChatModel model,List<ChatMessage> messages,Duration timeout,
+            String stage,String modelId,ChatUsageLedger.ModelAttempt usageAttempt,
+            java.util.concurrent.CompletableFuture<Boolean> modelWarmup) throws Exception {
+        return callResponse(model,messages,timeout,stage,modelId,usageAttempt,modelWarmup,null);
     }
 
     public static ChatResponse chatResponse(ChatModel model, List<ChatMessage> messages, Duration timeout,
@@ -182,9 +193,10 @@ public final class TimedChatModelCaller {
         try {
             delegate = executor.submit(ContextPropagation.wrapCallable(() -> {
                 Thread.interrupted();
-                try (var judgeBinding = observation == null ? null : observation.bind()) {
+                try (var judgeBinding = observation == null ? null : observation.bind();
+                     var textStage = com.example.lms.service.chat.ChatRunExecutionContext.bindProviderTextStage(stage)) {
                     if (observation != null) observation.invocationStarted();
-                    return model.chat(messages);
+                    return answerWithContinuation(model, messages, stage, modelId, observation);
                 } finally {
                     Thread.interrupted();
                     try {
@@ -334,6 +346,93 @@ public final class TimedChatModelCaller {
             }
             throw new RuntimeException(cause);
         }
+    }
+
+    private static ChatResponse answerWithContinuation(ChatModel model, List<ChatMessage> messages,
+            String stage, String modelId, JudgeCallObservation observation) throws Exception {
+        var run = com.example.lms.service.chat.ChatRunExecutionContext.current();
+        boolean mainAnswer = "chat_draft".equals(stage) && observation == null
+                && (run == null || !run.foldStreamingRequested()) && modelId != null
+                && modelId.matches("(?i)(?:chatgpt-oauth:|openai:)?(?:gpt-[0-9].*|o[134](?:[.-].*)?)");
+        if (!mainAnswer) return model.chat(messages);
+        ChatResponse first;
+        try {
+            first = model.chat(messages);
+        } catch (com.example.lms.llm.gateway.LlmResponseTerminalException terminal) {
+            if (!isOutputLimit(terminal)) throw terminal;
+            first = ChatResponse.builder().aiMessage(AiMessage.from(terminal.partialText() == null ? "" : terminal.partialText()))
+                    .metadata(terminal.metadata()).build();
+        }
+        if (first == null || first.finishReason() != dev.langchain4j.model.output.FinishReason.LENGTH) return first;
+        if (first.aiMessage() != null && first.aiMessage().hasToolExecutionRequests()) return first;
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        if (Thread.currentThread().isInterrupted()) throw new CancellationException("caller_cancelled");
+        var budget = TimeBudgetContext.get();
+        if (!com.example.lms.service.chat.ChatRunExecutionContext.isAcceptedExecution()
+                && budget != null && budget.expired()) throw hardTimeout("LLM request deadline exhausted", null);
+        String prefix = first.aiMessage() == null || first.aiMessage().text() == null ? "" : first.aiMessage().text();
+        var continuation = new java.util.ArrayList<ChatMessage>(messages);
+        if (!prefix.isEmpty()) {
+            continuation.add(AiMessage.from(prefix));
+            continuation.add(dev.langchain4j.data.message.UserMessage.from(
+                    "Continue the previous answer exactly where it stopped. Output only the missing text, without repeating its prefix or adding a new introduction."));
+        }
+        var parameters = model.defaultRequestParameters();
+        Integer cap = parameters.maxOutputTokens();
+        if (parameters instanceof dev.langchain4j.model.openai.OpenAiChatRequestParameters p && p.maxCompletionTokens() != null)
+            cap = p.maxCompletionTokens();
+        if (cap == null && first.tokenUsage() != null) cap = first.tokenUsage().outputTokenCount();
+        int nextCap = (int) Math.min(ANSWER_CONTINUATION_MAX_OUTPUT_TOKENS,
+                Math.max(ANSWER_MIN_OUTPUT_TOKENS, cap == null ? ANSWER_MIN_OUTPUT_TOKENS : 2L * cap));
+        var override = parameters instanceof dev.langchain4j.model.openai.OpenAiChatRequestParameters p && p.maxCompletionTokens() != null
+                ? dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder().maxCompletionTokens(nextCap).build()
+                : dev.langchain4j.model.chat.request.DefaultChatRequestParameters.builder().maxOutputTokens(nextCap).build();
+        TraceStore.put("llm.output.continuationCount", 1);
+        ChatResponse second;
+        try {
+            second = model.chat(dev.langchain4j.model.chat.request.ChatRequest.builder()
+                    .messages(continuation).parameters(parameters.overrideWith(override)).build());
+        } catch (com.example.lms.llm.gateway.LlmResponseTerminalException terminal) {
+            TraceStore.put("llm.output.truncatedFinal", true);
+            throw new com.example.lms.llm.gateway.LlmResponseTerminalException(terminal.reasonCode(), terminal.failureClass(),
+                    isOutputLimit(terminal) ? prefix + (terminal.partialText() == null ? "" : terminal.partialText()) : terminal.partialText(),
+                    combinedMetadata(first, terminal.metadata()), terminal.status(), terminal.incompleteReason(), terminal.providerCode());
+        }
+        if (second != null && second.aiMessage() != null && second.aiMessage().hasToolExecutionRequests())
+            throw new com.example.lms.llm.gateway.LlmResponseTerminalException("responses_tools_unsupported",
+                    com.example.lms.llm.gateway.LlmFailureClass.BAD_REQUEST, null,
+                    combinedMetadata(first, second.metadata()), "incomplete", null, null);
+        if (second != null && (second.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH
+                || second.finishReason() == dev.langchain4j.model.output.FinishReason.CONTENT_FILTER)) {
+            boolean limited = second.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH;
+            TraceStore.put("llm.output.truncatedFinal", limited);
+            TraceStore.put("llm.output.doneReason", finishReason(second));
+            throw new com.example.lms.llm.gateway.LlmResponseTerminalException(
+                    limited ? "output_limit_reached" : "content_filter", com.example.lms.llm.gateway.LlmFailureClass.NONE,
+                    limited ? prefix + (second.aiMessage() == null || second.aiMessage().text() == null ? "" : second.aiMessage().text()) : null,
+                    combinedMetadata(first, second.metadata()), "incomplete", limited ? "max_output_tokens" : "content_filter", null);
+        }
+        if (second == null || second.aiMessage() == null || second.aiMessage().text() == null || second.aiMessage().text().isBlank())
+            throw new IllegalStateException("LLM blank continuation response");
+        TraceStore.put("llm.output.truncatedFinal", second.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH);
+        TraceStore.put("llm.output.doneReason", finishReason(second));
+        return ChatResponse.builder().aiMessage(AiMessage.from(prefix + second.aiMessage().text()))
+                .metadata(combinedMetadata(first, second.metadata())).build();
+    }
+
+    private static boolean isOutputLimit(com.example.lms.llm.gateway.LlmResponseTerminalException terminal) {
+        return "incomplete".equals(terminal.status()) && "max_output_tokens".equals(terminal.incompleteReason())
+                && terminal.providerCode() == null
+                && terminal.metadata().finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH;
+    }
+
+    private static dev.langchain4j.model.chat.response.ChatResponseMetadata combinedMetadata(ChatResponse first,
+            dev.langchain4j.model.chat.response.ChatResponseMetadata last) {
+        var initialUsage = first.tokenUsage();
+        var finalUsage = last.tokenUsage();
+        var usage = initialUsage == null || finalUsage == null ? null : initialUsage.add(finalUsage);
+        return dev.langchain4j.model.chat.response.ChatResponseMetadata.builder().id(last.id()).modelName(last.modelName())
+                .finishReason(last.finishReason()).tokenUsage(usage).build();
     }
 
     public static boolean isExpectedFailureResponse(String text) {

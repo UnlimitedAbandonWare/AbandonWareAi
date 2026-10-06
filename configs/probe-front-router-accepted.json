@@ -1,0 +1,9 @@
+[
+  {
+    "id": "R-TOKEN-CAP-PROMO",
+    "file": "main/java/com/example/lms/service/routing/RouterPolicy.java",
+    "reason": "승격 대상 무과금(OAuth/로컬/기본 동일), 2026-10-06 W1 판정",
+    "evidence": "data/agent-handoff/devin-router-policy-token-cap-dba5d57a/EVIDENCE.md W1",
+    "verifiedAt": "2026-10-06T13:40:33+09:00"
+  }
+]

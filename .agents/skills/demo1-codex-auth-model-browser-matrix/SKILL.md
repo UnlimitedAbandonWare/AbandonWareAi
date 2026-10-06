@@ -36,6 +36,12 @@ reproduces the video symptom — then re-patch only the failing cells.
 7. `chat.js`/`chat-style.css`/`main/**` edits only when the governing
    directive's scope includes them — otherwise record HOLD with the reason.
 
+## VIBE_OPEN
+
+- VIBE_OPEN(`configs/vibe-open.yaml`)이면 Display·Fold6·웹 Display 접근 인증
+  검사는 `DEFERRED_SECURITY`로만 기록하고 잠금·토큰 게이트를 제안하지 않는다
+  (`docs/security/VIBE_OPEN.md`).
+
 ## Never
 
 - pick a model outside `configs/agent-test-model-policy.yaml` or a

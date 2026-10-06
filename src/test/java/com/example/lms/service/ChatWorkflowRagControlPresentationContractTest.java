@@ -23,7 +23,8 @@ class ChatWorkflowRagControlPresentationContractTest {
                 && source.contains("Boolean.TRUE.equals(req.getUseRag())"));
         assertTrue(source.contains("new com.example.lms.orchestration.control.RagControlRuntimeAdapter.RuntimeInput("));
         assertTrue(source.contains("useWeb || useRag"));
-        assertTrue(source.contains("return ChatResult.of(out, modelUsed, ragUsed,"));
+        assertTrue(source.contains("return new ChatResult(out, modelUsed, ragUsed,"));
+        assertTrue(source.contains(".withVerificationUnknownRelease(isVerificationUnknownRelease(releaseDecision)"));
         assertFalse(source.contains("private com.example.lms.orchestration.control.RagControlCoordinator ragControlCoordinator;"));
         assertFalse(source.contains("private com.example.lms.orchestration.control.RagControlProjectionRenderer ragControlProjectionRenderer;"));
         assertFalse(source.contains("userVisibleOut = controlRenderer.append"));

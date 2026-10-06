@@ -54,6 +54,10 @@
 ## Goal-Switch Barrier
 - 목표 전환 배리어: 새 목표 전 stale journal/lease 정리와 reject-complete. — 상세: `docs/agents-rules/DEMO1-GOAL-SWITCH.md`
 <!-- END DEMO1-GOAL-SWITCH -->
+<!-- BEGIN DEMO1-STAGED-METHOD -->
+## Staged Method (default work order)
+- 기본 작업 순서 = 지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음. — 상세: `docs/agents-rules/DEMO1-STAGED-METHOD.md`
+<!-- END DEMO1-STAGED-METHOD -->
 <!-- BEGIN DEMO1-CODEX-GOAL-INTAKE-CONTINUE -->
 ## Codex goal intake ≠ Done
 - goal-objective 읽기는 intake이지 Done이 아니다 — 완료 주장 전 확인. — 상세: `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`
@@ -192,6 +196,10 @@
 ## External-Agent Directive Loops (Devin report ↔ follow-up directive)
 - Devin 보고서 회신/지시서 작성 루프 — DRAFT/REVIEW/CLOSE. — 상세: `docs/agents-rules/DEMO1-DEVIN-DIRECTIVE-LOOP.md`
 <!-- END DEMO1-DEVIN-DIRECTIVE-LOOP -->
+<!-- BEGIN DEMO1-GEMINI-SEARCH-WORKER -->
+## Gemini Search Worker (external-spec subagent)
+- gemini_search_worker 한 줄 장착: 공식 문서·최신 사양 교차검증 전용, 실행 SSOT=scripts/gemini_search_worker.py. — 상세: `docs/agents/DEMO1-GEMINI-SEARCH-WORKER.md`
+<!-- END DEMO1-GEMINI-SEARCH-WORKER -->
 
 ## Runtime Boundary And Active Runtime Map
 - Treat the active runtime surface as evidence, not memory. Reconfirm Gradle settings and sourceSets before editing.
@@ -357,3 +365,7 @@
 ## Tool output budget + session state
 - 도구 출력 예산·wait·JSON-parse·patch 재시도·세션 state.md 체크포인트 SSOT. — 상세: `docs/agents-rules/DEMO1-OUTPUT-BUDGET.md`
 <!-- END DEMO1-OUTPUT-BUDGET -->
+<!-- BEGIN DEMO1-VIBE-OPEN -->
+## VIBE_OPEN: security-question auto-defer
+- 바이브 단계 보안 검증·접근 인증 질문 자동 개방유지+DEFERRED_SECURITY (스위치 configs/vibe-open.yaml). — 상세: `docs/security/VIBE_OPEN.md`
+<!-- END DEMO1-VIBE-OPEN -->

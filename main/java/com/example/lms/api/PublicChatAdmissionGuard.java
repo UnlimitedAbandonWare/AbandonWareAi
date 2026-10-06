@@ -9,7 +9,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Semaphore;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 /**
@@ -147,7 +147,10 @@ public final class PublicChatAdmissionGuard {
         private final PublicChatAdmissionGuard owner;
         private final String ownerHash;
         private final Semaphore permits;
-        private final AtomicBoolean closed = new AtomicBoolean();
+        private static final int OPEN = 0;
+        private static final int WORKING = 1;
+        private static final int CLOSED = 2;
+        private final AtomicInteger state = new AtomicInteger(OPEN);
 
         private Lease(PublicChatAdmissionGuard owner, String ownerHash, Semaphore permits) {
             this.owner = owner;
@@ -155,9 +158,21 @@ public final class PublicChatAdmissionGuard {
             this.permits = permits;
         }
 
+        /** A cancelled queued subscription must not start unadmitted blocking work. */
+        public boolean startWork() {
+            return state.compareAndSet(OPEN, WORKING);
+        }
+
+        /** Only the blocking worker's finally may release a started operation. */
+        public void finishWork() {
+            if (state.compareAndSet(WORKING, CLOSED)) {
+                owner.release(ownerHash, permits);
+            }
+        }
+
         @Override
         public void close() {
-            if (closed.compareAndSet(false, true)) {
+            if (state.compareAndSet(OPEN, CLOSED)) {
                 owner.release(ownerHash, permits);
             }
         }

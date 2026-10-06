@@ -94,6 +94,7 @@ workflow rules plus the GrokBot handover. Source SSOT stays `AGENTS.md`.
   Clean은 worktree 모드 OFF(2026-10-01~)라 지시서는 읽기 전용/lease 범위 한정.
 - Grok Bot 앱 답 형식: 결론 한 줄 → 근거 → `말로: 「…」`(지시서 인계 시) →
   `한 줄:` 요약. 재개 문장·보고서 판정은 `grokbot-current/` 레시피를 따른다.
+- **Devin 지시서 표준 스킬 라인 자동 포함**: Devin 지시서 작성 시 18개 표준 스킬 태그 프리셋(@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md)을 첫 줄에 누락 없이 반드시 자동 배치한다.
 
 ### GrokBot(웹 세션) ↔ agy(로컬 터미널) 상호운용
 

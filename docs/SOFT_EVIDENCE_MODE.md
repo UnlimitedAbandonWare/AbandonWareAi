@@ -1,3 +1,6 @@
+> **역사/참고 전용 (2026-10-06 재분류)** — 당시 tree-copy 진단과 property-gated soft allow 제안이다. 현재 구현 완료 증거나 초안 일괄 공개·설정 변경·재시작 지시로 읽지 않는다.
+> 현행 기준: [문서·P0 진입점](PRIMARY_SURFACE.md), [운영 규칙](../AGENTS.md), [현재 현황](PROJECT_STATUS.md), [답변 공개 계약](agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md). 아래 원문은 회귀·설계 근거로 보존한다.
+
 # Soft-evidence mode
 
 ## Problem

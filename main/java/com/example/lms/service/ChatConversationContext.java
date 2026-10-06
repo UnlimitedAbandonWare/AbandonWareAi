@@ -6,7 +6,11 @@ import java.util.*;
 
 /** Server-selected conversation data. Never deserialized from a public request. */
 public record ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,
-                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer focusAnswerLengthChars) {
+                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer focusAnswerLengthChars,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch) {
+    public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer length,boolean allowed){this(recent,summary,relevant,supplied,evidence,transcript,length,allowed,false);}
+    public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer length){this(recent,summary,relevant,supplied,evidence,transcript,length,false);}
+    public ChatConversationContext withFocusGoogleSearch(boolean allowed){return withFocusGoogleSearch(allowed,false);}
+    public ChatConversationContext withFocusGoogleSearch(boolean allowed,boolean required){return new ChatConversationContext(recent,summary,relevant,supplied,evidence,transcript,focusAnswerLengthChars,supplied&&allowed,supplied&&allowed&&required);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript){this(recent,summary,relevant,supplied,evidence,transcript,null);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence){this(recent,summary,relevant,supplied,evidence,List.of());}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied){this(recent,summary,relevant,supplied,List.of());}

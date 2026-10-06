@@ -282,7 +282,11 @@ public final class ChatGenerationAdmissionFilter extends OncePerRequestFilter {
                     : result instanceof com.example.lms.dto.ChatResponseDto;
             if (!valid || !finished.compareAndSet(false,true)) return;
             try {
-                byte[] encoded=json.writeValueAsBytes(result);
+                // Google grounded output is for this live request only. Preserve the main replay contract.
+                com.fasterxml.jackson.databind.JsonNode persisted=json.valueToTree(result);
+                if(persisted instanceof com.fasterxml.jackson.databind.node.ObjectNode object)
+                    object.remove("googleSearchRescue");
+                byte[] encoded=json.writeValueAsBytes(persisted);
                 if(encoded.length>2*1024*1024)throw new IllegalStateException("result_limit");
                 String body=new String(encoded,StandardCharsets.UTF_8);long now=System.currentTimeMillis();
                 transactions.executeWithoutResult(status->{

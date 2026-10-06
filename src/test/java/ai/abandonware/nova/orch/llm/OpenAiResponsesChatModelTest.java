@@ -45,6 +45,96 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class OpenAiResponsesChatModelTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void mainAnswerContinuesOutputLimitOnceWithoutRepeatingItsPrefix(boolean oauth) throws Exception {
+        var requests = new java.util.concurrent.CopyOnWriteArrayList<Map<?, ?>>();
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/v1/responses", exchange -> {
+            requests.add(new ObjectMapper().readValue(exchange.getRequestBody().readAllBytes(), Map.class));
+            boolean first = requests.size() == 1;
+            String text = first ? "The answer is " : "complete.";
+            String response = "{\"id\":\"fixture-" + requests.size() + "\",\"model\":\"gpt-5.6-sol\","
+                    + "\"status\":\"" + (first ? "incomplete" : "completed") + "\","
+                    + (first ? "\"incomplete_details\":{\"reason\":\"max_output_tokens\"}," : "")
+                    + "\"output_text\":\"" + text + "\",\"usage\":{\"input_tokens\":3,\"output_tokens\":2048,\"total_tokens\":2051}}";
+            String body = oauth ? "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"" + text + "\"}\n\n"
+                    + "event: response." + (first ? "incomplete" : "completed")
+                    + "\ndata: {\"type\":\"response." + (first ? "incomplete" : "completed") + "\",\"response\":" + response + "}\n\n"
+                    : response;
+            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", oauth ? "text/event-stream" : "application/json");
+            exchange.sendResponseHeaders(200, bytes.length);
+            try (var output = exchange.getResponseBody()) { output.write(bytes); }
+        });
+        server.start();
+        try {
+            String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1";
+            var model = oauth ? new OpenAiResponsesChatModel(base, "gpt-5.6-sol", 5_000L, () -> "synthetic-oauth-bearer")
+                    : new OpenAiResponsesChatModel(base, "synthetic-api-key-value", "gpt-5.6-sol", 5_000L,
+                            null, "primary", null, null, 2048);
+            var answer = com.example.lms.llm.TimedChatModelCaller.chatResponse(model,
+                    List.of(UserMessage.from("synthetic probe")), java.time.Duration.ofSeconds(10),
+                    "chat_draft", "gpt-5.6-sol", null, null);
+            assertEquals("The answer is complete.", answer.aiMessage().text());
+            assertEquals(dev.langchain4j.model.output.FinishReason.STOP, answer.finishReason());
+            assertEquals(4096, answer.tokenUsage().outputTokenCount());
+            assertEquals(2, requests.size());
+            var input = (List<?>) requests.get(1).get("input");
+            assertEquals("assistant", ((Map<?, ?>) input.get(input.size() - 2)).get("role"));
+            assertTrue(new ObjectMapper().writeValueAsString(input).contains("The answer is "));
+            if (oauth) {
+                assertFalse(requests.get(0).containsKey("max_output_tokens"));
+                assertFalse(requests.get(1).containsKey("max_output_tokens"), "OAuth keeps its allowlisted wire contract");
+            } else {
+                assertEquals(2048, requests.get(0).get("max_output_tokens"));
+                assertEquals(4096, requests.get(1).get("max_output_tokens"));
+            }
+        } finally { server.stop(0); }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"completed","failed"})
+    void oauthFoldReceivesUsefulSentenceBeforeCompletionWithoutReplay(String terminal) throws Exception {
+        var first=new CountDownLatch(1);var release=new CountDownLatch(1);
+        var seen=new java.util.concurrent.CopyOnWriteArrayList<String>();var calls=new java.util.concurrent.atomic.AtomicInteger();
+        String sentence="A useful first sentence. "+"x".repeat(40);
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/v1/responses",exchange->{
+            calls.incrementAndGet();exchange.getRequestBody().readAllBytes();
+            exchange.getResponseHeaders().add("Content-Type","text/event-stream");exchange.sendResponseHeaders(200,0);
+            try(var out=exchange.getResponseBody()){
+                String delta=new ObjectMapper().writeValueAsString(Map.of("type","response.output_text.delta","sequence_number",2,"delta",sentence));
+                out.write(("data: {\"type\":\"response.reasoning_text.delta\",\"sequence_number\":1,\"delta\":\"SYNTHETIC_PRIVATE_REASONING\"}\n\ndata: "+delta+"\n\ndata: "+delta+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();
+                try{release.await(5,TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}
+                Map<String,Object> response="completed".equals(terminal)?Map.of("status","completed","model","gpt-5.6-luna","output_text",sentence):Map.of("status","failed","error",Map.of("code","server_error"));
+                out.write(("data: "+new ObjectMapper().writeValueAsString(Map.of("type","response."+terminal,"sequence_number",3,"response",response))+"\n\n").getBytes(StandardCharsets.UTF_8));out.flush();
+            }
+        });server.start();
+        var registry=new com.example.lms.service.chat.ChatRunRegistry();
+        org.springframework.test.util.ReflectionTestUtils.setField(registry,"replayCapacity",16);
+        var run=registry.beginOrJoin(9754L).context();var pool=java.util.concurrent.Executors.newSingleThreadExecutor();
+        try{
+            run.installFoldTextConsumer(text->{seen.add(text);first.countDown();});
+            var future=pool.submit(()->{
+                try(var binding=com.example.lms.service.chat.ChatRunExecutionContext.bind(run);var permit=run.permitFoldStreaming(true)){
+                    return com.example.lms.llm.TimedChatModelCaller.chat(oauthFixtureModel(server),List.of(UserMessage.from("synthetic probe")),java.time.Duration.ofSeconds(5),"chat_draft","chatgpt-oauth:gpt-5.6-luna");
+                }
+            });
+            assertTrue(first.await(3,TimeUnit.SECONDS));assertFalse(future.isDone(),"Fold useful text precedes provider completion");
+            release.countDown();
+            if("completed".equals(terminal)){
+                String result=future.get(3,TimeUnit.SECONDS).text();run.requireFoldPrefix(result);
+                assertEquals(sentence,result);
+            }else{
+                var failure=assertThrows(java.util.concurrent.ExecutionException.class,()->future.get(3,TimeUnit.SECONDS));
+                assertNotNull(com.example.lms.llm.gateway.LlmResponseTerminalException.find(failure));
+            }
+            assertEquals(List.of("A useful first sentence."),seen);
+            assertEquals(1,calls.get());
+            assertTrue(run.foldTimings().containsKey("focus.stream.firstUsefulPublishedMs"));
+        }finally{release.countDown();pool.shutdownNow();org.springframework.test.util.ReflectionTestUtils.invokeMethod(registry,"shutdown");server.stop(0);}
+    }
 
     @Test
     void oauthPayloadRetainsMemoryBeforeTheCurrentQuestion() throws Exception {

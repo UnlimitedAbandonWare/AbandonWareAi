@@ -26,6 +26,44 @@ final class NoEvidenceChatFallback {
     private NoEvidenceChatFallback() {
     }
 
+    static boolean isSessionMemoryOnly(String query) {
+        if (query == null || query.isBlank()
+                || !java.util.regex.Pattern.compile("(?:이|이번)\\s*(?:대화|세션)").matcher(query).find()) {
+            return false;
+        }
+        var directive = java.util.regex.Pattern.compile(
+                "^(.+?)(?:(?:기억|정정|수정|변경)\\s*해\\s*(?:줘|주세요)|"
+                        + "바꿔\\s*(?:줘|주세요)|다시\\s*말해\\s*(?:줘|주세요))$");
+        var storageOptOut = java.util.regex.Pattern.compile(
+                "^(.+?)(?:기억|저장|보관|기록).{0,80}필요(?:는|가)?\\s*없(?:어|어요|습니다)?$");
+        var searchOptOut = java.util.regex.Pattern.compile(
+                "^(?:외부\\s*)?검색(?:은|이|도|을)?\\s*필요(?:는|가)?\\s*없(?:어|어요|습니다)?$");
+        var additionalRequest = java.util.regex.Pattern.compile(
+                "줘|주세요|해라|하세요|할까|되는지|인지|찾아|알아(?:보|내)|검색|원문|출처|최신|확인\\s*해|https?://");
+        boolean memoryDirective = false;
+        // Every clause must be a memory instruction or its storage policy.
+        // Unknown extra tasks retain the ordinary evidence/verification path.
+        for (String part : query.split("[.!?\\n]+")) {
+            String clause = part.strip();
+            if (clause.isEmpty()) continue;
+            var memory = directive.matcher(clause);
+            var policy = storageOptOut.matcher(clause);
+            String prefix;
+            if (memory.matches()) {
+                memoryDirective = true;
+                prefix = memory.group(1);
+            } else if (policy.matches()) {
+                prefix = policy.group(1);
+            } else if (searchOptOut.matcher(clause).matches()) {
+                continue;
+            } else {
+                return false;
+            }
+            if (additionalRequest.matcher(prefix).find()) return false;
+        }
+        return memoryDirective;
+    }
+
     static boolean hasNoEvidence(Collection<?>... sources) {
         if (sources == null || sources.length == 0) {
             return true;
@@ -36,6 +74,42 @@ final class NoEvidenceChatFallback {
             }
         }
         return true;
+    }
+
+    static boolean isExplicitNoAdditionalSearch(String query) {
+        return query != null
+                && !java.util.regex.Pattern.compile("(?:검색|찾아)(?:\\s*해)?\\s*(?:줘|주세요)")
+                        .matcher(query).find()
+                && java.util.regex.Pattern.compile(
+                        "(?iu)^\\s*(?:추가|외부|새(?:로운)?)\\s*검색(?:은|을)?\\s*"
+                                + "(?:없이|하지\\s*말(?:고|아|아줘|아주세요))(?=\\s|$|[,.!?])")
+                        .matcher(query).find();
+    }
+
+
+    static boolean isClarificationFirstPriorComparison(String query) {
+        if (query == null) return false;
+        return java.util.regex.Pattern.compile(
+                "^\\s*(?:앞에서|앞서|이전에)\\s*확인한\\s*[^.!?\\n]+(?:자료|출처)\\s*"
+                        + "(?:두\\s*개|둘)(?:를|을)\\s*비교해(?:줘|주세요)\\s*[.]\\s*"
+                        + "(?:어느|어떤)\\s*두\\s*(?:자료|출처)인지\\s*(?:또는|나)\\s*비교\\s*기준이\\s*"
+                        + "(?:불명확|모호)하면\\s*먼저\\s*(?:확인\\s*)?질문(?:을)?\\s*해(?:줘|주세요)\\s*[.!?]?$"
+        ).matcher(query).matches();
+    }
+
+    static boolean isExplicitGeneralConceptOnly(String query) {
+        if (!com.example.lms.util.QueryTypeHeuristics.isDefinitional(query)
+                || java.util.regex.Pattern.compile(
+                        "(?iu)(?:최신|오늘|현재|출처|공식|원문|인용|https?://|교수|소속|프로필|"
+                                + "진료|처방|진단|의료|복용|병용|약물|투자|법률|찾아|알아내|확인해|검증해|알려줘|CEO)")
+                        .matcher(query).find()) {
+            return false;
+        }
+        return java.util.regex.Pattern.compile(
+                "(?iu)^[^.!?\\n]+(?:일반적인|일반)\\s*개념으로\\s*(?:[1-5]|한|두|세|네|다섯)\\s*"
+                        + "문장(?:만)?\\s*설명해(?:줘|주세요)\\s*[.!?]?\\s*"
+                        + "외부\\s*검색이\\s*필요한\\s*주제는\\s*아니(?:야|에요)\\s*[.!?]?$"
+        ).matcher(query.strip()).matches();
     }
 
     static String compose(String query) {

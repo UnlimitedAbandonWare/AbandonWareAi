@@ -1,3 +1,6 @@
+> **역사/참고 전용 (2026-10-06 재분류)** — 당시 읽기 전용 감사와 삭제0 기록이다. 옛 DELETE 후보는 현재 삭제 권한·활성 소유권·대체 완료의 증거가 아니다.
+> 현행 기준: [문서·P0 진입점](PRIMARY_SURFACE.md), [운영 규칙](../AGENTS.md), [현재 현황](PROJECT_STATUS.md), [답변 공개 계약](agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md). 아래 원문은 회귀·설계 근거로 보존한다.
+
 # 오래된 산출물 정리 감사 (읽기 전용)
 
 - taskId: `cleanup-audit-old-artifacts-844675f5`

@@ -280,7 +280,7 @@ public class NovaFocusService implements AutoCloseable {
                     var sourceIds=accepted.sourceIds();
                     s.preparedContext=new NovaFocusHistoryService.Context(List.copyOf(s.recent),"",List.of(),
                         s.finalized.values().stream().filter(t->!sourceIds.contains(t.sourceId())).toList(),
-                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled());
+                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled(),accepted.webSearchEnabled());
                     s.preparedRequestId=accepted.requestId();
                 }
                 if(request!=null){
@@ -309,28 +309,37 @@ public class NovaFocusService implements AutoCloseable {
             }
             FocusMemoryScope scope;
             synchronized(s){scope=memories==null?null:memories.scope(s.owner,s.channel);}
-            String answer;
-            if(StringUtils.hasText(request.imageBase64())){
-                answer=adapter.answer(accepted.chatSessionId(),request.question(),request.imageBase64(),request.imageMediaType(),memory,scope,()->{synchronized(s){return s.state.accepts(request);}});
-            }else{
-                answer=adapter.answer(accepted.chatSessionId(),request.question(),memory,scope,()->{synchronized(s){return s.state.accepts(request);}});
-            }
+            var result=adapter.answerResult(accepted.chatSessionId(),request.question(),request.imageBase64(),request.imageMediaType(),memory,scope,()->{synchronized(s){return s.state.accepts(request);}},text->{
+                synchronized(s){
+                    if(!s.state.accepts(request)||s.settingsVersion!=request.settingsVersion()||(memories!=null&&!memories.current(scope)))
+                        throw new java.util.concurrent.CancellationException("focus_stream_cancelled");
+                    s.state.foldPartial(request,accepted.turnId(),text);
+                }
+            });
+            String answer=result.text();
             synchronized(s){
                 if(!s.state.accepts(request)||(memories!=null&&!memories.current(scope))){history.terminal(s.owner,s.channel,id,"CANCELLED",null);s.state.close("memory_changed");return;}
                 s.answerDiagnostics=NovaFocusAnswerService.diagnosticTrace();
+                if(!s.state.foldPrefixMatches(answer))throw new IllegalStateException("focus_stream_final_mismatch");
                 if(history.terminal(s.owner,s.channel,id,"COMPLETED",answer)){
-                    s.recent.addLast(new NovaFocusHistoryService.Pair(0,id,"COMPLETED",
+                    if(result.grounding()==null)s.recent.addLast(new NovaFocusHistoryService.Pair(0,id,"COMPLETED",
                         NovaFocusHistoryService.memoryClip(request.question(),350),NovaFocusHistoryService.memoryClip(answer,350)));
                     while(s.recent.size()>2)s.recent.removeFirst();
                     byte[] bytes=new byte[32];random.nextBytes(bytes);
-                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis());
+                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis(),result.grounding());
                 }else s.state.failed(request,"focus_outcome_unknown");
             }
         }catch(RuntimeException failure){
             synchronized(s){
                 if(s.state.accepts(request))s.answerDiagnostics=NovaFocusAnswerService.diagnosticTrace();
                 if(id!=null)try{history.terminal(s.owner,s.channel,id,"OUTCOME_UNKNOWN",null);}catch(RuntimeException unavailable){}
-                s.state.failed(request,failure instanceof PublicChatAdmissionGuard.Rejection?"focus_busy":"focus_answer_unavailable");
+                String reason=failure instanceof PublicChatAdmissionGuard.Rejection?"focus_busy":"focus_answer_unavailable";
+                if(java.util.Set.of("focus_grounding_publication_held","focus_search_off","focus_search_quick","focus_search_image_unsupported",
+                        "focus_search_model_required","focus_search_unsupported","focus_search_not_observed","focus_search_model_mismatch",
+                        "focus_search_attribution_unavailable","focus_stream_final_mismatch","focus_stream_cancelled").contains(java.util.Objects.toString(failure.getMessage(),"")))reason=failure.getMessage();
+                if(request.answerSelection().routing()!=null&&request.answerSelection().routing().executionTarget()==NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY
+                        &&failure instanceof com.example.lms.llm.ModelSelectionException known)reason="focus_search_"+known.code();
+                s.state.failed(request,reason);
                 if(!s.state.active())s.recent.clear();
             }
         }finally{com.example.lms.search.TraceStore.clear();if(lease!=null)lease.close();synchronized(s){s.pendingTurn=null;s.busy=false;}}

@@ -27,7 +27,7 @@ class AdaptiveRouteDecisionTest {
     final DynamicChatModelFactory factory = mock(DynamicChatModelFactory.class, invocation ->
             "automaticMainRoute".equals(invocation.getMethod().getName()) ? OAUTH :
                     org.mockito.Answers.RETURNS_DEFAULTS.answer(invocation));
-    final RouterPolicy policy = new RouterPolicy(new com.example.lms.config.MoeRoutingProps());
+    final RouterPolicy policy = new RouterPolicy(new com.example.lms.config.MoeRoutingProps(), new com.example.lms.service.rag.QueryComplexityGate());
     final PolicyBasedModelRouter router = new PolicyBasedModelRouter(base, null, null, policy, factory);
     @BeforeEach void setup() {
         RequestedModelSelection.begin(null);

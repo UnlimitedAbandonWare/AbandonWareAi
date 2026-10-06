@@ -8,6 +8,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.savedrequest.NullRequestCache;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -197,6 +199,8 @@ public class ChatOpenSecurityConfig {
             }))
             .cors(cors -> { if (interviewDemo) cors.disable(); else cors.configurationSource(corsConfigurationSource()); })
             .csrf(csrf -> csrf
+                .csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
+                .csrfTokenRequestHandler(new CsrfTokenRequestAttributeHandler())
                 .ignoringRequestMatchers(
                     this::displayRequest,
                     request -> interviewDemo && request.getRequestURI().startsWith(request.getContextPath() + "/api/assist/"),

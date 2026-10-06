@@ -44,6 +44,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-answer-chars:280}") private int lensAnswerChars=280;
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-answer-lines:6}") private int lensAnswerLines=6;
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.lens-source-suffix:true}") private boolean lensSourceSuffix=true;
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.timeout-ms:8000}") private long focusTimeoutMs=8000;
     public NovaFocusAnswerService(ChatService chat,PublicRequestBudgetGuard budgets,ChatRunRegistry runs){this(chat,budgets,runs,null);}
     @org.springframework.beans.factory.annotation.Autowired
     public NovaFocusAnswerService(ChatService chat,PublicRequestBudgetGuard budgets,ChatRunRegistry runs,FocusMemoryService memories){this.chat=chat;this.budgets=budgets;this.runs=runs;this.memories=memories;}
@@ -57,10 +58,22 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         return answer(room,question,null,null,memory,scope,current);
     }
     @Override public String answer(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context memory,FocusMemoryScope scope,java.util.function.BooleanSupplier current){
+        return answerResult(room,question,imageBase64,imageMediaType,memory,scope,current).text();
+    }
+    @Override public Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context memory,FocusMemoryScope scope,java.util.function.BooleanSupplier current){
+        return answerResult(room,question,imageBase64,imageMediaType,memory,scope,current,null);
+    }
+    @Override public Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context memory,FocusMemoryScope scope,java.util.function.BooleanSupplier current,java.util.function.Consumer<String> foldPartial){
         TraceStore.clear();
         boolean imagePresent=StringUtils.hasText(imageBase64);
         boolean quick=memory.quickAnswerEnabled();
-        boolean web=!quick&&!imagePresent&&(decisions.decide(question,SearchMode.AUTO,null,3,
+        var selection=memory.answerSelection();
+        boolean exclusive=selection.routing()!=null&&selection.routing().executionTarget()==NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY;
+        requireCurrent(current);
+        if(exclusive&&(Boolean.FALSE.equals(memory.webSearchEnabled())||quick||imagePresent))
+            throw new IllegalStateException(Boolean.FALSE.equals(memory.webSearchEnabled())?"focus_search_off":quick?"focus_search_quick":"focus_search_image_unsupported");
+        boolean searchAllowed=!Boolean.FALSE.equals(memory.webSearchEnabled())&&!quick&&!imagePresent;
+        boolean web=!exclusive&&searchAllowed&&(decisions.decide(question,SearchMode.AUTO,null,3,
                     webAggressiveEnabled&&!casualOnly(question)).shouldSearch()
                 ||ConversateAnswerPipeline.focusEvidenceRequested(question));
         // Advice may run only after admission and binding to the current request budget.
@@ -68,14 +81,19 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         boolean jevApplied=false;
         var requestBuilder=ChatRequestDto.builder().message(question).sessionId(null).memoryMode("EPHEMERAL")
             .searchMode(web?SearchMode.AUTO:SearchMode.OFF).useWebSearch(web).useRag(false).useVerification(false)
-            .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(web,false)).maxTokens(memory.answerLengthChars()==null?1024:Math.min(2048,Math.max(256,memory.answerLengthChars()*3))).webTopK(imagePresent||quick?0:3);
-        var selection=memory.answerSelection();
+            .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(web,false)).maxTokens(memory.answerLengthChars()==null?1024:Math.min(2048,Math.max(256,memory.answerLengthChars()*3))).webTopK(!exclusive&&searchAllowed?3:0);
         if(selection.mode()==NovaFocusSettings.AnswerSelection.Mode.FIXED)
             requestBuilder.model(selection.modelId()).strictModelSelection(true);
         if(selection.routing()!=null)requestBuilder.model(primaryModel(selection)).strictModelSelection(true);
         if(imagePresent){
             requestBuilder.imageBase64(imageBase64).imageMediaType(imageMediaType).snapshotSource("focus_snapshot");
         }
+        boolean foldCandidate=foldPartial!=null&&!imagePresent&&!exclusive&&!web
+            &&selection.mode()==NovaFocusSettings.AnswerSelection.Mode.FIXED
+            &&com.example.lms.llm.ChatGptOAuthRegistration.isRoute(selection.modelId())
+            &&(scope==null||!scope.recallEnabled())&&memory.transcript().isEmpty()
+            &&(selection.routing()==null||!selection.routing().effectiveFallbackAllowed());
+        if(foldCandidate)requestBuilder.mode("FACT").polish(false);
         var request=requestBuilder.build();
         var admissionContext=new ChatConversationContext(memory.recent().stream().map(NovaFocusAnswerService::pair).toList(),
             memory.summary(),memory.relevant().stream().map(NovaFocusAnswerService::pair).toList(),true,List.of(),memory.transcript());
@@ -84,8 +102,9 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         var started=runs.beginOrJoin(room);
         if(!started.owner())throw new IllegalStateException("focus_busy");
         var run=started.context();active.put(room,run);
+        if(foldCandidate)run.installFoldTextConsumer(text->{requireCurrent(current);foldPartial.accept(text);});
         var previousBudget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
-        if(previousBudget==null)com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(60000));
+        if(previousBudget==null)com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(Math.min(10000L,Math.max(3000L,focusTimeoutMs))));
         String timeline=null,terminal="error",terminalModel=request.getModel();
         try(var binding=ChatRunExecutionContext.bind(run)){
             if(modelHealth!=null){
@@ -98,7 +117,9 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             }
             requireCurrent(current);
             if(previousBudget!=null&&previousBudget.expired())throw new java.util.concurrent.CancellationException("focus_budget_exhausted");
-            if(!quick&&!imagePresent&&jevAdvisor!=null)jev=jevAdvisor.advise("focus",question,web?"WEB":"RECENT_ONLY");
+            // A fixed general answer goes straight to its selected model; web ON is permission to look up facts when needed.
+            if(!exclusive&&searchAllowed&&(web||selection.mode()!=NovaFocusSettings.AnswerSelection.Mode.FIXED)&&jevAdvisor!=null)
+                jev=jevAdvisor.advise("focus",question,web?"WEB":"RECENT_ONLY");
             requireCurrent(current);
             if(jev.usable()){
                 boolean revised=switch(jev.verdict()){
@@ -113,7 +134,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             if(web&&selection.mode()==NovaFocusSettings.AnswerSelection.Mode.AUTO&&selection.routing()==null)
                 request=withWebModel(request);
             var mode=UnknownAnswerPolicy.mode(jev);
-            boolean memoryEnabled=scope!=null&&scope.recallEnabled()
+            boolean memoryEnabled=!exclusive&&scope!=null&&scope.recallEnabled()
                 &&mode!=UnknownAnswerPolicy.Mode.RECENT_ONLY&&mode!=UnknownAnswerPolicy.Mode.WEB;
             var effectiveAdmission=request.toBuilder().message(admissionRequest.getMessage()).build();
             budgets.validateChatProjected(effectiveAdmission,PlanHints.empty("nova-focus"),web,memoryEnabled);
@@ -123,7 +144,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
                 :memories.retrieve(scope,question,current);
             if(retrieval.status()==FocusMemoryService.Status.BLOCKED_SCOPE)throw new java.util.concurrent.CancellationException("focus_memory_revoked");
             var context=new ChatConversationContext(memory.recent().stream().map(NovaFocusAnswerService::pair).toList(),
-                memory.summary(),memory.relevant().stream().map(NovaFocusAnswerService::pair).toList(),true,retrieval.evidence(),memory.transcript(),memory.answerLengthChars());
+                memory.summary(),memory.relevant().stream().map(NovaFocusAnswerService::pair).toList(),true,retrieval.evidence(),memory.transcript(),memory.answerLengthChars())
+                .withFocusGoogleSearch(searchAllowed&&(exclusive||web||Boolean.TRUE.equals(memory.webSearchEnabled())),exclusive);
             var transcriptIds=memory.transcript().stream().map(t->t.sourceId()+":"+t.revision()+":"+t.contextEpoch()).toList();
             // Project bounded extra input into the existing public admission guard; the actual DTO remains unchanged.
             var projected=request.toBuilder().message(question+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
@@ -139,33 +161,50 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             // Per-profile narrowing only: false disables the retry for this owner; true never widens the global switch.
             boolean ownerWeb=scope==null||!Boolean.FALSE.equals(scope.memoryOrDefault().webOnUnknown());
             var unknown=UnknownAnswerPolicy.decide(UnknownAnswerPolicy.mode(jev),imagePresent,
-                    scopedWebEnabled,unknownWebEnabled&&ownerWeb&&!quick,web,unknownTrigger);
+                    scopedWebEnabled,!exclusive&&unknownWebEnabled&&ownerWeb&&searchAllowed,
+                    web||(completed.result().grounding()!=null&&completed.result().grounding().searchObserved()),unknownTrigger);
             com.example.lms.search.TraceStore.put("focus.unknown.trigger",unknownTrigger==null?"none":unknownTrigger.name());
             com.example.lms.search.TraceStore.put("focus.unknown.mode",unknown.mode().name());
             com.example.lms.search.TraceStore.put("focus.unknown.webRetry",unknown.webAllowed());
             com.example.lms.search.TraceStore.put("focus.unknown.reason",unknown.reason());
-            if(unknown.webAllowed()){
+            if(unknown.webAllowed()&&!run.foldHasPublished()){
                 requireCurrent(current);
                 var webRequest=withWebModel(request.toBuilder().searchMode(SearchMode.AUTO).useWebSearch(true)
                         .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true,false)).webTopK(3).build());
                 var projectedWeb=webRequest.toBuilder().message(question+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
                 budgets.validateChatProjected(projectedWeb,PlanHints.empty("nova-focus"),true,memoryEnabled);
-                var retried=executeModels(webRequest,context,selection,current,memoryEnabled);
+                var retried=executeModels(webRequest,context.withFocusGoogleSearch(searchAllowed),selection,current,memoryEnabled);
                 ChatRunExecutionContext.throwIfCancelled();
                 ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
                 if(StringUtils.hasText(retried.text())){completed=retried;web=true;}
                 com.example.lms.search.TraceStore.put("focus.unknown.outcome",completed==retried?"replaced":"kept_first");
             }
             var result=completed.result();String answer=completed.text();
-            if(memory.answerLengthChars()!=null){
+            var grounding=result.grounding();
+            boolean grounded=grounding!=null&&grounding.searchObserved();
+            if(exclusive){
+                requireCurrent(current);
+                if(!grounded)throw new IllegalStateException("focus_search_not_observed");
+                var choice=modelCatalog.resolve(request.getModel()).orElse(null);
+                if(choice==null||!Objects.equals(choice.modelId(),grounding.selectedModel())
+                        ||!Objects.equals(result.modelUsed(),grounding.model()))throw new IllegalStateException("focus_search_model_mismatch");
+                if(!Objects.equals(answer,grounding.originalText())||!grounding.exclusivePublicationReady())
+                    throw new IllegalStateException("focus_search_attribution_unavailable");
+            }
+            if(grounded&&(!java.util.Objects.equals(answer,grounding.originalText())||!grounding.publicationReady()))
+                throw new IllegalStateException("focus_grounding_publication_held");
+            if(!grounded&&memory.answerLengthChars()!=null){
                 // Preserve full text in the existing ephemeral state. The lens projection caps it;
                 // the owner-bound Fold projection remains available without another model call.
                 if(web){answer=cleanLensText(answer);String suffix=lensSourceSuffix?sourceSuffix(result):null;if(suffix!=null)answer+=suffix;}
-            }else if(web)answer=lensCompact(answer,result);
+            }else if(!grounded&&web)answer=lensCompact(answer,result);
             TraceStore.put("focus.length.generatedGraphemes",graphemes(completed.text()));
             TraceStore.put("focus.length.visibleGraphemes",graphemes(memory.answerLengthChars()==null?answer:boundDisplay(answer,memory.answerLengthChars())));
             TraceStore.put("focus.length.targetChars",memory.answerLengthChars()==null?"legacy":memory.answerLengthChars());
             TraceStore.put("focus.quick",quick);
+            TraceStore.put("focus.search.allowed",searchAllowed);
+            TraceStore.put("focus.search.webRequested",exclusive||web);
+            TraceStore.put("focus.search.groundingStatus",!searchAllowed?"off":grounded?"grounded_phone":grounding!=null?"search_not_observed":"unsupported_display_route");
             // ChatWorkflow clears TraceStore at every attempt; publish only final immutable request metadata here.
             com.example.lms.search.TraceStore.put("focus.context.snapshotId",NovaFocusHistoryService.digest(String.join("\n",transcriptIds)));
             com.example.lms.search.TraceStore.put("focus.context.sourceIds",memory.transcript().stream().map(ChatConversationContext.Transcript::sourceId).toList());
@@ -185,16 +224,21 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             com.example.lms.search.TraceStore.put("focus.selection.resultModelHash",NovaFocusHistoryService.digest(Objects.toString(result.modelUsed(),"not_observed")));
             com.example.lms.search.TraceStore.put("focus.selection.strict",request.isStrictModelSelection());
             com.example.lms.search.TraceStore.put("focus.selection.executionTarget",selection.routing()==null?"AUTO":selection.routing().executionTarget().name());
+            com.example.lms.search.TraceStore.put("focus.selection.fallbackAllowed",selection.routing()!=null&&selection.routing().fallbackAllowed());
+            com.example.lms.search.TraceStore.put("focus.selection.effectiveFallbackAllowed",selection.routing()!=null&&selection.routing().effectiveFallbackAllowed());
             com.example.lms.search.TraceStore.put("focus.selection.selectedModelHash",NovaFocusHistoryService.digest(Objects.toString(completed.selectedModel(),"AUTO")));
             com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",completed.fallbackCount());
             com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",completed.fallbackReason());
             if(!current.getAsBoolean()||(memoryEnabled&&memories!=null&&!memories.valid(scope,retrieval.evidence())))throw new java.util.concurrent.CancellationException("focus_memory_stale");
             if(answer==null||answer.isBlank())throw new IllegalStateException("focus_empty_answer");
+            if(run.foldHasPublished())answer=answer.stripLeading();
+            run.requireFoldPrefix(answer);
             terminal="success";terminalModel=result.modelUsed();
-            return answer;
+            return new Result(answer,grounded?grounding:null);
         }catch(java.util.concurrent.CancellationException cancelled){terminal="cancelled";throw cancelled;
         }catch(ModelSelectionException failure){if("backend_timeout".equals(failure.code()))terminal="timeout";else if("request_cancelled".equals(failure.code()))terminal="cancelled";throw failure;
         }finally{
+            run.foldTimings().forEach(TraceStore::put);
             try{
                 // ChatWorkflow clears TraceStore per attempt; publish the bounded Jev verdict
                 // here so it survives into the allowlisted diagnostic snapshot on every path.
@@ -245,9 +289,12 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             "focus.jev.reasonCode","focus.jev.applied","focus.jev.latencyMs","focus.selection.settingsVersion","focus.selection.mode",
             "focus.selection.requestedModelHash","focus.selection.resultModelHash","focus.selection.strict","focus.selection.executionTarget",
             "focus.selection.selectedModelHash","focus.selection.fallbackCount","focus.selection.fallbackReason",
+            "focus.selection.fallbackAllowed","focus.selection.effectiveFallbackAllowed",
+            "focus.stream.firstProviderDeltaMs","focus.stream.firstUsefulPublishedMs","focus.stream.finalValidatedMs","focus.stream.publishedChars",
             "focus.unknown.trigger","focus.unknown.mode","focus.unknown.webRetry","focus.unknown.reason","focus.unknown.outcome",
             "focus.request.attempts","focus.request.attemptCount","focus.request.attemptRowsOmitted","focus.request.evidenceBoundary","focus.request.terminalClass",
-            "focus.length.generatedGraphemes","focus.length.visibleGraphemes","focus.length.targetChars","focus.quick")){
+            "focus.length.generatedGraphemes","focus.length.visibleGraphemes","focus.length.targetChars","focus.quick",
+            "focus.search.allowed","focus.search.webRequested","focus.search.groundingStatus","focus.search.parametricRetry")){
             Object value=TraceStore.get(key);if(value!=null)safe.put(key,value);
         }
         return Map.copyOf(safe);
@@ -299,14 +346,10 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         return boundDisplay(text,budget);
     }
     static int graphemes(String text){return text==null?0:(int)java.util.regex.Pattern.compile("\\X").matcher(text.replace("\r\n","\n")).results().count();}
+    /** Full text is returned as-is: display bounds live in the lens renderer and the length setting at generation time. */
     static String boundDisplay(String text,int budget){
-        if(text==null)return null;String normalized=text.replace("\r\n","\n");
-        if(graphemes(normalized)<=budget)return normalized;
-        // A prefix can omit a negation or condition even at a punctuation boundary.
-        // Keep the full owner-scoped Fold answer and show no partial factual claim.
-        String notice="표시 길이를 넘었습니다. 전체 답변은 Fold에서 확인해 주세요.";
-        if(graphemes(notice)<=budget)return notice;
-        return "전체 답변은 Fold에서 확인해 주세요.";
+        if(text==null)return null;
+        return text.replace("\r\n","\n");
     }
     private static String sourceSuffix(ChatResult result){
         var meta=result==null?null:result.evidenceMetadata();
@@ -344,14 +387,27 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     }
     private boolean allowedTarget(ChatModelCatalogService.Choice choice,NovaFocusSettings.Routing policy){
         return choice!=null&&switch(policy.executionTarget()){
-            case AUTO -> true;
+            case AUTO -> providerKind(choice)!=ProviderKind.LOCAL;
             case API_ONLY -> providerKind(choice)==ProviderKind.API;
             case LOCAL_ONLY -> providerKind(choice)==ProviderKind.LOCAL;
+            case GEMINI_WEBSEARCH_ONLY -> "gemini".equalsIgnoreCase(choice.provider())&&choice.id().startsWith("llmrouter.")
+                &&Boolean.TRUE.equals(choice.metadata().get("googleSearchSupported"))&&routerConfig!=null
+                &&routerConfig.getModels().containsKey(choice.endpointId())
+                &&"gemini".equalsIgnoreCase(routerConfig.getModels().get(choice.endpointId()).getProvider())
+                &&Objects.equals(choice.modelId(),routerConfig.getModels().get(choice.endpointId()).getName())
+                &&choice.id().equals("llmrouter."+choice.endpointId());
         };
     }
     private String primaryModel(NovaFocusSettings.AnswerSelection selection){
         if(modelCatalog==null)throw new ModelSelectionException("model_unavailable");
         var policy=selection.routing();
+        if(policy.executionTarget()==NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY){
+            if(selection.mode()!=NovaFocusSettings.AnswerSelection.Mode.FIXED)throw new IllegalStateException("focus_search_model_required");
+            var choice=modelCatalog.resolve(selection.modelId()).orElse(null);
+            if(choice==null||!allowedTarget(choice,policy))throw new IllegalStateException("focus_search_unsupported");
+            if(!choice.selectable())throw new ModelSelectionException(modelCatalog.failureCode(choice));
+            return selection.modelId();
+        }
         if(selection.mode()==NovaFocusSettings.AnswerSelection.Mode.FIXED){
             var choice=modelCatalog.resolve(selection.modelId()).orElse(null);
             if(choice!=null&&!allowedTarget(choice,policy))throw new ModelSelectionException("model_request_invalid");
@@ -383,9 +439,22 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         if(!current.getAsBoolean())throw new java.util.concurrent.CancellationException("focus_closed");
         ChatRunExecutionContext.throwIfCancelled();ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
     }
-    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason){
+    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason,boolean searchRetryAllowed){
         requireCurrent(current);
-        var result=chat.continueChat(request,null,context);String answer=result.content();
+        ChatResult result;
+        try{
+            result=chat.continueChat(request,null,context);
+        }catch(ModelSelectionException|java.util.concurrent.CancellationException failure){throw failure;
+        }catch(RuntimeException failure){
+            // Same-model parametric recovery: a transient search/grounding failure on a
+            // web-enabled call must not cascade into model fallback or stall the lens.
+            if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!searchRetryAllowed||!Boolean.TRUE.equals(request.isUseWebSearch()))throw failure;
+            requireCurrent(current);
+            try{result=chat.continueChat(request.toBuilder().useWebSearch(false).searchMode(SearchMode.OFF)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false,false)).webTopK(0).build(),null,context);
+            }finally{com.example.lms.search.TraceStore.put("focus.search.parametricRetry",true);}
+        }
+        String answer=result.content();
         if(StringUtils.hasText(request.getImageBase64())&&"vision:unavailable".equals(result.modelUsed())){
             // No vision call occurred; retry text once with the same exact model and policy.
             requireCurrent(current);
@@ -398,10 +467,13 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     }
     private ModelAnswer executeModels(ChatRequestDto request,ChatConversationContext context,NovaFocusSettings.AnswerSelection selection,
                                       java.util.function.BooleanSupplier current,boolean memoryEnabled){
+        var entryBudget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+        if(entryBudget!=null&&entryBudget.remainingMillis()<2000)throw new java.util.concurrent.CancellationException("focus_budget_exhausted");
         var policy=selection.routing();
-        if(policy==null)return callModel(request,context,current,0,"none");
+        if(policy==null)return callModel(request,context,current,0,"none",true);
         var ids=new LinkedHashSet<String>();ids.add(request.getModel());
-        if(policy.fallbackAllowed())ids.addAll(policy.allowedFallbackIds());
+        boolean fallbackAllowed=policy.effectiveFallbackAllowed();
+        if(fallbackAllowed)ids.addAll(policy.allowedFallbackIds());
         int index=0,fallbacks=0;String reason="none";ModelSelectionException last=null;
         for(String id:ids){
             requireCurrent(current);
@@ -416,15 +488,16 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
                 var projected=attempt.toBuilder().message(request.getMessage()+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
                 budgets.validateChatProjected(projected,PlanHints.empty("nova-focus"),Boolean.TRUE.equals(request.isUseWebSearch()),memoryEnabled);
                 if(backup)fallbacks++;
-                return callModel(attempt,context,current,fallbacks,reason);
+                return callModel(attempt,context,current,fallbacks,reason,
+                        policy.executionTarget()!=NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY);
             }catch(ModelSelectionException failure){
                 requireCurrent(current);last=failure;
                 if("none".equals(reason))reason=failure.code();
                 com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",reason);
                 com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",fallbacks);
                 var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
-                if(!policy.fallbackAllowed()||Set.of("request_cancelled","model_request_invalid").contains(failure.code())
-                        ||budget!=null&&budget.expired())throw failure;
+                if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!fallbackAllowed||Set.of("request_cancelled","model_request_invalid").contains(failure.code())
+                        ||budget!=null&&budget.remainingMillis()<2000)throw failure;
             }
         }
         throw last==null?new ModelSelectionException("model_unavailable"):last;

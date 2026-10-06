@@ -1531,6 +1531,10 @@ public class ChatApiController {
                 requestIdHeader, MDC.get("x-request-id"), java.util.UUID.randomUUID().toString());
         Mono<ResponseEntity<ChatResponseDto>> mono = Mono.fromCallable(
                 com.example.lms.infra.exec.ContextPropagation.wrapCallable(() -> {
+            if (!admissionLease.startWork()) {
+                throw new java.util.concurrent.CancellationException("request_cancelled");
+            }
+            try {
             ChatResponseDto body = handleChat(
                     req,
                     _username,
@@ -1558,6 +1562,9 @@ public class ChatApiController {
             ok.header("X-User", username);
             ok.header("Access-Control-Expose-Headers", EXPOSE_HEADERS);
             return ok.body(body);
+            } finally {
+                admissionLease.finishWork();
+            }
         }));
         // Offload the blocking call to a bounded elastic scheduler and attach a common
         // error handler.
@@ -1782,6 +1789,10 @@ public class ChatApiController {
             logSuppressed("stream.status.started");
         }
         Disposable d = Mono.fromRunnable(() -> {
+            if (!admissionLease.startWork()) {
+                return;
+            }
+            try {
             try (var __ruleBreakScope = __capturedRuleBreak.bind()) {
             ChatRunExecutionContext.Scope runScope = null;
             try {
@@ -2837,7 +2848,7 @@ public class ChatApiController {
                                 traceTurnId,
                                 learningContextMeta,
                                 result.evidenceMetadata(),
-                                finalPipelineSnapshot).withObservation(traceMetaForSnapshot);
+                                finalPipelineSnapshot).withGoogleSearchRescue(result.googleSearchRescue()).withObservation(traceMetaForSnapshot);
                 requestCompletion.accept(completedRequestEvent);
                 Sinks.EmitResult finalEmitResult = emitFinalStreamEvent(
                         committingRun,
@@ -3089,6 +3100,9 @@ public class ChatApiController {
                 sink.tryEmitComplete();
             }
             }
+            } finally {
+                admissionLease.finishWork();
+            }
         })
                 .subscribeOn(Schedulers.boundedElastic())
                 .doFinally(ignored -> admissionLease.close())
@@ -3297,7 +3311,7 @@ public class ChatApiController {
                 data.learningContext(), data.evidence(), data.statusSignal(),
                 data.traceSignal(), data.scoreDelta(), data.pipelineSnapshot(),
                 data.debugFxSignal(), data.transformerBlocks(), data.selectionEntropySignal(),
-                data.generationTermination(), data.observation());
+                data.generationTermination(), data.observation(), data.evidenceHint(), data.googleSearchRescue());
         return ServerSentEvent.<ChatStreamEvent>builder(projected)
                 .event(event.event()).id(event.id()).retry(event.retry())
                 .comment(event.comment()).build();
@@ -4796,7 +4810,7 @@ public class ChatApiController {
 
         ChatResponseDto response = new ChatResponseDto(visibleFinalContent, completedSession.getId(), modelUsedFinal, result.ragUsed(),
                 answerModeFinal, traceTurnId, learningContextMeta, result.evidenceMetadata(),
-                syncPipelineSnapshot, syncSelectionEntropy, extraMeta);
+                syncPipelineSnapshot, syncSelectionEntropy, extraMeta).withGoogleSearchRescue(result.googleSearchRescue());
         // A synchronous endpoint has no post-return client ACK. Its bounded
         // delivery-acceptance boundary is successful response construction at
         // the immediate Spring MVC handoff; the stream path never uses this rule.

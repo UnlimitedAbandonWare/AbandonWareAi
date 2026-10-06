@@ -1,0 +1,75 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
+[DEVIN 지시서] chat.js 대기 진행률 UI(스피너·단계 문구·첫 delta 노출) 준비 패치 안전 적용 및 계약 검증 — 2026-10-06 15:46 KST
+파일 ID: PASTE_DEVIN_CHAT_WAIT_PROGRESS_UI_APPLY_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): push · add -A · 비밀 출력 · remote 추가 · PROTO_OPEN 변경 금지 · 백엔드 자바 소스 수정 금지(main/java 수정 0) · 실제 유료 API 호출 0
+
+## 0. 한 줄 목표
+이전 세션 lease 블록으로 미적용(NOT_APPLIED)된 chat.js 대기 진행률(스피너, 단계별 안내 문구, 첫 delta 노출) 준비 패치(prepared-chat.patch)를 안전하게 적용하고 계약 테스트 6/6 GREEN 및 브라우저 정적 렌더링을 검증한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-06 15:46 KST)
+- 대상 파일: `main/resources/static/js/chat.js` (현재 SHA12: `AD7C7ECA9645`, 344,742 bytes). 이전 세션의 임시 스텁 문자열(`Response still pending (client-wait:0ms). Use Stop to cancel.`)만 존재.
+- 준비된 패치 자산: `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/prepared-chat.patch` (191줄, `git apply --check` exit=0 확인 완료).
+- 단위/계약 테스트: `scripts/chat_wait_progress_contract_tests.cjs` (현재 미적용 상태에서 3 PASS, 3 FAIL RED 상태 -> 패치 적용 시 6/6 GREEN 목표).
+- 사전 단위 테스트: `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/candidate-unit.cjs` (이미 6/6 PASS 입증 완료).
+- 보조 정적 파일: `main/resources/static/css/chat-style.css` (SHA12: `2538171E20F5`) 스피너 CSS 및 `main/resources/templates/chat-ui.html` (SHA12: `CFBEF47F8446`) 검색 라벨은 이미 반영 완료되어 JS 로직 연결만 남음.
+- Lease 상태: `python -B scripts/agent_scope_lease.py check --path main/resources/static/js/chat.js` 결과 allowed: true (충돌 0건).
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 항목
+- WP1 [Devin 직접] Source Lease 획득 및 prepared-chat.patch 안전 적용
+  - 증거: `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/prepared-chat.patch`, `main/resources/static/js/chat.js:3112`
+  - 실행: `python -B scripts/agent_scope_lease.py claim --path main/resources/static/js/chat.js --task devin-chat-wait-progress-apply` 로 lease 획득 후 `git apply data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/prepared-chat.patch` 적용
+  - 문법 검증: `node -c main\resources\static\js\chat.js; "exit=$LASTEXITCODE"`
+  - GREEN: 문법 오류 없이 `chat.js`에 `assistantWaitLabel`, `updateAssistantWaitProgress`, `clearAssistantPendingPlaceholder` 함수 반영 완료.
+  - 완료 조건: `node -c` exit=0.
+
+- WP2 [Devin 직접] 대기 진행률 계약 테스트 및 단위 테스트 검증 (RED -> GREEN)
+  - 증거: `scripts/chat_wait_progress_contract_tests.cjs`, `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/candidate-unit.cjs`
+  - 실행: `node --test scripts/chat_wait_progress_contract_tests.cjs; "exit=$LASTEXITCODE"` 및 `node --test data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/candidate-unit.cjs; "exit=$LASTEXITCODE"`
+  - GREEN: 두 테스트 모두 6/6 ALL PASS (실패 0건, exit 0).
+  - 완료 조건: 기존 3건 실패(RED)가 모두 6/6 GREEN으로 해소됨.
+
+- WP3 [Devin 직접] 로컬 화면 대기 UI 정적 확인 및 Lease 정상 반납
+  - 증거: `http://127.0.0.1:18180/chat`, `main/resources/static/js/chat.js`
+  - 실행: 로컬 서버 18180 /chat 페이지 정적 리소스 로드 및 HTML/CSS/JS 연동 확인, 작업 완료 후 `python -B scripts/agent_scope_lease.py done --task devin-chat-wait-progress-apply` 로 lease 해제
+  - GREEN: 잔여 lease 0건 및 `/chat` 페이지의 대기 UI 관련 DOM 스펙 무결성 확인.
+  - 완료 조건: 종료 시 lease 0건.
+
+## 4. HOLD
+- `main/resources/static/js/chat.js`의 SHA12가 `AD7C7ECA9645`와 다르고 타 에이전트의 live lease가 활성화된 경우 즉시 HOLD.
+- `git apply --check` 실패 시 강제 적용하지 말고 차이점 분석 후 HOLD.
+- 백엔드 Java 소스(`main/java/**`) 수정이 필요한 상황 발견 시 즉시 HOLD (Devin 권한 밖).
+
+## 5. ASK_ONCE
+- A-1: 대기 시간 경과 문구(`대기 N초`)의 갱신 주기 250ms 유지 여부 (기본값: (a) 기존 heartbeat 250ms 타이머에 맞춘 초 단위 표시 유지).
+
+## 6. 절대 금지
+- `git push`, `git pull`, `git add -A`, `git commit -a`, `git reset`, `git clean` 절대 금지.
+- 백엔드 자바 제품 소스(`main/java/**`) 수정 절대 금지 (main/java diff 0 유지).
+- `.secrets`, `.env*` 파일 열람 또는 비밀값 출력 절대 금지.
+- 실제 유료 외부 API 호출 절대 금지 (0회 호출).
+- 전체 Gradle 테스트(`:test`) 수행 금지.
+- PROTO_OPEN 보안 모드 해제 또는 관리자 로그인 게이트 추가 금지.
+- remote 추가 금지.
+
+## 7. Acceptance
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- WP1: `main/resources/static/js/chat.js`에 대기 스피너, 단계별 안내(`답변 준비 중`, `검색 중`, `답변 작성 중`), 첫 delta 도착 즉시 본문 노출 로직이 반영되고 `node -c` 구문 검사 exit=0.
+- WP2: `scripts/chat_wait_progress_contract_tests.cjs` 6/6 PASS 및 `candidate-unit.cjs` 6/6 PASS로 기존 계약 테스트 실패 3건이 모두 GREEN으로 전환됨.
+- WP3: 로컬 `/chat` 정적 리소스 무결성 확인 및 종료 시 소유 lease 0건으로 정상 반납됨.
+
+## 8. 보고 형식
+외부 API: 0회 호출
+비밀값 열람: 0회
+제품 백엔드(main/java) diff: 0건
+프론트엔드 수정: main/resources/static/js/chat.js
+테스트 결과: contract_tests 6/6 PASS, candidate-unit 6/6 PASS
+종료 시 lease: 0
+관측 요약: [간략한 2~3줄 요약]
+
+[ANTI-STOP] 지시서의 모든 WP 검증을 완료하고 최종 보고 형식대로 결과를 반환하십시오.

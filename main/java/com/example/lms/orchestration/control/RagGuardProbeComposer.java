@@ -39,6 +39,11 @@ public final class RagGuardProbeComposer {
         if (hard != null) {
             return plan(hard.proposedAction(), true, lineageComplete, hard.reasonCode(), findings);
         }
+        RagControlFinding nonModelRelease = trustedNonModelRelease(findings);
+        if (nonModelRelease != null && lineage != LineageAssessment.CONFLICT) {
+            return plan(RagActionPlan.Action.DEGRADE, false, false,
+                    nonModelRelease.reasonCode(), findings);
+        }
         if (!lineageComplete) {
             // lineage 충돌은 언제나 fail-closed. lineage 누락은 검증이 필요한 응답에서만
             // 보류한다 — 검증 불필요 응답(인사·일반 대화)의 lineage 갭은 관측 한계일 뿐
@@ -89,6 +94,46 @@ public final class RagGuardProbeComposer {
                 selected.reasonCode(),
                 findings,
                 decision);
+    }
+
+    private RagControlFinding trustedNonModelRelease(List<RagControlFinding> findings) {
+        if (findings.stream().anyMatch(finding ->
+                finding.proposedAction() == RagActionPlan.Action.HOLD
+                        || finding.proposedAction() == RagActionPlan.Action.BLOCK)) return null;
+        long completeKeys = findings.stream()
+                .filter(finding -> finding.lineageStatus() == RagControlFinding.LineageStatus.COMPLETE)
+                .map(RagControlFinding::lineageKey).distinct().count();
+        if (completeKeys > 1) return null;
+        RagControlFinding approval = findings.stream()
+                .filter(finding -> finding.stage() == RagControlFinding.Stage.VERIFICATION)
+                .filter(this::isBoundNonModelFinding).findFirst().orElse(null);
+        if (approval == null) return null;
+        return findings.stream().anyMatch(finding ->
+                finding.stage() == RagControlFinding.Stage.LLM
+                        && isBoundNonModelFinding(finding)
+                        && approval.reasonCode().equals(finding.reasonCode())
+                        && approval.evidence().equals(finding.evidence())) ? approval : null;
+    }
+
+    private boolean isBoundNonModelFinding(RagControlFinding finding) {
+        String kind = switch (finding.reasonCode()) {
+            case "verification_unavailable_excerpt" -> "SUPPORTED_EXCERPT";
+            case "verification_unavailable_guidance" -> "VERIFICATION_GUIDANCE";
+            default -> "";
+        };
+        return !kind.isEmpty()
+                && "chat-workflow-runtime".equals(finding.sourceId())
+                && finding.authority() == RagControlFinding.Authority.VERIFICATION
+                && finding.evidenceStatus() == RagControlFinding.EvidenceStatus.OBSERVED
+                && finding.failureClass() == RagControlFinding.FailureClass.OBSERVABILITY_GAP
+                && finding.proposedAction() == RagActionPlan.Action.DEGRADE
+                && finding.lineageStatus() == RagControlFinding.LineageStatus.MISSING
+                && kind.equals(finding.evidence().get("nonModelReleaseKind"))
+                && Boolean.TRUE.equals(finding.evidence().get("nonModelReleaseBound"))
+                && String.valueOf(finding.evidence().get("nonModelReleaseBodyHash"))
+                        .matches("hash:[a-f0-9]{12}")
+                && String.valueOf(finding.evidence().get("nonModelReleaseRequestHash"))
+                        .matches("hash:[a-f0-9]{12}");
     }
 
     private RagActionPlan plan(

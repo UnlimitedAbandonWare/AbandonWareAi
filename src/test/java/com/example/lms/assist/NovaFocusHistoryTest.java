@@ -18,6 +18,20 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusHistoryTest {
+    @Test void dedicatedModeAndFallbackPreferencesSurviveLegacySaveCasReconnectAndOwnerIsolation() throws Exception {
+        String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"dedicated").settings());
+        var selection=node.putObject("answerSelection").put("mode","FIXED").put("modelId","llmrouter.gemini-pro");
+        selection.putObject("routing").put("executionTarget","GEMINI_WEBSEARCH_ONLY").put("fallbackAllowed",true).putArray("allowedFallbackIds").add("llmrouter.backup");
+        node.put("webSearchEnabled",false);store.settings(owner,"dedicated",0,mapper.treeToValue(node,NovaFocusSettings.class));
+        node.remove("answerSelection");node.remove("webSearchEnabled");store.settings(owner,"dedicated",1,mapper.treeToValue(node,NovaFocusSettings.class));
+        var saved=store.settings(owner,"dedicated");assertEquals(2,saved.settingsVersion());
+        assertEquals("GEMINI_WEBSEARCH_ONLY",saved.settings().answerSelection().routing().executionTarget().name());
+        assertEquals(List.of("llmrouter.backup"),saved.settings().answerSelection().routing().allowedFallbackIds());assertTrue(saved.settings().answerSelection().routing().fallbackAllowed());
+        assertFalse(saved.settings().webSearchAllowed());assertThrows(IllegalArgumentException.class,()->store.settings(owner,"dedicated",1,saved.settings()));
+        assertNotEquals(saved.settings().answerSelection(),store.settings(owner+"other","dedicated").settings().answerSelection());
+        assertNotEquals(saved.settings().answerSelection(),store.settings(owner,"other-channel").settings().answerSelection());
+    }
     static AnnotationConfigApplicationContext context;
     static NovaFocusHistoryService store;
     @Configuration static class Database {
@@ -42,6 +56,21 @@ class NovaFocusHistoryTest {
         var value=NovaFocusSettings.defaults();assertEquals(1,store.settings(owner,"c",0,value).settingsVersion());
         assertThrows(IllegalArgumentException.class,()->store.settings(owner,"c",0,value));
         assertEquals(1,store.settings(owner,"c").settingsVersion());
+    }
+    @Test void searchFalseSurvivesLegacySaveReconnectCasAndOwnerIsolation() throws Exception {
+        String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"c").settings());
+        node.put("webSearchEnabled",false);
+        store.settings(owner,"c",0,mapper.treeToValue(node,NovaFocusSettings.class));
+        node.remove("webSearchEnabled");
+        store.settings(owner,"c",1,mapper.treeToValue(node,NovaFocusSettings.class));
+        assertFalse(mapper.valueToTree(store.settings(owner,"c").settings()).path("webSearchEnabled").booleanValue());
+        assertTrue(mapper.valueToTree(store.settings(owner,"c").settings()).hasNonNull("webSearchEnabled"));
+        assertTrue(mapper.valueToTree(store.settings(owner+"other","c").settings()).path("webSearchEnabled").isNull());
+        node.put("webSearchEnabled",true);
+        assertThrows(IllegalArgumentException.class,()->store.settings(owner,"c",1,mapper.treeToValue(node,NovaFocusSettings.class)));
+        store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
+        assertTrue(mapper.valueToTree(store.settings(owner,"c").settings()).path("webSearchEnabled").booleanValue());
     }
     @Test void unsetDisplayDefaultIsExactOauthAndExplicitChoicesAndOmittedLengthArePreserved() throws Exception {
         String owner=UUID.randomUUID().toString();var fresh=store.settings(owner,"c");

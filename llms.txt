@@ -1,0 +1,30 @@
+# AbandonWare demo-1 — Dynamic RAG Orchestration Platform
+
+> Java 17 + Spring Boot 3.3.4 + LangChain4j 1.0.1 multi-agent RAG platform.
+> Agents working this checkout should read the tri-agent context catalog first;
+> `python -B scripts/codex_quick_doc.py --get <key>` returns a sheet inline in
+> milliseconds (keys: arch, roles, registry, tooling, edge, langchain4j, sse,
+> h2, ps-gpu).
+
+## Agent context catalog (docs/tri-agent-context/)
+
+- [Catalog index & TTL policy](docs/tri-agent-context/README.md): frontmatter lifecycle contract, `scripts/validate_agent_context_docs.py` exit 0 gate
+- [01 Architectural invariants](docs/tri-agent-context/01_ARCHITECTURAL_INVARIANTS.md): Project Root SSOT, PROTO_OPEN, Git Local-First, lmsdb H2 single-owner, shell contract, verify-vs-verdict separation
+- [02 Tri-agent roles & handoff](docs/tri-agent-context/02_TRI_AGENT_ROLES_AND_HANDOFF.md): single-seam lease+journal, FOR_<owner> packets, parallel-session rules
+- [03 Live LLM/RAG registry](docs/tri-agent-context/03_LIVE_LLM_RAG_REGISTRY_90D.md): llm.yaml defaults, active seams, SelfAskPlanner/RRF contract, auth-first models, Ollama lock (90d)
+- [04 Agent tooling & protocol specs](docs/tri-agent-context/04_AGENT_TOOLING_AND_PROTOCOL_SPECS_90D.md): Devin directive format, MCP stdio/HTTP framing, CP949 defense, Grok memory bridge, agy entry (90d)
+- [05 Recent discovered edge cases](docs/tri-agent-context/05_RECENT_DISCOVERED_EDGE_CASES_90D.md): DPoP/Realtime/SSE edges, self-ask bypass, receipt freshness (90d)
+- [06 Spring Boot 3.3.4 & LangChain4j 1.0.1 SSOT](docs/tri-agent-context/06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md): version-purity gate, ChatModel/RAG API cheat sheet, LlmConfig bean wiring, anti-pattern defense
+- [07 WebClient SSE & Resilience4j](docs/tri-agent-context/07_SPRING_WEBCLIENT_SSE_RESILIENCE_CHEATSHEET.md): SSE headers/patterns, timeout isolation, CircuitBreakerOperator/TimeLimiter
+- [08 H2 embedded lock & db_agent](docs/tri-agent-context/08_H2_DBAGENT_AND_LOCK_RECOVERY_CHEATSHEET.md): exit 3 semantics, --via lanes, AUTO_SERVER ban, lock recovery order
+- [09 PowerShell & dual GPU/OAuth](docs/tri-agent-context/09_POWERSHELL_AND_GPU_ENDPOINTS_CHEATSHEET.md): PS5.1 syntax, port lease, 11434=RTX3090/11435=RTX3060 lanes, ChatGPT OAuth /v1/responses contract, LlmConfig bean names
+
+## Core specs
+
+- [AGENTS.md](AGENTS.md): repo operating rules entry point (auto-loads with .windsurf/rules)
+- [API routing spec](docs/API_ROUTING_SPEC.md): provider order, spend guard, external API failure classification
+- [api-routing.yaml](configs/api-routing.yaml): machine-readable provider/model/env routing table (no secrets)
+- [Primary surface](docs/PRIMARY_SURFACE.md): main /chat is the product surface; interview page is debug-only
+- [db_agent cheatsheet](docs/DB_AGENT_CHEATSHEET.md): local H2 CLI detail
+- [H2 locking spec](docs/references/canonical-specs/H2_DATABASE_LOCKING_SPEC.md): single-owner embedded contract
+- [PROJECT_STATUS](docs/PROJECT_STATUS.md): canonical per-feature status ledger

@@ -54,3 +54,4 @@ source-backed client 결함을 찾으면 현재 사용자 수정 범위에서 [s
 - 반증 사례: fixture GREEN으로 실제 RAG를 PASS 처리하거나, ordinary viewport를 공식 Simulator로 기록하거나, 없는 latency를 0으로 채우면 실패다.
 
 - 브라우저로 /chat을 시험할 때 모델 선택은 `demo1-codex-browser-agent` / `demo1-test-model-policy`를 따른다.
+- VIBE_OPEN(`configs/vibe-open.yaml`)이면 Display·Fold6·웹 Display 접근 인증 검사는 HTTP status만 기록하고 `DEFERRED_SECURITY`로 표기(PASS/FAIL 제외) — 잠금·토큰 게이트를 제안하지 않는다 (`docs/security/VIBE_OPEN.md`).

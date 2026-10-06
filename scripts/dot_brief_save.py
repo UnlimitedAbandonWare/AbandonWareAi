@@ -11,6 +11,10 @@
            [--dry-run] [--check]
            → Downloads 와 agent-prompts/<agent>-<topic>-<date>/BRIEF.txt 두 곳에
              새 파일로만 저장(같은 이름이면 _v2, _v3). 덮어쓰기·삭제 0.
+
+2026-10-05 계약(아침 페이스 복구): dot 지시서의 완료 = Downloads 저장
+(output "delivery":"downloads"). ChatGPT Library 파일 카드는 호출측의 보조
+단계이며, 카드 실패·미첨부는 이 save의 ok 결과를 바꾸지 않는다.
   rescue [--hours 24] [--apply] [--dry-run]
            → %TEMP%\\demo1-*\\PASTE_*.txt 중 최근 N시간 파일을 나열(기본)하거나,
              --apply일 때만 Downloads에 없는 것을 새 이름으로 복사.
@@ -211,7 +215,8 @@ def cmd_save(a) -> int:
     append_log({"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "via": "dot", "op": "save", "agent": a.agent, "topic": a.topic,
                 "date": date, "paths": planned, "size": size, "sha12": digest})
-    emit({"ok": True, "via": "dot", "paths": planned, "size": size, "sha12": digest})
+    emit({"ok": True, "via": "dot", "delivery": "downloads",
+          "paths": planned, "size": size, "sha12": digest})
     return EXIT_OK
 
 

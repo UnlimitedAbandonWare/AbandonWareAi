@@ -18,3 +18,4 @@ Fold 안경 표시 설정에서 전사/힌트 유지시간·페이지 전환 간
 ## Hard stops
 - Minimal diff. No secret values. No openssl key name/value/format/structure changes.
 - Do not delete Grok Bot skills.
+- VIBE_OPEN(`configs/vibe-open.yaml`)이면 렌즈·Fold6·웹 Display 접근 인증 검사는 `DEFERRED_SECURITY`로만 기록 — 잠금·인증 게이트 제안 금지 (`docs/security/VIBE_OPEN.md`).

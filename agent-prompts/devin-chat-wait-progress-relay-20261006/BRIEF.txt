@@ -1,0 +1,88 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
+# DEVIN 지시서 — chat.js 대기 진행률 UI 준비 패치 안전 적용 및 계약 검증 — 2026-10-06 15:52 KST
+파일 ID: PASTE_DEVIN_chat-wait-progress-relay_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): push · add -A · 비밀 출력 · remote 추가 · PROTO_OPEN 변경 금지 · 백엔드 자바 소스 수정 금지(main/java 수정 0) · 실제 유료 API 호출 0
+
+```powershell
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+```
+
+## 0. 한 줄 목표
+이전 세션 lease 블록으로 미적용(NOT_APPLIED)된 chat.js 대기 진행률(스피너, 단계 문구, 첫 delta 노출) 준비 패치를 안전하게 적용하고 계약 테스트 6/6 GREEN 및 브라우저 정상 렌더링을 검증한다.
+
+## 1. 사실 (2026-10-06 15:52 KST 기준)
+- 대상 파일: `main/resources/static/js/chat.js` (현재 SHA12: `AD7C7ECA9645`, 344,742 bytes)
+- 준비된 패치 자산: `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/prepared-chat.patch` (191줄, `git apply --check` exit 0 확인됨)
+- 단위/계약 테스트: `scripts/chat_wait_progress_contract_tests.cjs` (현재 3 PASS, 3 FAIL RED 상태 -> 적용 후 6/6 GREEN 목표)
+  - 실패 항목: `client wait is immediate and elapsed is excluded from live announcements`, `wait uses actual stage codes and completed retrieval cannot regress`, `terminal and first answer remove waiting DOM and late status never restarts it`
+- 사전 단위 테스트: `data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/candidate-unit.cjs` (6/6 PASS 확인됨)
+- 보조 정적 파일: `main/resources/static/css/chat-style.css` (SHA12: `2538171E20F5`) 및 `main/resources/templates/chat-ui.html` (SHA12: `CFBEF47F8446`)는 이미 반영 완료됨
+- Lease 상태: `python -B scripts/agent_scope_lease.py check --path main/resources/static/js/chat.js` 결과 `allowed: true` (충돌 0건)
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 세부 작업 항목 (WPs)
+
+### WP1. Source Lease 획득 및 prepared-chat.patch 안전 적용
+- 실행:
+  ```powershell
+  python -B scripts/agent_scope_lease.py claim --path main/resources/static/js/chat.js --task devin-chat-wait-progress-apply
+  git apply data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/prepared-chat.patch
+  node -c main/resources/static/js/chat.js; "exit=$LASTEXITCODE"
+  ```
+- 완료 조건: `node -c` 문법 검사 exit 0 및 `chat.js`에 `assistantWaitLabel`, `updateAssistantWaitProgress`, `clearAssistantPendingPlaceholder` 함수 반영 확인.
+
+### WP2. 계약 테스트 및 Node 단위 테스트 검증 (RED -> GREEN)
+- 실행:
+  ```powershell
+  node --test scripts/chat_wait_progress_contract_tests.cjs; "exit=$LASTEXITCODE"
+  node --test data/agent-handoff/codex-autonomy/codex-wait-progress-aee89b80/candidate-unit.cjs; "exit=$LASTEXITCODE"
+  ```
+- 기대 결과: 두 테스트 모두 6/6 tests ALL PASS (exit 0). 기존 3 FAIL이 해소되어 6/6 GREEN 달성.
+- 완료 조건: exit 0 확인.
+
+### WP3. 로컬 /chat 화면 대기 UI 검증 및 Lease 정상 반납
+- 실행:
+  ```powershell
+  curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:18180/chat
+  python -B scripts/agent_scope_lease.py done --task devin-chat-wait-progress-apply
+  ```
+- 내용: 로컬 서버 18180 /chat 정적 리소스 로드 확인 및 작업 종료 시 소유 lease 즉시 해제.
+- 완료 조건: 종료 시 잔여 lease 0건.
+
+## 4. HOLD 조건
+- `main/resources/static/js/chat.js`의 SHA12가 `AD7C7ECA9645`와 다르고 타 에이전트의 live lease가 활성화된 경우 즉시 HOLD.
+- `git apply --check` 실패 시 강제 적용하지 말고 차이점 분석 후 HOLD.
+- 백엔드 Java 소스(`main/java/**`) 수정이 필요한 상황 발견 시 즉시 HOLD (Devin 권한 밖, Codex 전담).
+
+## 5. ASK_ONCE
+- 본 작업은 프론트엔드 UI 대기 진행률 표시 연동 작업으로 자동 진행(AUTO) 기본값 적용. 사용자 질의 불필요.
+
+## 6. 절대 금지
+- `git push`, `git pull`, `git add -A`, `git commit -a`, `git reset`, `git clean` 절대 금지.
+- 백엔드 Java 제품 코드 (`main/java/**`) 수정 절대 금지 (main/java diff 0 라인 유지).
+- 실제 유료 외부 API 라이브 호출 금지 (호출 0회, 비용 $0).
+- 비밀값, 인증 토큰, 키 파일 열람 금지.
+- PROTO_OPEN 엔드포인트 보안 강화 질문 또는 임의 수정 금지 (VIBE_OPEN 준수).
+- remote 추가 금지.
+
+## 7. 수용 기준 (Acceptance)
+- [ ] WP1. `main/resources/static/js/chat.js`에 `assistantWaitLabel`, `updateAssistantWaitProgress` 등 대기 진행률 함수 반영 및 `node -c` 구문 검사 exit 0
+- [ ] WP2. `node --test scripts/chat_wait_progress_contract_tests.cjs` 6/6 ALL PASS (exit 0) 및 `candidate-unit.cjs` 6/6 ALL PASS (기존 3 FAIL 해소)
+- [ ] WP3. 로컬 18180 /chat 정적 리소스 로드 확인 및 종료 시 소유 lease 0건 정상 해제
+- 실행 못 한 항목은 `NOT_RUN(사유)`으로 명시하며 PASS로 바꾸지 않는다.
+
+## 8. 보고 형식
+보고는 반드시 다음 줄로 시작한다:
+```
+외부 API: 0회 호출, 비밀 열람: 0회, 백엔드 Java diff: 0건, 종료 시 lease: 0건
+```
+- 프론트엔드 수정 파일: main/resources/static/js/chat.js
+- 테스트 결과: contract_tests 6/6 PASS, candidate-unit 6/6 PASS
+- 관측 요약: [간략한 2~3줄 요약]
+
+[ANTI-STOP] 지시서의 모든 WP 검증을 완료하고 최종 보고 형식대로 결과를 반환하십시오.

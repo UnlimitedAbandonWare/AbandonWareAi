@@ -36,6 +36,84 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TimedChatModelCallerTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"chat_draft", "judge"})
+    void lengthContinuationIsBoundedAndOnlyAppliesToTheMainAnswer(String stage) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ChatModel model = new ChatModel() {
+            @Override public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                int attempt = calls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(AiMessage.from(attempt == 1 ? "prefix " : "tail"))
+                        .finishReason(dev.langchain4j.model.output.FinishReason.LENGTH).build();
+            }
+        };
+        if ("chat_draft".equals(stage)) {
+            var terminal = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> TimedChatModelCaller.chatResponse(model, List.of(UserMessage.from("synthetic probe")),
+                            Duration.ofSeconds(2), stage, "gpt-5.6-sol", null, null));
+            assertEquals(2, calls.get());
+            assertEquals("prefix tail", terminal.partialText());
+            assertEquals("output_limit_reached", terminal.reasonCode());
+            assertEquals(dev.langchain4j.model.output.FinishReason.LENGTH, terminal.metadata().finishReason());
+            assertEquals(true, TraceStore.get("llm.output.truncatedFinal"));
+            return;
+        }
+        var answer = TimedChatModelCaller.chatResponse(model, List.of(UserMessage.from("synthetic probe")),
+                Duration.ofSeconds(2), stage, "gpt-5.6-sol", null, null);
+        assertEquals("chat_draft".equals(stage) ? 2 : 1, calls.get());
+        assertEquals("chat_draft".equals(stage) ? "prefix tail" : "prefix ", answer.aiMessage().text());
+        assertEquals(dev.langchain4j.model.output.FinishReason.LENGTH, answer.finishReason());
+        if ("chat_draft".equals(stage)) assertEquals(true, TraceStore.get("llm.output.truncatedFinal"));
+    }
+
+    @Test
+    void filteredContinuationDoesNotPromoteThePrefixToSuccess() {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        ChatModel model = new ChatModel() {
+            @Override public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                int attempt = calls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(AiMessage.from(attempt == 1 ? "prefix " : "blocked"))
+                        .finishReason(attempt == 1 ? dev.langchain4j.model.output.FinishReason.LENGTH
+                                : dev.langchain4j.model.output.FinishReason.CONTENT_FILTER).build();
+            }
+        };
+        var terminal = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                () -> TimedChatModelCaller.chatResponse(model, List.of(UserMessage.from("synthetic probe")),
+                        Duration.ofSeconds(2), "chat_draft", "gpt-5.6-sol", null, null));
+        assertEquals(2, calls.get());
+        assertNull(terminal.partialText());
+        assertEquals("content_filter", terminal.reasonCode());
+        assertEquals(dev.langchain4j.model.output.FinishReason.CONTENT_FILTER, terminal.metadata().finishReason());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {1, 2})
+    void continuationDoesNotDiscardToolRequests(int toolAttempt) throws Exception {
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        var toolMessage = AiMessage.from("tool prefix", List.of(dev.langchain4j.agent.tool.ToolExecutionRequest.builder()
+                .id("synthetic-call").name("lookup").arguments("{}").build()));
+        ChatModel model = new ChatModel() {
+            @Override public ChatResponse doChat(dev.langchain4j.model.chat.request.ChatRequest request) {
+                int attempt = calls.incrementAndGet();
+                return ChatResponse.builder().aiMessage(attempt == toolAttempt ? toolMessage : AiMessage.from("prefix "))
+                        .finishReason(dev.langchain4j.model.output.FinishReason.LENGTH).build();
+            }
+        };
+        if (toolAttempt == 1) {
+            var answer = TimedChatModelCaller.chatResponse(model, List.of(UserMessage.from("synthetic probe")),
+                    Duration.ofSeconds(2), "chat_draft", "gpt-5.6-sol", null, null);
+            assertEquals(1, calls.get());
+            assertEquals(toolMessage, answer.aiMessage());
+        } else {
+            var terminal = assertThrows(com.example.lms.llm.gateway.LlmResponseTerminalException.class,
+                    () -> TimedChatModelCaller.chatResponse(model, List.of(UserMessage.from("synthetic probe")),
+                            Duration.ofSeconds(2), "chat_draft", "gpt-5.6-sol", null, null));
+            assertEquals(2, calls.get());
+            assertEquals("responses_tools_unsupported", terminal.reasonCode());
+            assertNull(terminal.partialText());
+        }
+    }
+
 
     @BeforeEach
     void clearTraceBefore() {

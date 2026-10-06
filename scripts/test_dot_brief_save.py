@@ -244,5 +244,21 @@ class DotBriefSaveTests(unittest.TestCase):
             b"different bytes")
 
 
+    def test_11_delivery_defaults_to_downloads(self):
+        # 2026-10-05 아침 페이스 계약: save 완료 = Downloads 사본.
+        # 카드는 호출측 보조 단계라 이 출력에 카드 필드가 없어도 ok다.
+        src = self.make_src(data=b"downloads-default brief")
+        proc = self.run_cli(*self.save_args(src))
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        res = self.payload(proc)
+        self.assertTrue(res["ok"])
+        self.assertEqual(res.get("delivery"), "downloads")
+        dl = self.downloads / "PASTE_DEVIN_skill-harmony_20261002.txt"
+        self.assertTrue(dl.is_file(), "Downloads 기본 경로에 사본이 없다")
+        self.assertEqual(Path(res["paths"][0]).resolve(), dl.resolve())
+        self.assertNotIn("card", {k.lower() for k in res},
+                         "카드 필드가 save 결과에 섞여 있다")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

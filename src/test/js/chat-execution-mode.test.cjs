@@ -16,15 +16,19 @@ test('history validation keeps the server-owned answer receipt through selector 
   const {context:renderer,assistant}=harness();
   renderer.render({executionMode:result.messages[0].executionMode},assistant);
   assert.equal(assistant.dataset.executionModeEffective,'AUTO');
-  assert.match(assistant.children[0].textContent,/안전 제한/);
+  assert.match(assistant.children[0].children[0].textContent,/안전 제한/);
 });
 function harness() {
   const start = source.indexOf('function renderExecutionModeReceipt(');
   const end = source.indexOf('\nconst renderTraceSignalDetail', start);
   assert.ok(start >= 0 && end > start, 'per-answer receipt renderer must exist');
-  const context = vm.createContext({document: {createElement: () => ({dataset:{}, textContent:''})}});
+  const element = tag => ({tagName:tag.toUpperCase(), dataset:{}, style:{}, children:[], textContent:'',
+    setAttribute(){}, appendChild(node){this.children.push(node);},
+    querySelector(){return this.children.flatMap(node => [node,...node.children]).find(node=>node.dataset.executionModeReceipt);}});
+  const context = vm.createContext({document: {createElement: element},
+    markChatDiagnosticNode: node => {node.dataset.liveRegion='excluded';return node;}});
   vm.runInContext(source.slice(start, end)+';globalThis.render=renderExecutionModeReceipt;', context);
-  const assistant = {dataset:{}, children:[], querySelector(){ return this.children[0]; }, appendChild(node){this.children.push(node);}};
+  const assistant = element('div');
   return {context,assistant};
 }
 test('each answer keeps requested, actual, counts and fallback reason instead of current selector', () => {
@@ -32,9 +36,13 @@ test('each answer keeps requested, actual, counts and fallback reason instead of
   context.render({executionMode:{requested:'SELF_ASK',effective:'AUTO',reason:'safety-gate',queryCount:1,httpAttempts:2}}, assistant);
   assert.equal(assistant.dataset.executionModeRequested, 'SELF_ASK');
   assert.equal(assistant.dataset.executionModeEffective, 'AUTO');
-  assert.match(assistant.children[0].textContent, /추가 확인 → 자동/);
-  assert.match(assistant.children[0].textContent, /안전 제한/);
-  assert.match(assistant.children[0].textContent, /질의 1/);
+  assert.equal(assistant.children[0].tagName, 'DIV', 'receipt has a separate metadata block');
+  assert.equal(assistant.children[0].dataset.role, 'execution-mode-meta');
+  assert.equal(assistant.children[0].dataset.liveRegion, 'excluded');
+  assert.equal(assistant.children[0].style.display, 'block');
+  assert.match(assistant.children[0].children[0].textContent, /추가 확인 → 자동/);
+  assert.match(assistant.children[0].children[0].textContent, /안전 제한/);
+  assert.match(assistant.children[0].children[0].textContent, /질의 1/);
   context.render({executionMode:{requested:'STRIKE',effective:'STRIKE',reason:'user-strike',queryCount:1,httpAttempts:1}}, assistant);
   assert.equal(assistant.children.length, 1, 'events update one receipt');
 });

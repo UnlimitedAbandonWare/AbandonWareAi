@@ -33,6 +33,95 @@ import static org.mockito.Mockito.when;
 
 class FactVerifierDetailedOutcomeTest {
 
+    @ParameterizedTest
+    @CsvSource({"PASS,rejected", "INSUFFICIENT,insufficient"})
+    void unavailableClaimJudgeCannotPromoteFallbackToKnownNegative(
+            String classifierStatus, String rejectedStatus) {
+        TraceStore.clear();
+        try {
+            ClaimVerifierService claims = mock(ClaimVerifierService.class);
+            when(claims.verifyClaims(anyString(), anyString(), anyString())).thenAnswer(invocation -> {
+                TraceStore.put("claimVerifier.judge.disabledReason", "judge_call_failed");
+                return new ClaimVerifierService.VerificationResult("draft", List.of(), true, false);
+            });
+            var result = service(claims, FactVerificationStatus.valueOf(classifierStatus))
+                    .verifyDetailed("question", "supporting official context ".repeat(8),
+                            "", "draft", "model", false);
+
+            assertEquals("unknown", result.status(), rejectedStatus + " requires an observed judge verdict");
+            assertFalse(result.outcomeKnown());
+            assertFalse(result.acceptedForMemory());
+        } finally { TraceStore.clear(); }
+    }
+
+    @Test
+    void sourceCredibilityRejectionRemainsKnownWithoutJudgeCalls() {
+        SourceAnalyzerService source = mock(SourceAnalyzerService.class);
+        when(source.analyze(anyString(), anyString())).thenReturn(SourceCredibility.CONFLICTING);
+        var result = service(acceptedClaimVerifier("draft"), FactVerificationStatus.PASS, source, "CONSISTENT")
+                .verifyDetailed("ordinary question", "supporting official context ".repeat(8),
+                        "", "draft", "model", false);
+
+        assertEquals("rejected", result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"INSUFFICIENT,not_run", "CONSISTENT,INSUFFICIENT"})
+    void sameRequestTraceDistinguishesMetaAndClassifierInsufficiency(String meta, String classifierVerdict) {
+        TraceStore.clear();
+        try {
+            String context = "synthetic supporting context ".repeat(8);
+            var result = service(acceptedClaimVerifier("draft"), FactVerificationStatus.INSUFFICIENT, meta)
+                    .verifyDetailed("question", context, "", "draft", "model", false);
+
+            assertEquals("insufficient", result.status());
+            assertEquals(context.length(), TraceStore.get("factVerifier.input.evidenceChars"));
+            assertEquals(0, TraceStore.get("factVerifier.input.memoryChars"));
+            assertEquals(meta, TraceStore.get("factVerifier.meta.status"));
+            assertEquals(classifierVerdict, TraceStore.get("factVerifier.classifier.status"));
+            assertEquals("not_run".equals(classifierVerdict) ? "meta_check" : "fact_classification",
+                    TraceStore.get("factVerifier.terminalStage"));
+            assertEquals("insufficient", TraceStore.get("factVerifier.terminalReason"));
+            assertFalse(TraceStore.getAll().toString().contains(context));
+        } finally { TraceStore.clear(); }
+    }
+
+    @Test
+    void absentEvidenceCannotBecomeKnownNegativeOrDiscardGeneralDraft() {
+        String draft = "Water expands as hydrogen bonds form an open crystal structure.";
+        SequentialModel judge = new SequentialModel(List.of(
+                "[\"Water expands when it freezes.\"]", "[false]"));
+        ClaimVerifierService claims = new ClaimVerifierService(judge, null, null, null);
+        FactVerifierService service = service(claims, FactVerificationStatus.INSUFFICIENT);
+
+        var result = service.verifyDetailed("Why does water expand when it freezes?",
+                "", "", draft, "model", false);
+
+        assertEquals(draft, result.answer());
+        assertEquals("unknown", result.status());
+        assertFalse(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+        assertFalse(result.verificationUnavailable());
+        assertEquals(0, judge.calls.get(), "An empty context cannot establish support or contradiction");
+    }
+
+    @Test
+    void shortPresentEvidenceKeepsExistingInsufficientVerdict() {
+        ClaimVerifierService claims = mock(ClaimVerifierService.class);
+        when(claims.verifyClaims(anyString(), anyString(), anyString()))
+                .thenReturn(new ClaimVerifierService.VerificationResult("filtered answer", List.of("unsupported"), true, false));
+        var result = service(claims, FactVerificationStatus.INSUFFICIENT).verifyDetailed(
+                "question", "Short contrary evidence.", "", "draft", "model", false);
+
+        assertEquals("filtered answer", result.answer());
+        assertEquals("insufficient", result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+        verify(claims).verifyClaims("", "draft", "model");
+    }
+
     @Test
     void acceptedMemoryOutcomeRequiresPositiveClaimVerification() {
         ClaimVerifierService claimVerifier = mock(ClaimVerifierService.class);

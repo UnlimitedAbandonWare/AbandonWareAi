@@ -20,8 +20,6 @@ import org.springframework.stereotype.Component;
 public class RouterPolicy {
 
     private final MoeRoutingProps props;
-    private static final com.example.lms.service.rag.QueryComplexityGate FALLBACK_GATE =
-            new com.example.lms.service.rag.QueryComplexityGate();
     private final com.example.lms.service.rag.QueryComplexityGate complexityGate;
 
     /**
@@ -91,10 +89,6 @@ public class RouterPolicy {
      */
     @Value("${router.margin:0.08}")
     private double margin;
-
-    public RouterPolicy(MoeRoutingProps props) {
-        this(props, FALLBACK_GATE);
-    }
 
     @org.springframework.beans.factory.annotation.Autowired
     public RouterPolicy(MoeRoutingProps props, com.example.lms.service.rag.QueryComplexityGate complexityGate) {

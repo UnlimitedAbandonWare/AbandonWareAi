@@ -30,6 +30,11 @@ class BuildErrorSecretMaskTest(unittest.TestCase):
             ("short prefix", "sk-short", "sk-short"),
             ("word boundary", "prefixsk-" + "F" * 24, "prefixsk-" + "F" * 24),
             ("multiline header", "Cookie: value\nBUILD SUCCESSFUL", "<secret>\nBUILD SUCCESSFUL"),
+            # 줄끝 콜론은 다음 줄 식을 삼키지 않는다(파이썬 if-guard 오탐 회귀).
+            ("eol colon guard", "if not to" + "ken:\n    break", "if not to" + "ken:\n    break"),
+            # `=` 연속행(Java 리터럴 분할)은 여전히 비밀 후보로 마스킹한다.
+            ("equals continuation", "to" + "ken =\n    \"H" + "H" * 24 + "\"", "<secret>"),
+            ("same-line pair still hits", "to" + "ken: abc123", "<secret>"),
         )
         for name in TOOLS:
             tool = load_tool(name)

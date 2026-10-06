@@ -7,8 +7,13 @@ everything you assert must come from a live re-read (SKILL.md §2).
 ---
 
 ```
+<!-- Devin 지시서일 때 첫 줄 필수 스킬 프리셋 (누락 금지): -->
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
 [<TARGET> 지시서] <주제 한 줄> — <YYYY-MM-DD HH:mm KST>
 파일 ID: PASTE_<TARGET>_<TOPIC>_<YYYYMMDD>
+Project Root: C:\AbandonWare\demo-1\demo-1\src
 금지 (이 작업 전체): <한 줄 — 예: 제품 소스 수정 0 · commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0>
 
 0. 목표 (한 문장)
@@ -30,6 +35,12 @@ everything you assert must come from a live re-read (SKILL.md §2).
   - 최소 수정: <무엇을>
   - GREEN: <명령 + 기대 exit>
   - 완료 조건: <관측 가능한 것>
+
+4-1. SKILL_PACK (WP가 스킬 생성·개편을 포함할 때 필수 — 아니면 "해당 없음")
+| WP | 등급(S/M/L) | 스킬 경로 | companion 경로 | intent | 검사 명령 |
+|----|----|----|----|----|----|
+| WP<n> | <등급> | .agents/skills/<id>/SKILL.md | <references/ · scripts/x.py+test_x.py · docs/agents-rules/DEMO1-*.md 중 ≥1> | skills-intent-index intent명 | python -B scripts/agy_skill_pack_check.py --skill <폴더> --grade <등급> |
+- 기준: docs/agents-rules/DEMO1-AGY-SKILL-PACK.md. M/L인데 SKILL.md 단독 = FAIL. @skill 5개+ 나열 = SKILL_SCATTER.
 
 5. 검증 명령 블록 (명령마다 exit 기록)
 cd <repo>

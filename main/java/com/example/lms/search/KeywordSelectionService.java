@@ -1,5 +1,7 @@
 package com.example.lms.search;
 
+import java.util.regex.Pattern;
+
 import com.example.lms.infra.resilience.FriendShieldPatternDetector;
 import com.example.lms.infra.resilience.IrregularityProfiler;
 import com.example.lms.infra.resilience.AuxDownTracker;
@@ -858,7 +860,7 @@ public class KeywordSelectionService {
             }
             traceRule("keywordSelection.mode=fallback_exception");
             if (irregularityProfiler != null) {
-                irregularityProfiler.markHighRisk(GuardContextHolder.getOrDefault(), "keyword_failed");
+                irregularityProfiler.bump(GuardContextHolder.getOrDefault(), 0.25, "keyword_failed");
             }
             if (cached != null) {
                 try {
@@ -1051,6 +1053,10 @@ public class KeywordSelectionService {
             String domainProfile,
             int minMust,
             String reason) {
+        // A minimum token count cannot turn alternative spellings into a conjunction.
+        SelectedTerms alternatives = fallbackAlternativeTerms(
+                safeSelectionSeed(extractLikelyUserQuery(conversation), 160), domainProfile, conversation);
+        if (alternatives != null) return alternatives;
         int min = Math.max(0, minMust);
         if (min <= 0) {
             return in;
@@ -1200,6 +1206,34 @@ public class KeywordSelectionService {
         GENERAL
     }
 
+    private static final Pattern UNCERTAIN_SPELLINGS = Pattern.compile(
+            "(?<![\\p{L}\\p{N}])([가-힣]{2,20})인가\\s*([가-힣]{2,20})인가(?=\\s|[?？]|$)");
+    private static final Pattern ALTERNATIVE_DOMAIN = Pattern.compile(
+            "^([\\p{L}\\p{N}·]{2,30}?)(?:에서|에)\\s+");
+
+    private static SelectedTerms fallbackAlternativeTerms(String query, String domainProfile, String conversation) {
+        // Selection seeds are bounded; explicit constraints must be checked before truncation.
+        var context = GuardContextHolder.getOrDefault();
+        if (query == null || SearchQueryConstraints.hasConstraints(query)
+                || SearchQueryConstraints.hasConstraints(conversation)
+                || SearchQueryConstraints.hasConstraints(context == null ? null : context.getUserQuery())) return null;
+        var spellings = UNCERTAIN_SPELLINGS.matcher(query);
+        if (!spellings.find() || query.split("인가", -1).length != 3) return null;
+        String first = spellings.group(1), second = spellings.group(2);
+        if (first.equals(second)) return null;
+        var domain = ALTERNATIVE_DOMAIN.matcher(query.strip());
+        SelectedTerms terms = new SelectedTerms();
+        terms.setMust(domain.find() ? List.of(domain.group(1)) : List.of());
+        terms.setShould(List.of("(" + first + " OR " + second + ")"));
+        terms.setExact(List.of());
+        terms.setNegative(List.of());
+        terms.setAliases(List.of());
+        terms.setDomainProfile(Objects.toString(domainProfile, "general"));
+        TraceStore.put("keywordSelection.fallback.alternatives.count", 2);
+        TraceStore.put("keywordSelection.fallback.alternatives.confirmed", false);
+        return terms;
+    }
+
     private static final Set<String> FALLBACK_STOPWORDS = Set.of(
             "추천", "알려줘", "알려주세요", "알려", "뭐야", "뭔가", "무엇", "어떻게", "방법", "정리",
             "설명", "해줘", "해주세요", "좀", "그리고", "근데", "가능", "가능해", "가능한", "있어",
@@ -1265,6 +1299,9 @@ public class KeywordSelectionService {
                 anchorCandidate = alt;
             }
         }
+
+        SelectedTerms alternatives = fallbackAlternativeTerms(anchorCandidate, dp, conversation);
+        if (alternatives != null) return alternatives;
 
         String anchor = pickAnchor(anchorCandidate);
         if (anchor.isBlank()) {

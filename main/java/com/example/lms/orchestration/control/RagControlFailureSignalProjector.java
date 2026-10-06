@@ -51,6 +51,8 @@ public final class RagControlFailureSignalProjector {
             "model_blank",
             "runtime_lineage_verified",
             "verification_outcome_missing",
+            "verification_unavailable_excerpt",
+            "verification_unavailable_guidance",
             "verification_rejected",
             "verification_accepted",
             "silent_failure",

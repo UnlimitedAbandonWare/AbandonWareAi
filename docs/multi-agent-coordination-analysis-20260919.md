@@ -1,3 +1,6 @@
+> **역사/참고 전용 (2026-10-06 재분류)** — 당시 조율 분석·개선 제안이다. ready-to-run 절, 무료·로컬 우선·hook 신설·저널 종결·삭제 제안을 현재 권한이나 미구현 사실로 재사용하지 않는다.
+> 현행 기준: [문서·P0 진입점](PRIMARY_SURFACE.md), [운영 규칙](../AGENTS.md), [현재 현황](PROJECT_STATUS.md), [답변 공개 계약](agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md). 아래 원문은 회귀·설계 근거로 보존한다.
+
 # demo-1 다중 코딩 에이전트 공조 기반 분석 보고서
 
 - 작성: Devin (Devin Desktop, SWE-2 Max) · 2026-09-19 · 작업 등록: `multi-agent-infra-analysis-8f04b751`

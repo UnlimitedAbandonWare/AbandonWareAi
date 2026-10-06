@@ -1,0 +1,50 @@
+{
+  "schemaVersion": "awx.behavior-ratchet.v1",
+  "locks": {
+    "staged-method.doc-present": {
+      "lockedAtUtc": "2026-10-05T13:16:38+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-STAGED-METHOD.md"
+      ],
+      "lockedByTask": "devin-staged-method-default-97c174e8"
+    },
+    "staged-method.skill-gates": {
+      "lockedAtUtc": "2026-10-05T13:16:38+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-staged-method/SKILL.md"
+      ],
+      "lockedByTask": "devin-staged-method-default-97c174e8"
+    },
+    "staged-method.agents-pointer": {
+      "lockedAtUtc": "2026-10-05T13:16:38+00:00",
+      "kind": "present",
+      "files": [
+        "AGENTS.md"
+      ],
+      "lockedByTask": "devin-staged-method-default-97c174e8"
+    },
+    "staged-method.checker-present": {
+      "lockedAtUtc": "2026-10-05T13:16:38+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/staged_method_check.py"
+      ],
+      "lockedByTask": "devin-staged-method-default-97c174e8"
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-05T13:16:38+00:00",
+      "action": "lock",
+      "ids": [
+        "staged-method.doc-present",
+        "staged-method.skill-gates",
+        "staged-method.agents-pointer",
+        "staged-method.checker-present"
+      ],
+      "task": "devin-staged-method-default-97c174e8"
+    }
+  ]
+}

@@ -1,0 +1,128 @@
+[depth L2: live 재현 run + file:line 검증 기반 수정 지시서]
+[ANTI-STOP]
+$demo1-work-ledger
+[CODEX 지시서] 웹 근거 승격 성공 후 "알려진 부정 검증"(verification_rejected) 보류 경로 정정 + fail-soft known-승격 차단 — 2026-10-06 11:40 KST
+파일 ID: PASTE_CODEX_VERIFIER_REJECTED_HOLD_20261006
+금지 (이 작업 전체): push/commit/add -A 0 · remote 추적·재격 조작 0 · 비밀값 출력 0 · 유료/외부 라이브 API 호출 0 · 무관 파일 수정 0 · PROTO_OPEN 관련 임의 규칙 변경 0 · 전체 :test 스위트 0
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+웹 근거가 검색·승격·프롬프트 주입까지 성공했는데도 답변 본문이 "검증된 근거가 추가로 필요해 응답 본문을 보류했습니다"로 통째로 대체되는 run2 사슬(초안 미인용 → 검증 부정 판정 → releaseAllowed=false → hardGuard HOLD → generic notice)을 정정하고, 그중 judge 인프라 실패(fail-soft)가 `VerificationState.reject()`를 통해 "알려진 부정 판정(outcomeKnown=true)"으로 둔갑해 본문을 잠그는 경로를 차단한다.
+
+### 1. 사실 (라이브 트리·로그 기준 확인, 2026-10-06 10:55~11:40 KST)
+- 입력 영상 `F:\CAM\2026-10-06 10-59-26.mkv` (97,941,863 B, sha12 F7039D5CAE9F): 두 번째 질의 "산드로네의 전무가 뭐냐"가 보류 문구로 종료되는 장면.
+- 세션 트레이스 `var/debug/chat-session-traces/20261006/s-9a72c24f2fd7.json`: 같은 세션 2 run — 02:00:53Z "산드로네가 뭐냐"(본문 릴리스·인용 표시) / 02:03:44~58Z "산드로네의 전무가 뭐냐"(HELD). 둘 다 gpt-5.6-sol, outcome=completed, errorClass=none, fallbackCount=0, ragEnabled=true.
+- run2 request 추적 `logs/debug-events.ndjson` (sid hash:e13ce2711eba, traceId hash:e33134af307b):
+  - `promoteForPrompt`: candidateCount=2→promotedCount=2, citableLocatorCount=2, distinctCitable=2, evidenceGatePassed·citationGateSoftPassed·citationGateMinPassed=true (citationMin=1) — 검색·승격·게이트 정상.
+  - `promptBuild`: webCount=2, citableEvidenceCount=2, ctxLen=3148 — 근거가 프롬프트에 실제 주입됨.
+  - model guard: weakDraft, coverage=0, strongEvidenceIgnored — 에스컬레이션된 초안이 주입된 근거 [W1]/[W2] 마커를 인용하지 않음(화면의 "Evidence 2검색됨 · 미인용" 라벨과 일치, `main/resources/static/js/chat.js:3959-3967`의 `searched-but-uncited` 분기).
+  - Debug FX: `Verification fail_soft fallback judge_call_failed` — 이 run 안에서 verifier judge 호출 실패가 최소 1회 발생.
+  - 제어 findings: PROMPT_EVIDENCE HELD `existing_release_guard_hold`(POLICY_DENIED/HARD_GUARD) / LLM HELD `runtime_lineage_missing`(OBSERVABILITY_GAP) / VERIFICATION HELD `verification_rejected`(CITATION_MISS, verificationKnown=true·accepted=false).
+- `verification_rejected`는 `main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java:330-340` — `verificationKnown && !verificationAccepted`일 때만 나오는 reason. 이번 run은 unknown이 아니라 known-부정 판정.
+- `main/java/com/example/lms/service/FactVerifierService.java` `VerificationState`: `markFailSoft()`(:541-545)는 outcomeKnown=false로 두지만, 이후 `reject("insufficient")`/`reject("rejected")`(:569-584)는 status를 덮고 `outcomeKnown=true`로 확정한다. 호출부 다수(:217,:234,:239,:256,:261,:287,:299,:346,:370,:384) 중 어느 것이 judge-의존 verdict이고 어느 것이 deterministic(엔티티 불일치·소스 신뢰도 등 LLM judge 없이 계산되는 분기)인지 구분이 현재 없음 — `callChatModel` 예외는 `judgeUnavailable=true`만 세팅(:515).
+- `ChatWorkflow.applyFinalVerificationReleaseGate`(:8279-8326): unknown+허용 → `verification_unknown_release`(:8284, releaseAllowed=true·UNVERIFIED·knowledgeWrite=false) / !outcomeKnown → `verification_outcome_unknown` HOLD(:8291) / insufficient → `verification_insufficient` HOLD(:8312) / rejected → `verification_rejected` REJECT(:8321) / 기타 → `verification_state_inconsistent` HOLD(:8333). releaseAllowed=false → hardGuardHeld → PROMPT_EVIDENCE `existing_release_guard_hold`(adapter :172-183) → plan hardGuardLocked → `RagActionPlan.shouldStop()` → `RagControlPresentationBoundary.heldNoticeFor`(:184-194) default 분기 → generic `HELD_NOTICE`(`RagControlProjectionRenderer.java:12-13,30`)로 본문 교체.
+- `heldNoticeFor`(:184-194)는 `control_projection_failed`·`observability_gap`·`runtime_lineage_*`·`model_blank`·`silent_failure`만 별도 문구. `verification_insufficient`/`verification_rejected`/`verification_state_inconsistent`·`existing_release_guard_hold`는 전부 generic HELD_NOTICE로 떨어짐 — 사용자가 "검색 실패"와 "검증 부정 판정"을 구별할 수 없음.
+- 보조 관측(수정 범위 아님, 보고 대상): Brave `web.brave.requestBudgetExhausted=true`(tookMs=0·발송 전 EXCEPTION)인데 단계 경계/부가 분류가 `timeout`; `aux.llm.down` — 비활성 Ollama(127.0.0.1)로 `llm.ollamaNative.route=true` 호출이 잡힘(주체 미확정: aux keywordSelection 또는 verifier judge일 수 있음).
+- 서버 pid 51672, 09:53 KST 기동 — ChatWorkflow(08:21)·FactVerifierService(09:47) 최신 소스 포함 빌드. 10-05 지시서의 `verification_unknown_release` 경로는 소스에 이미 존재하며 이번 run은 그 경로가 아님(어제 패치 미반영이 원인이 아님).
+- 리스(11:20 KST `python -B scripts/agent_scope_lease.py who`): 활성 2건 `display-capability-timeout-01a10ef1`(geminigateway 계열, 만료 14:15 KST)·`display-search-capability-assist-43a6bf1a`(assist 스크립트·문서, 만료 14:10 KST) — 본 작업 대상과 무관. 대상 파일 활성 리스 0 → `agent_scope_lease.py begin` 필요.
+- 정책 근거: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` fail-soft 절 — 판정불능(infra)과 부정 판정(verdict)은 다르며 전자는 본문 유지+미검증 표기+메모리 쓰기 금지.
+
+### 2. 기존 인식 수정
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| "웹서치는 됐는데 답이 보류됐다" | RIGHT | promotedCount=2·게이트 통과 후 본문 HELD_NOTICE |
+| "웹서치 결과가 컨텍스트에 유입 안 됐다" | WRONG(기제) | promptBuild webCount=2·citableEvidenceCount=2·ctxLen=3148. 단 초안이 근거를 미인용(coverage=0·strongEvidenceIgnored)해 결과적으로 근거 미반영은 RIGHT |
+| "10-05 fail-soft 패치가 이 증상을 잡았어야 한다" | 부분 WRONG | 이번 run은 verification_rejected(known). unknown-release 경로는 이미 존재 |
+| "judge 실패가 있으면 최종 판정은 항상 unknown" | 현행 코드상 WRONG | reject()가 insufficient/rejected로 outcomeKnown=true 승격 가능(FactVerifierService:569-584) — 수정 대상 |
+| "runtime_lineage_missing이 본문을 잠갔다" | 부분 WRONG | HOLD finding이지만 shouldStop 발동은 release-gate hardGuardHeld 경로 |
+| "'검색됨 · 미인용' 카드가 검색 실패를 뜻한다" | WRONG | 인용 마커 0개 라벨(chat.js:3959-3967) |
+
+### 3. 파일 기준 해시표 (2026-10-06 11:25 KST 측정)
+| 경로 | sha12 | 권한 |
+|---|---|---|
+| main/java/com/example/lms/service/ChatWorkflow.java | 89FEB3BD04EA | 수정 |
+| main/java/com/example/lms/service/FactVerifierService.java | 63F0FC78C94E | 수정 |
+| main/java/com/example/lms/service/verification/ClaimVerifierService.java | 0CB88861F9AD | 읽기(verdict 의존성 분류용) |
+| main/java/com/example/lms/service/verification/FactStatusClassifier.java | 97DC56C28E0F | 읽기 |
+| main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java | 6099D145EF96 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlPresentationBoundary.java | 148DE2111AF7 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlProjectionRenderer.java | 2783DA363585 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagActionPlan.java | 2A626F5A3C8A | 읽기 |
+| main/java/com/example/lms/orchestration/control/RagControlCoordinator.java | DCEC0AD14DAE | 읽기 |
+| main/resources/static/js/chat.js | (라벨 확인) | 읽기 전용 — 라벨 문구 수정 금지 |
+| src/test/java/com/example/lms/service/ChatWorkflowFinalVerificationReleaseGateTest.java | 9963B71A5E3D | 수정(계약 갱신) |
+| src/test/java/com/example/lms/service/FactVerifierDetailedOutcomeTest.java | B6554ACB5883 | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlPresentationBoundaryTest.java | 2BA99DDFD89A | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlProjectionRendererTest.java | CAFB553BDED7 | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlRuntimeAdapterTest.java | 49CC8E3C62F3 | 수정 |
+| docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md | 4700ECC8BA41 | 읽기(정책 근거, 수정 금지) |
+
+### 4. 공통 규칙
+- 최소 diff. 무관 코드·테스트·문서 건드리지 않는다. 비밀값 출력/커밋 금지.
+- 원격·이력 조작 금지: git push/pull/fetch/merge/rebase/reset/clean, add -A/add ./commit -a. 이 작업은 로컬 커밋도 하지 않는다.
+- 파일 쓰기 전 `python -B scripts/agent_scope_lease.py begin --topic <topic> --paths <대상>` — live lease 충돌 시 해당 파일 BLOCKED_LEASE로 보고하고 우회하지 않는다.
+- 변경 묶음은 `scripts/codex_work_checkpoint.py`로 보존하고 journal을 남긴다(DEMO1-WORK-LEDGER).
+- Java 변경 반영: focused test 통과 후 Start-RAG/DevWatch 재기동 1회 허용(DEMO1-SPRING-VIBE-RELOAD). 무단 반복 재기동 금지.
+- 라이브 재현은 로컬 `http://127.0.0.1:18180/chat`만, ≤3회, 합성 질의. 공개 사이트·유료 API 호출 0.
+
+### 5. 항목 (WP ≤ 4)
+
+**WP1 (핵심): judge 실패 후 known-승격 차단 — `FactVerifierService.java`**
+- 대상: `VerificationState`(:533-584) 및 모든 `reject(` 호출부(:195,:217,:230,:234,:239,:256,:261,:287,:299,:346,:370,:380-410 영역), `markFailSoft` 호출부(:266,:278,:296,:307,:315,:380), `judgeUnavailable` 세팅(:515).
+- 내용: `markFailSoft()` 또는 `judgeUnavailable=true`가 이미 세팅된 run에서, judge-의존 단계(LLM judge/ChatModel 호출로 얻은 verdict — meta-check, FactStatusClassifier, ClaimVerifierService 계열)가 반환한 reject는 `outcomeKnown=true`로 승격하지 못하게 한다. 단 deterministic 판정(LLM judge 호출 없이 코드가 계산하는 분기 — 예: 엔티티 불일치·소스 신뢰도 규칙)의 reject는 known 승격을 유지한다.
+- 구현 권장안(택일, 더 작은 diff): (a) `rejectDeterministic(String)` 분리해 deterministic 호출부만 승격 허용, (b) `reject(String status, boolean judgeDependent)` 인자 추가. 어떤 호출부가 judge-의존인지는 호출부별로 확인 후 분류하고 결정 근거를 보고서에 남긴다.
+- 계약(수정 후): judge 인프라 실패가 있는 run의 최종 verdict가 judge-의존이면 status=unknown·outcomeKnown=false → `verification_unknown_release`(본문 유지·UNVERIFIED 표기·knowledgeWriteAllowed=false). deterministic reject는 기존대로 known → 정당한 HOLD/REJECT 유지. `acceptedForMemory`·`partialReleaseBlocked` 의미 불변.
+- RED 확인: `FactVerifierDetailedOutcomeTest`에 신규 케이스 — (a) judge 호출 실패 후 judge-의존 insufficient verdict → outcomeKnown=false·status=unknown; (b) deterministic reject(엔티티 불일치 계열) → outcomeKnown=true 유지; (c) judge 정상 응답 rejected → known 유지(회귀 없음).
+
+**WP2: 보류 문구 사유별 분기 + release reasonCode 전파**
+- 대상: `RagControlPresentationBoundary.heldNoticeFor`(:184-194), `RagControlRuntimeAdapter` PROMPT_EVIDENCE finding(:172-183), 필요 시 `RagControlCoordinator`/plan reasonCode 결정부.
+- 내용 A(전파): `existing_release_guard_hold` 발행 시 실제 gate 사유가 findings에서 읽히지 않는다. `releaseDecision.reasonCode()`를 finding evidence에 `releaseReason` 키로 싣거나 plan.reasonCode를 게이트 사유로 설정 — 소스 구조상 더 작은 diff를 선택.
+- 내용 B(문구): heldNoticeFor에 verification 계열 reasonCode 분기 추가. 기본 문구안(사용자 확정 U-3):
+  - `verification_insufficient` → "검증 결과 제시된 근거가 답변을 충분히 뒷받침하지 못해 본문을 보류했습니다."
+  - `verification_rejected` / `verification_state_inconsistent` → "검증 단계가 답변을 기각해 본문을 보류했습니다."
+  - `existing_release_guard_hold`는 전파된 releaseReason이 verification 계열이면 위 문구를 따르고, 그 외(명시 evidence_needed·문서 스코프)는 기존 HELD_NOTICE 유지.
+- RED 확인: `RagControlPresentationBoundaryTest`/`RagControlProjectionRendererTest`에 reasonCode별 문구 분기 케이스(verification_insufficient ≠ generic heldNotice).
+
+**WP3 (조건부 — ASK U-2 승인 시에만): insufficient + 승격 근거 존재 → 지원 부분본문 릴리스**
+- 대상: `ChatWorkflow` release gate(:8279-8326) 및 `supportedDescriptionExcerpt`/지원 부분본문 선택 경로(:8213-8223 계열·:4462 계열).
+- 내용: verifier verdict=insufficient이고 promoteForPrompt가 citable 근거를 승격했다면, 전체 보류 대신 지원 부분본문(supported subset)을 "미검증 부분본문"으로 릴리스(releaseAllowed=true·UNVERIFIED 표기·knowledgeWriteAllowed=false). 정책 확장이므로 U-2 미승인 시 구현 금지 — WP2 문구 개선만으로 종결.
+- RED 확인(승인 시): `ChatWorkflowFinalVerificationReleaseGateTest`에 insufficient+promoted-evidence → releaseAllowed=true·knowledgeWriteAllowed=false 케이스; 근거 0이면 기존 HOLD 유지.
+
+**WP4: 관측성 — terminal-stage trace + Brave budget 분류**
+- 내용 A: `FactVerifierService`/verification 경로에 최종 verdict를 낸 단계·사유를 TraceStore 키로 남긴다(예: `factVerifier.terminalStage`, `factVerifier.terminalReason`, judge 실패 stage 식별자 — 기존 traceKeys 네이밍·해시 규칙 준수). run2는 이 값 부재로 정당 판정/오분류 구분이 불가했다 — 다음 재현 때 즉시 판독 가능해야 한다.
+- 내용 B: Brave `request_budget_exhausted`(tookMs=0·발송 전 실패)를 stage-boundary/실패 분류에서 `timeout`과 구분(`budget_exhausted` 등) — 허위 timeout 보고 방지.
+- 보고 전용(구현 아님): `llm.ollamaNative.route=true` 호출의 주체(aux keywordSelection인지 verifier judge인지)를 코드로 확인하고, 비활성 Ollama로 라우팅되는 경로가 api-routing API-first 정책과 충돌하는지 보고서에 한 줄 기록. 수정이 필요하면 ASK U-4.
+
+### 6. HOLD 조건
+- 대상 파일에 타인 live lease → 그 파일만 BLOCKED_LEASE로 보고, 무리스 범위 작업은 계속.
+- WP1에서 judge-의존/deterministic 분류가 코드상 판별 불가한 호출부가 있으면 그 호출부만 HOLD+질의(전체 중단 아님).
+- 라이브 재현에서 judge 실패를 유도할 수 없으면 단위테스트 증거로 대체하고 A5를 NOT_RUN으로 표기 — 억지 재현 금지.
+
+### 7. ASK_ONCE (무응답 시 권장값으로 진행)
+- U-1 failSoft 보호 강도: (a)권장 — judge-의존 reject만 unknown 격리, deterministic reject는 known 유지 (b) failSoft 후 모든 reject → unknown(더 보수적이나 정당한 deterministic 판정도 덮을 수 있음).
+- U-2 WP3 승인: (a)권장 승인 — 승격 근거가 있으면 부분본문+미검증 표기로 공개 (b) 거절 — 보류 유지, WP2 문구만 적용.
+- U-3 보류 문구: (a)권장 WP2 문구안 그대로 (b) 사용자 제시 문구로 교체.
+- U-4 비활성 Ollama 라우팅 발견 시: (a)권장 api-routing API-first 정책에 맞게 최소 수정 (b) 보고서 기록만.
+
+### 8. 절대 금지
+- `chat.js`의 "검색됨 · 미인용" 등 근거 카드 라벨을 사실과 다르게 "인용됨"으로 바꾸는 표면 패치 금지.
+- `runtime_lineage_missing` finding 자체를 삭제하거나 라인리지 계측을 끄는 것으로 본문 보류를 우회 금지.
+- insufficient/rejected/inconsistent의 known-판정 의미 자체를 깨는 변경 금지(격리 대상은 judge-의존 승격뿐).
+- 10-05 `verification_unknown_release` 계약 회귀 금지.
+- 서버·cloudflared·배포 설정 변경, 공개 사이트 전송, 유료/외부 API 호출, `git` 원격·이력 조작, `add -A`/`commit -a`, 전체 `:test` 스위트.
+- FactVerifierService의 deterministic 판정을 evidence 보강 없이 임의 재작성 금지.
+
+### 9. Acceptance (미실행은 NOT_RUN+사유)
+- A1 `.\gradlew.bat :test --tests com.example.lms.service.FactVerifierDetailedOutcomeTest --tests com.example.lms.service.ChatWorkflowFinalVerificationReleaseGateTest --tests com.example.lms.orchestration.control.RagControlPresentationBoundaryTest --tests com.example.lms.orchestration.control.RagControlProjectionRendererTest --tests com.example.lms.orchestration.control.RagControlRuntimeAdapterTest --no-daemon --console=plain; "exit=$LASTEXITCODE"` → exit=0, 신규 케이스 전부 PASS.
+- A2 failSoft/judgeUnavailable 후 judge-의존 reject → outcomeKnown=false·status=unknown·releaseReason=verification_unknown_release (신규 테스트).
+- A3 deterministic reject → outcomeKnown=true 유지 (기존 known 계약 무회귀).
+- A4 verification 계열 reasonCode별 보류 문구 분기 PASS + PROMPT_EVIDENCE finding에 releaseReason 노출.
+- A5 (가능 시, 로컬 18180 ≤3회): 동일 질의 계열 재현 — generic HELD_NOTICE가 아니라 본문/부분본문 또는 사유별 문구 관측. judge 실패 재현 불가 시 NOT_RUN + A2 단위테스트 증거로 대체.
+- A6 WP4: terminalStage/terminalReason 키가 debug 관측 경로에 기록됨(단위테스트 또는 trace assert), Brave budget_exhausted 별도 분류 확인.
+
+### 10. 보고 형식
+- 첫 줄 `외부 API: 사용 0` → WP별 결과(수정 파일+sha12) → A1~A6 각각 명령·exit·결과 → U-1~U-4 채택값 → 잔여 관측(Ollama 라우팅 주체 판정 결과, Brave 분류 반영 위치) → 미완료 항목은 NOT_RUN+사유. PASS 주장은 실제 실행한 범위만.
+
+[ANTI-STOP]

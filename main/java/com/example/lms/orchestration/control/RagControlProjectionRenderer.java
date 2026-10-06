@@ -16,6 +16,30 @@ public final class RagControlProjectionRenderer {
         return HELD_NOTICE;
     }
 
+    static String heldNoticeFor(RagActionPlan plan) {
+        String reason = plan == null ? "" : plan.reasonCode();
+        if ("existing_release_guard_hold".equals(reason) && plan != null) {
+            reason = plan.findings().stream()
+                    .filter(finding -> finding.stage() == RagControlFinding.Stage.PROMPT_EVIDENCE
+                            && finding.authority() == RagControlFinding.Authority.HARD_GUARD
+                            && "existing_release_guard_hold".equals(finding.reasonCode()))
+                    .map(finding -> finding.evidence().get("releaseReason"))
+                    .filter(String.class::isInstance).map(String.class::cast)
+                    .findFirst().orElse(reason);
+        }
+        return switch (reason) {
+            case "verification_insufficient" ->
+                    "검증 결과 제시된 근거가 답변을 충분히 뒷받침하지 못해 본문을 보류했습니다.";
+            case "verification_rejected", "verification_state_inconsistent" ->
+                    "검증 단계가 답변을 기각해 본문을 보류했습니다.";
+            case "control_projection_failed", "observability_gap", "control_gap",
+                    "runtime_lineage_missing", "runtime_lineage_conflict" ->
+                    RagControlPresentationBoundary.CONTROL_FAILURE_NOTICE;
+            case "model_blank", "silent_failure" -> RagControlPresentationBoundary.MODEL_FAILURE_NOTICE;
+            default -> HELD_NOTICE;
+        };
+    }
+
     public String append(String answer, boolean ragRuntime, RagActionPlan inputPlan) {
         if (!ragRuntime) {
             return answer;
@@ -27,7 +51,7 @@ public final class RagControlProjectionRenderer {
         RagActionPlan plan = inputPlan == null ? RagActionPlan.observabilityGap() : inputPlan;
         String semanticAnswer = stripExistingProjection(answer);
         StringBuilder out = new StringBuilder();
-        out.append(plan.shouldStop() ? HELD_NOTICE : semanticAnswer);
+        out.append(plan.shouldStop() ? heldNoticeFor(plan) : semanticAnswer);
         out.append("\n\n").append(TABLE_MARKER);
         out.append("\n\n### RAG 안전·증거 상태\n\n")
                 .append("| 단계 | 상태 | 근거 수준 | 실패 분류 | 적용 조치 | 답변 영향 |\n")

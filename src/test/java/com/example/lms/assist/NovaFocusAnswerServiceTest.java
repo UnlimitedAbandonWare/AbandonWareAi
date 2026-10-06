@@ -2,6 +2,7 @@ package com.example.lms.assist;
 
 import com.example.lms.api.PublicRequestBudgetGuard;
 import com.example.lms.dto.ChatRequestDto;
+import com.example.lms.llm.ModelSelectionException;
 import com.example.lms.service.*;
 import com.example.lms.service.chat.*;
 import org.junit.jupiter.api.Test;
@@ -13,6 +14,96 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusAnswerServiceTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"completed","changed","failed"})
+    void publishedFixedOAuthPrefixNeverStartsUnknownWebRetryOrAcceptsRevision(String outcome) throws Exception {
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        var seen=new java.util.concurrent.CopyOnWriteArrayList<String>();
+        when(chat.continueChat(any(),isNull(),any())).thenAnswer(call->{
+            ChatRequestDto request=call.getArgument(0);
+            assertEquals("chatgpt-oauth:gpt-5.6-luna",request.getModel());assertTrue(request.isStrictModelSelection());
+            assertEquals("FACT",request.getMode());assertEquals(Boolean.FALSE,request.getPolish());
+            assertFalse(request.isUseWebSearch());assertFalse(request.isUseRag());
+            var run=ChatRunExecutionContext.current();
+            try(var permit=run.permitFoldStreaming(true);var stage=ChatRunExecutionContext.bindProviderTextStage("chat_draft")){
+                ChatRunExecutionContext.providerTextConsumer().accept("모르겠습니다. "+"x".repeat(40));
+            }
+            if(outcome.equals("failed"))throw new ModelSelectionException("backend_unavailable");
+            return ChatResult.of(outcome.equals("changed")?"다른 답변입니다.":"모르겠습니다.","gpt-5.6-luna",false);
+        });
+        var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"chatgpt-oauth:gpt-5.6-luna"),4,400,false,true);
+        try{
+            if(outcome.equals("completed"))assertEquals("모르겠습니다.",adapter.answerResult(9755L,"일반 질문",null,null,memory,null,()->true,seen::add).text());
+            else assertThrows(RuntimeException.class,()->adapter.answerResult(9755L,"일반 질문",null,null,memory,null,()->true,seen::add));
+            assertEquals(List.of("모르겠습니다."),seen);verify(chat,times(1)).continueChat(any(),isNull(),any());
+            if(!outcome.equals("failed"))assertEquals(0L,((Number)NovaFocusAnswerService.diagnosticTrace().get("focus.selection.fallbackCount")).longValue());
+            assertTrue(((Number)NovaFocusAnswerService.diagnosticTrace().get("focus.stream.publishedChars")).intValue()>0);
+        }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+    @Test void explicitOnAllowsSelectedModelToChooseSearchWithoutForcingGenericRetrieval() throws Exception {
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("안녕하세요","gemini-fixture",false));
+        var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"gemini-fixture"),4,400,false,true);
+        try {
+            assertEquals("안녕하세요",adapter.answer(7L,"안녕?",memory));
+            var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);var context=org.mockito.ArgumentCaptor.forClass(ChatConversationContext.class);
+            verify(chat).continueChat(request.capture(),isNull(),context.capture());
+            assertFalse(request.getValue().isUseWebSearch());assertTrue(context.getValue().focusGoogleSearchAllowed());
+            assertEquals("gemini-fixture",request.getValue().getModel());
+        }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+    @Test void selectedGeminiGroundingKeepsOriginalAndPermissionInInternalContext() throws Exception {
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        String original="원문 그대로";
+        var metadata=new com.example.lms.learning.gemini.GeminiGateway.GroundingMetadata(List.of("query"),List.of(
+            new com.example.lms.learning.gemini.GeminiGateway.GroundingChunk(new com.example.lms.learning.gemini.GeminiGateway.WebSource("https://example.com/source","Source"))),
+            List.of(new com.example.lms.learning.gemini.GeminiGateway.GroundingSupport(new com.example.lms.learning.gemini.GeminiGateway.Segment(0,0,16,original),List.of(0),List.of())),
+            new com.example.lms.learning.gemini.GeminiGateway.SearchEntryPoint("<div>Suggestions</div>"));
+        var grounding=new com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer(original,"gemini-selected-fixture",metadata,List.of(original),true);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(new ChatResult(original,"gemini-selected-fixture",false,Set.of(),List.of(),grounding));
+        var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"gemini-selected-fixture"),4,400,false,true);
+        try {
+            var result=adapter.answerResult(7L,"최신 공식 자료를 웹에서 찾아줘",null,null,memory,null,()->true);
+            assertEquals(original,result.text());assertSame(grounding,result.grounding());
+            var context=org.mockito.ArgumentCaptor.forClass(ChatConversationContext.class);
+            var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);verify(chat).continueChat(request.capture(),isNull(),context.capture());
+            assertTrue(context.getValue().focusGoogleSearchAllowed());assertEquals("gemini-selected-fixture",request.getValue().getModel());
+            assertTrue(request.getValue().isStrictModelSelection());
+            when(chat.continueChat(any(),isNull(),any())).thenReturn(new ChatResult("changed body","gemini-selected-fixture",false,Set.of(),List.of(),grounding));
+            var held=assertThrows(IllegalStateException.class,()->adapter.answerResult(7L,"웹에서 찾아줘",null,null,memory,null,()->true));
+            assertEquals("focus_grounding_publication_held",held.getMessage());
+        } finally {ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+    @Test void explicitSearchOffBlocksInitialJevAndUnknownRetryWithoutChangingFixedModel() throws Exception {
+        var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,budgets,runs);var requests=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
+        var calls=new java.util.concurrent.atomic.AtomicInteger();
+        var advisor=new JevDecisionAdvisor(new MockEnvironment().withProperty("demo.jev.mode","on").withProperty("demo.jev.free-window-end","2999-01-01T00:00:00Z"),java.time.Clock.systemUTC(),
+            req->{calls.incrementAndGet();return new JevDecisionAdvisor.EvalResponse(200,JevDecisionAdvisor.Verdict.WEB,null,null);},name->"fixture-key");
+        ReflectionTestUtils.setField(adapter,"jevAdvisor",advisor);ReflectionTestUtils.setField(adapter,"webAggressiveEnabled",true);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("모르겠습니다","pinned-model",false));
+        var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"pinned-model"),3,400,false,false);
+        try {
+            assertEquals("모르겠습니다",adapter.answer(7L,"최신 공식 자료를 웹에서 찾아줘",memory));
+            verify(chat,times(1)).continueChat(requests.capture(),isNull(),any());assertEquals(0,calls.get());
+            assertFalse(requests.getValue().isUseWebSearch());assertEquals(0,requests.getValue().getWebTopK());
+            assertEquals(com.example.lms.gptsearch.dto.SearchMode.OFF,requests.getValue().getSearchMode());
+            assertEquals("pinned-model",requests.getValue().getModel());assertTrue(requests.getValue().isStrictModelSelection());
+            assertEquals("off",NovaFocusAnswerService.diagnosticTrace().get("focus.search.groundingStatus"));
+            clearInvocations(chat);assertThrows(CancellationException.class,()->adapter.answer(7L,"late",memory,()->false));verifyNoInteractions(chat);
+        } finally {advisor.close();ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
     @Test void publicAutoEvidenceAndExactCancellationKeepHistoryOutOfPublicDto() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
         ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
@@ -297,6 +388,32 @@ class NovaFocusAnswerServiceTest {
             assertFalse(request.getValue().isUseWebSearch(),"session-context questions stay local under aggressive auto");
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
+    @Test void fixedGeneralQuestionWithWebEnabledSkipsAdvisorAndGenericRetrieval() throws Exception{
+        var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,budgets,runs);
+        var count=new java.util.concurrent.atomic.AtomicInteger();
+        var env=new MockEnvironment().withProperty("demo.jev.mode","on").withProperty("demo.jev.free-window-end","2999-01-01T00:00:00Z");
+        var advisor=new JevDecisionAdvisor(env,java.time.Clock.systemUTC(),
+            req->{count.incrementAndGet();return new JevDecisionAdvisor.EvalResponse(200,JevDecisionAdvisor.Verdict.WEB,null,null);},name->"fixture-key");
+        ReflectionTestUtils.setField(adapter,"jevAdvisor",advisor);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("광합성은 빛으로 양분을 만드는 과정입니다.","recording",false));
+        try{
+            for(String id:List.of("gpt-5.6-luna","chatgpt-oauth:gpt-5.6-luna")){
+                var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+                    new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,id),7,400,false,true);
+                adapter.answer(7L,"광합성이 뭐야?",memory);
+                var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
+                var context=org.mockito.ArgumentCaptor.forClass(com.example.lms.service.ChatConversationContext.class);
+                verify(chat).continueChat(request.capture(),isNull(),context.capture());
+                assertEquals(0,count.get(),"a fixed general answer must not await an auxiliary model");
+                assertEquals(id,request.getValue().getModel());assertTrue(request.getValue().isStrictModelSelection());
+                assertFalse(request.getValue().isUseWebSearch());assertFalse(request.getValue().isUseRag());
+                assertTrue(context.getValue().focusGoogleSearchAllowed(),"preserve the explicit native-search permission contract");
+                clearInvocations(chat);
+            }
+        }finally{advisor.close();ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
     @Test void defaultPolicyKeepsGeneralQuestionLocalAndUnpinned() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
         ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
@@ -324,18 +441,28 @@ class NovaFocusAnswerServiceTest {
         var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of());
         try{
             var answer=adapter.answer(7L,"공식 자료를 찾아 확인해줘",memory);
-            assertTrue(answer.codePointCount(0,answer.length())<=280,"lens answer stays inside the code-point budget");
+            assertFalse(answer.contains("표시 길이를 넘었습니다"));assertFalse(answer.contains("전체 답변은 Fold에서"));
+            assertTrue(answer.contains("가나다라마바사아자차카타파하"),"overflow keeps the generated answer instead of a notice");
             assertTrue(answer.lines().count()<=6,"lens answer stays inside the six-line budget");
             assertFalse(answer.contains("##"));assertFalse(answer.contains("]("));
             assertTrue(answer.contains("[출처:"));assertTrue(answer.contains("naver.com"));
             clearInvocations(chat);
-            // Evidence가 없으면 접미사도 없지만 길이 한도는 그대로다.
+            // Evidence가 없으면 접미사도 없다; 길이 초과도 안내문이 아닌 원문이 유지된다.
             when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of(longAnswer,"recording",false));
             answer=adapter.answer(8L,"공식 자료를 다시 확인해줘",memory);
-            assertTrue(answer.codePointCount(0,answer.length())<=280);
+            assertTrue(answer.contains("가나다라마바사아자차카타파하"));
+            assertFalse(answer.contains("표시 길이를 넘었습니다"));
             assertTrue(answer.lines().count()<=6);
             assertFalse(answer.contains("[출처:"));
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+    @Test void overBudgetDisplayKeepsTheGeneratedAnswerInsteadOfANotice(){
+        // 길이 초과 답변은 원문이 보존된다 — 안경 표시는 receiver.js 페이징과 생성 시 길이 설정이 담당한다.
+        String longText="가나다라마바사아자차카타파하".repeat(20);
+        assertEquals(longText,NovaFocusAnswerService.boundDisplay(longText,10));
+        assertEquals("a\nb",NovaFocusAnswerService.boundDisplay("a\r\nb",1));
+        assertNull(NovaFocusAnswerService.boundDisplay(null,5));
+        assertFalse(NovaFocusAnswerService.boundDisplay(longText,10).contains("Fold에서 확인"));
     }
     @Test void nonWebAnswersAreNotCompacted() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();

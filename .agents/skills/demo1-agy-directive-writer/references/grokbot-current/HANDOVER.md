@@ -31,7 +31,8 @@
 - 0 한 줄 목표 → 1 사실(확인 시각 KST 포함) → 공통 규칙 → DV(Devin)/WP(Codex) 항목 → HOLD → ASK_ONCE(기본값 포함, 답 없으면 그 부분만 멈춤) → 절대 금지 → Acceptance(안 돌린 항목은 NOT_RUN + 사유) → 보고 형식.
 - Project Root는 항상 `<repo>`.
 - **Devin 지시서**:
-  - 첫 줄은 @skill 한 줄(중복 없이, `.agents/skills`에 실제 있는 것만): `@demo1-project-root @agent-scope-lease @demo1-lease-conflict-autoflow @regression-check @positive-negative-neutral-judge @demo1-vibe-selfask-judge-auto @demo1-work-ledger @demo1-superpowers-repo-evidence-guard @demo1-agent-code-evidence-gate` (+ 주제에 맞는 실제 스킬 추가)
+  - 첫 줄은 사용자의 표준 18개 스킬 태그 프리셋(17개 스킬 + `@SKILL.md`)을 누락 없이 자동 배치한다:
+    `@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md`
   - 첫 명령은 `Set-Location C:\AbandonWare\demo-1\demo-1\src`
   - 장부 파일은 `[IO.File]::WriteAllText(경로, 내용, [Text.UTF8Encoding]::new($false))`로 쓴다.
   - 보고는 `외부 API:` 줄로 시작한다.

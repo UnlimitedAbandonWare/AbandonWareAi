@@ -6,7 +6,7 @@ const source = fs.readFileSync("main/resources/static/js/chat-model-picker.js", 
 
 // A small DOM fixture: focus detaches exactly when a focused descendant is removed.
 // Native dialog keyboard containment is verified separately in the real browser.
-function fixture(storedSettings = null) {
+function fixture(storedSettings = null, preferences = {}) {
   let document;
   class Element {
     constructor(tag = "div") {
@@ -59,8 +59,8 @@ function fixture(storedSettings = null) {
   document.body.append(trigger,panel,select);
   document.createElement = tag => new Element(tag);
   document.getElementById = id => ({modelBrowser:panel,modelSelect:select,modelBrowserTrigger:trigger})[id] || null;
-  filter.value = "available"; select.value = "local:0";
-  const calls = [], ready = [], storage = new Map();
+  filter.value = "available"; select.value = preferences.selected || "local:0";
+  const calls = [], ready = [], storage = new Map(Object.entries(preferences.storage || {})), writes = [];
   document.addEventListener("chat:model-catalog", event => ready.push(event.detail.ready));
   class Event { constructor(type, opts = {}) { this.type = type; Object.assign(this,opts); } preventDefault() { this.defaultPrevented = true; } }
   const selectionMode = new Element("select");
@@ -82,9 +82,9 @@ function fixture(storedSettings = null) {
     });
   }
   vm.runInNewContext(source, {document, Event, CustomEvent:Event, Map, console,
-    localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},
+    localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>{ writes.push(key); storage.set(key,value); }},
     fetch:(url,opts)=>new Promise((resolve,reject)=>calls.push({url,opts,resolve,reject}))});
-  return {document,panel,select,selectionMode,trigger,search,filter,list,status,count,more,close,refresh,calls,ready,
+  return {document,panel,select,selectionMode,trigger,search,filter,list,status,count,more,close,refresh,calls,ready,storage,writes,
     async respond(index, rows) { calls[index].resolve({ok:true,redirected:false,headers:{get:()=>"application/json"},json:async()=>rows}); await settle(); },
     change(mode) { filter.value=mode; filter.dispatchEvent(new Event("change")); },
     findFavorite(id) { return list.querySelectorAll("button").find(item=>item.getAttribute("aria-label")===id+" 즐겨찾기"); }
@@ -216,4 +216,103 @@ test("Tab wraps inside the open dialog and Escape from search closes it", async 
   f.search.focus(); f.search.value="model";
   f.document.dispatchEvent({type:"keydown",key:"Escape",target:f.search,cancelable:true,preventDefault(){prevented=true;}});
   assert.equal(f.panel.open,false); assert.equal(f.document.activeElement,f.trigger);
+});
+
+// Synthetic producer identities only; no account catalog or history is copied here.
+const localRow = {id:"local:0",modelId:"local:0",provider:"Ollama",endpointId:"local-default",selectable:true,status:"installed"};
+const apiRow = {id:"llmrouter.fixture-api",modelId:"gpt-5.6-luna",provider:"OpenAI",endpointId:"fixture-api",evidence:"server_catalog",selectable:true,status:"configured"};
+const oauthRow = modelId => ({id:"chatgpt-oauth:"+modelId,modelId,provider:"chatgpt_oauth",endpointId:"chatgpt-oauth",selectable:true,status:"configured"});
+const oauthSol = oauthRow("gpt-5.6-sol"), oauthLuna = oauthRow("gpt-5.6-luna");
+const unknownRow = {id:"fixture:unknown",modelId:"Codex OAuth Luna5.6",provider:"Unknown",selectable:true};
+const renderedIds = f => f.list.querySelectorAll(".model-choice-select").map(button=>button.getAttribute("data-model-id"));
+const optionIds = f => f.select.options.filter(option=>!option.disabled).map(option=>option.value);
+
+test("native and browser lists order producer groups before favorites and keep input order within ties", async () => {
+  const f=fixture(null,{storage:{"chat.modelFavorites":JSON.stringify([localRow.id,oauthSol.id])}});
+  const rows=[localRow,apiRow,unknownRow,oauthSol,oauthLuna,oauthRow("fixture-second"),oauthRow("fixture-first")];
+  const before=JSON.stringify(rows);
+  await f.respond(0,rows);
+  const expected=[oauthLuna.id,oauthSol.id,"chatgpt-oauth:fixture-second","chatgpt-oauth:fixture-first",apiRow.id,unknownRow.id,localRow.id];
+  assert.deepEqual(renderedIds(f),expected);
+  assert.deepEqual(optionIds(f),expected);
+  assert.deepEqual(f.select.children.map(group=>group.label),["Codex OAuth","외부 API","기타 등록 모델","로컬 · Ollama"]);
+  assert.equal(f.select.value,localRow.id);
+  assert.equal(JSON.stringify(rows),before,"display ordering must not mutate the catalog");
+  assert.deepEqual(f.writes,[],"refresh/reorder must not rewrite preferences");
+});
+
+test("duplicate names and contradictory provenance retain distinct exact IDs in unknown groups", async () => {
+  const contradictions=[
+    {...oauthRow("fixture-mismatch"),endpointId:"external"},
+    {...oauthRow("fixture-slug"),id:"chatgpt-oauth:other-slug"},
+    {...localRow,id:"fixture:local-name",endpointId:"external"},
+    {...apiRow,id:"llmrouter.other-route"},
+    {...apiRow,id:"fixture:api-name",evidence:"unverified"}
+  ];
+  const f=fixture(); await f.respond(0,[...contradictions,localRow,apiRow,oauthLuna,unknownRow]);
+  assert.deepEqual(renderedIds(f),[oauthLuna.id,apiRow.id,...contradictions.map(row=>row.id),unknownRow.id,localRow.id]);
+  assert.equal(f.select.options.length,9,"same modelId must not merge providers");
+  assert.match(f.list.textContent,/Codex OAuth/);
+  assert.match(f.list.textContent,/OpenAI · API/);
+});
+
+for(const state of ["absent","disabled"]) test("Luna recommendation never invents or enables an unavailable row: "+state,async()=>{
+  const f=fixture(); const rows=[localRow,oauthSol];
+  if(state==="disabled") rows.push({...oauthLuna,selectable:false,reason:"auth_missing"});
+  await f.respond(0,rows); f.change("all"); await f.respond(1,rows);
+  assert.deepEqual(optionIds(f),[oauthSol.id,localRow.id]);
+  const luna=f.list.querySelectorAll(".model-choice-select").find(button=>button.getAttribute("data-model-id")===oauthLuna.id);
+  assert.equal(Boolean(luna),state==="disabled");
+  if(luna) assert.equal(luna.disabled,true);
+  assert.equal(f.select.value,localRow.id);
+});
+
+for(const selected of [localRow.id,apiRow.id,oauthSol.id,"fixture:missing"]) test("reordering preserves exact stored choice and disabled placeholder: "+selected,async()=>{
+  const f=fixture({model:selected,modelSelectionMode:"strict",source:"user"});
+  await f.respond(0,[localRow,apiRow,oauthSol,oauthLuna]);
+  assert.equal(f.select.value,selected); assert.equal(f.selectionMode.value,"strict");
+  assert.equal(Boolean(f.select.options.find(option=>option.value===selected).disabled),selected==="fixture:missing");
+  assert.deepEqual(f.writes,[]);
+});
+
+test("favorites keep their set, recent keeps usage order, filters/search and focus preserve exact identities", async()=>{
+  const f=fixture(null,{storage:{"chat.modelFavorites":JSON.stringify([localRow.id,oauthSol.id]),"chat.recentModels":JSON.stringify([localRow.id,apiRow.id,oauthSol.id])}});
+  await f.respond(0,[localRow,apiRow,unknownRow,oauthSol,oauthLuna]);
+  f.change("favorites"); assert.deepEqual(renderedIds(f),[oauthSol.id,localRow.id]);
+  f.change("recent"); assert.deepEqual(renderedIds(f),[localRow.id,apiRow.id,oauthSol.id]);
+  f.change("available"); f.search.value="gpt-5.6-luna"; f.search.dispatchEvent({type:"input"});
+  assert.deepEqual(renderedIds(f),[oauthLuna.id,apiRow.id]);
+  const apiFavorite=f.list.querySelectorAll(".model-favorite").find(button=>button.getAttribute("data-model-id")===apiRow.id);
+  apiFavorite.click();
+  assert.equal(f.document.activeElement.getAttribute("data-model-id"),apiRow.id);
+  assert.deepEqual(renderedIds(f),[oauthLuna.id,apiRow.id],"API favorite must stay below OAuth");
+  assert.deepEqual(f.writes,["chat.modelFavorites"]);
+  assert.equal(f.storage.get("chat.recentModels"),JSON.stringify([localRow.id,apiRow.id,oauthSol.id]));
+});
+
+test("interleaved provider rows retain the same native/browser order and safe provider labels",async()=>{
+  const otherApi={...apiRow,id:"llmrouter.fixture-other",endpointId:"fixture-other",provider:"OtherAPI"};
+  const tailApi={...apiRow,id:"llmrouter.fixture-tail",endpointId:"fixture-tail",modelId:"fixture-tail"};
+  const f=fixture(null,{storage:{"chat.modelFavorites":JSON.stringify([apiRow.id,otherApi.id])}});
+  await f.respond(0,[apiRow,otherApi,tailApi,localRow]);
+  assert.deepEqual(optionIds(f),renderedIds(f));
+  assert.match(f.select.options.find(option=>option.value===otherApi.id).textContent,/OtherAPI/);
+});
+
+test("toggling a favorite immediately synchronizes native order without changing selection or focus",async()=>{
+  const f=fixture(); await f.respond(0,[localRow,oauthSol,oauthRow("fixture-other")]);
+  const target="chatgpt-oauth:fixture-other";
+  const clickFavorite=()=>f.list.querySelectorAll(".model-favorite").find(button=>button.getAttribute("data-model-id")===target).click();
+  for(let i=0;i<2;i++){
+    clickFavorite();
+    assert.deepEqual(optionIds(f),renderedIds(f));
+    assert.equal(f.select.value,localRow.id);
+    assert.equal(f.document.activeElement.getAttribute("data-model-id"),target);
+  }
+});
+
+test("local provenance with contradictory exact model identity remains unclassified",async()=>{
+  const contradiction={...localRow,id:"llmrouter.fixture-external"};
+  const f=fixture(); await f.respond(0,[localRow,contradiction,oauthSol]);
+  assert.deepEqual(renderedIds(f),[oauthSol.id,contradiction.id,localRow.id]);
 });

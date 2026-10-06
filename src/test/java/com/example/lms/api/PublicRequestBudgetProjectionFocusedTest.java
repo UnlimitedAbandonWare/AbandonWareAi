@@ -20,8 +20,62 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class PublicRequestBudgetProjectionFocusedTest {
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(com.example.lms.domain.enums.ExecutionMode.class)
+    void defaultDeepSearchFitsTheExistingCaps(com.example.lms.domain.enums.ExecutionMode executionMode) {
+        for (String message : java.util.List.of(
+                "Spring Security의 세션과 CSRF 관계를 공식 자료로 설명해 주세요.",
+                "Explain the Spring Security session and CSRF relationship using official sources.")) {
+            ChatRequestDto request = ChatRequestDto.builder().message(message)
+                    .executionMode(executionMode).useRag(true).useWebSearch(true)
+                    .webTopK(8).searchQueries(0).searchMode(SearchMode.FORCE_DEEP).build();
+            assertDoesNotThrow(() -> new PublicRequestBudgetGuard()
+                    .validateChatProjected(request, null, true, true));
+        }
+    }
+
     @Test
-    void historicalDeepWorkIsCausedBySearchOptionsRatherThanExecutionPreference() {
+    void policyFanoutReservesTheExecutableEvidenceGapEnvelope() {
+        var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(
+                com.example.lms.domain.enums.ExecutionMode.AUTO);
+        budget.allowExpansion("evidence-gap");
+        int admittedQueries = 0;
+        for (String query : java.util.List.of("synthetic original", "synthetic supplement one",
+                "synthetic supplement two", "synthetic excess")) {
+            if (budget.tryQuery(query)) admittedQueries++;
+        }
+        assertEquals(3, admittedQueries, "the execution owner refuses a fourth logical query");
+        ChatRequestDto request = braveWebRequest().toBuilder()
+                .searchMode(SearchMode.FORCE_DEEP).build();
+        guardWithPlans().validateChatProjected(request, null, true, false);
+        assertEquals((long) admittedQueries, TraceStore.get("public.request.budget.plannedQueries"));
+    }
+
+    @Test
+    void explicitClientQueryOverflowStillRejectsWithDefaultCaps() {
+        ChatRequestDto request = braveWebRequest().toBuilder().useRag(true)
+                .webTopK(9).searchQueries(8).searchMode(SearchMode.FORCE_DEEP).build();
+        var rejection = org.junit.jupiter.api.Assertions.assertThrows(
+                PublicRequestBudgetGuard.Rejection.class,
+                () -> new PublicRequestBudgetGuard().validateChatProjected(request, null, true, true));
+        assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
+    }
+
+    @Test
+    void additionalExtremeZOverflowStillRejectsWithDefaultCaps() {
+        var plan = new com.example.lms.plan.PlanHints("overflow", null, null,
+                java.util.List.of(), 8, 8, null, java.util.List.of(), null, null, null,
+                true, true, null, null, null, null, null, null, 32, true, java.util.Map.of());
+        var rejection = org.junit.jupiter.api.Assertions.assertThrows(
+                PublicRequestBudgetGuard.Rejection.class,
+                () -> new PublicRequestBudgetGuard().validateChatProjected(
+                        braveWebRequest().toBuilder().useRag(true)
+                                .searchMode(SearchMode.FORCE_DEEP).build(), plan, true, true));
+        assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
+    }
+
+    @Test
+    void historicalDeepOptionsFitTheBoundedWorkflowEnvelope() {
         var plan = new com.example.lms.plan.PlanHints("budget-replay", null, null,
                 java.util.List.of(), 8, 8, null, java.util.List.of(), null, null, null,
                 true, true, null, null, null, null, null, null, 2, true, java.util.Map.of());
@@ -34,20 +88,20 @@ class PublicRequestBudgetProjectionFocusedTest {
                     .searchQueries(0).searchMode(SearchMode.FORCE_DEEP).build();
             PublicRequestBudgetGuard diagnostic = guardWithPlans();
             diagnostic.validateChatProjected(request, plan, true, true);
-            assertEquals(14L, TraceStore.get("public.request.budget.plannedQueries"));
+            assertEquals(3L, TraceStore.get("public.request.budget.plannedQueries"));
+            assertEquals(14, TraceStore.get("public.request.budget.policyMaxFinalQueries"));
+            assertEquals(3, TraceStore.get("public.request.budget.workflowQueries"));
             assertEquals(2, TraceStore.get("public.request.budget.extremeZQueries"));
-            assertEquals(672L, TraceStore.get("public.request.budget.retrievalWork"));
-            assertEquals(4_224L, TraceStore.get("public.request.budget.providerWork"));
+            // (tuned web11 + vector10) * (workflow3 + ExtremeZ2) * DEEP2.
+            assertEquals(210L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(1_320L, TraceStore.get("public.request.budget.providerWork"));
 
             var defaults = new PublicRequestBudgetGuard();
-            var rejection = org.junit.jupiter.api.Assertions.assertThrows(
-                    PublicRequestBudgetGuard.Rejection.class,
-                    () -> defaults.validateChatProjected(request, plan, true, true));
-            assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
+            assertDoesNotThrow(() -> defaults.validateChatProjected(request, plan, true, true));
             assertDoesNotThrow(() -> defaults.validateChatProjected(
                     request.toBuilder().searchMode(SearchMode.AUTO).build(), plan, true, true));
-            assertEquals(128L, TraceStore.get("public.request.budget.retrievalWork"));
-            assertEquals(768L, TraceStore.get("public.request.budget.providerWork"));
+            assertEquals(80L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(480L, TraceStore.get("public.request.budget.providerWork"));
         }
     }
 
@@ -83,10 +137,9 @@ class PublicRequestBudgetProjectionFocusedTest {
 
         assertDoesNotThrow(() -> guard.validateChatProjected(
                 braveWebRequest(), applier.load("brave.v1"), true, false));
-        // BALANCED apply 캡(10) + extremeZ 버스트(12) = 22 — 종전 24는
-        // max(planQueries, workflow) 팽창의 잔재였다.
-        assertEquals(22L, TraceStore.get("public.request.budget.branchCount"));
-        assertEquals(396L, TraceStore.get("public.request.budget.retrievalWork"));
+        // Workflow envelope3 + additive ExtremeZ12; tuned plan webK18.
+        assertEquals(15L, TraceStore.get("public.request.budget.branchCount"));
+        assertEquals(270L, TraceStore.get("public.request.budget.retrievalWork"));
         assertEquals(12, ((Number) TraceStore.get("public.request.budget.extremeZQueries")).intValue());
     }
 
@@ -138,7 +191,7 @@ class PublicRequestBudgetProjectionFocusedTest {
             fail("expected rejection");
         } catch (PublicRequestBudgetGuard.Rejection rejection) {
             assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
-            assertEquals(396L,
+            assertEquals(270L,
                     rejection.getBody().getProperties().get("projectedRetrievalWork"));
             assertEquals("web_topK", rejection.getBody().getProperties().get("dominantTerm"));
         }

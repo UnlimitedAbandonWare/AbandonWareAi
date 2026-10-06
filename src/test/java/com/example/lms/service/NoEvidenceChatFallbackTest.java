@@ -18,6 +18,118 @@ import static org.mockito.Mockito.when;
 
 class NoEvidenceChatFallbackTest {
 
+    @Test
+    void explicitNoAdditionalSearchControlsRetrievalOnly() {
+        assertTrue(NoEvidenceChatFallback.isExplicitNoAdditionalSearch(
+                "추가 검색 없이 앞에서 확인된 출처만으로 확인 범위를 구분해줘."));
+        assertTrue(NoEvidenceChatFallback.isExplicitNoAdditionalSearch(
+                "외부 검색은 하지 말고 그 문서 기준으로 설명해줘."));
+        assertFalse(NoEvidenceChatFallback.isExplicitNoAdditionalSearch(null));
+        assertFalse(NoEvidenceChatFallback.isExplicitNoAdditionalSearch(
+                "추가 검색 없이는 답하지 마. 최신 출처를 검색해줘."));
+        assertFalse(NoEvidenceChatFallback.isExplicitNoAdditionalSearch("추가 검색으로 현재 상태를 확인해줘."));
+        assertFalse(NoEvidenceChatFallback.isExplicitNoAdditionalSearch(
+                "추가 검색 없이 답한다는 방식의 문제를 설명해줘. 최신 출처도 검색해줘."));
+    }
+
+
+    @Test
+    void clarificationFirstPriorComparisonExcludesNewAndAdditionalTasks() {
+        String query = "앞에서 확인한 원신 자료 두 개를 비교해줘. 어느 두 자료인지 또는 비교 기준이 불명확하면 먼저 확인 질문을 해줘.";
+        assertTrue(NoEvidenceChatFallback.isClarificationFirstPriorComparison(query));
+        assertTrue(NoEvidenceChatFallback.isClarificationFirstPriorComparison(query.replace("원신", "Spring Security")));
+        assertFalse(NoEvidenceChatFallback.isClarificationFirstPriorComparison(query + " 최신 공지도 찾아줘."));
+        assertFalse(NoEvidenceChatFallback.isClarificationFirstPriorComparison("새로운 원신 자료 두 개를 찾아서 비교해줘."));
+        assertFalse(NoEvidenceChatFallback.isClarificationFirstPriorComparison("앞에서 확인한 자료 A와 자료 B를 비교해줘."));
+        assertFalse(NoEvidenceChatFallback.isClarificationFirstPriorComparison(null));
+    }
+
+    @Test
+    void generalConceptOptOutDoesNotAuthorizeMedicationUse() {
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(
+                "아스피린과 와파린을 함께 복용해도 되는지를 일반적인 개념으로 3문장만 설명해줘. 외부 검색이 필요한 주제는 아니야."));
+    }
+
+    @Test
+    void explicitGeneralConceptIntentExcludesFactualAndAdditionalTasks() {
+        String concept = "RAG에서 키워드 검색과 벡터 검색의 차이를 일반적인 개념으로 3문장만 설명해줘. 외부 검색이 필요한 주제는 아니야.";
+        assertTrue(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(concept));
+        for (String prefix : java.util.List.of("현재 ", "공식 출처의 ", "의료 진단의 ", "교수 소속의 ",
+                "CEO의 ", "웹에서 찾아 ")) {
+            assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(prefix + concept), prefix);
+        }
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(concept + " 최신 버전도 확인해줘."));
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(
+                "RAG에서 키워드 검색과 벡터 검색의 차이를 설명해줘."));
+    }
+
+    @Test
+    void sessionAssignmentsAndCorrectionsNeedConversationContextOnly() throws Exception {
+        var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
+        classifier.setAccessible(true);
+        assertTrue((boolean) classifier.invoke(null,
+                "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, "
+                        + "비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. "
+                        + "계정의 장기 기억에 저장할 필요는 없어."));
+        assertTrue((boolean) classifier.invoke(null,
+                "방금 정한 프로젝트 이름·색상·비교 기준을 다시 말해줘. "
+                        + "그리고 이 대화의 색상은 남색으로 정정해줘."));
+    }
+
+    @Test
+    void sessionRecallWithSearchOptOutNeedsConversationContextOnly() throws Exception {
+        var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
+        classifier.setAccessible(true);
+        assertTrue((boolean) classifier.invoke(null,
+                "이 대화의 시험 프로젝트 이름, 마지막으로 정정된 색상, "
+                        + "처음 정한 비교 기준을 정확히 다시 말해줘. 외부 검색은 필요 없어."));
+    }
+
+    @Test
+    void searchOptOutDoesNotConvertAdditionalTasksIntoSessionMemory() throws Exception {
+        var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
+        classifier.setAccessible(true);
+        for (String query : java.util.List.of(
+                "이 대화에서 외부 검색은 필요 없어.",
+                "이 대화에서 색상 청록을 기억해줘. 외부 검색은 필요 없어. 아스피린과 와파린을 같이 먹어도 되는지 알려줘.",
+                "이 대화에서 프로젝트 이름을 다시 말해줘. 외부 검색은 필요 없어. 최신 원신 공식 공지를 확인해줘.")) {
+            assertFalse((boolean) classifier.invoke(null, query), query);
+        }
+    }
+
+    @Test
+    void mixedSessionAndExternalEvidenceRequestsKeepRetrieval() throws Exception {
+        var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
+        classifier.setAccessible(true);
+        for (String query : List.of(
+                "이 대화에서 최신 원신 공식 공지를 찾아서 기억해줘.",
+                "이 대화에서 프로젝트 이름 해솔-42를 기억해줘. 그리고 아스피린과 와파린을 함께 복용해도 되는지 알려줘.",
+                "이 대화에서 프로젝트 이름 해솔-42를 기억해줘 그리고 약 복용 여부를 알려줘.",
+                "이 대화의 색상을 정정해줘. 그리고 공식 원문을 확인해줘.",
+                "추가 검색 없이 앞에서 확인된 원신 출처로 오늘 상태를 말해줘.",
+                "공식 자료 우선·확인 가능한 갱신일을 알려줘.")) {
+            assertFalse((boolean) classifier.invoke(null, query), query);
+        }
+    }
+
+    @Test
+    void discoveringAnExternalValueBeforeRememberingKeepsVerification() throws Exception {
+        var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
+        classifier.setAccessible(true);
+        assertFalse((boolean) classifier.invoke(null,
+                "이 대화에서 OpenAI의 대표이사 이름을 알아내서 기억해줘."));
+    }
+
+    @Test
+    void sessionMemoryRouteUsesExistingDirectPromptAndNotRequiredVerification() throws Exception {
+        String workflow = java.nio.file.Files.readString(java.nio.file.Path.of(
+                "main/java/com/example/lms/service/ChatWorkflow.java"));
+        assertTrue(workflow.contains("final boolean sessionMemoryDirectMode ="));
+        assertTrue(workflow.contains("final boolean directRetrievalOffMode = sessionMemoryDirectMode"));
+        assertTrue(workflow.contains("final boolean casualGreetingNoEvidenceIntent = sessionMemoryDirectMode"));
+        assertTrue(workflow.contains("if (casualGreetingNoEvidenceIntent) {\n            useWeb = false;\n            useRag = false;"));
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

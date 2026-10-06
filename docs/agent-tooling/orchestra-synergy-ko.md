@@ -21,10 +21,12 @@
 
 ## 역할 분담 (사용자 지정 2026-10-03, dot 줄 추가 2026-10-05)
 
-- **dot (ChatGPT "UnlimitedAbandon")**: **전체 컨트롤 타워.** 계획·우선순위,
-  Codex 소스수정 지시서 작성(`PASTE_CODEX_*.md`), Codex 세션에 직접 발송·
-  진행 감시, 패치 검증 후 룰·스킬·도구 갱신과 원복 방지(ratchet). 산출물
-  전달은 ChatGPT 파일 카드(`DEMO1-DOT-FILE-CARD`).
+- **dot (ChatGPT "UnlimitedAbandon")**: **지시서 작성·Downloads 배달 담당
+  (아침 페이스, 2026-10-05 재고정).** 목표·스킬·자료를 받으면
+  `PASTE_CODEX_*.md`/`PASTE_<AGENT>_*.txt` 지시서를 만들고 Downloads sha12
+  MATCH까지가 완료. 세션 적용은 사용자가 손수 붙여넣기 — 자동 발송·자동
+  감시·패치 후 룰 자동 갱신 루프 금지(사용자 요청 단건 companion만).
+  상세: `docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md`.
 - **Grok Bot**: 아이디어·신호 키움(긍정/부정/반례 → 중립 판정 연타). 결과를
   devin-signal / codex 후보 / research-question으로 쪼갬. PC 밖에서
   `Downloads\PASTE_*.txt`로 지시서를 넘긴다.
@@ -38,16 +40,22 @@
   웹서치로 근거 수집 → web-evidence 신호로 회수. Grok Bot 부재 시
   `demo1-agy-grokbot-mode`로 서브 역할.
 
-위계 (2026-10-05):
-- dot = 지휘(무엇을·누가·언제). Codex = 제품 소스 작성자. Devin = 룰·도구·검증
-  지원(dot 결정을 도구로 굳힘, 뒤집지 않음). Grok Bot = 사용자 옆 분석·지시서
-  보조. agy·Grok CLI = 하위 작업자(조사·단건 위임).
+위계 (2026-10-05, 아침 페이스 재고정):
+- dot = 지시서 작성 + Downloads 배달(무엇을·누가 제안은 dot이 지시서로
+  만든다; 세션 적용·발송은 사용자 손수). Codex = 제품 소스 작성자.
+  Devin = 룰·도구·검증 지원(dot 지시서를 도구로 굳힘, 뒤집지 않음).
+  Grok Bot = 사용자 옆 분석·지시서 보조. agy·Grok CLI = 하위 작업자
+  (조사·단건 위임).
 - 충돌 시 우선순위: **사용자 직접 지시 > dot 최신 지시서 > 기존 SSOT 문구**.
   단 비밀값·PROTO_OPEN·lease 안전 규칙은 누구도 못 바꾼다.
-- dot이 PC에 못 붙을 때도 구조는 그대로: 사용자가 카드 파일을 받아 Codex에
-  붙여넣으면 같은 효력.
-- dot 대체 금지: 다른 에이전트가 "컨트롤 타워" 역할을 가져가지 않는다.
+- dot이 PC에 못 붙을 때도 구조는 그대로: 사용자가 지시서 파일(Downloads
+  또는 카드 경유)을 받아 Codex에 손수 붙여넣으면 같은 효력.
+- dot 대체 금지: 다른 에이전트가 dot의 지시서 작성 역할을 가져가지 않는다.
   Grok Bot·Devin은 dot 지시서에 **보조 지시서**(companion)만 쓴다.
+- SERIAL_LANE (2026-10-05): 한 Codex/dot 작업 세션 = **활성 지시서(PASTE)
+  1개**. 새 목표는 현재 목표를 Acceptance/HOLD로 닫은 뒤 새 세션·새 PASTE로만
+  진행 — 같은 컨텍스트 합치기 금지 (SSOT:
+  `docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md` §1-B, 잠금 INV-S1~S3).
 
 ## lane 규칙 (route-rules.json 기본값)
 

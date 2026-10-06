@@ -390,19 +390,19 @@ class PublicRequestBudgetGuardTest {
         assertDoesNotThrow(() -> guard.validateChatEffective(request));
         assertDoesNotThrow(() -> guard.validateChatProjected(
                 request, applier.load("brave.v1"), true, false));
-        assertEquals(396L, TraceStore.get("public.request.budget.retrievalWork"));
-        assertEquals(22L, TraceStore.get("public.request.budget.branchCount"));
+        assertEquals(270L, TraceStore.get("public.request.budget.retrievalWork"));
+        assertEquals(15L, TraceStore.get("public.request.budget.branchCount"));
         assertEquals(18, TraceStore.get("public.request.budget.effectiveTopK"));
-        assertEquals(2_376L, TraceStore.get("public.request.budget.providerWork"));
+        assertEquals(1_620L, TraceStore.get("public.request.budget.providerWork"));
 
-        guard.setMaxRetrievalWork(395);
+        guard.setMaxRetrievalWork(269);
         assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
                 () -> guard.validateChatProjected(request, applier.load("brave.v1"), true, false));
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "burst offset={0} projectedWork={2}")
-    @org.junit.jupiter.params.provider.CsvSource({"-1,21,378,2268,true", "0,22,396,2376,true",
-            "1,23,414,2484,true"})
+    @org.junit.jupiter.params.provider.CsvSource({"-1,14,252,1512,true", "0,15,270,1620,true",
+            "1,16,288,1728,true"})
     void shippedQueryBurstCountChangesActualProjectedAdmission(int offset, long expectedBranches,
             long expectedWork, long expectedProviderWork, boolean acceptedAtShippedBudget) throws Exception {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper(
@@ -508,7 +508,7 @@ class PublicRequestBudgetGuardTest {
                 .searchMode(SearchMode.AUTO)
                 .build();
         guard.validateChatProjected(english, null, true, false);
-        assertEquals(480L, TraceStore.get("public.request.budget.providerWork"));
+        assertEquals(144L, TraceStore.get("public.request.budget.providerWork"));
 
         ChatRequestDto korean = english.toBuilder()
                 .message("일반적인 근거 검색 요청을 충분히 긴 문장으로 작성합니다")
@@ -534,7 +534,7 @@ class PublicRequestBudgetGuardTest {
 
         assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
                 () -> guard.validateChatProjected(request, null, false, false));
-        assertEquals(80L, TraceStore.get("public.request.budget.retrievalWork"));
+        assertEquals(24L, TraceStore.get("public.request.budget.retrievalWork"));
     }
 
     @Test
@@ -862,6 +862,8 @@ class PublicRequestBudgetGuardTest {
                 .useWebSearch(true)
                 .useRag(false)
                 .webTopK(8)
+                // Workflow3 + ExtremeZ12 is legal; accumulation preserves a real overflow.
+                .accumulation(true)
                 .searchMode(SearchMode.AUTO)
                 .build();
 

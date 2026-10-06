@@ -698,9 +698,15 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
         } else {
             // apply()가 최종 쿼리 수를 maxFinalQueries로 상한하므로 플래너 인자가
             // 더 커도 실행은 maxFinalQueries를 넘지 않는다 — max() 팩창은 제거한다.
-            workflowQueries = policy.maxFinalQueries();
+            // ChatWorkflow and SelfAskSearchBudget permit at most three logical
+            // queries, including AUTO evidence-gap expansion. Reserve that
+            // conservative envelope instead of unexecutable policy fanout.
+            workflowQueries = Math.min(policy.maxFinalQueries(), 3);
         }
         workflowQueries = Math.max(1, Math.min(32, workflowQueries));
+        TraceStore.put("public.request.budget.policyMaxFinalQueries",
+                policy == null ? null : policy.maxFinalQueries());
+        TraceStore.put("public.request.budget.workflowQueries", workflowQueries);
         long projected = Math.max(clientQueries, workflowQueries);
         TraceStore.put("public.request.budget.plannedQueries", projected);
         TraceStore.put("public.request.budget.extremeZQueries", 0);
@@ -1128,6 +1134,8 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
         TraceStore.put("public.request.budget.imageMediaType", null);
         TraceStore.put("public.request.budget.searchPolicyFallback", null);
         TraceStore.put("public.request.budget.searchPolicyFallback.errorType", null);
+        TraceStore.put("public.request.budget.policyMaxFinalQueries", null);
+        TraceStore.put("public.request.budget.workflowQueries", null);
         if ("raw_body".equals(phase)) {
             TraceStore.put("public.request.budget.bodyBytes", null);
         }

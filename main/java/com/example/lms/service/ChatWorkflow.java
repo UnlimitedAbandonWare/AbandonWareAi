@@ -604,6 +604,8 @@ public class ChatWorkflow {
     private com.example.lms.agent.context.AgentDbContextProperties agentDbContextProperties;
     @Autowired(required = false)
     private org.springframework.beans.factory.ObjectProvider<com.example.lms.agent.context.AgentDbContextProvider> agentDbContextProviderProvider;
+    @Autowired(required = false)
+    private com.example.lms.learning.gemini.GeminiGateway geminiGateway;
     /** In-flight cancel flags per session (best-effort) */
     private final ConcurrentHashMap<Long, AtomicBoolean> cancelFlags = new ConcurrentHashMap<>();
 
@@ -997,6 +999,16 @@ public class ChatWorkflow {
         var result = new java.util.LinkedHashMap<String, String>();
         validated.forEach((key, value) -> result.put(key, (String) value));
         return java.util.Map.copyOf(result);
+    }
+
+    static boolean permitsFocusFoldStreaming(ChatRequestDto effective, AnswerMode mode, VisionMode effectiveVisionMode, boolean publicationNeedsFinalization) {
+        return effective != null && effective.isStrictModelSelection()
+                && com.example.lms.llm.ChatGptOAuthRegistration.isRoute(effective.getModel())
+                && !StringUtils.hasText(effective.getImageBase64())
+                && Boolean.FALSE.equals(effective.getUseVerification())
+                && Boolean.FALSE.equals(effective.getPolish()) && mode == AnswerMode.FACT
+                && effectiveVisionMode != null && effectiveVisionMode != VisionMode.FREE
+                && !publicationNeedsFinalization;
     }
 
     static dev.langchain4j.data.message.UserMessage primaryUserMessage(
@@ -1397,23 +1409,13 @@ public class ChatWorkflow {
 
         // ?? 0) ?ъ슜???낅젰 ?뺣낫 ?????????????????????????????????????
         final String userQuery = Optional.ofNullable(req.getMessage()).orElse("");
+        final boolean explicitNoAdditionalSearch =
+                NoEvidenceChatFallback.isExplicitNoAdditionalSearch(userQuery);
         final boolean evidenceReleaseRequired =
                 EvidenceNeededDirectivePolicy.requiresEvidenceNeeded(userQuery);
         final String requestedModel = Optional.ofNullable(req.getModel()).orElse("");
         final boolean forceLightSearchMode = req != null
                 && req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT;
-        final boolean directRetrievalOffMode = req != null
-                && (req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.OFF
-                || Boolean.FALSE.equals(req.getUseWebSearch()))
-                && Boolean.FALSE.equals(req.getUseRag());
-        // 인사·일상 대화는 근거 검증이 필요 없다 — AUTO 검색/RAG 실행과 공개 게이트를 함께 생략.
-        // 명시적 evidence_needed 지시·강제 검색 모드·직접 OFF 계약은 기존 규칙을 유지한다.
-        final boolean casualGreetingNoEvidenceIntent = !evidenceReleaseRequired
-                && !directRetrievalOffMode
-                && req != null
-                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
-                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
-                && NoEvidenceChatFallback.isCasualGreetingOnly(userQuery);
         // evidence_only 정책과 문서·첨부 범위 한정은 근거 없는 일반 답변 대체를 허용하지 않는다.
         final boolean ragEvidenceOnly = req != null
                 && "evidence_only".equalsIgnoreCase(
@@ -1458,6 +1460,34 @@ public class ChatWorkflow {
 
         // Domain classification for this query
         QueryDomain queryDomain = queryDomainClassifier.classify(userQuery);
+
+        final boolean conceptExplanationDirectMode = interactionShortCircuitAllowed
+                && !evidenceReleaseRequired && !evidenceScopeBound
+                && queryDomain.isLowRisk() && !"HIGH".equals(detectRisk(userQuery))
+                && !"BLOCK".equals(TraceStore.get("blackbox.risk.routingDecision"))
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
+                && (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
+                && NoEvidenceChatFallback.isExplicitGeneralConceptOnly(userQuery);
+        final boolean sessionMemoryDirectMode = !evidenceReleaseRequired
+                && !"HIGH".equals(detectRisk(userQuery))
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
+                && !"evidence_only".equalsIgnoreCase(req.getRagAnswerPolicy())
+                && (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
+                && NoEvidenceChatFallback.isSessionMemoryOnly(userQuery);
+        final boolean directRetrievalOffMode = sessionMemoryDirectMode || conceptExplanationDirectMode || req != null
+                && (req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.OFF
+                || Boolean.FALSE.equals(req.getUseWebSearch()))
+                && Boolean.FALSE.equals(req.getUseRag());
+        // 인사·일상 대화는 근거 검증이 필요 없다 — AUTO 검색/RAG 실행과 공개 게이트를 함께 생략.
+        // 명시적 evidence_needed 지시·강제 검색 모드·직접 OFF 계약은 기존 규칙을 유지한다.
+        final boolean casualGreetingNoEvidenceIntent = sessionMemoryDirectMode || conceptExplanationDirectMode || !evidenceReleaseRequired
+                && !directRetrievalOffMode
+                && req != null
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
+                && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
+                && NoEvidenceChatFallback.isCasualGreetingOnly(userQuery);
 
         // [NEW] AnswerMode / MemoryMode from HTTP request (null-safe)
         AnswerMode requestedAnswerMode = AnswerMode.fromString(req.getMode());
@@ -1789,6 +1819,24 @@ public class ChatWorkflow {
             dr = disambiguationService.clarify(userQuery, recentHistory);
         }
 
+        // Unresolved references to prior sources need a user question, not a fresh search.
+        if (interactionShortCircuitAllowed
+                && !"BLOCK".equals(TraceStore.get("blackbox.risk.routingDecision"))
+                && NoEvidenceChatFallback.isClarificationFirstPriorComparison(userQuery)
+                && (dr == null || !dr.isConfident()
+                || dr.getRewrittenQuery() == null || dr.getRewrittenQuery().isBlank())) {
+            throwIfCancelled(sessionIdLong);
+            TraceStore.put("chat.disambiguation.reasonCode", "prior_comparison_unresolved");
+            TraceStore.put("finalAnswer.memorySaveAllowed", false);
+            TraceStore.put("finalAnswer.verificationStatus", "not_required");
+            TraceStore.put("finalAnswer.releaseStatus", "NOT_REQUIRED");
+            TraceStore.put("finalAnswer.releaseReason", "prior_comparison_unresolved");
+            return finishEarlyResult(ChatResult.of(
+                    "비교할 두 자료의 제목이나 URL과 적용할 비교 기준을 알려주시겠어요? "
+                            + "현재 대화에서 비교 대상을 충분히 확인하지 못했습니다.",
+                    "clarification:prior-comparison", false));
+        }
+
         final String finalQuery;
         if (dr != null && dr.isConfident()
                 && dr.getRewrittenQuery() != null && !dr.getRewrittenQuery().isBlank()) {
@@ -1873,6 +1921,12 @@ public class ChatWorkflow {
         if (casualGreetingNoEvidenceIntent) {
             useWeb = false;
             useRag = false;
+        }
+        // A source-scope follow-up may forbid fresh retrieval without granting direct release.
+        if (explicitNoAdditionalSearch) {
+            useWeb = false;
+            useRag = false;
+            TraceStore.put("retrieval.explicitNoAdditionalSearch", true);
         }
         final RetrievalReleaseContract retrievalReleaseContract = buildRetrievalReleaseContract(
                 req,
@@ -3030,6 +3084,21 @@ public class ChatWorkflow {
             }
         }
 
+        com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue = null;
+        if (!conversationContext.present() && req.isGoogleSearchRescueEnabled() && useWeb) {
+            throwIfCancelled(sessionIdLong);
+            var rescueEvidence = new java.util.ArrayList<dev.langchain4j.rag.content.Content>();
+            if (promptWebDocs != null) rescueEvidence.addAll(promptWebDocs);
+            if (promptVectorDocs != null) rescueEvidence.addAll(promptVectorDocs);
+            boolean needed = rescueEvidence.isEmpty()
+                    || com.example.lms.service.rag.SelfAskSearchBudget.needsExpansion(finalQuery, rescueEvidence);
+            var rescueBudget = TimeBudgetContext.get();
+            long remaining = rescueBudget == null ? Long.MAX_VALUE : rescueBudget.remainingMillis();
+            googleSearchRescue = geminiGateway == null
+                    ? com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult.skipped("PROVIDER_UNAVAILABLE", null)
+                    : geminiGateway.searchRescue(userQuery, finalQuery, true, needed, remaining).block();
+            throwIfCancelled(sessionIdLong);
+        }
         // Freeze the main route before projecting context and output budgets.
         ChatModel model = modelRouter.routeMain(intent, detectRisk(userQuery), vp.hint(),
                 vp.targetTokenBudgetOut(), effectiveRequestedModel, userQuery, false);
@@ -3795,7 +3864,22 @@ public class ChatWorkflow {
                     "conversation.frame.primaryModelCallCount",
                     TraceStore.getLong("conversation.frame.primaryModelCallCount") + 1L);
             appendConversationFrameBreadcrumb(conversationFrame, "conversationFrame.primaryCallBreadcrumb");
-            try {
+            var foldRun = ChatRunExecutionContext.current();
+            boolean foldNeedsFinalization = foldRun == null || !foldRun.foldStreamingRequested()
+                    || useWeb || useRag || interactionPolicyDecision.defensive()
+                    || "HIGH".equals(riskLevel) || evidenceReleaseRequired || evidenceScopeBound
+                    || !retrievalReleaseContract.explicitDirectOff() || attachmentScopeCount != 0
+                    || conversationFrame == null || conversationFrame.multimodalInputPresent()
+                    || promptWebDocs != null && !promptWebDocs.isEmpty()
+                    || promptVectorDocs != null && !promptVectorDocs.isEmpty()
+                    || promptLocalDocs != null && !promptLocalDocs.isEmpty()
+                    || citableEvidence != null && !citableEvidence.isEmpty()
+                    || !conversationContext.present() || !conversationContext.evidence().isEmpty()
+                    || !conversationContext.transcript().isEmpty()
+                    || finalAnswerPostProcessor.requiresWholeAnswer(userQuery)
+                    || finalAnswerPostProcessor.requiresWholeAnswer(finalQuery);
+            try (var foldPublication = foldRun == null ? null : foldRun.permitFoldStreaming(
+                    permitsFocusFoldStreaming(finalReq, answerMode, visionMode, foldNeedsFinalization))) {
                 draft = callWithRetryReportingSuccess(
                         model,
                         msgs,
@@ -3803,7 +3887,9 @@ public class ChatWorkflow {
                         primarySuccessRef::set,
                         strictSingleAttempt,
                         vp == null ? null : vp.targetTokenBudgetOut(),
-                        mainDecision);
+                        mainDecision,
+                        conversationContext.present() && conversationContext.focusGoogleSearchAllowed(),
+                        conversationContext.present() && conversationContext.requireNativeGoogleSearch());
             } finally {
                 refreshConversationFrameAttemptCoverage(
                         conversationFrame,
@@ -3829,6 +3915,7 @@ public class ChatWorkflow {
             if (primaryPermit != null) {
                 primaryPermit.completeCancelled(ce, "chat-draft-primary");
             }
+            if (ChatRunExecutionContext.current()!=null && ChatRunExecutionContext.current().foldHasPublished()) throw ce;
             if (!(ce instanceof ClientCancellationException) && !isCancelled(sessionIdLong)) {
                 throw ce;
             }
@@ -3866,6 +3953,7 @@ public class ChatWorkflow {
             }
 
             if (req.isStrictModelSelection()
+                    || ChatRunExecutionContext.current()!=null && ChatRunExecutionContext.current().foldHasPublished()
                     || com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req.getModel())
                     || TimedChatModelCaller.isHardTimeout(e)
                     || com.example.lms.llm.gateway.LlmGatewayFailureClassifier.hasNonReplayableReason(e)
@@ -4105,15 +4193,17 @@ public class ChatWorkflow {
                             // citations.
                             int detourEvidenceCountBefore = evidenceDocs == null ? 0 : evidenceDocs.size();
                             try {
-                                DetourRetryResult retryResult = tryDetourCheapRetry(finalQuery, queryDomain, metaHints,
-                                        sessionIdLong, visionMode, evidenceDocs, draftBeforeGuard, model, llmReq,
-                                        breakerKey);
-                                lateUnattributedEvidenceAdded = detectLateUnattributedEvidence(
-                                        detourEvidenceCountBefore,
-                                        evidenceDocs == null ? 0 : evidenceDocs.size(),
-                                        retryResult.unattributedEvidenceAdded());
-                                if (retryResult.content() != null && !retryResult.content().isBlank()) {
-                                    out = retryResult.content();
+                                if (!explicitNoAdditionalSearch) {
+                                    DetourRetryResult retryResult = tryDetourCheapRetry(finalQuery, queryDomain, metaHints,
+                                            sessionIdLong, visionMode, evidenceDocs, draftBeforeGuard, model, llmReq,
+                                            breakerKey);
+                                    lateUnattributedEvidenceAdded = detectLateUnattributedEvidence(
+                                            detourEvidenceCountBefore,
+                                            evidenceDocs == null ? 0 : evidenceDocs.size(),
+                                            retryResult.unattributedEvidenceAdded());
+                                    if (retryResult.content() != null && !retryResult.content().isBlank()) {
+                                        out = retryResult.content();
+                                    }
                                 }
                             } catch (Exception ignore) {
                                 ChatWorkflowTraceSuppressions.traceSuppressed("guard.detourCheapRetry", ignore);
@@ -4448,10 +4538,34 @@ public class ChatWorkflow {
             }
             modelUsed = modelUsed + ":fallback:empty-answer";
         }
-        final boolean priorFallbackApplied = finalAnswerFallbackApplied;
+        // Select a narrower public-source draft before the sole final verification.
+        // The original no-information verdict never grants release permission.
+        boolean supportedSubsetSelected = false;
+        if (verifyAnswer && queryDomain.isLowRisk() && !"HIGH".equals(detectRisk(userQuery))
+                && !evidenceReleaseRequired && !evidenceScopeBound
+                && (draft == null || draft.isBlank() || draft.toLowerCase(Locale.ROOT).contains("정보 없음"))
+                && promotionResult != null
+                && promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.PROMOTED) {
+            TraceStore.put("finalAnswer.originalDraftStatus", "heuristic_insufficient");
+            var supported = EvidenceAnswerComposer.supportedDescriptionExcerpt(
+                    userQuery != null && !userQuery.isBlank() ? userQuery : finalQuery,
+                    topDocs, citableEvidence);
+            if (supported.isPresent() && !supported.get().sourceContext().isBlank()
+                    && supported.get().sourceContext().length() <= 8_000) {
+                out = supported.get().content();
+                citableEvidence = supported.get().evidence();
+                verifierEvidenceContext = supported.get().sourceContext();
+                supportedSubsetSelected = true;
+                finalAnswerFallbackApplied = true;
+                finalAnswerMemoryDeniedByPolicy = true;
+                TraceStore.put("finalAnswer.supportedSubset.selected", true);
+            }
+        }
+        final boolean priorFallbackApplied = finalAnswerFallbackApplied && !supportedSubsetSelected;
         final String priorFallbackContent = priorFallbackApplied ? out : null;
 
         boolean finalVerificationOutcomeKnown = false;
+        boolean finalVerificationUnavailable = false;
         boolean finalVerificationAcceptedForMemory = false;
         String finalVerificationStatus = "not_run";
         // Sole policy-gated final-verifier call site: runtime cardinality per workflow invocation is 0..1.
@@ -4475,6 +4589,7 @@ public class ChatWorkflow {
             finalVerificationOutcomeKnown = verification.outcomeKnown();
             finalVerificationAcceptedForMemory = verification.acceptedForMemory();
             finalVerificationStatus = verification.status();
+            finalVerificationUnavailable = verification.verificationUnavailable();
         }
         throwIfCancelled(sessionIdLong);
         FinalVerificationReleaseDecision releaseDecision = applyFinalVerificationReleaseGate(
@@ -4482,8 +4597,23 @@ public class ChatWorkflow {
                 verifyAnswer,
                 finalVerificationStatus,
                 finalVerificationOutcomeKnown,
-                finalVerificationAcceptedForMemory);
-        if (priorFallbackApplied && releaseDecision.releaseAllowed()) {
+                finalVerificationAcceptedForMemory,
+                !evidenceReleaseRequired && !evidenceScopeBound);
+        releaseDecision = applyUnavailableVerificationRelease(
+                releaseDecision, finalVerificationUnavailable,
+                userQuery != null && !userQuery.isBlank() ? userQuery : finalQuery,
+                topDocs, citableEvidence,
+                promotionResult != null
+                        && promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.PROMOTED,
+                evidenceReleaseRequired, evidenceScopeBound);
+        if (isUnavailableVerificationRelease(releaseDecision)) {
+            citableEvidence = releaseDecision.releasedEvidence();
+            finalAnswerFallbackApplied = true;
+            finalAnswerMemoryDeniedByPolicy = true;
+            if (primarySuccessRef.get() == null) modelUsed = "unknown";
+        }
+        if (priorFallbackApplied && releaseDecision.releaseAllowed()
+                && !isUnavailableVerificationRelease(releaseDecision)) {
             releaseDecision = new FinalVerificationReleaseDecision(
                     priorFallbackContent,
                     releaseDecision.releaseStatus(),
@@ -4515,7 +4645,8 @@ public class ChatWorkflow {
         if (releaseDecision.evidencePolicyApplied()) {
             finalAnswerFallbackApplied = true;
         }
-        boolean protectedBaseContent = !baseReleaseDecision.releaseAllowed() || priorFallbackApplied;
+        boolean protectedBaseContent = !baseReleaseDecision.releaseAllowed() || priorFallbackApplied || supportedSubsetSelected
+                || isUnavailableVerificationRelease(releaseDecision) || isVerificationUnknownRelease(releaseDecision);
         boolean finalAnswerWeakResult = EvidenceAwareGuard.looksWeak(out);
         String finalAnswerForMemoryCandidate = out;
         if (!protectedBaseContent && !releaseDecision.evidencePolicyApplied()) {
@@ -4545,6 +4676,7 @@ public class ChatWorkflow {
                             protectedBaseContent ? null : userQuery));
         } catch (RuntimeException failure) {
             throwIfCancelled(sessionIdLong);
+            if (ChatRunExecutionContext.current()!=null && ChatRunExecutionContext.current().foldHasPublished()) throw failure;
             Throwable cause = failure;
             for (int depth = 0; cause != null && depth < 16; depth++) {
                 if (cause instanceof CancellationException
@@ -4572,6 +4704,14 @@ public class ChatWorkflow {
                     failure.getClass().getName());
         }
         out = finalized.content();
+        var completedFoldRun = ChatRunExecutionContext.current();
+        if (completedFoldRun != null) completedFoldRun.requireFoldPrefix(out);
+        if (supportedSubsetSelected) {
+            final String selectedSubsetBody = out;
+            citableEvidence = citableEvidence.stream().filter(item -> item != null
+                    && item.marker() != null && item.source() != null
+                    && selectedSubsetBody.contains("[" + item.marker() + "](" + item.source() + ")")).toList();
+        }
         throwIfCancelled(sessionIdLong);
         try {
             TraceStore.put("finalAnswer.memorySaveAllowed", finalized.memorySaveAllowed());
@@ -4742,16 +4882,20 @@ public class ChatWorkflow {
                         finalVerificationAcceptedForMemory,
                         releaseDecision.evidencePolicyApplied() || !releaseDecision.releaseAllowed(),
                         true,
-                        verifyAnswer));
+                        verifyAnswer).withNonModelRelease(releaseDecision.reasonCode(), out)
+                        .withVerificationUnknownRelease(isVerificationUnknownRelease(releaseDecision)
+                                && !evidenceReleaseRequired && !evidenceScopeBound));
         LlmCallSuccess finalGeneration = primarySuccessRef.get();
         (finalGeneration == null ? new com.example.lms.dto.GenerationObservation(
                 null, null, null, null, null, "response_not_observed") : finalGeneration.observation()).publish();
         if (loadoutEnabled) {
             TraceStore.put("prompt.loadout.observation", TraceStore.get("observedModel") == null ? "NO_OBSERVATION" : "OBSERVED");
         }
-        return ChatResult.of(out, modelUsed, ragUsed,
+        return new ChatResult(out, modelUsed, ragUsed,
                 java.util.Collections.unmodifiableSet(evidence),
-                visibleEvidenceMetadata == null ? java.util.List.of() : visibleEvidenceMetadata);
+                visibleEvidenceMetadata == null ? java.util.List.of() : visibleEvidenceMetadata,
+                conversationContext.present() && conversationContext.focusGoogleSearchAllowed() && finalGeneration != null
+                        ? finalGeneration.grounding() : null, googleSearchRescue);
     } // ??硫붿꽌???? ?먥쁾??諛섎뱶???ル뒗 以묎큵???뺤씤
 
     /**
@@ -6322,30 +6466,7 @@ public class ChatWorkflow {
     }
 
     private static String sanitizeEvidenceReferenceUrl(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return raw;
-        }
-        try {
-            URI uri = URI.create(raw.trim());
-            String scheme = uri.getScheme();
-            String host = uri.getHost();
-            if (scheme == null || host == null
-                    || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
-                return raw;
-            }
-            URI clean = new URI(
-                    scheme.toLowerCase(Locale.ROOT),
-                    null,
-                    host,
-                    uri.getPort(),
-                    uri.getRawPath(),
-                    null,
-                    null);
-            return clean.toString();
-        } catch (Throwable ignore) {
-            ChatWorkflowTraceSuppressions.traceSuppressed("evidence.referenceUrlSanitize", ignore);
-            return raw;
-        }
+        return RagEvidenceAttributionService.sanitizePublicUrl(raw);
     }
 
     private static Long parseNumericSessionId(Object raw) {
@@ -6489,10 +6610,7 @@ public class ChatWorkflow {
         if (rawText == null || rawText.isBlank() || evidence.length() >= 8_000) {
             return;
         }
-        String text = rawText.strip();
-        if (text.length() > 1_200) {
-            text = text.substring(0, 1_200);
-        }
+        String text = com.example.lms.prompt.StandardPromptBuilder.truncate(rawText.strip(), 1_200);
         String row = "[" + source + "]\n" + text + "\n";
         int remaining = 8_000 - evidence.length();
         evidence.append(row, 0, Math.min(row.length(), remaining));
@@ -7046,7 +7164,9 @@ public class ChatWorkflow {
     }
 
     private record LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint,
-            com.example.lms.dto.GenerationObservation observation) {
+            com.example.lms.dto.GenerationObservation observation,
+            com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding) {
+        private LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint,com.example.lms.dto.GenerationObservation observation){this(modelId,endpoint,observation,null);}
         private LlmCallSuccess(String modelId, OpenAiEndpointCompatibility.Endpoint endpoint) {
             this(modelId, endpoint, com.example.lms.dto.GenerationObservation.current());
         }
@@ -7118,12 +7238,24 @@ public class ChatWorkflow {
             List<dev.langchain4j.data.message.ChatMessage> msgs, ChatRequestDto dto,
             Consumer<LlmCallSuccess> successSink, boolean strictSingleAttempt, Integer profileTarget,
             com.example.lms.llm.gateway.LlmRouteDecision mainDecision) {
+        return callWithRetryReportingSuccess(model,msgs,dto,successSink,strictSingleAttempt,profileTarget,mainDecision,false);
+    }
+    private String callWithRetryReportingSuccess(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs,ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink,boolean strictSingleAttempt,Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision,boolean focusGoogleSearchAllowed) {
+        return callWithRetryReportingSuccess(model,msgs,dto,successSink,strictSingleAttempt,profileTarget,mainDecision,focusGoogleSearchAllowed,false);
+    }
+    private String callWithRetryReportingSuccess(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs,ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink,boolean strictSingleAttempt,Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch) {
         boolean finalSamplingCall = creativeProviderSamplingPending();
         try {
             String out = callWithRetryReportingSuccessCore(
                     model, msgs, dto, successSink,
-                    strictSingleAttempt || llmStrictSingleAttempt || (dto != null && dto.isStrictModelSelection()),
-                    profileTarget, mainDecision);
+                    requireNativeGoogleSearch || strictSingleAttempt || llmStrictSingleAttempt || (dto != null && dto.isStrictModelSelection()),
+                    profileTarget, mainDecision, focusGoogleSearchAllowed,requireNativeGoogleSearch);
             if (finalSamplingCall) {
                 if (out == null || out.isBlank()) {
                     markCreativeSamplingUnprovenPreservingReason("provider-blank-response");
@@ -7162,6 +7294,18 @@ public class ChatWorkflow {
             List<dev.langchain4j.data.message.ChatMessage> msgs, ChatRequestDto dto,
             Consumer<LlmCallSuccess> successSink, boolean strictSingleAttempt, Integer profileTarget,
             com.example.lms.llm.gateway.LlmRouteDecision mainDecision) {
+        return callWithRetryReportingSuccessCore(model,msgs,dto,successSink,strictSingleAttempt,profileTarget,mainDecision,false);
+    }
+    private String callWithRetryReportingSuccessCore(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs,ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink,boolean strictSingleAttempt,Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision,boolean focusGoogleSearchAllowed) {
+        return callWithRetryReportingSuccessCore(model,msgs,dto,successSink,strictSingleAttempt,profileTarget,mainDecision,focusGoogleSearchAllowed,false);
+    }
+    private String callWithRetryReportingSuccessCore(ChatModel model,
+            List<dev.langchain4j.data.message.ChatMessage> msgs,ChatRequestDto dto,
+            Consumer<LlmCallSuccess> successSink,boolean strictSingleAttempt,Integer profileTarget,
+            com.example.lms.llm.gateway.LlmRouteDecision mainDecision,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch) {
         if (model == null) {
             throw new IllegalStateException("ChatModel is not configured");
         }
@@ -7272,10 +7416,20 @@ public class ChatWorkflow {
         if (dto != null && dynamicChatModelFactory != null) {
             TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY, true);
             try {
-                modelForCall = dto.getContextSourceCheck()!=null
+                modelForCall = requireNativeGoogleSearch
+                        ? dynamicChatModelFactory.lcWithTimeout(resolved,dto.getTemperature(),dto.getTopP(),
+                                dto.getFrequencyPenalty(),dto.getPresencePenalty(),
+                                com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),
+                                callTimeoutBudgetSeconds,0,observedContext,null,true,true)
+                        : dto.getContextSourceCheck()!=null
                         ? dynamicChatModelFactory.lcForPreparedAnswer(resolved,dto.getTemperature(),dto.getTopP(),
                                 dto.getFrequencyPenalty(),dto.getPresencePenalty(),
                                 com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),callTimeoutBudgetSeconds,observedContext)
+                        : focusGoogleSearchAllowed
+                        ? dynamicChatModelFactory.lcWithTimeout(resolved,dto.getTemperature(),dto.getTopP(),
+                                dto.getFrequencyPenalty(),dto.getPresencePenalty(),
+                                com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),
+                                callTimeoutBudgetSeconds,strictSingleAttempt?0:null,observedContext,null,true)
                         : strictSingleAttempt
                         ? dynamicChatModelFactory.lcWithTimeout(
                                 resolved,
@@ -7414,7 +7568,7 @@ public class ChatWorkflow {
                 boolean observedLimitMatches = observedContext != null && contextModel.equalsIgnoreCase(dispatchedModel);
                 TraceStore.put("llm.call.contextLimitTokens", observedLimitMatches ? observedContext.contextTokens() : null);
                 TraceStore.put("llm.call.contextLimitSource", observedLimitMatches ? "model_spec_snapshot" : null);
-                dev.langchain4j.data.message.AiMessage ai = TimedChatModelCaller.chat(
+                dev.langchain4j.model.chat.response.ChatResponse response = TimedChatModelCaller.chatResponse(
                         modelForCall,
                         msgs,
                         chatDraftTimeout,
@@ -7422,6 +7576,7 @@ public class ChatWorkflow {
                         resolved,
                         usageAttempt,
                         dynamicChatModelFactory == null ? null : dynamicChatModelFactory.requestModelWarmup(resolved));
+                dev.langchain4j.data.message.AiMessage ai = response == null ? null : response.aiMessage();
                 TraceStore.put("llm.call.memoryIncluded", TraceStore.get("prompt.memory.preparedForModel"));
                 String out = ai == null ? "" : (ai.text() == null ? "" : ai.text());
                 Object responseModel = TraceStore.get("llm.call.responseModel");
@@ -7432,7 +7587,9 @@ public class ChatWorkflow {
                 successSink.accept(new LlmCallSuccess(responseModel instanceof String name && !name.isBlank() ? name : resolved,
                         oauthRequested ? OpenAiEndpointCompatibility.Endpoint.RESPONSES
                                 : OpenAiEndpointCompatibility.Endpoint.CHAT_COMPLETIONS,
-                        withModelRebuildFallback(com.example.lms.dto.GenerationObservation.current())));
+                        withModelRebuildFallback(com.example.lms.dto.GenerationObservation.current()),
+                        focusGoogleSearchAllowed && response != null && response.metadata() instanceof com.example.lms.learning.gemini.GeminiGateway.GroundedChatMetadata nativeMetadata
+                                ? nativeMetadata.grounding() : null));
                 return out;
             } catch (CancellationException cancelled) {
                 throw cancelled;
@@ -8021,6 +8178,7 @@ public class ChatWorkflow {
                         true,
                         false);
             }
+            if (isUnavailableVerificationRelease(base) || isVerificationUnknownRelease(base)) return base;
             // 근거 0·인용 메타데이터 불완전만으로 본문을 보류하지 않는다 — 명시적
             // evidence_needed 지시가 있을 때만 HOLD를 유지하고, 미검증 공개 답변은
             // 장기 기억 저장을 차단한다(knowledgeWriteAllowed=false).
@@ -8129,12 +8287,70 @@ public class ChatWorkflow {
         return returnedFlag || afterCount > beforeCount;
     }
 
+    static FinalVerificationReleaseDecision applyUnavailableVerificationRelease(
+            FinalVerificationReleaseDecision base,
+            boolean verificationUnavailable,
+            String query,
+            java.util.List<dev.langchain4j.rag.content.Content> rawWeb,
+            java.util.List<RagEvidenceMetadata> promoted,
+            boolean promotionConfirmed,
+            boolean evidenceRequired,
+            boolean scopeBound) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        if (!verificationUnavailable || base.releaseAllowed()
+                || !"verification_outcome_unknown".equals(base.reasonCode())) return base;
+        // Local/attachment scope and its owner/revision contract remain fail closed.
+        if (scopeBound) return base;
+        var excerpt = promotionConfirmed
+                ? EvidenceAnswerComposer.supportedIdentityExcerpt(query, rawWeb, promoted)
+                : java.util.Optional.<EvidenceAnswerComposer.SupportedExcerpt>empty();
+        // Ordinary descriptions stay below strict/high-risk and owner-scoped policies.
+        if (excerpt.isEmpty() && promotionConfirmed && !evidenceRequired) {
+            excerpt = EvidenceAnswerComposer.supportedDescriptionExcerpt(query, rawWeb, promoted);
+        }
+        if (excerpt.isPresent()) {
+            var supported = excerpt.get();
+            return new FinalVerificationReleaseDecision(supported.content(), "UNVERIFIED",
+                    "verification_unavailable_excerpt", true, false, false, supported.evidence());
+        }
+        if (evidenceRequired) return base;
+        return new FinalVerificationReleaseDecision(
+                "[검증 미완료 · 일반 확인 안내]\n"
+                        + "검증 서비스를 이용하지 못해 생성한 설명을 확인하지 못했습니다. "
+                        + "질문과 관련된 공식 자료의 원문과 출처를 확인한 뒤 다시 시도해 주세요. "
+                        + "확인되지 않은 설명은 제공하지 않습니다.",
+                "UNVERIFIED", "verification_unavailable_guidance", true, false, false, java.util.List.of());
+    }
+
+    private static boolean isUnavailableVerificationRelease(FinalVerificationReleaseDecision decision) {
+        return decision != null && decision.releaseAllowed() && !decision.knowledgeWriteAllowed()
+                && "UNVERIFIED".equals(decision.releaseStatus())
+                && ("verification_unavailable_excerpt".equals(decision.reasonCode())
+                || "verification_unavailable_guidance".equals(decision.reasonCode()));
+    }
+
     static FinalVerificationReleaseDecision applyFinalVerificationReleaseGate(
             String candidate,
             boolean verificationRequired,
             String verificationStatus,
             boolean outcomeKnown,
             boolean acceptedForMemory) {
+        return applyFinalVerificationReleaseGate(candidate, verificationRequired, verificationStatus,
+                outcomeKnown, acceptedForMemory, false);
+    }
+
+    private static boolean isVerificationUnknownRelease(FinalVerificationReleaseDecision decision) {
+        return decision != null && decision.releaseAllowed() && !decision.knowledgeWriteAllowed()
+                && "verification_unknown_release".equals(decision.reasonCode());
+    }
+
+    static FinalVerificationReleaseDecision applyFinalVerificationReleaseGate(
+            String candidate,
+            boolean verificationRequired,
+            String verificationStatus,
+            boolean outcomeKnown,
+            boolean acceptedForMemory,
+            boolean unknownReleaseAllowed) {
         String safeCandidate = candidate == null ? "" : candidate;
         if (!verificationRequired) {
             return new FinalVerificationReleaseDecision(
@@ -8149,6 +8365,16 @@ public class ChatWorkflow {
         String normalizedStatus = verificationStatus == null
                 ? "unknown"
                 : verificationStatus.trim().toLowerCase(Locale.ROOT);
+        // A missing judge verdict is infrastructure uncertainty, not a negative verdict.
+        // Explicit evidence and attachment-scoped requests keep their existing release guard.
+        if (unknownReleaseAllowed && !acceptedForMemory
+                && (!outcomeKnown || "fail_soft".equals(normalizedStatus))
+                && !"insufficient".equals(normalizedStatus)
+                && !"rejected".equals(normalizedStatus)
+                && !"inconsistent".equals(normalizedStatus)) {
+            return new FinalVerificationReleaseDecision(safeCandidate, "UNVERIFIED",
+                    "verification_unknown_release", true, false, false);
+        }
         if (!outcomeKnown) {
             return new FinalVerificationReleaseDecision(
                     "evidence_needed: final verification outcome unknown / retry with verifiable evidence",
@@ -8207,7 +8433,16 @@ public class ChatWorkflow {
             String reasonCode,
             boolean releaseAllowed,
             boolean evidencePolicyApplied,
-            boolean knowledgeWriteAllowed) {
+            boolean knowledgeWriteAllowed,
+            java.util.List<RagEvidenceMetadata> releasedEvidence) {
+        FinalVerificationReleaseDecision(String content, String releaseStatus, String reasonCode,
+                boolean releaseAllowed, boolean evidencePolicyApplied, boolean knowledgeWriteAllowed) {
+            this(content, releaseStatus, reasonCode, releaseAllowed, evidencePolicyApplied,
+                    knowledgeWriteAllowed, java.util.List.of());
+        }
+        FinalVerificationReleaseDecision {
+            releasedEvidence = releasedEvidence == null ? java.util.List.of() : java.util.List.copyOf(releasedEvidence);
+        }
     }
 
     static ChatResult sanitizeFallbackResult(
@@ -11072,6 +11307,12 @@ public class ChatWorkflow {
         if (!asksToRememberForNextTurn(query)) {
             return java.util.List.of();
         }
+        // A storage opt-out is policy, not a labeled value. Keep the complete
+        // request on the model path rather than acknowledging a partial parse.
+        if (Pattern.compile("(?iu)(?:기억|저장|보관|기록)[^.!?\\n]{0,80}필요(?:는|가)?\\s*없")
+                .matcher(query).find()) {
+            return java.util.List.of();
+        }
         java.util.List<String> labeledValues = labeledMemoryValues(query);
         java.util.List<String> codeValues = codeLikeValues(query);
         String requestedLabelValue = !asksForCodeOnly(query) ? labeledRecentHistoryValue(query, query) : null;
@@ -11231,6 +11472,13 @@ public class ChatWorkflow {
 
     static String composeRecentHistoryFallback(String query, String recentHistory, Long sessionId,
             java.util.List<ChatHistoryService.RecentHistoryTurn> historyWindow) {
+        // A read-only recall shortcut cannot fulfill a correction in the same
+        // request; let the existing conversation/model path handle both intents.
+        if (query != null && Pattern.compile(
+                "(?iu)(?:정정|수정|변경)\\s*해\\s*(?:줘|주세요)|바꿔\\s*(?:줘|주세요)")
+                .matcher(query).find()) {
+            return null;
+        }
         ChatRunExecutionContext run = ChatRunExecutionContext.current();
         boolean trustedWindow = historyWindow != null && run != null && run.belongsToSession(sessionId);
         if (!currentTurnMemoryValues(query).isEmpty()) {

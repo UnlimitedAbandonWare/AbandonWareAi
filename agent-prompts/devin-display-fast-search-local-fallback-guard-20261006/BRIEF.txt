@@ -1,0 +1,108 @@
+[ANTI-STOP] 읽고 멈추지 마세요. 이 지시서의 모든 단계를 끝까지 수행하세요.
+@demo1-nova-focus
+[DEVIN 지시서] Meta Ray-Ban Display 검색 모델 초고속 응답 보장 및 로컬 모델/무분별한 폴백 헛짓거리 차단 — 2026-10-06 12:25 KST
+파일 ID: PASTE_DEVIN_DISPLAY_FAST_SEARCH_LOCAL_FALLBACK_GUARD_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 외 소스 수정 0 · commit/push/add -A 0 · remote 추가 0 · PROTO_OPEN 변경 0 · 비밀값/secret 출력 0 · 전체 테스트(:test) 0 · chat.js 수정 0 · 유료 외부 API 실호출 0
+
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+# 0. 한 줄 목표
+Meta Ray-Ban Display 실시간 응답 환경에서 고성능 모델(루나 5.6, Gemini) 사용 시, 검색 실패나 일시 오류 발생 때 느린 로컬 모델(Ollama)로 폴백하거나 과도한 타임아웃(60s)으로 헛짓거리하는 설계 결함을 차단하고, 자체 파라메트릭 지식으로 1~2초 내 즉시 응답(Fast Parametric Fallback)하는 초고속 방어 레일을 구축한다.
+
+# 1. 사실 (2026-10-06 12:25 KST 관측)
+- application-meta-display.yml: `priced-model: gpt-5.6-luna`(expected 1000ms), `gemini-3.8-flash`(Grounding 지원). `conversate.cue.local-support-enabled: true`가 켜져 있어 실패 시 로컬 모델로 전락하는 통로 존재.
+- ConversateApiCueService.java:626: `supportFallback`에서 `localSupport.suggestSupport(...)`를 호출하여 로컬 Ollama 모델로 폴백. 스마트글래스 환경에서 GPU 대기/로딩 등으로 수십 초 먹통을 유발하는 치명적 헛짓거리 발생.
+- NovaFocusAnswerService.java:96, 376, 448:
+  - :96: `TimeBudgetContext.set(new TimeBudget(60000))` 60초 예산 하드코딩 (스마트글래스는 6~8초 내 종결 필수).
+  - :376: `allowedTarget`: `ExecutionTarget.AUTO`일 때 `case AUTO -> true`로 느린 로컬 모델(Ollama)까지 허용.
+  - :448: 클라우드 검색 모델 실패 시 루나 5.6 등 고성능 모델이 파라메트릭 지식으로 즉시 답하는 회복 경로 부재.
+
+# 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- git commit/push/add -A/remote 추가/reset/clean 일체 금지
+- PROTO_OPEN 해제/확장 금지 및 비밀값(secret) 출력 금지
+- 전체 테스트 (:test) 금지, 포커스 단위 테스트만 실행
+- chat.js 수정 금지
+
+# 3. WP 항목 (작업 패키지)
+
+WP0 [DEVIN] Display / Nova Focus 런타임에서 로컬 모델(Ollama) 폴백 하드 차단
+- 증거: main/java/com/example/lms/assist/NovaFocusAnswerService.java:375-386, main/java/com/example/lms/assist/ConversateApiCueService.java:626-636, main/resources/application-meta-display.yml:49
+- 최소 수정:
+  1) `NovaFocusAnswerService.java`의 `allowedTarget`에서 AUTO 정책 시 로컬 모델 배제:
+     ```java
+     case AUTO -> providerKind(choice) != ProviderKind.LOCAL;
+     ```
+     (로컬 모델은 사용자가 명시적 `LOCAL_ONLY`를 선택했을 때만 허용)
+  2) `ConversateApiCueService.java:626`의 `supportFallback`에서 로컬 Ollama(`localSupport`) 호출 차단.
+  3) `application-meta-display.yml`에서 `conversate.cue.local-support-enabled: false` 설정.
+- 완료 조건: Display/Focus에서 클라우드 실패 시 느린 로컬 모델로 미끄러져 들어가는 헛짓거리 0.
+
+WP1 [DEVIN] 루나 5.6 및 고성능 모델의 Graceful Fast Parametric Fallback
+- 증거: main/java/com/example/lms/assist/NovaFocusAnswerService.java:429-473
+- 문제: 루나 5.6(`gpt-5.6-luna`)이나 Gemini는 검색 도구가 일시 실패(타임아웃, 429, zero-hit)하더라도 자체 지식 성능이 탁월함. 검색 실패를 치명 오류로 간주해 타 모델로 연쇄 폴백하는 것은 심각한 시간 낭비임.
+- 최소 수정:
+  - `NovaFocusAnswerService.java`에서 검색 활성 고성능 모델 호출 시 검색/그라운딩 장애가 감지되면, 다단계 폴백으로 빠지지 않고 동일 모델의 파라메트릭 모드(`useWebSearch(false)`, `searchMode(SearchMode.OFF)`)로 1회 즉시 재시도하여 1~2초 내 고품질 답변 생성.
+- 완료 조건: 검색 실패 시에도 루나 5.6 / Gemini가 1~2초 내 즉시 파라메트릭 응답 반환.
+
+WP2 [DEVIN] 스마트글래스 맞춤형 초고속 타임아웃 예산 상한 (TimeBudget Clamp: 60s → 8s)
+- 증거: main/java/com/example/lms/assist/NovaFocusAnswerService.java:95-97
+- 문제: `:96`의 60초(`60000`) 하드코딩은 글래스 착용자에게 먹통 경험을 유발.
+- 최소 수정:
+  - `NovaFocusAnswerService.java:96`에서 Display 타임아웃 예산을 8초 상한으로 clamp:
+    ```java
+    long displayTimeoutMs = Math.min(10000L, Math.max(3000L, env.getProperty("conversate.focus.timeout-ms", Long.class, 8000L)));
+    com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(displayTimeoutMs));
+    ```
+  - `executeModels` 진입 전 `budget.remainingMillis() < 2000`이면 무의미한 폴백을 즉시 중단하고 fail-fast.
+- 완료 조건: Display 런타임에서 60초 대기 헛짓거리 0.
+
+WP3 [DEVIN] 포커스 단위 테스트 및 계약 검증
+- 증거: src/test/java/com/example/lms/assist/NovaFocusDisplayContractTest.java
+- 실행 명령:
+  `.\gradlew.bat :test --tests com.example.lms.assist.NovaFocusDisplayContractTest --no-daemon --console=plain ; "exit=$LASTEXITCODE"`
+- 완료 조건: 계약 테스트 PASS.
+
+# 4. HOLD 조건
+- UI 계약(`display-focus-controls.js`)과 충돌하는 설정 스키마 변경 시 HOLD.
+- Foreign live lease 충돌 발견 시 해당 파일 작업 즉시 HOLD.
+
+# 5. ASK_ONCE
+- U-1 displayTimeoutMs 기본값: (a) 권장: 8000ms (스마트글래스 최적 반응) (b) 6000ms (초고속) (c) 10000ms (여유)
+
+# 6. 절대 금지
+- git commit, push, add -A, remote 추가, rebase, reset 금지
+- PROTO_OPEN 해제/확장 금지 및 비밀 파일 열람/출력 금지
+- 전체 테스트 (:test) 금지, chat.js 수정 금지, 외부 API 실호출 0
+
+수정 허용 (allow-list):
+- main/java/com/example/lms/assist/NovaFocusAnswerService.java
+- main/java/com/example/lms/assist/ConversateApiCueService.java
+- main/resources/application-meta-display.yml
+- src/test/java/com/example/lms/assist/NovaFocusDisplayContractTest.java
+
+기준 해시 표:
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| main/java/com/example/lms/assist/NovaFocusAnswerService.java | 118059297716 | M | 수정 허용 |
+| main/java/com/example/lms/assist/NovaFocusSettings.java | ef7f90752370 | clean | 읽기 전용 |
+| main/java/com/example/lms/assist/ConversateApiCueService.java | 75031fdc2ea9 | clean | 수정 허용 |
+| main/resources/application-meta-display.yml | 2160b8fd162d | M | 수정 허용 |
+| src/test/java/com/example/lms/assist/NovaFocusDisplayContractTest.java | 6f427bb099b7 | clean | 수정 허용 |
+
+# 7. Acceptance (통과 증거)
+- NovaFocusAnswerService에서 ExecutionTarget.AUTO 시 로컬 Ollama 모델 폴백 차단 확인.
+- ConversateApiCueService에서 로컬 카드 생성기 호출 차단 확인.
+- 검색 실패 시 고성능 모델(루나 5.6 등)의 무검색 파라메트릭 즉시 응답 경로 확보.
+- TimeBudgetContext 60초 하드코딩이 8초~10초로 clamp되어 불필요한 대기 방지.
+- 포커스 단위 테스트 `NovaFocusDisplayContractTest` exit=0 통과. 실호출 0.
+
+# 8. 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 소스 외 diff 0, 종료 시 lease 0
+WP0 (로컬 모델 폴백 차단): [DONE_OFFLINE / NOT_RUN]
+WP1 (루나 5.6 파라메트릭 회복): [DONE_OFFLINE / NOT_RUN]
+WP2 (타임아웃 8s 상한): [DONE_OFFLINE / NOT_RUN]
+WP3 (단위 테스트): [PASS / NOT_RUN] (명령, exit code, 테스트 수)
+
+[ANTI-STOP] 모든 단계를 끝까지 수행하고 위 보고 형식대로 결과를 출력하세요.

@@ -83,6 +83,8 @@ class BraveSearchServiceOutboundHeaderTest {
         assertEquals("request_budget_exhausted", result.message());
         assertEquals("request_budget_exhausted", TraceStore.get("web.brave.failureReason"));
         assertEquals(Boolean.TRUE, TraceStore.get("web.brave.requestBudgetExhausted"));
+        assertEquals(Boolean.FALSE, TraceStore.get("web.brave.timeout"),
+                "Budget exhaustion before sending is not a provider timeout");
     }
 
     @Test

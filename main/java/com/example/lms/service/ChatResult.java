@@ -15,7 +15,14 @@ public record ChatResult(
         String modelUsed,
         boolean ragUsed,
         Set<String> evidence,
-        List<RagEvidenceMetadata> evidenceMetadata) {
+        List<RagEvidenceMetadata> evidenceMetadata,
+        @com.fasterxml.jackson.annotation.JsonIgnore com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,
+        @com.fasterxml.jackson.annotation.JsonIgnore com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue) {
+
+    public ChatResult(String content,String modelUsed,boolean ragUsed,Set<String> evidence,List<RagEvidenceMetadata> metadata,
+            com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){this(content,modelUsed,ragUsed,evidence,metadata,grounding,null);}
+
+    public ChatResult(String content,String modelUsed,boolean ragUsed,Set<String> evidence,List<RagEvidenceMetadata> metadata){this(content,modelUsed,ragUsed,evidence,metadata,null);}
 
     public ChatResult {
         evidence = evidence == null ? Set.of() : evidence;

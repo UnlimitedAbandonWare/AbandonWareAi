@@ -1,0 +1,137 @@
+[ANTI-STOP] 이 지시서는 읽고 끝내는 게 아니라 아래 작업을 실제로 수행하고 검증하는 실행 지시서다.
+@demo1-dot-control-tower @demo1-evidence-debugging
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+### 0. 한 줄 목표
+ChatGPT dot(UnlimitedAbandon)이 데스크톱 컨트롤 타워(지시서 작성자) 역할을 흔들림 없이 수행할 수 있도록, 직접 소스 수정 탈선 방지 방어벽 구축·이전 패치 잔재 감사 및 테스트 4종 컴파일 무결성 검증·10줄 진단 데이터 피더 도구(`dot_evidence_feed.py`)·지시서 유효성 검사기(`dot_brief_check.py`)를 구현·배치한다.
+
+### 1. 사실 (2026-10-05 21:15 KST 기준 실측 및 DX_A 분석 증거)
+1. DX_A.txt 대화 분석 및 사용자 탈선("헛짓거리")의 실체:
+   - 사용자가 dot에게 "지시서 말고 직접 패치해줘"(590행), "다중 사용자/모바일/이창화 교수 답변 보류 직접 수정해봐"(85, 660, 766행)라며 dot을 직접 PC 코드 작성자로 끌어들임.
+   - 이로 인해 dot은:
+     ① PC 작업 서비스 연결 오류로 작업이 중단되거나 지연됨("작업 시작 서비스 오류", 44, 108, 133행).
+     ② 비밀 설정 파일(`*.secrets` 등)의 일부 라인이 검색 범위에 들어가는 보안 위험 발생(648행).
+     ③ `Documents/Codex/2026-10-05/task-4/partial-staging/`에 미적용 제안 파일들을 남겨둠.
+     ④ `src/test/java`에 4종 테스트를 추가했으나, `RagControlNonModelReleaseTest`의 생성자 모호성 `new RagControlPresentationBoundary(..., null)`로 컴파일 에러(`cycle-01-red` 실패)를 겪고 `cycle-02-red`는 미검증 봉인(`sealed/unverified`)으로 남겨짐.
+     ⑤ trace:983/987("이창화 교수")의 verifier fail-soft(`FactVerifierService.markFailSoft` -> `!outcomeKnown` -> `hardGuardHeld`), trace:991("원신 보디냐챠")의 검색 후보 3건이 `officialOnly`/`minCitations`로 프롬프트 전 탈락한 원인을 규명하지 못해 수만 토큰의 화면 덤프와 로그를 핑퐁하며 시간을 소진함.
+   - 사용자가 1616행에서 "방식을 바꿔야겠어, 지시서로 써줘봐... 여태 고쳐야 할 거 지시서로 딱 출력해줘"라며 dot을 지시서 작성자로 원복시켰고, dot이 `PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md`(38,675B)를 작성함.
+2. 현재 라이브 상태:
+   - `PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md`는 현재 Codex가 실행 중 (`codex-rag-context-release-47e29263` 활성 저널 존재, `dot_tower_status.py`에서 RUNNING).
+   - `src/test/java`에 4종 테스트 클래스 실존 확인:
+     - `com/example/lms/service/ChatWorkflowUnavailableVerificationReleaseTest.java` (6,442B)
+     - `com/example/lms/service/FactVerifierUnavailableOutcomeTest.java` (5,123B)
+     - `com/example/lms/service/rag/EvidenceAnswerComposerSupportedExcerptTest.java` (7,870B)
+     - `com/example/lms/orchestration/control/RagControlNonModelReleaseTest.java` (13,020B, L264에 `(ModelRuntimeHealthTracker) null` 캐스트 적용됨)
+   - Devin의 역할 SSOT (`docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md` §1):
+     "dot = 지휘(무엇을·누가·언제). Codex = 제품 소스 작성자. Devin = 룰·도구·검증 지원 (dot 결정을 도구로 굳힘, 뒤집지 않음)."
+   - Devin 선행 작업 `devin-dot-role-delivery-restore-c4e81a2b`에서 아침 페이스 복구(dot=지시서 작성 후 Downloads 배달 전용, 원복 금지)가 착수됨.
+
+### 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- 금지: git push/pull/fetch/merge/rebase/reset/clean, add -A / add . / commit -a, remote 추가 또는 변경.
+- 외부 API 유료 실호출 0, 비밀 열람 0 (.secrets, API key, credential 토큰 등 비밀 정보 접근 금지).
+- PROTO_OPEN 프로토타입 라이트 모드 준수: 익명 접근 보장, 추가적인 로그인 폼 강제나 admin role-gate 추가 금지.
+- 역할 분담: Devin은 룰 명세 보강, 진단/유효성 도구 제작, 테스트 컴파일 하네스 검증을 담당한다. 제품 자바 소스(`main/java/**`)의 직접 diff는 0으로 유지한다 (제품 소스 수정은 dot의 지시서를 받은 Codex가 전담).
+
+### 3. 작업 항목
+
+#### DV01: dot 직접 수정 탈선 방지 방어벽 쇄신 (Anti-Drift Guardrail)
+1. `docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md` 및 dot-control-tower 스킬에 "직접 소스 수정 요청 거절 및 지시서 모드 자동 전환 (Auto-Brief Redirect)" 규칙 확립:
+   - 사용자가 "직접 패치해", "이것 좀 수정해봐", "서비스 만들어줘"라고 요구하더라도, dot은 직접 PC 소스 수정(tools/patch)을 시도하지 않고 즉시 지시서 모드로 자동 전환해야 함을 명문화.
+   - dot 표준 응답 계약:
+     「dot은 컨트롤 타워(지시서 작성자)입니다. 직접 소스 수정 권한은 0이며, 현재 요청을 Codex/Devin 실행 지시서(`PASTE_CODEX_*.md`)로 작성하여 Downloads에 전달합니다.」
+2. `configs/dot-tower-ratchet.json`의 불변식 잠금 상태(INV-T1~T5)를 유지하고, dot이 직접 수정을 시도하지 못하도록 룰 문서의 위계와 단일 책임 원칙을 고정.
+
+#### DV02: dot 작업 잔재 감사 및 신규 테스트 4종 컴파일 베이스라인 검증 (Staging & Test Preflight)
+1. `src/test/java`에 dot이 추가한 4개 테스트의 컴파일 무결성 검증:
+   - `com.example.lms.service.ChatWorkflowUnavailableVerificationReleaseTest`
+   - `com.example.lms.service.FactVerifierUnavailableOutcomeTest`
+   - `com.example.lms.service.rag.EvidenceAnswerComposerSupportedExcerptTest`
+   - `com.example.lms.orchestration.control.RagControlNonModelReleaseTest`
+   - 검증 명령: `.\gradlew.bat testClasses --no-daemon --console=plain` (컴파일 에러 0 확인).
+   - 특히 `RagControlNonModelReleaseTest:264`의 `(ModelRuntimeHealthTracker) null` 캐스트로 생성자 모호성이 해결되어 javac 통과가 되는지 보증.
+2. `Documents/Codex/2026-10-05/task-4/partial-staging/`의 미적용 7개 제안 파일(`ChatWorkflow.java`, `FactVerifierService.java` 등)이 실제 `main/java` 소스셋에 불완전하게 복사되지 않았는지 해시 확인.
+3. 결과를 `data/agent-handoff/dot-harness-preflight/report.json`에 기록하여, Codex가 `PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md`를 진행할 때 깨끗한 RED 출발선을 보장.
+
+#### DV03: dot 전용 10줄 진단 데이터 피더 도구 제작 (`scripts/dot_evidence_feed.py`)
+1. 배경: DX_A.txt에서 dot이 trace:983/987/991의 원인을 파악하지 못해 사용자가 긴 로그를 복사하느라 토큰을 소모함. dot에게 10줄의 정제된 핵심 런타임 팩트를 제공하는 초경량 도구가 필수적임.
+2. `scripts/dot_evidence_feed.py` (Python stdlib 전용, 외부 라이브러리 0, 비용 0, 비밀값 0) 신규 구현:
+   - 사용법:
+     `python -B scripts/dot_evidence_feed.py --latest`
+     `python -B scripts/dot_evidence_feed.py --trace <traceId>`
+     `python -B scripts/dot_evidence_feed.py --request <hash>`
+   - `logs/debug-events.ndjson` 및 `var/rag-launcher/**.log`를 파싱하여 정확히 10줄 내외의 표준 요약 출력:
+     Line 1: `[REQUEST]` reqHash:..., ts:..., queryLen:..., queryHash:..., reqModel:..., respModel:...
+     Line 2: `[RETRIEVE]` provider:..., rawCount:..., afterFilterCount:..., timeout:true/false
+     Line 3: `[PLAN/GATES]` officialOnly:..., minCitations:..., highRisk:..., candidateCount:..., promotedCount:...
+     Line 4: `[VERIFIER]` judgeModel:..., failSoft:..., outcomeKnown:..., failReason:...
+     Line 5: `[HOLD_ACTION]` hardGuardHeld:..., action:HOLD/DEGRADE/ALLOW, reasonCode:...
+     Line 6: `[SOURCES]` W1:..., W2:..., ... (호스트 도메인만, URL 쿼리 파라미터는 마스킹)
+     Line 7: `[SUMMARY]` 1줄 결론 (예: "검색 후보 3건 있으나 officialOnly+minCitations=2로 프롬프트 전 탈락" 또는 "근거 5건 승격되었으나 verifier failSoft로 hardGuardHeld=true")
+   - 보안: 토큰, 패스워드, 사용자 개인 쿼리 원문은 절대 노출하지 않고 해시 및 길이만 표기.
+3. 단위 테스트 `scripts/test_dot_evidence_feed.py` 작성 및 `python -B scripts/test_dot_evidence_feed.py` exit 0 검증.
+
+#### DV04: dot 지시서 유효성 프리플라이트 검사기 제작 (`scripts/dot_brief_check.py`)
+1. 배경: dot이 Downloads에 생성한 `PASTE_CODEX_*.md` 지시서를 사용자가 Codex에 넣기 전, 1초 만에 이상 여부를 검사하는 도구.
+2. `scripts/dot_brief_check.py` 신규 구현:
+   - 사용법: `python -B scripts/dot_brief_check.py --brief <지시서파일경로>`
+   - 검증 항목:
+     ① 대상 클래스/FQCN 실존 검증: 지시서에 언급된 Java 클래스 및 파일 경로가 live repo에 존재하는지 확인.
+     ② Lease 충돌 검사: 지시서의 대상 파일이 다른 에이전트의 live lease와 겹치는지 `scripts/agent_scope_lease.py check`로 검사.
+     ③ 필수 섹션 및 계약 확인: 한 줄 목표, 사실, 공통 규칙, 작업 항목, HOLD, 수용 조건 구비 여부.
+     ④ 안티 패턴 검사: git commit/push, 비밀값 노출, 무조건적인 전체 원복 유도 여부.
+   - 출력: 3줄 판정 (VERDICT: PASS / WARN / FAIL, 검사 항목 요약, 권장 조치).
+3. 단위 테스트 `scripts/test_dot_brief_check.py` 작성 및 exit 0 검증.
+
+#### DV05: dot 현황 대시보드 및 지시서 매칭 정합성 점검 (`scripts/dot_tower_status.py`)
+1. `python -B scripts/dot_tower_status.py`를 실행하여 현재 `PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md`가 RUNNING 상태로 정상 인식되는지 확인.
+2. 토큰 분할 정합성을 점검하여 `RAG_CONTEXT_RELEASE_FIX`가 Codex 저널 `codex-rag-context-release-47e29263`와 정확히 매칭되도록 유지.
+
+### 4. HOLD (중단 조건)
+1. 다른 세션이 점유 중인 foreign live lease와 수정 대상 파일이 충돌할 때.
+2. 제품 소스(`main/java/**`)의 직접 수정을 요구받았을 때 (Devin은 도구/규칙/검증 전용이므로 즉시 중단).
+3. 외부 유료 API 크레딧 소모가 발생하는 명령을 실행해야 할 때.
+
+### 5. ASK_ONCE (선택 카드 / 기본값)
+- Q1: `dot_evidence_feed.py`의 기본 탐색 시간 범위는 몇 시간으로 설정할 것인가?
+  - 선택지: (A) 최근 2시간 (기본값, 추천) / (B) 최근 12시간 / (C) 최근 24시간
+  - 기본값으로 진행: (A) 최근 2시간 우선 탐색 후 없으면 확장.
+
+### 6. 절대 금지
+- git commit, push, add -A, add ., commit -a, reset, clean, checkout, stash 금지.
+- remote 추가 또는 변경 금지.
+- .secrets, .env, 비밀 키, 사용자 토큰 열람 및 출력 금지.
+- PROTO_OPEN을 해제하거나 관리자 로그인 폼/권한 체크를 강제하는 변경 금지.
+- 제품 소스(`main/java/**`) 직접 수정 금지 (Devin은 도구 및 검증 스크립트만 수정).
+- dot이 작성한 지시서 원문을 삭제하거나 임의로 수정하는 행위 금지.
+
+### 7. Acceptance Criteria (완료 기준)
+1. [DV01] `DEMO1-DOT-CONTROL-TOWER.md`에 dot 직접 수정 거절 및 지시서 자동 전환 계약이 반영되고, ratchet check 통과:
+   `python -B scripts/behavior_ratchet.py --config configs/dot-tower-ratchet.json --lock configs/dot-tower-ratchet.lock.json check` -> INV-T1~T5 정상.
+2. [DV02] 4개 신규 테스트의 컴파일이 에러 없이 통과함을 확인:
+   `.\gradlew.bat testClasses --no-daemon --console=plain` -> exit 0.
+   `data/agent-handoff/dot-harness-preflight/report.json` 생성 완료.
+3. [DV03] `scripts/dot_evidence_feed.py` 및 `scripts/test_dot_evidence_feed.py` 구현 및 테스트 통과:
+   `python -B scripts/test_dot_evidence_feed.py` -> exit 0.
+   실제 10줄 요약 출력 기능 확인: `python -B scripts/dot_evidence_feed.py --latest` -> exit 0.
+4. [DV04] `scripts/dot_brief_check.py` 및 `scripts/test_dot_brief_check.py` 구현 및 테스트 통과:
+   `python -B scripts/test_dot_brief_check.py` -> exit 0.
+   실제 dot 지시서 검증 수행:
+   `python -B scripts/dot_brief_check.py --brief C:\Users\nninn\Downloads\PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md` -> VERDICT 출력 확인.
+5. [DV05] `python -B scripts/dot_tower_status.py` 실행 시 lease conflict 0, `PASTE_CODEX_RAG_CONTEXT_RELEASE_FIX_20261005.md` 매칭 정상 확인.
+
+### 8. 보고 형식
+- 외부 API: 실호출 0, 비용 0, 비밀 열람 0.
+- 제품 소스 diff: 0 (도구/스크립트/문서/테스트 하네스만 대상).
+- 산출물 목록: 신규 작성된 스크립트 및 테스트 파일 경로, 바이트 수, sha12.
+- 검증 결과:
+  - `.\gradlew.bat testClasses`: exit code 및 결과 (실행 못 한 항목은 NOT_RUN + 사유).
+  - `python -B scripts/test_dot_evidence_feed.py`: exit code.
+  - `python -B scripts/test_dot_brief_check.py`: exit code.
+  - `python -B scripts/dot_evidence_feed.py --latest`: 출력 10줄 샘플.
+  - `python -B scripts/dot_brief_check.py --brief ...`: 검사 결과 요약.
+- 종료 시 잔여 lease: 0 (모든 작업 소유 lease 정상 해제).
+
+[ANTI-STOP] 지시서의 모든 작업 항목과 검증을 끝까지 완료하고 보고하라.

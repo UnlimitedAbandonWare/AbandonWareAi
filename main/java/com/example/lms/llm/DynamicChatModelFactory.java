@@ -447,6 +447,26 @@ public class DynamicChatModelFactory {
             int timeoutSeconds, Integer maxRetriesOverride,
             com.example.lms.llm.spec.ModelSpecSnapshot observedContext,
             com.example.lms.routing.RoutingInvocation routingInvocation) {
+        return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,
+                timeoutSeconds,maxRetriesOverride,observedContext,routingInvocation,false);
+    }
+
+    public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+            Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
+            int timeoutSeconds, Integer maxRetriesOverride,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext,
+            com.example.lms.routing.RoutingInvocation routingInvocation,boolean focusGoogleSearchAllowed) {
+        return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,
+                timeoutSeconds,maxRetriesOverride,observedContext,routingInvocation,focusGoogleSearchAllowed,false);
+    }
+
+    public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+            Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
+            int timeoutSeconds, Integer maxRetriesOverride,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext,
+            com.example.lms.routing.RoutingInvocation routingInvocation,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch) {
+        // Registered native Gemini construction belongs to the existing router Aspect.
+        if(requireNativeGoogleSearch)throw new ModelSelectionException("protocol_unsupported");
         if (routingInvocation != null && routingInvocation.candidate(modelName).isEmpty())
             throw new IllegalArgumentException("routing_candidate_forbidden");
         if (routingInvocation != null && ChatGptOAuthRegistration.isRoute(modelName))

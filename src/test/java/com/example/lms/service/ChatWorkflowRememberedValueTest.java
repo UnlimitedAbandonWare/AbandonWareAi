@@ -1,10 +1,41 @@
 package com.example.lms.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import org.junit.jupiter.api.Test;
 
 class ChatWorkflowRememberedValueTest {
+
+    @Test
+    void scopedCompoundAssignmentDoesNotCaptureStoragePolicyAsValue() {
+        assertNull(ChatWorkflow.composeCurrentTurnMemoryFallback(
+                "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, "
+                        + "비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. "
+                        + "계정의 장기 기억에 저장할 필요는 없어."));
+    }
+
+    @Test
+    void recognizedAssignmentWithStorageOptOutKeepsTheCompleteModelPath() {
+        assertNull(ChatWorkflow.composeCurrentTurnMemoryFallback(
+                "색상은 청록이야. 이 대화에서 기억해줘. 계정에 저장할 필요는 없어."));
+    }
+
+    @Test
+    void storageOptOutAloneIsNotAMemoryAssignment() {
+        assertNull(ChatWorkflow.composeCurrentTurnMemoryFallback(
+                "계정의 장기 기억에 저장할 필요는 없어."));
+    }
+
+    @Test
+    void recallCombinedWithCorrectionDoesNotShortCircuitTheUpdate() {
+        assertNull(ChatWorkflow.composeRecentHistoryFallback(
+                "방금 정한 프로젝트 이름·색상·비교 기준을 다시 말해줘. "
+                        + "그리고 이 대화의 색상은 남색으로 정정해줘.",
+                "User: 이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, "
+                        + "비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. "
+                        + "계정의 장기 기억에 저장할 필요는 없어.\nAssistant: 합성 확인 응답"));
+    }
 
     @Test
     void currentTurnMemoryFallbackIgnoresDirectiveNounBeforeCompoundLabel() {

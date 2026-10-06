@@ -20,6 +20,15 @@
    점검, 활성 저널/리스 확인, 타 에이전트 보고서 교차 검증
    (`demo1-agy-report-review`).
 
+부속 축 (2026-10-05, PASTE_DEVIN_agy-skill-pack-author_20261005):
+
+- **스킬 팩 작성 (Skill Pack Author)** — 스킬·규칙·탐침 절차를 만들 때
+  `SKILL.md` 단독이 아니라 등급(S/M/L)에 맞는 팩(스킬 + intent 1건 +
+  companion ≥1 + `agy_skill_pack_check` PASS)으로 산출한다. SSOT
+  `docs/agents-rules/DEMO1-AGY-SKILL-PACK.md`, 스킬 `demo1-agy-skill-pack`,
+  지시서 측은 `demo1-agy-directive-writer` §Skill Pack 등급 + template
+  §4-1 SKILL_PACK 칸.
+
 ## 유연성 보존 원칙
 
 - "특화라는 것이지 다른 걸 못하는 건 아니다" — 4축은 협업 라우팅 시 1순위

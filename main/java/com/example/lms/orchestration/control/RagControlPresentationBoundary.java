@@ -57,6 +57,7 @@ public final class RagControlPresentationBoundary {
     }
 
     public Projection projectResult(String semanticAnswer, boolean ragRequested) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         if (!ragRequested) {
             return Projection.passThrough(semanticAnswer);
         }
@@ -72,13 +73,16 @@ public final class RagControlPresentationBoundary {
                 // UI 요청 토글만으로 다시 RAG 미완료로 판정하지 않는다.
                 return Projection.passThrough(semanticAnswer);
             }
+            if (input.hasNonModelRelease() && !input.matchesNonModelBody(semanticAnswer)) {
+                input = input.withHardGuardHeld();
+            }
             List<RagControlFinding> findings = runtimeAdapter.collect(input, runtimeHealthTracker);
             return coordinator.applyCurrentPlan(findings, false, plan -> {
                 String rendererInput = plan.shouldStop() ? "" : semanticAnswer;
                 String visible = renderer.append(rendererInput, true, plan);
                 boolean hardGuardInversion = plan.hardGuardLocked() && !plan.shouldStop();
                 boolean disclosureLeak = plan.shouldStop()
-                        && !safeHeldProjection(visible);
+                        && !safeHeldProjection(visible, plan);
                 coordinator.observe(
                         plan,
                         System.nanoTime() - startedNanos,
@@ -100,6 +104,10 @@ public final class RagControlPresentationBoundary {
     }
 
     static boolean safeHeldProjection(String visible) {
+        return safeHeldProjection(visible, null);
+    }
+
+    static boolean safeHeldProjection(String visible, RagActionPlan plan) {
         if (visible == null) {
             return false;
         }
@@ -108,7 +116,8 @@ public final class RagControlPresentationBoundary {
             return false;
         }
         String normalizedPreamble = normalizeDisclosureText(visible.substring(0, marker));
-        String normalizedNotice = normalizeDisclosureText(RagControlProjectionRenderer.heldNotice());
+        String normalizedNotice = normalizeDisclosureText(plan == null
+                ? RagControlProjectionRenderer.heldNotice() : RagControlProjectionRenderer.heldNoticeFor(plan));
         return !normalizedPreamble.isBlank() && normalizedPreamble.equals(normalizedNotice);
     }
 
@@ -178,15 +187,7 @@ public final class RagControlPresentationBoundary {
          * 다른 문구로 보여 사용자가 원인을 구별할 수 있게 한다.
          */
         static String heldNoticeFor(RagActionPlan plan) {
-            String reason = plan == null ? "" : plan.reasonCode();
-            return switch (reason) {
-                case "control_projection_failed", "observability_gap", "control_gap",
-                        "runtime_lineage_missing", "runtime_lineage_conflict" ->
-                        RagControlPresentationBoundary.CONTROL_FAILURE_NOTICE;
-                case "model_blank", "silent_failure" ->
-                        RagControlPresentationBoundary.MODEL_FAILURE_NOTICE;
-                default -> RagControlProjectionRenderer.heldNotice();
-            };
+            return RagControlProjectionRenderer.heldNoticeFor(plan);
         }
     }
 }

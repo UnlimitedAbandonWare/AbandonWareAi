@@ -1,0 +1,122 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니다. 아래 WP를 끝까지 수행하고 지정된 검증을 통과한 뒤 §8 표로 회신한다.
+$demo1-evidence-debugging (+ 보조 $demo1-rag-platform)
+
+[CODEX 지시서] 영상 확정 라이브 장애: 검증 fail-soft가 답변 본문을 안내 카드로 대체 + 91s 정체 + 근거 연결도 공열 — 2026-10-06 07:30 KST
+파일 ID: PASTE_CODEX_verify-hold-live-evidence_20261006
+[depth L2: 실행자 직행 지시서 — 주장 전부 라이브 file:line·트레이스·영상 프레임 대조 완료]
+선행 계약: PASTE_CODEX_verifier-failsoft-release_20261005.txt (sha12 8B6E0B617DDB) — 이 지시서는 그 착륙 강제 + 영상에서 새로 확정된 심 2개다. 중복 지시 아님, 증거 갱신이다.
+
+## 0. 한줄 목표
+검증 판정불능(검색 타임아웃+judge fail-soft)에서 생성된 답변 본문이 안내 카드로 대체되지 않고 `verification_unknown_release`(본문 유지·미검증 표기·메모리 금지)로 공개되게 하고, 같은 run의 91s 정체 원인과 근거 연결도 공열 원인을 file:line으로 확정한다.
+
+## 1. 사실 (읽기 전용 확인, 2026-10-06 07:05~07:30 KST)
+- 영상 `f:\CAM\2026-10-06 07-00-43.mkv` (195초, 공개 https://abandonwareai.kro.kr/chat, 모델 chatgpt-oauth:gpt-5.6-sol, RAG ON, session 316): 질문 "원신에서 오데트가 뭐냐?" 후 client-wait 21s→51s→71s→91s 동안 Intake running·Anchor/Retrieve/DPP/CFVM/Supabase queued 정체 → 완료 시 본문이 "[검증 미완료 · 일반 확인 안내] … 확인되지 않은 설명은 제공하지 않습니다." 카드 하나뿐.
+- `logs\debug-events.ndjson` L234-235 (2026-10-05T22:03:07Z = 10-06 07:03 KST): trace/request `hash:2ef2192a1fbf`, session `hash:87c3a800f4c2` → LLM·VERIFICATION reasonCode `verification_unavailable_guidance`, failureClass OBSERVABILITY_GAP, action DEGRADE, hardGuard=false.
+- 내구 레코드 `var/debug/chat-session-traces/20261005/s-7a20311cf7a4.json` (runId `hash:331cc36cd230`, 동일 run): outcome=completed, errorClass=none, fallbackCount=0, effectiveModel=gpt-5.6-sol — 본문 보류 방출이 정상 완료로 집계됨.
+- `logs\trace.2026-10-05.ndjson` judge breadcrumb: reasonCode=judge_call_failed, status=fail_soft, judgeOutcomeKnown=false, verificationOutcomeKnown=false, judgeHttpAttemptCount=2; `fact_status_classifier`·`claim_extraction` TimeoutException, `claim_judgment` 미실행(judgment_not_run).
+- Debug FX final 라인: "Verification fail_soft fallback judge_call_failed" + "MLA FINAL search timeout". MLA FINAL은 UI 라벨 `main/resources/static/js/chat.js:3660-3661`(stageBoundaryPhase=="final").
+- `python -B scripts/probe_verifier_failsoft_release.py` = exit 3 OLD-CONTRACT: gateLine 8220, oldBranch line 8240(hold/oldReasonCode/bodyReplaced/releaseDenied 전부 true). stale-test 경고 5건: ChatWorkflowFinalVerificationReleaseGateTest.java:102,111,1316 · FinalAnswerPostProcessorTest.java:117,140,143.
+- 직전 답변("베스나"): 본문에 "### 근거(검색 결과)" WEB:NOFILTER_SAFE 2건이 렌더됐으나 `prompt.citableEvidenceCount=0`·`prompt.webCount=0`·`prompt.ragCount=0`·sources 0·anchors 0, 패널 출력 "이 답변의 근거 연결도를 확인할 수 없습니다. 답변에 결속된 근거 정보가 없습니다" = `chat-evidence-graph.js:128`.
+- 해당 본문 렌더 경로: `EvidenceAnswerComposer.java:142`(헤더) + `:159-177`(근거 bullets) — composer가 본문에 심는 스니펫이 citableEvidence/releasedEvidence 승격과 분리돼 있음.
+- 게이트 실제 경로: `ChatWorkflow.java:4506` applyFinalVerificationReleaseGate → `:4512` applyUnavailableVerificationRelease → `:4543` applyEvidenceReleasePolicy. 거부문 `:8206-8210`(verification_unavailable_guidance, releaseAllowed=true, knowledgeWriteAllowed=false). excerpt 없으면 초안 대신 안내 카드.
+- 계약 SSOT: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` L8-12 — fail-soft(outcomeKnown=false)는 판정불능, 초안 본문 유지 + releaseReason=verification_unknown_release; 본문을 안내 문구로 바꾸거나 삼키는 것은 금지 회귀로 명시. `docs/design/UNHOOKED_SEAMS_CONTRACT_SPEC.md` R1 동일 갭필 지정.
+- 리스 0 활성/0 차단 (07:09 KST). 진행 저널 `codex-timeout-split-ae8f6e83`(챗 런 수명·전송 분리, 10-03) — WP3 범위 인접.
+- 서버: spring-app 18180 READY/VERIFIED(영상 Diagnostics), ollama-local DISABLED — 모델은 OAuth API 경로.
+
+기준 해시 표 (지시서가 이름 붙이는 파일):
+| 경로 | sha12 | 권한 |
+| main/java/com/example/lms/service/ChatWorkflow.java | EBB27E4CCA98 | 수정 |
+| main/java/com/example/lms/service/rag/EvidenceAnswerComposer.java | F48AE6864BCB | 읽기(승격 심 확인, 필요 시 최소 수정) |
+| main/java/com/example/lms/service/FactVerifierService.java | D7B9C263B840 | 읽기 |
+| main/java/com/example/lms/service/verification/FactStatusClassifier.java | 97DC56C28E0F | 읽기 |
+| main/java/com/example/lms/service/verification/ClaimVerifierService.java | 0CB88861F9AD | 읽기 |
+| main/resources/static/js/chat-evidence-graph.js | EED49DCBCC1A | 읽기(표시 조건 확인) |
+| main/resources/static/js/chat.js | D55F00A8DB2D | 읽기 |
+| src/test/java/com/example/lms/service/ChatWorkflowFinalVerificationReleaseGateTest.java | 4BEDC5F0EBB8 | 수정(구계약 고정 분 갱신) |
+| src/test/java/com/example/lms/service/ChatWorkflowUnavailableVerificationReleaseTest.java | 2DA6B3BAEC96 | 수정 |
+| src/test/java/com/example/lms/service/postprocess/FinalAnswerPostProcessorTest.java | EAEB1197B952 | 수정(구계약 고정 분 갱신) |
+| docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md | 014BDEFDC7EE | 읽기(계약 SSOT) |
+| docs/design/UNHOOKED_SEAMS_CONTRACT_SPEC.md | 80642187A4DB | 읽기(R1) |
+| scripts/probe_verifier_failsoft_release.py | BB5F28D57434 | 읽기(검증기, 수정 금지) |
+| logs/trace.2026-10-05.ndjson · logs/debug-events.ndjson · var/debug/chat-session-traces/** | - | 읽기 전용 |
+
+입력 판정표:
+| 주장 | 판정 | 근거 |
+| "검증 서비스 불가로 답변이 안내 카드로 대체됐다" | RIGHT | debug-events L234 `verification_unavailable_guidance` + ChatWorkflow.java:8206 |
+| "검색이 타임아웃됐다" | RIGHT(라벨 수준) | Debug FX "MLA FINAL search timeout"(chat.js:3660) + `stage_boundary·brave` breadcrumb; provider 내부 원인은 WP3에서 확정 |
+| "이전 지시서(10-05)로 이미 고쳐졌다" | WRONG | probe exit 3 OLD-CONTRACT, gateLine 8220 구계약 생존 |
+| "서버가 오류로 처리했다" | WRONG | 레코드 outcome=completed·errorClass=none — 관측 갭이 실패를 숨김(WP5) |
+| "근거가 표시됐으면 연결도도 있다" | WRONG | 본문 렌더 ≠ 승격: citableEvidenceCount=0, chat-evidence-graph.js:128 공열 분기(WP4) |
+
+## 2. 공통 규칙
+- Project Root: C:\AbandonWare\demo-1\demo-1\src — 첫 명령 `Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'`.
+- lease: `python -B scripts/agent_scope_lease.py check --path <대상>` → claim → done. Java/JS/테스트 파일은 lease 대상; lease 걸린 파일은 BLOCKED_LEASE 표기, 우회 금지.
+- journal: `python -B scripts/work_journal.py open …` → note → close.
+- Java 변경 후 라이브 반영: DevWatch/ForceRestart + 기존 verify 엔트리. 재현 질의는 로컬 `http://127.0.0.1:18180/chat`에 `[devin-test]` 프리픽스 합성 문장 1회 이하 — 공개 kro.kr write 금지.
+- Git: remote 추가·push/pull/fetch/merge/rebase 금지, `add -A`/`add .`/`commit -a`/`--no-verify` 금지. 조건부 로컬 커밋만 `agent_git_vibe_commit.py` 경로.
+- PROTO_OPEN 유지 — auth/role 게이트·로그인 요구 추가 금지.
+- 비밀값 출력 금지(env 이름만). 유료 호출은 위 합성 질의 한도 안.
+
+## 항목 (한 항목 한 오너, 전부 Codex)
+- WP1 [Codex] `verification_unknown_release` 착륙(선행 지시서 계약 그대로, 지연분)
+  - 증거: ChatWorkflow.java:8240-8248 `!outcomeKnown → HOLD/verification_outcome_unknown/releaseAllowed=false` — 정책 L12 금지 회귀.
+  - RED: `python -B scripts/probe_verifier_failsoft_release.py` → 현재 exit 3.
+  - 최소 수정: 판정불능 경로에서 safeCandidate 본문 유지 + releaseAllowed=true + reasonCode `verification_unknown_release` + knowledgeWriteAllowed=false. scopeBound·명시 evidence_needed/must-cite·실제 부정 판정(insufficient/rejected/inconsistent)은 기존 HOLD/REJECT 유지. stale-test 5곳(FinalVerificationReleaseGateTest:102,111,1316 · FinalAnswerPostProcessorTest:117,140,143)을 신 계약으로 갱신.
+  - GREEN: probe exit 0 + `.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowFinalVerificationReleaseGateTest --tests com.example.lms.service.postprocess.FinalAnswerPostProcessorTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- WP2 [Codex] `applyUnavailableVerificationRelease` 우선순위 정리
+  - 증거: ChatWorkflow.java:8178-8211 — excerpt empty + evidenceRequired=false면 초안을 버리고 안내 카드로 교체. 영상 run이 이 분기.
+  - RED: `ChatWorkflowUnavailableVerificationReleaseTest`에 "excerpt 없음 + 초안 본문 있음 → 본문 유지(verification_unknown_release)" 케이스를 먼저 추가해 실패 확인.
+  - 최소 수정: 초안 존재(비blank·!looksWeak) 시 초안 유지 경로 우선; 안내 카드는 초안이 비었거나 weak일 때만. RagControlFailureSignalProjector.java:54-55 · RagGuardProbeComposer.java:120-121 · RagControlRuntimeAdapter.java:569-614에 `verification_unknown_release` 매핑 추가 여부 확인·반영.
+  - GREEN: `.\gradlew.bat :test --tests com.example.lms.service.ChatWorkflowUnavailableVerificationReleaseTest --tests com.example.lms.orchestration.control.RagControlNonModelReleaseTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`
+- WP3 [Codex] 91s 정체 원인 분리(분석 WP, 패치 금지)
+  - 증거: 영상 client-wait 21s→91s 동안 Anchor/Retrieve/DPP/CFVM/Supabase queued; trace breadcrumb `stage_boundary·brave` → FINAL; judge TimeoutException×2 + claim_judgment 미실행.
+  - RED(분석 산출): trace.2026-10-05.ndjson의 `hash:2ef2192a1fbf` 이벤트 ts 델타로 단계별 소비 표 — 검색 타임아웃 한도·judge 재시도가 client-wait에 직렬 합산되는지와 각 버짓 키 이름(yml)을 file:line으로 명시.
+  - GREEN: ts 델타 표 + `python -B scripts/chat_session_debug_export.py export hash:331cc36cd230` export 경로 첨부.
+  - 완료 조건: "어느 단계가 몇 초를 먹었고 어느 버짓 키가 상한인지"가 증거와 함께 답변됨. 버짓 값 변경은 §5 U-2로 넘긴다. codex-timeout-split-ae8f6e83과 겹치면 거기 note만.
+- WP4 [Codex] 근거 연결도 공열 원인 확정(분석 우선, 최소 수정 허용)
+  - 증거: EvidenceAnswerComposer.java:142·159-177 본문 삽입 경로 vs promotion(RagEvidenceAttributionService PROMOTED) 미달 시 releasedEvidence 0 → chat-evidence-graph.js:128 공열 분기. `lateUnattributedEvidenceAdded`(ChatWorkflow.java:8174) 감지는 존재.
+  - RED(분석): 베스나 run(trace `hash:85d8ae3c22de`·assistantMessageId 1167)에서 webCount=0인데 본문에 근거가 있는 경로를 file:line으로 — composer 주입 vs promotion 승격 중 끊긴 경계 하나를 지명.
+  - 최소 수정(택1): 표시된 스니펫을 releasedEvidence에 바인딩하거나, 불가면 "본문에 표시된 출처 N건(연결도 미등록)" 안내로 공열 문구 대체 — 근거가 지지하는 쪽 하나만.
+  - GREEN: `src/test/js/chat-evidence-graph.test.cjs` 기존 러너 + 변경 시 focused 테스트.
+- WP5 [Codex] 관측 갭 분류(분석 WP)
+  - 증거: runId hash:331cc36cd230 outcome=completed·errorClass=none인데 사용자는 거부 카드 수신; 진단 매트릭스 Model UNKNOWN(ChatWorkflow.java:4523 `primarySuccessRef==null → modelUsed="unknown"`)인데 레코드 effectiveModel=gpt-5.6-sol.
+  - RED(분석): outcome/errorClass 집계 경로(ChatSessionTraceRecorder)가 releaseStatus/reasonCode를 보지 않는지 file:line으로 확인; Model UNKNOWN이 의도 fallback인지 표시 버그인지 분류.
+  - GREEN: 분류 결론 + (수정한다면) focused 테스트 또는 recorder 필드 제안.
+
+## 4. HOLD 조건
+- scopeBound(로컬/첨부·owner 계약) 질의는 fail-closed 유지 — 여긴 fail-soft 공개 대상이 아니다.
+- 명시 evidence_needed/must-cite 지시, 실제 부정 판정(insufficient/rejected/inconsistent), 기존 safety 차단은 HOLD/REJECT 유지 — WP1/2가 이 경로를 풀면 반려.
+- lease 충돌 파일 발견 시 해당 WP만 BLOCKED_LEASE 표기하고 나머지 진행.
+
+## 5. ASK_ONCE (기본값 포함 — 무응답이면 권장값으로 진행)
+- U-1 안내 카드 운명 — (a) 권장: 초안이 있으면 본문+미검증 표기, 카드는 초안 공백/weak 전용 (b) 카드 완전 폐기 (c) 현행 유지.
+- U-2 검색/judge 타임아웃 버짓 조정 — (a) 권장: 이번엔 WP3 관측 표만, 조정은 별도 지시서 (b) 이번에 상한 축소까지.
+- U-3 완료 레코드에 releaseStatus/reasonCode 반영 — (a) 권장: WP5 분석 결과가 제안하면 다음 지시서로 (b) 이번에 recorder 필드 추가.
+
+## 6. 절대 금지
+- `!outcomeKnown → 본문 대체(HOLD/안내 카드)` 부활, `verification_outcome_unknown` 재도입.
+- 검증 없이 완료 주장(테스트 미실행 시 NOT_RUN+사유), mock 통과를 라이브 검증으로 표기.
+- 공개 kro.kr에서의 write/반복 호출, 로그인·토큰·쿠키 출력, cloudflared/터널 설정 변경, 18180 무명령 재기동.
+- 선행 지시서(10-05)와 충돌하는 별도 계약 발명 — 계약 이름은 `verification_unknown_release` 고정.
+
+## 7. Acceptance
+- A1: `python -B scripts/probe_verifier_failsoft_release.py` exit 0 (RED 3 → GREEN 0).
+- A2: §항목의 Gradle focused 테스트 4개 클래스 exit 0 — unknown-outcome 케이스가 본문 유지·verification_unknown_release·knowledgeWriteAllowed=false를 단정.
+- A3: WP3 ts 델타 표에 각 단계 소비 초와 상한 버짓 키 이름이 있음(값 변경 없음).
+- A4: WP4 끊긴 경계 file:line 1곳 + 선택한 처리(바인딩 또는 미등록 표기)의 증거.
+- A5: WP5 관측 갭 분류 결론 1문장 + 근거 file:line.
+- 미실행 항목은 전부 NOT_RUN+사유 — PASS 수에 넣지 않는다.
+
+## 8. 보고 형식
+| 항목 | 결과 | 증거 경로 |
+| WP1 release gate | PASS/FAIL/NOT_RUN | probe 출력 + 테스트 exit |
+| WP2 unavailable-release 순서 | | 테스트 exit |
+| WP3 91s 정체 | | ts 델타 표 + export 경로 |
+| WP4 근거 연결도 | | 끊긴 경계 file:line |
+| WP5 관측 갭 | | 분류 결론 |
+첫 줄에 종료 상태 하나: DONE_LIVE | DONE_OFFLINE | ALREADY_COVERED | BLOCKED_LEASE | NOT_RUN_ENV | APPROVAL_REQUIRED
+- DONE_LIVE 요건: A1·A2 PASS + 로컬 18180에서 fail-soft 조건 재현 시 본문 공개 관측. 라이브 미관측이면 DONE_OFFLINE + NOT_RUN 표기.
+
+근거 SSOT: docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md · docs/design/UNHOOKED_SEAMS_CONTRACT_SPEC.md(R1) · AGENTS.md#DEMO1-STAGED-METHOD · .agents/skills/demo1-evidence-debugging · PASTE_CODEX_verifier-failsoft-release_20261005.txt
+
+[ANTI-STOP] 여기까지 읽었으면 WP1 RED(probe exit 3) 확인부터 바로 시작한다. 계획만 쓰고 멈추지 않는다.

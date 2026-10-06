@@ -110,6 +110,65 @@
       const last = choiceButtons[choiceButtons.length - 1];
       if (last) last.focus();
     }
+    // Classify only identities emitted by the existing catalog producers.
+    // Display names and route-like strings alone are not authentication evidence.
+    function displayGroup(row) {
+      if (row.provider === "chatgpt_oauth" && row.endpointId === "chatgpt-oauth"
+          && row.modelId && row.id === "chatgpt-oauth:" + row.modelId) {
+        return { rank: 0, label: "Codex OAuth" };
+      }
+      if (row.provider === "Ollama" && row.endpointId === "local-default" && row.id === row.modelId) {
+        return { rank: 3, label: "로컬 · Ollama" };
+      }
+      if (row.evidence === "server_catalog" && row.endpointId && row.endpointId !== "unconfigured"
+          && row.id === "llmrouter." + row.endpointId
+          && !["chatgpt_oauth", "chatgpt-oauth", "ollama", "local", "local_llm"].includes(row.provider.toLowerCase())) {
+        return { rank: 1, label: row.provider + " · API" };
+      }
+      return { rank: 2, label: row.provider + " · 등록 모델" };
+    }
+    function displayRows(rows) {
+      return rows.map((row, index) => ({ row, index, group: displayGroup(row) }))
+        .sort((a, b) => a.group.rank - b.group.rank
+          || Number(b.group.rank === 0 && b.row.modelId === "gpt-5.6-luna")
+            - Number(a.group.rank === 0 && a.row.modelId === "gpt-5.6-luna")
+          || Number(favorites.includes(b.row.id)) - Number(favorites.includes(a.row.id))
+          || a.index - b.index)
+        .map(item => item.row);
+    }
+    function renderNativeOptions(previous) {
+      select.replaceChildren();
+      if (isDefaults) {
+        const inherit = doc.createElement("option");
+        inherit.value = ""; inherit.textContent = "기본 설정 따르기 · 채팅에서 선택";
+        select.appendChild(inherit);
+      }
+      const groups = new Map();
+      for (const row of displayRows(choices.filter(row => row.selectable))) {
+        const display = displayGroup(row);
+        let group = groups.get(display.rank);
+        if (!group) {
+          group = doc.createElement("optgroup");
+          group.label = ["Codex OAuth", "외부 API", "기타 등록 모델", "로컬 · Ollama"][display.rank];
+          groups.set(display.rank, group);
+          select.appendChild(group);
+        }
+        const option = doc.createElement("option");
+        option.value = row.id;
+        option.textContent = row.modelId + (display.rank === 1 || display.rank === 2 ? " · " + row.provider : "");
+        group.appendChild(option);
+      }
+      if (!choices.some(row => row.id === previous && row.selectable) && !(isDefaults && previous === "")) {
+        const unavailable = doc.createElement("option");
+        unavailable.value = previous;
+        unavailable.textContent = previous ? previous + " · 사용 가능 여부 확인 필요" : "모델을 선택해 주세요";
+        unavailable.disabled = true;
+        unavailable.selected = true;
+        select.prepend(unavailable);
+      } else {
+        select.value = previous;
+      }
+    }
     function render() {
       const query = search.value.trim().toLowerCase();
       const mode = filter.value;
@@ -120,13 +179,13 @@
       }
       let marker = focusedMarker();
       const scrollTop = list.scrollTop;
-      const visible = choices.filter(row => (!query || (row.provider + " " + row.modelId).toLowerCase().includes(query))
+      let visible = choices.filter(row => (!query || (row.provider + " " + row.modelId).toLowerCase().includes(query))
         && (mode !== "available" || row.selectable)
         && (mode !== "unavailable" || !row.selectable)
         && (mode !== "favorites" || favorites.includes(row.id))
         && (mode !== "recent" || recent.includes(row.id)));
-      visible.sort((a, b) => mode === "recent" ? recent.indexOf(a.id) - recent.indexOf(b.id)
-        : Number(favorites.includes(b.id)) - Number(favorites.includes(a.id)));
+      if (mode === "recent") visible.sort((a, b) => recent.indexOf(a.id) - recent.indexOf(b.id));
+      else visible = displayRows(visible);
       const shown = visible.slice(0, windowSize);
       list.replaceChildren();
       for (const row of shown) {
@@ -142,7 +201,7 @@
         title.textContent = row.modelId;
         const info = doc.createElement("small");
         const lifecycle = row.release === "preview" ? " · Preview" : row.release === "stable" ? " · Stable" : "";
-        info.textContent = row.provider + lifecycle + " · " + (row.selectable
+        info.textContent = displayGroup(row).label + lifecycle + " · " + (row.selectable
           ? row.status === "installed" ? "설치됨 · 생성 미검증" : "연결 설정됨 · 생성 미검증"
           : reasons[row.reason] || "연결 또는 모델 점검 필요");
         choice.append(title, info);
@@ -163,6 +222,7 @@
         favorite.addEventListener("click", () => {
           favorites = isFavorite ? favorites.filter(id => id !== row.id) : [row.id, ...favorites].slice(0, 20);
           save("chat.modelFavorites", favorites);
+          renderNativeOptions(select.value);
           render();
         });
         item.append(choice, favorite);
@@ -281,36 +341,7 @@
         const defaultChoice = firstSessionDefault || serverDefault;
         const applyDefault = defaultChoice && untouchedFreshChat();
         const previous = applyDefault ? defaultChoice.id : select.value;
-        select.replaceChildren();
-        if (isDefaults) {
-          const inherit = doc.createElement("option");
-          inherit.value = ""; inherit.textContent = "기본 설정 따르기 · 채팅에서 선택";
-          select.appendChild(inherit);
-        }
-        const groups = new Map();
-        for (const row of choices.filter(row => row.selectable)) {
-          let group = groups.get(row.provider);
-          if (!group) {
-            group = doc.createElement("optgroup");
-            group.label = row.provider;
-            groups.set(row.provider, group);
-            select.appendChild(group);
-          }
-          const option = doc.createElement("option");
-          option.value = row.id;
-          option.textContent = row.modelId;
-          group.appendChild(option);
-        }
-        if (!choices.some(row => row.id === previous && row.selectable) && !(isDefaults && previous === "")) {
-          const unavailable = doc.createElement("option");
-          unavailable.value = previous;
-          unavailable.textContent = previous ? previous + " · 사용 가능 여부 확인 필요" : "모델을 선택해 주세요";
-          unavailable.disabled = true;
-          unavailable.selected = true;
-          select.prepend(unavailable);
-        } else {
-          select.value = previous;
-        }
+        renderNativeOptions(previous);
         status.textContent = choices.filter(row => row.selectable).length + "개 선택 가능 · 목록 확인은 실제 생성 성공을 뜻하지 않습니다.";
         if (applyDefault) {
           defaultApplied = true;

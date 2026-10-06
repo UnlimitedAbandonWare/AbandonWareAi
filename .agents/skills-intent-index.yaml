@@ -359,6 +359,34 @@ intents:
     forbid_families: []
     notes: 목표 회전/재라우팅 시 소유 journal close+lease 해제+재resolve 게이트; 완료 오인 차단 reject-complete 포함
 
+  - intent: staged-method
+    match:
+      - staged-method
+      - staged method
+      - staged_method
+      - 단계형
+      - 순차 작업
+      - 순차적 작업
+      - 순차적으로
+      - 스킬 먼저
+      - 스킬먼저
+      - 6게이트
+      - 여섯 게이트
+      - 야생 휘두르기
+      - 두서없
+      - 무작위로 휘두
+      - 감으로 휘두
+      - staged_method_check
+    soft:
+      - 순차
+      - 단계별
+      - 방법론
+      - 작업 순서
+    primary_skill: demo1-staged-method
+    optional_skill: null
+    forbid_families: []
+    notes: STAGED_METHOD 6게이트 기본 작업 방식(2026-10-05) — 지시서1개→스킬→사실→단계→검증→닫기→다음; SSOT docs/agents-rules/DEMO1-STAGED-METHOD.md
+
   - intent: codex-goal-intake
     match:
       - goal-objective
@@ -1512,6 +1540,22 @@ intents:
     optional_skill: null
     forbid_families: []
     notes: 랜딩된 동작/룰의 한쪽 방향 잠금(check→update, unlock은 사용자 ADR); REVERTED=잠긴 동작 소실
+
+  - intent: agy-skill-pack
+    match:
+      - 스킬 팩
+      - skill pack
+      - 스킬 만들어
+      - 스킬 추가
+      - 스킬 생성
+      - 스킬 하나 만들
+      - agy_skill_pack_check
+      - SKILL_PACK
+      - re:스킬.{0,12}(팩|pack|두껍|companion)
+    primary_skill: demo1-agy-skill-pack
+    optional_skill: demo1-agy-directive-writer
+    forbid_families: []
+    notes: 스킬 생성·개편 요청을 SKILL.md 단독이 아니라 S/M/L 팩(스킬+intent+companion+검사기)으로 산출; SSOT docs/agents-rules/DEMO1-AGY-SKILL-PACK.md
 
 fallback:
   primary_skill: demo1-vibe-max-agency

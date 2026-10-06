@@ -24,6 +24,7 @@
     let cacheScope='',scopeEpoch=0,reconcileBusy=false,disposed=false,settingsAttempts=0,wasActive=false,memoryDraft=null,memoryBusy=false;
     // OFF 의도는 서버 저장 성공과 무관하게 이 기기의 촬영을 즉시 차단한다. ON은 저장 성공 뒤에만 해제된다.
     let snapshotLocalBlocked=false,catalogLoaded=false,catalogBusy=false,catalogRows=[],catalogGeneration=0,catalogAbort=null;
+    let fallbackPreference=false; // Stored general-mode preference; strict mode shows effective OFF.
     const modelInputs=['nf-answer-model','nf-answer-backup-1','nf-answer-backup-2','nf-answer-backup-3'];
     const captureJobs=new Map();
     const snapshotter=host.DisplaySnapshot?host.DisplaySnapshot.createSnapshotter({navigator:host.navigator,document}):null;
@@ -47,6 +48,22 @@
     messages.focus_outbox_pending='접수 여부가 확인되지 않은 질문이 이 창에 남아 있습니다. 내용을 확인한 뒤 직접 다시 보내 주세요.';
     messages.focus_outbox_full='아직 접수를 확인하지 못한 질문이 있습니다. 연결 후 대화 기록을 확인해 주세요.';
     messages.snapshot_unsupported='이 브라우저에서 카메라 촬영을 시작할 수 없습니다.';
+    messages.focus_grounding_publication_held='검색 답변의 출처 표시를 확인할 수 없어 답변을 보류했습니다.';
+    Object.assign(messages,{
+      focus_search_off:'웹 검색이 꺼져 있습니다. 검색을 허용하거나 일반 자동 모드로 전환한 뒤 저장해 주세요.',
+      focus_search_quick:'빠른 답변에서는 검색하지 않습니다. 빠른 답변을 끄거나 일반 자동 모드로 전환해 주세요.',
+      focus_search_image_unsupported:'현재 사진 질문은 전용 검색을 지원하지 않습니다. 사진 설정 또는 실행 경로를 변경해 주세요.',
+      focus_search_model_required:'전용 모드에 사용할 Gemini 모델을 직접 선택해 주세요.',
+      focus_search_unsupported:'선택 모델의 native Google 검색 지원을 확인하지 못했습니다. 모델 또는 실행 경로를 변경해 주세요.',
+      focus_search_not_observed:'검색이 실행된 것을 확인하지 못했습니다. 일반 자동 모드로 전환할 수 있습니다.',
+      focus_search_attribution_unavailable:'검색 결과의 출처 표시를 확인하지 못했습니다. 일반 자동 모드로 전환할 수 있습니다.',
+      focus_search_model_mismatch:'선택한 모델과 응답의 연결을 확인하지 못했습니다. 실행 경로를 확인해 주세요.',
+      focus_search_provider_unauthorized:'선택 Gemini의 접근 권한을 확인하지 못했습니다.',
+      focus_search_quota_exceeded:'선택 Gemini의 사용 한도에 도달했습니다.',focus_search_rate_limited:'선택 Gemini의 요청 한도에 도달했습니다.',
+      focus_search_backend_timeout:'선택 Gemini의 응답 시간이 지났습니다.',focus_search_backend_unavailable:'선택 Gemini 서비스를 사용할 수 없습니다.',
+      focus_search_model_unavailable:'선택 Gemini 모델을 사용할 수 없습니다.',focus_search_provider_not_configured:'선택 Gemini 연결이 준비되지 않았습니다.',
+      focus_search_protocol_unsupported:'선택 연결에서 native Google 검색을 사용할 수 없습니다.',focus_search_request_cancelled:'전용 검색 요청이 취소됐습니다.'
+    });
     messages.focus_cache_unavailable='임시 질문 상태를 준비하지 못했습니다. 연결을 다시 확인해 주세요.';
     messages.snapshot_timeout='촬영 시간이 지나 사진 없이 답변합니다.';
     messages.snapshot_failed='사진을 확보하지 못해 사진 없이 답변합니다.';
@@ -73,10 +90,17 @@
     function modelStatus(){
       const output=$('nf-model-status');if(!output)return;
       const selected=$('nf-answer-model')?.value,row=catalogRows.find(value=>value.id===selected);
+      const exclusive=$('nf-answer-target')?.value==='GEMINI_WEBSEARCH_ONLY';
+      for(const id of modelInputs.slice(1))if($(id))$(id).disabled=exclusive;
+      if($('nf-answer-fallback')){$('nf-answer-fallback').disabled=false;$('nf-answer-fallback').checked=!exclusive&&fallbackPreference;}
+      if(exclusive){output.textContent=!selected?messages.focus_search_model_required:row?.metadata?.googleSearchSupported===true?
+        '선택 Gemini의 native 검색 지원이 확인됐습니다. 실제 검색·인용·표시는 응답마다 확인합니다.':
+        messages.focus_search_unsupported+' ('+(row?.metadata?.googleSearchReason||'capability_unknown')+')';output.textContent+=' 모델 자동 전환 OFF · ON을 선택하면 선택 모델 우선 모드로 전환합니다.';return;}
       output.textContent=!selected?'자동 선택은 기존 서버 정책을 따릅니다.':row?.selectable===false?
         '서버 목록에서 현재 선택 불가입니다. 저장된 선택은 유지합니다. 다른 모델을 선택하세요.':row?.selectable===true?
         '선택 가능한 서버 목록에 있습니다. 실제 실행·세부 지원 기능은 별도 확인이 필요합니다.':
         '저장된 선택의 현재 사용 가능 여부가 미확인입니다. 선택은 유지합니다.';
+      output.textContent+=fallbackPreference?' 선택 모델 우선 · 모델 자동 전환 ON (허용 목록만).':' 모델 자동 전환 OFF.';
     }
     function modelOptions(rows,selections){
       for(const id of modelInputs){const input=$(id);if(!input)continue;const selected=selections?.[id]??input.value??'';
@@ -92,6 +116,28 @@
       modelStatus();
     }
     if($('nf-answer-model'))$('nf-answer-model').onchange=modelStatus;
+    if($('nf-answer-target'))$('nf-answer-target').onchange=modelStatus;
+    if($('nf-answer-fallback'))$('nf-answer-fallback').onchange=()=>{
+      fallbackPreference=$('nf-answer-fallback').checked;
+      if(fallbackPreference&&$('nf-answer-target').value==='GEMINI_WEBSEARCH_ONLY')$('nf-answer-target').value='AUTO';
+      settingsEdits++;modelStatus();$('nf-status').textContent='모델 전환 설정을 저장하면 다음 질문부터 적용합니다.';
+    };
+    if($('nf-general-mode'))$('nf-general-mode').onclick=()=>{$('nf-answer-target').value='AUTO';settingsEdits++;modelStatus();$('nf-status').textContent='일반 자동 모드로 전환할 설정입니다. 저장 후 다음 질문부터 적용합니다.';};
+    // 메인 모델 프리셋: 카탈로그에서 선택 가능한 경로를 우선 찾고 없으면 라우트 기본값을 쓴다. 클릭은 편집값만 바꾸고 저장 전 전송은 없다.
+    const presetSay=text=>{const e=$('nf-preset-status');if(e)e.textContent=text;};
+    function presetModel(res,fallback){
+      for(const re of res){const hit=catalogRows.find(row=>re.test(row.id)&&row.selectable===true)||catalogRows.find(row=>re.test(row.id));if(hit)return hit.id;}
+      return fallback;
+    }
+    function presetApply(target,model,webSearch,text){
+      if($('nf-answer-target'))$('nf-answer-target').value=target;
+      if($('nf-answer-model')){const selections={};for(const id of modelInputs)selections[id]=id==='nf-answer-model'?model:($(id)?.value||'');modelOptions(catalogRows,selections);}
+      if(webSearch!==null&&$('nf-web-search'))$('nf-web-search').value=webSearch;
+      settingsEdits++;modelStatus();presetSay(text);
+    }
+    if($('nf-preset-luna'))$('nf-preset-luna').onclick=()=>presetApply('API_ONLY',presetModel([/openai-economy/i,/luna/i],'llmrouter.openai-economy'),'false','루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+    if($('nf-preset-gemini'))$('nf-preset-gemini').onclick=()=>presetApply('GEMINI_WEBSEARCH_ONLY',presetModel([/gemini-pro/i,/gemini/i],'llmrouter.gemini-pro'),'true','제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+    if($('nf-preset-auto'))$('nf-preset-auto').onclick=()=>presetApply('AUTO','',null,'자동 모드로 전환할 설정입니다. 저장하면 다음 질문부터 적용됩니다.');
     async function loadModels(){
       if(catalogLoaded||catalogBusy||!host.fetch||!$('nf-answer-model'))return;catalogBusy=true;
       const generation=catalogGeneration,abort=new AbortController();catalogAbort=abort;const timer=host.setTimeout?.(()=>abort.abort(),4000);
@@ -108,6 +154,7 @@
       stored=value;
       for(const [key,id] of Object.entries(fields)){const e=$(id);if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
       syncLengthPreset();
+      if($('nf-web-search'))$('nf-web-search').value=value.settings.webSearchEnabled==null?'':String(value.settings.webSearchEnabled);
       for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=value.settings.presentation[key];}
       const snap=value.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
       const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
@@ -115,7 +162,9 @@
       const selection=value.settings.answerSelection||{mode:'AUTO',modelId:''},routing=selection.routing||{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]};
       if($('nf-answer-model')){const selections={'nf-answer-model':selection.mode==='FIXED'?selection.modelId:''};
         for(let i=1;i<=3;i++)selections['nf-answer-backup-'+i]=routing.allowedFallbackIds?.[i-1]||'';
-        modelOptions(catalogRows,selections);$('nf-answer-target').value=routing.executionTarget;$('nf-answer-fallback').checked=!!routing.fallbackAllowed;
+        fallbackPreference=!!routing.fallbackAllowed;
+        modelOptions(catalogRows,selections);$('nf-answer-target').value=routing.executionTarget;$('nf-answer-fallback').checked=fallbackPreference;
+        modelStatus();
       }
       const recent=value.settings.recentContext||{enabled:true,maxAgeSeconds:180,maxUtterances:12,tokenBudget:2000};
       if($('nf-recent-enabled')){ $('nf-recent-enabled').checked=!!recent.enabled;$('nf-recent-age').value=recent.maxAgeSeconds;$('nf-recent-count').value=recent.maxUtterances;$('nf-recent-budget').value=recent.tokenBudget;}
@@ -258,13 +307,18 @@
         const rawLength=String($('nf-answer-length')?.value??'').trim();
         if(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(Number(rawLength))||Number(rawLength)<80||Number(rawLength)>800)throw Error('invalid_nova_settings');
         for(const [key,id] of Object.entries(fields)){const e=$(id);settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'?e.value:Number(e.value);}
+        if($('nf-web-search')&&$('nf-web-search').value!=='')settings.webSearchEnabled=$('nf-web-search').value==='true';
         for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value);}
         if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR'};
         if($('nf-answer-model')){
-          const model=$('nf-answer-model').value,allowed=$('nf-answer-fallback').checked;
+          const model=$('nf-answer-model').value;
+          const exclusive=$('nf-answer-target').value==='GEMINI_WEBSEARCH_ONLY';
+          const allowed=exclusive?fallbackPreference:$('nf-answer-fallback').checked;
+          if(exclusive&&!model)throw Error('focus_search_model_required');
           const backups=modelInputs.slice(1).map(id=>$(id)?.value||'').filter(Boolean);
           if(allowed&&(new Set(backups).size!==backups.length||backups.includes(model)))throw Error('focus_model_selection_invalid');
-          settings.answerSelection={mode:model?'FIXED':'AUTO',modelId:model||null,routing:{executionTarget:$('nf-answer-target').value,fallbackAllowed:allowed,allowedFallbackIds:allowed?backups:[]}};
+          const keepBackups=exclusive||allowed||stored.settings.answerSelection?.routing?.executionTarget==='GEMINI_WEBSEARCH_ONLY';
+          settings.answerSelection={mode:model?'FIXED':'AUTO',modelId:model||null,routing:{executionTarget:$('nf-answer-target').value,fallbackAllowed:allowed,allowedFallbackIds:keepBackups?backups:[]}};
         }
         if($('nf-recent-enabled'))settings.recentContext={enabled:$('nf-recent-enabled').checked,maxAgeSeconds:Number($('nf-recent-age').value),maxUtterances:Number($('nf-recent-count').value),tokenBudget:Number($('nf-recent-budget').value)};
         if($('nf-memory-mode'))settings.memory={mode:$('nf-memory-mode').value||null,graphMode:$('nf-graph-mode').value||'OFF',maxEvidence:Number($('nf-max-evidence').value),embeddingPrefer:$('nf-embed-prefer').value||'LOCAL_THEN_CLOUD',webOnUnknown:$('nf-web-unknown').value===''?null:$('nf-web-unknown').value==='true'};

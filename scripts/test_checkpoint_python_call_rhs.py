@@ -52,6 +52,15 @@ class PythonCallRhsCheckpointTest(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertTrue(held(text), "literal in call args must block: " + text[:40])
 
+    def test_eol_colon_guard_is_not_a_key_value_pair(self):
+        # `if not <name>:` 줄끝 콜론이 다음 줄 식(`break`)을 값으로 삼키던 오탐 회귀.
+        code = (
+            "    " + self.tok + ' = payload.get("nextPageToken")\n'
+            "    if not " + self.tok + ":\n"
+            "        break\n"
+        )
+        self.assertFalse(held(code), "EOL-colon guard false positive")
+
     def test_call_rule_is_scoped_to_python_paths(self):
         text = self.tok + " = make_lock_token()"
         for path in ("docs/note.md", "main/java/E.java", "src/e.js", ""):

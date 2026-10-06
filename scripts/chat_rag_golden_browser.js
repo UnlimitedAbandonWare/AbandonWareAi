@@ -84,6 +84,11 @@ function safeMetadata(body, diagnostic={}) {
     }
   }
   const normalized=body.replace(/\r\n?/g,'\n');
+  if (/^\s*[\[{]/.test(normalized)) {
+    try { visit(JSON.parse(normalized)); diagnostic.jsonParseSucceeded++; }
+    catch { diagnostic.jsonParseFailed++; }
+    return result;
+  }
   const blocks=normalized.split('\n\n');
   for(let index=0;index<blocks.length;index++){
     const block=blocks[index],data=[];let type='message';
@@ -96,7 +101,15 @@ function safeMetadata(body, diagnostic={}) {
     if(!/^[A-Za-z0-9_-]{1,48}$/.test(type))type='unknown';
     diagnostic.eventTypes[type]=(diagnostic.eventTypes[type]||0)+1;
     if(index===blocks.length-1 && !normalized.endsWith('\n\n'))diagnostic.truncatedEvents++;
-    try{visit(JSON.parse(data.join('\n')));diagnostic.jsonParseSucceeded++;}
+    try{
+      const payload=JSON.parse(data.join('\n'));
+      visit(payload);
+      if (['error','stream_failed'].includes(payload?.type || type)) {
+        const code=payload?.reasonCode ?? payload?.code ?? payload?.data;
+        if (typeof code==='string' && /^[a-z0-9_]{1,80}$/.test(code)) result.reasonCode=code;
+      }
+      diagnostic.jsonParseSucceeded++;
+    }
     catch{diagnostic.jsonParseFailed++;}
   }
   return result;

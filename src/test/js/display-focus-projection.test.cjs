@@ -1,6 +1,33 @@
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createProjection,decode}=require('../../../main/resources/static/assets/display/display-focus.js');
 const base={active:true,phase:'ANSWER_READY',serverInstanceId:'boot',activationId:'a',turnId:'t',stateVersion:1,answerVersion:1,draftText:'',questionText:'질문',answerText:'답변',idleRemainingMs:0,renderTarget:'lens',renderReceiptTicket:'a'.repeat(64)};
+function groundingFixture(){
+ const doc={hidden:false,createElement(tag){const node={tagName:tag.toUpperCase(),style:{},children:[],attributes:[],textContent:'',get lastElementChild(){return this.children.at(-1);},appendChild(node){node.parent=this;this.children.push(node);},append(...nodes){nodes.forEach(node=>this.appendChild(node));},replaceChildren(...nodes){this.children=[];this.append(...nodes);},remove(){this.removed=true;if(this.parent)this.parent.children=this.parent.children.filter(node=>node!==this);},attachShadow(){return this.shadow={};}};
+   if(tag==='template')Object.defineProperty(node,'innerHTML',{set(value){this.content={querySelectorAll:()=>value.includes('<script')?[{tagName:'SCRIPT',attributes:[]}]:[]};}});return node;}};
+ const answer=doc.createElement('div');answer.ownerDocument=doc;const calls=[],projection=createProjection({host:{},document:doc,target:'fold',answer,receipt:async(name)=>calls.push(name),requestFrame:()=>0,cancelFrame(){}});
+ const html='<div><a href="https://www.google.com/search?q=fixture">Google Search</a></div>';
+ const value={...base,renderTarget:'fold',grounding:{originalText:'원문'.repeat(5000),model:'gemini-fixture',metadata:{groundingChunks:[{web:{uri:'https://example.com/source',title:'Source'}}],groundingSupports:[{groundingChunkIndices:[0]}],searchEntryPoint:{renderedContent:html}}}};
+ return {doc,answer,calls,projection,value,html};
+}
+test('phone presents original, related sources and intact Suggestions with one receipt pair',async()=>{
+ const f=groundingFixture();f.projection.update(f.value);await new Promise(setImmediate);
+ const block=f.answer.children[0];assert.equal(block.children[0].textContent,f.value.grounding.originalText);
+ assert.equal(block.children[1].children[0].href,'https://example.com/source');assert.equal(block.children[2].shadow.innerHTML,f.html);
+ assert.equal(f.answer.style.overflow,'auto');assert.deepEqual(f.calls,['first_visible','presentation_done']);
+ f.projection.update({...f.value,stateVersion:2});await new Promise(setImmediate);assert.equal(f.calls.length,2);
+ f.projection.update({...f.value,active:false,stateVersion:3});assert.equal(block.removed,true);
+ f.projection.update(f.value);assert.equal(f.projection.isActive(),false);
+});
+test('unsafe Suggestions hold only grounded rendering without acknowledging a displayed result',async()=>{
+ const f=groundingFixture();f.value.grounding.metadata.searchEntryPoint.renderedContent='<script>bad()</script>';
+ f.projection.update(f.value);await new Promise(setImmediate);assert.equal(f.calls.length,0);assert.equal(f.answer.children.some(node=>node.shadow),false);
+ assert.match(f.answer.textContent,/출처 표시/);
+});
+test('hidden phone waits for fresh visible projection before acknowledging grounded result',async()=>{
+ const f=groundingFixture();f.doc.hidden=true;f.projection.update(f.value);await new Promise(setImmediate);assert.equal(f.calls.length,0);
+ f.doc.hidden=false;f.projection.visibility();f.projection.update({...f.value,stateVersion:2});await new Promise(setImmediate);
+ assert.deepEqual(f.calls,['first_visible','presentation_done']);
+});
 function fixture(target='lens'){
  const frames=new Map(),calls=[],panel={},status={},draft={},doc={hidden:false};let id=0,time=0;
  const projection=createProjection({host:{},document:doc,target,panel,status,draft,requestFrame:fn=>{frames.set(++id,fn);return id;},cancelFrame:id=>frames.delete(id),fitsLine:()=>true,receipt:async(name,detail)=>calls.push({name,detail})});

@@ -191,6 +191,62 @@ public class GeminiGateway {
                         result.errorClass()))));
     }
 
+    /** Request-owned auxiliary search; never supplies content to another model or learning memory. */
+    public Mono<SearchRescueResult> searchRescue(String originalQuestion, String finalQuery,
+            boolean optIn, boolean evidenceNeeded, long remainingMillis) {
+        String model = modelFor(Purpose.SEARCH_RESCUE);
+        if (!optIn) return Mono.just(SearchRescueResult.skipped("OPT_OUT", model));
+        if (!evidenceNeeded) return Mono.just(SearchRescueResult.skipped("EVIDENCE_SUFFICIENT", model));
+        if (remainingMillis <= 5_000) return Mono.just(SearchRescueResult.skipped("REQUEST_BUDGET", model));
+        var credential = credentialResolver.resolve(ProviderCredentialResolver.Provider.GEMINI);
+        if (!enabled() || !purposeEnabled(Purpose.SEARCH_RESCUE) || !groundingEnabled())
+            return Mono.just(SearchRescueResult.skipped("PROVIDER_DISABLED", model));
+        if (!credential.enabled() || credential.valueOrNull() == null)
+            return Mono.just(SearchRescueResult.skipped("MISSING_CREDENTIAL", model));
+        // Public getAll() omits the internal shared HTTP budget.
+        var requestContext = new LinkedHashMap<>(TraceStore.context());
+        var subscribed = new java.util.concurrent.atomic.AtomicBoolean();
+        long waitMs = Math.min(3_000, Math.min(remainingMillis - 5_000,
+                Math.max(1, environment.getProperty("gemini.gateway.search-rescue.timeout-ms", Long.class, 3_000L))));
+        Map<String,Object> body = generationBody(originalQuestion, true);
+        Map<String,Object> config = new LinkedHashMap<>();
+        config.put("maxOutputTokens", 1024);
+        if (model.startsWith("gemini-3.8")) config.put("thinkingConfig", Map.of("thinkingLevel", "low"));
+        body.put("generationConfig", config);
+        return Mono.defer(() -> {
+            if (!subscribed.compareAndSet(false, true))
+                return Mono.just(SearchRescueResult.skipped("ALREADY_ATTEMPTED", model));
+            if (Thread.currentThread().isInterrupted())
+                return Mono.just(SearchRescueResult.skipped("CANCELLED", model));
+            if (!com.example.lms.service.rag.SelfAskSearchBudget.tryReserveHttp(requestContext, finalQuery))
+                return Mono.just(SearchRescueResult.skipped("SEARCH_BUDGET", model));
+            // No preflight cache, retries, or completed-result cache on this path.
+            return executeGeneration(body, Purpose.SEARCH_RESCUE, model, credential.valueOrNull(), true, waitMs, 1)
+                    .map(result -> SearchRescueResult.from(result, model));
+        });
+    }
+
+    private void recordGroundingSpend(String model, GeminiResponse payload, int httpStatus) {
+        try {
+        var metadata = payload.firstGrounding();
+        if (metadata == null) return;
+        int queries = (int) metadata.webSearchQueries().stream().filter(q -> q != null && !q.isBlank()).count();
+        var usage = payload.completion().usage();
+        com.example.lms.routing.ApiSpendAttribution.record("gemini-grounding", "google", model,
+                "configured", "observed", "GeminiGateway", "none", httpStatus, null,
+                usage == null ? null : usage.promptTokenCount(), usage == null ? null : usage.candidatesTokenCount(), "unknown");
+        String path = environment.getProperty("gemini.gateway.grounding.usage-ledger", "var/usage/gemini-grounding-monthly.json");
+        if (queries > 0 && model.startsWith("gemini-3.") && path != null && !path.isBlank())
+            com.example.lms.routing.ApiSpendAttribution.recordGrounding(java.nio.file.Path.of(path),
+                    java.time.YearMonth.now(java.time.ZoneOffset.UTC), queries,
+                    environment.getProperty("gemini.gateway.grounding.monthly-allowance", Long.class, 5_000L));
+        } catch (RuntimeException accountingUnavailable) {
+            // Optional observability cannot discard or retry a valid provider response.
+            System.getLogger(com.example.lms.routing.ApiSpendAttribution.class.getName()).log(System.Logger.Level.WARNING,
+                    "[AWX][api-spend] purpose=gemini-grounding meter=unavailable admission=unchanged");
+        }
+    }
+
     private boolean groundingEnabled() {
         return environment.getProperty("gemini.gateway.grounding.enabled", Boolean.class, true);
     }
@@ -268,8 +324,36 @@ public class GeminiGateway {
         public RouterReadiness { reasons = List.copyOf(reasons); }
     }
 
+    /** Selected generateContent contract; configuration checks only, never a generation probe.
+        Support verified against Google's generateContent search table on 2026-10-06. */
+    public RouterReadiness focusSearchReadiness(RouterSpec spec) {
+        var reasons=new java.util.ArrayList<>(routerReadiness().reasons());
+        if(!groundingEnabled())reasons.add("focus_search_disabled");
+        if(spec==null||spec.model()==null||spec.model().isBlank())reasons.add("focus_search_model_required");
+        else if(!java.util.Set.of("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash",
+                "gemini-3.5-flash-lite","gemini-3.5-flash","gemini-3.1-flash-lite",
+                "gemini-3.1-pro-preview","gemini-3-flash-preview","gemini-3.1-flash-lite-preview",
+                "gemini-2.5-pro","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash").contains(spec.model()))
+            reasons.add("focus_search_capability_unknown");
+        if(spec==null||!nativeRouteMatches(spec.baseUrl()))reasons.add("focus_search_route_mismatch");
+        return new RouterReadiness(reasons.isEmpty(),reasons);
+    }
+
     public ChatModel buildOpenAiCompatibleChatModel(RouterSpec spec, boolean cueJson,
             dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema) {
+        return buildOpenAiCompatibleChatModel(spec, cueJson, cueJsonSchema, false);
+    }
+
+    /** Internal Focus permission only. Ordinary chat and cue construction retain their transport. */
+    public ChatModel buildOpenAiCompatibleChatModel(RouterSpec spec, boolean cueJson,
+            dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema, boolean focusGoogleSearch) {
+        return buildOpenAiCompatibleChatModel(spec,cueJson,cueJsonSchema,focusGoogleSearch,false);
+    }
+
+    public ChatModel buildOpenAiCompatibleChatModel(RouterSpec spec, boolean cueJson,
+            dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema, boolean focusGoogleSearch, boolean requireNativeGoogleSearch) {
+        if(requireNativeGoogleSearch&&(!focusGoogleSearch||cueJson||!focusSearchReadiness(spec).ready()))
+            throw new com.example.lms.llm.ModelSelectionException("protocol_unsupported");
         RouterSpec effective = spec == null ? RouterSpec.defaults(environment) : spec.normalized(environment);
         ProviderCredentialResolver.Resolution credential = credentialResolver
                 .resolve(ProviderCredentialResolver.Provider.GEMINI);
@@ -328,7 +412,19 @@ public class GeminiGateway {
                 .reasoningEffort("low").build());
         status(Purpose.ROUTER, effective.model(), true, true, 0, null, 0L,
                 false, "not-attempted", "", "");
-        return new GatewayRouterChatModel(builder.build(), effective.model());
+        return new GatewayRouterChatModel(builder.build(), effective.model(),
+                focusGoogleSearch && !cueJson && nativeRouteMatches(effective.baseUrl()) ? effective : null,requireNativeGoogleSearch);
+    }
+
+    private boolean nativeRouteMatches(String compatibleBase){
+        try{
+            var selected=java.net.URI.create(compatibleBase);
+            var nativeBase=java.net.URI.create(environment.getProperty("gemini.gateway.base-url",DEFAULT_BASE_URL));
+            int selectedPort=selected.getPort()<0?("https".equalsIgnoreCase(selected.getScheme())?443:80):selected.getPort();
+            int nativePort=nativeBase.getPort()<0?("https".equalsIgnoreCase(nativeBase.getScheme())?443:80):nativeBase.getPort();
+            return selected.getHost()!=null&&selected.getHost().equalsIgnoreCase(nativeBase.getHost())
+                &&selected.getScheme().equalsIgnoreCase(nativeBase.getScheme())&&selectedPort==nativePort;
+        }catch(RuntimeException invalid){return false;}
     }
 
     public ProviderStatus latestStatus() {
@@ -341,10 +437,16 @@ public class GeminiGateway {
             String model,
             String apiKey,
             boolean webGrounding) {
+        Map<String, Object> body = generationBody(prompt, webGrounding);
+        return executeGeneration(body, purpose, model, apiKey, webGrounding, timeoutMs(),
+                purpose == Purpose.SEARCH_EXPANSION ? 1 : maxAttempts());
+    }
+
+    private Mono<GenerationResult> executeGeneration(Map<String,Object> body, Purpose purpose,
+            String model, String apiKey, boolean webGrounding, long waitMs, int attemptLimit) {
         long startedNanos = System.nanoTime();
         AtomicInteger attempts = new AtomicInteger();
         AtomicReference<String> quotaDecision = new AtomicReference<>("allowed");
-        Map<String, Object> body = generationBody(prompt, webGrounding);
         WebClient client = client();
 
         Mono<GenerationResult> attempt = Mono.defer(() -> {
@@ -365,7 +467,9 @@ public class GeminiGateway {
                         }
                         return response.bodyToMono(GeminiResponse.class)
                                 .defaultIfEmpty(GeminiResponse.empty())
-                                .map(payload -> new GenerationResult(payload.firstText(), status(
+                                .map(payload -> {
+                                    if (webGrounding && response.statusCode().is2xxSuccessful()) recordGroundingSpend(model, payload, statusCode);
+                                    return new GenerationResult(response.statusCode().is2xxSuccessful()?payload.firstText():"", status(
                                         purpose,
                                         model,
                                         true,
@@ -376,18 +480,21 @@ public class GeminiGateway {
                                         false,
                                         quotaDecision.get(),
                                         response.statusCode().is2xxSuccessful() ? "" : "http-status",
-                                        response.statusCode().is2xxSuccessful() ? "" : "http_" + statusCode)));
+                                        response.statusCode().is2xxSuccessful() ? "" : "http_" + statusCode),
+                                        webGrounding&&response.statusCode().is2xxSuccessful()&&!payload.firstText().isBlank()?payload.firstGrounding():null,
+                                        webGrounding, payload.publicParts(), payload.modelVersion(), payload.completion());
+                                });
                     });
         });
 
-        int effectiveMaxAttempts = purpose == Purpose.SEARCH_EXPANSION ? 1 : maxAttempts();
+        int effectiveMaxAttempts = Math.max(1, Math.min(maxAttempts(), attemptLimit));
         if (effectiveMaxAttempts > 1) {
             attempt = attempt.retryWhen(
                     Retry.max(effectiveMaxAttempts - 1L).filter(GeminiGateway::retryable));
         }
         attempt = attempt.transformDeferred(CircuitBreakerOperator.of(circuitBreaker));
         return attempt
-                .timeout(Duration.ofMillis(timeoutMs()))
+                .timeout(Duration.ofMillis(Math.max(1L, waitMs)))
                 .onErrorResume(failure -> {
                     Throwable root = unwrapRetry(failure);
                     boolean quotaDenied = root instanceof QuotaDeniedException;
@@ -565,7 +672,7 @@ public class GeminiGateway {
     }
 
     private boolean purposeEnabled(Purpose purpose) {
-        boolean defaultValue = purpose == Purpose.SEARCH_EXPANSION;
+        boolean defaultValue = purpose == Purpose.SEARCH_EXPANSION || purpose == Purpose.SEARCH_RESCUE;
         return environment.getProperty(
                 "gemini.gateway.purpose." + purpose.id() + ".enabled",
                 Boolean.class,
@@ -582,7 +689,8 @@ public class GeminiGateway {
     }
 
     private String modelFor(Purpose purpose) {
-        String fallback = environment.getProperty("gemini.gateway.models.default", DEFAULT_MODEL);
+        String fallback = purpose == Purpose.SEARCH_RESCUE ? "gemini-3.8-flash"
+                : environment.getProperty("gemini.gateway.models.default", DEFAULT_MODEL);
         String model = environment.getProperty("gemini.gateway.models." + purpose.id(), fallback);
         return model == null || model.isBlank() ? DEFAULT_MODEL : model.trim();
     }
@@ -637,6 +745,7 @@ public class GeminiGateway {
 
     public enum Purpose {
         SEARCH_EXPANSION("search-expansion"),
+        SEARCH_RESCUE("search-rescue"),
         TRANSLATION("translation"),
         UNDERSTANDING("understanding"),
         KEYWORD_TRAINING("keyword-training"),
@@ -655,10 +764,155 @@ public class GeminiGateway {
         }
     }
 
-    public record GenerationResult(String text, ProviderStatus status) {
+    public record GenerationResult(String text, ProviderStatus status,GroundingMetadata groundingMetadata,boolean searchToolAllowed,
+            List<String> publicParts,String responseModel,CompletionMetadata completion) {
+        public GenerationResult(String text,ProviderStatus status,GroundingMetadata metadata,boolean allowed,
+                List<String> parts,String responseModel){this(text,status,metadata,allowed,parts,responseModel,null);}
+        public GenerationResult(String text,ProviderStatus status){this(text,status,null,false);}
+        public GenerationResult(String text,ProviderStatus status,GroundingMetadata metadata,boolean allowed){this(text,status,metadata,allowed,List.of(text==null?"":text),null);}
         public GenerationResult {
             text = text == null ? "" : text;
+            publicParts=List.copyOf(publicParts);
         }
+        /** Observed search material is separate from attribution, which needs original part/byte-index validation at presentation. */
+        public boolean searchObserved(){return groundingMetadata!=null&&(groundingMetadata.webSearchQueries().stream().anyMatch(q->q!=null&&!q.isBlank())
+            ||groundingMetadata.groundingChunks().stream().anyMatch(c->c!=null&&c.web()!=null&&c.web().uri()!=null&&!c.web().uri().isBlank()));}
+        /** A rescue display receipt, never permission to inject Google output into the main prompt. */
+        public String rescueEligibilityReason() {
+            if (!searchToolAllowed) return "TOOL_NOT_ALLOWED";
+            if (status == null || !status.enabled() || status.statusCode() == null
+                    || status.statusCode() < 200 || status.statusCode() >= 300) return "PROVIDER_UNAVAILABLE";
+            if (completion != null && completion.promptBlockReason() != null
+                    && !completion.promptBlockReason().isBlank()
+                    && !"BLOCK_REASON_UNSPECIFIED".equals(completion.promptBlockReason())) return "PROMPT_BLOCKED";
+            if (completion != null && completion.safetyBlocked()) return "SAFETY_BLOCKED";
+            if (text.isBlank()) return "EMPTY_RESPONSE";
+            if (completion == null || completion.finishReason() == null
+                    || completion.finishReason().isBlank()) return "FINISH_UNKNOWN";
+            if (!"STOP".equals(completion.finishReason())) return "INCOMPLETE_RESPONSE";
+            if (!searchObserved()) return "SEARCH_NOT_OBSERVED";
+            return new GroundedAnswer(text, responseModel, groundingMetadata, publicParts, true,
+                    status.model()).exclusivePublicationReady() ? "READY_FOR_DISPLAY" : "ATTRIBUTION_INVALID";
+        }
+        @Override public String toString(){return "GeminiGenerationResult[redacted]";}
+    }
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+    public record SearchRescueResult(String reasonCode, boolean allowed, boolean attempted,
+            boolean searchObserved, boolean attributionValid, long durationMs, String requestedModel,
+            String responseModel, UsageMetadata usage, GroundedAnswer answer) {
+        public static SearchRescueResult skipped(String reason, String model) {
+            return new SearchRescueResult(reason, false, false, false, false, 0, model, null, null, null);
+        }
+        public static SearchRescueResult from(GenerationResult result, String model) {
+            var status = result.status();
+            String reason = result.rescueEligibilityReason();
+            if (status != null && status.statusCode() != null && (status.statusCode() < 200 || status.statusCode() >= 300))
+                reason = "HTTP_" + status.statusCode();
+            else if (status != null && status.errorClass().toLowerCase(java.util.Locale.ROOT).contains("timeout")) reason = "TIMEOUT";
+            else if (status != null && "quota-denied".equals(status.fallbackReason())) reason = "RATE_LIMIT";
+            boolean ready = "READY_FOR_DISPLAY".equals(reason);
+            return new SearchRescueResult(reason, true, status != null && status.attemptCount() > 0,
+                    result.searchObserved(), ready, status == null ? 0 : status.latencyMs(), model,
+                    result.responseModel(), result.completion() == null ? null : result.completion().usage(),
+                    ready ? new GroundedAnswer(result.text(), result.responseModel(), result.groundingMetadata(),
+                            result.publicParts(), true, model) : null);
+        }
+        @com.fasterxml.jackson.annotation.JsonProperty public boolean bodyFetched() { return false; }
+        @com.fasterxml.jackson.annotation.JsonProperty public boolean mainPromptPermission() { return false; }
+        @com.fasterxml.jackson.annotation.JsonProperty public boolean memoryEligible() { return false; }
+        @Override public String toString() { return "SearchRescueResult[redacted]"; }
+    }
+    /** Native completion/accounting fields. Absent values remain unknown; tokens do not prove search cost. */
+    public record CompletionMetadata(String finishReason,String promptBlockReason,boolean safetyBlocked,UsageMetadata usage) {}
+    public record UsageMetadata(Integer promptTokenCount,Integer candidatesTokenCount,Integer totalTokenCount,
+            Integer thoughtsTokenCount,Integer toolUsePromptTokenCount) {}
+    /** Native response data only. Never copied into provider status, TraceStore or learning eligibility. */
+    public record GroundingMetadata(List<String> webSearchQueries,List<GroundingChunk> groundingChunks,
+                                    List<GroundingSupport> groundingSupports,SearchEntryPoint searchEntryPoint) {
+        public GroundingMetadata {
+            webSearchQueries=webSearchQueries==null?List.of():Collections.unmodifiableList(new java.util.ArrayList<>(webSearchQueries));
+            groundingChunks=groundingChunks==null?List.of():Collections.unmodifiableList(new java.util.ArrayList<>(groundingChunks));
+            groundingSupports=groundingSupports==null?List.of():Collections.unmodifiableList(new java.util.ArrayList<>(groundingSupports));
+        }
+        @Override public String toString(){return "GeminiGroundingMetadata[redacted]";}
+    }
+    public record GroundingChunk(WebSource web) {}
+    public record WebSource(String uri,String title) {}
+    public record GroundingSupport(Segment segment,List<Integer> groundingChunkIndices,List<Double> confidenceScores) {
+        public GroundingSupport {groundingChunkIndices=groundingChunkIndices==null?List.of():Collections.unmodifiableList(new java.util.ArrayList<>(groundingChunkIndices));
+            confidenceScores=confidenceScores==null?List.of():Collections.unmodifiableList(new java.util.ArrayList<>(confidenceScores));}
+    }
+    public record Segment(Integer partIndex,Integer startIndex,Integer endIndex,String text) {}
+    public record SearchEntryPoint(String renderedContent) {}
+
+    /** One provider response, held only in the current owner-bound Focus result. */
+    public record GroundedAnswer(String originalText,String model,GroundingMetadata metadata,
+            @com.fasterxml.jackson.annotation.JsonIgnore List<String> parts,boolean searchToolAllowed,String selectedModel) {
+        public GroundedAnswer(String text,String model,GroundingMetadata metadata,List<String> parts,boolean allowed){this(text,model,metadata,parts,allowed,model);}
+        public GroundedAnswer {parts=List.copyOf(parts);}
+        @Override public String toString(){return "GroundedAnswer[redacted]";}
+        public boolean searchObserved(){return metadata!=null&&(metadata.webSearchQueries().stream().anyMatch(query->query!=null&&!query.isBlank())
+            ||metadata.groundingChunks().stream().anyMatch(chunk->chunk!=null&&chunk.web()!=null&&chunk.web().uri()!=null&&!chunk.web().uri().isBlank()));}
+        public boolean publicationReady(){
+            if(!searchObserved())return true;
+            if(model==null||model.isBlank()||metadata.searchEntryPoint()==null
+                    ||metadata.searchEntryPoint().renderedContent()==null||metadata.searchEntryPoint().renderedContent().isBlank())return false;
+            for(var support:metadata.groundingSupports()){
+                if(support==null||support.segment()==null)return false;
+                var segment=support.segment();int part=segment.partIndex()==null?0:segment.partIndex();
+                int start=segment.startIndex()==null?0:segment.startIndex();Integer end=segment.endIndex();
+                if(part<0||part>=parts.size()||end==null||start<0||end<=start)return false;
+                byte[] bytes=parts.get(part).getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                if(end>bytes.length)return false;
+                byte[] slice=java.util.Arrays.copyOfRange(bytes,start,end);
+                String text=new String(slice,java.nio.charset.StandardCharsets.UTF_8);
+                if(!java.util.Arrays.equals(slice,text.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                        ||(segment.text()!=null&&!segment.text().equals(text)))return false;
+                for(Integer index:support.groundingChunkIndices()){
+                    if(index==null||index<0||index>=metadata.groundingChunks().size())return false;
+                    var chunk=metadata.groundingChunks().get(index);
+                    if(chunk==null||chunk.web()==null||!safeSourceUri(chunk.web().uri()))return false;
+                }
+            }
+            return true;
+        }
+        /** Exclusive mode requires actual attribution; ordinary Focus retains its publication policy. */
+        public boolean exclusivePublicationReady(){
+            if(!searchToolAllowed||!searchObserved()||!publicationReady()||metadata.groundingSupports().isEmpty()
+                    ||metadata.groundingSupports().stream().anyMatch(s->s==null||s.groundingChunkIndices().isEmpty()))return false;
+            String html=metadata.searchEntryPoint().renderedContent();
+            var doc=org.jsoup.Jsoup.parseBodyFragment(html);
+            var allowed=java.util.Set.of("div","span","style","a","svg","path","p","br","g","circle");
+            for(var element:doc.body().getAllElements()){
+                if(element==doc.body())continue;
+                if(!allowed.contains(element.normalName()))return false;
+                for(var attr:element.attributes()){
+                    String name=attr.getKey().toLowerCase(java.util.Locale.ROOT);
+                    if(name.startsWith("on")||java.util.Set.of("src","srcdoc","action","formaction","xlink:href").contains(name))return false;
+                    if("href".equals(name)&&(!"a".equals(element.normalName())||!safeSourceUri(attr.getValue())))return false;
+                    if("style".equals(name)&&unsafeSuggestionsStyle(attr.getValue()))return false;
+                }
+                if("style".equals(element.normalName())&&unsafeSuggestionsStyle(element.data()))return false;
+            }
+            return !doc.body().children().isEmpty();
+        }
+        private static boolean unsafeSuggestionsStyle(String value){return java.util.regex.Pattern.compile(
+            "\\\\|@import|url\\s*\\(|expression\\s*\\(|behavior\\s*:|position\\s*:\\s*fixed",java.util.regex.Pattern.CASE_INSENSITIVE).matcher(value).find();}
+        private static boolean safeSourceUri(String value){
+            try{var uri=java.net.URI.create(value);return "https".equalsIgnoreCase(uri.getScheme())&&uri.getHost()!=null&&uri.getUserInfo()==null;}
+            catch(RuntimeException invalid){return false;}
+        }
+    }
+
+    /** LangChain4j 1.0.1's existing response metadata extension point; never TraceStore. */
+    public static final class GroundedChatMetadata extends dev.langchain4j.model.chat.response.ChatResponseMetadata {
+        private final GroundedAnswer grounding;
+        private GroundedChatMetadata(GenerationResult result){
+            super(dev.langchain4j.model.chat.response.ChatResponseMetadata.builder().modelName(result.responseModel()));
+            grounding=new GroundedAnswer(result.text(),result.responseModel(),result.groundingMetadata(),result.publicParts(),result.searchToolAllowed(),result.status()==null?result.responseModel():result.status().model());
+        }
+        public GroundedAnswer grounding(){return grounding;}
+        @Override public String toString(){return "GroundedChatMetadata[redacted]";}
     }
 
     public record SearchExpansion(String query, ProviderStatus status) {
@@ -748,13 +1002,30 @@ public class GeminiGateway {
     private record Content(List<Part> parts) {
     }
 
-    private record Candidate(Content content) {
+    private record SafetyRating(Boolean blocked) {}
+    private record PromptFeedback(String blockReason,List<SafetyRating> safetyRatings) {}
+    private record Candidate(Content content,GroundingMetadata groundingMetadata,String finishReason,List<SafetyRating> safetyRatings) {
     }
 
-    private record GeminiResponse(List<Candidate> candidates) {
+    private record GeminiResponse(List<Candidate> candidates,String modelVersion,PromptFeedback promptFeedback,UsageMetadata usageMetadata) {
         private static GeminiResponse empty() {
-            return new GeminiResponse(List.of());
+            return new GeminiResponse(List.of(),null,null,null);
         }
+        private CompletionMetadata completion() {
+            Candidate candidate = candidates == null || candidates.isEmpty() ? null : candidates.get(0);
+            return new CompletionMetadata(candidate == null ? null : candidate.finishReason(),
+                    promptFeedback == null ? null : promptFeedback.blockReason(),
+                    blocked(candidate == null ? null : candidate.safetyRatings())
+                            || blocked(promptFeedback == null ? null : promptFeedback.safetyRatings()), usageMetadata);
+        }
+        private static boolean blocked(List<SafetyRating> ratings) {
+            return ratings != null && ratings.stream().anyMatch(rating -> rating != null && Boolean.TRUE.equals(rating.blocked()));
+        }
+        private List<String> publicParts(){
+            if(candidates==null||candidates.isEmpty()||candidates.get(0)==null||candidates.get(0).content()==null||candidates.get(0).content().parts()==null)return List.of();
+            return candidates.get(0).content().parts().stream().map(part->part==null||part.text()==null||Boolean.TRUE.equals(part.thought())?"":part.text()).toList();
+        }
+        private GroundingMetadata firstGrounding(){return candidates==null||candidates.isEmpty()||candidates.get(0)==null?null:candidates.get(0).groundingMetadata();}
 
         private String firstText() {
             if (candidates == null || candidates.isEmpty()) {
@@ -812,10 +1083,14 @@ public class GeminiGateway {
     private final class GatewayRouterChatModel implements ChatModel {
         private final ChatModel delegate;
         private final String model;
+        private final RouterSpec focusSpec;
+        private final boolean requireNativeGoogleSearch;
 
-        private GatewayRouterChatModel(ChatModel delegate, String model) {
+        private GatewayRouterChatModel(ChatModel delegate, String model, RouterSpec focusSpec,boolean requireNativeGoogleSearch) {
             this.delegate = delegate;
             this.model = model;
+            this.focusSpec = focusSpec;
+            this.requireNativeGoogleSearch=requireNativeGoogleSearch;
         }
 
         @Override
@@ -824,6 +1099,32 @@ public class GeminiGateway {
         }
 
         private ChatResponse doChat(List<ChatMessage> messages, ChatRequest request) {
+            if(requireNativeGoogleSearch&&!focusSearchReadiness(focusSpec).ready())
+                throw new com.example.lms.llm.ModelSelectionException("protocol_unsupported");
+            if(focusSpec!=null){
+                var credential=credentialResolver.resolve(ProviderCredentialResolver.Provider.GEMINI);
+                if(!routerReadiness(credential).ready())throw new IllegalStateException("gemini_router_disabled");
+                boolean allowed=groundingEnabled();
+                if(requireNativeGoogleSearch&&!allowed)
+                    throw new com.example.lms.llm.ModelSelectionException("protocol_unsupported");
+                var result=executeGeneration(nativeChatBody(messages,focusSpec,allowed),Purpose.ROUTER,
+                    model,credential.valueOrNull(),allowed,focusSpec.timeout().toMillis(),
+                    1+Math.max(0,focusSpec.maxRetries())).block();
+                if(requireNativeGoogleSearch&&(result==null||result.text().isBlank())){
+                    var status=result==null?null:result.status();Integer code=status==null?null:status.statusCode();
+                    String reason=status==null?"":status.fallbackReason().toLowerCase(java.util.Locale.ROOT);
+                    boolean timeout=reason.contains("timeout")||(status!=null
+                        &&status.errorClass().toLowerCase(java.util.Locale.ROOT).contains("timeout"));
+                    throw new com.example.lms.llm.ModelSelectionException(reason.contains("quota")?"quota_exceeded":
+                        code!=null&&(code==401||code==403)?"provider_unauthorized":code!=null&&code==404?"model_unavailable":
+                        code!=null&&code==429?"rate_limited":timeout?"backend_timeout":"backend_unavailable");
+                }
+                if(result==null||result.text().isBlank())throw new com.example.lms.llm.gateway.LlmGatewayException(
+                    "Gemini Focus generation unavailable",com.example.lms.llm.gateway.LlmFailureClass.UNKNOWN,
+                    result==null?"gemini_empty_response":result.status().fallbackReason().isBlank()?"gemini_empty_response":result.status().fallbackReason());
+                return ChatResponse.builder().aiMessage(dev.langchain4j.data.message.AiMessage.from(result.text()))
+                    .metadata(new GroundedChatMetadata(result)).build();
+            }
             long startedNanos = System.nanoTime();
             if (!quotaAllowed()) {
                 status(Purpose.ROUTER, model, true, true, 0, null, elapsedMillis(startedNanos),
@@ -855,6 +1156,27 @@ public class GeminiGateway {
                 throw failure;
             }
         }
+    }
+
+    /** Preserve PromptBuilder's complete role messages; no question-only shadow prompt. */
+    static Map<String,Object> nativeChatBody(List<ChatMessage> messages,RouterSpec spec,boolean allowed){
+        var body=new LinkedHashMap<String,Object>();var contents=new java.util.ArrayList<Map<String,Object>>();
+        var system=new java.util.ArrayList<Map<String,Object>>();
+        for(var message:messages){
+            if(message instanceof dev.langchain4j.data.message.SystemMessage value){system.add(Map.of("text",value.text()));continue;}
+            String role,text;
+            if(message instanceof dev.langchain4j.data.message.UserMessage value&&value.hasSingleText()){role="user";text=value.singleText();}
+            else if(message instanceof dev.langchain4j.data.message.AiMessage value&&!value.hasToolExecutionRequests()){role="model";text=value.text();}
+            else throw new IllegalArgumentException("focus_native_message_unsupported");
+            contents.add(Map.of("role",role,"parts",List.of(Map.of("text",text==null?"":text))));
+        }
+        body.put("contents",contents);if(!system.isEmpty())body.put("systemInstruction",Map.of("parts",system));
+        if(allowed)body.put("tools",List.of(Map.of("google_search",Map.of())));
+        var config=new LinkedHashMap<String,Object>();
+        if(spec.maxTokens()!=null)config.put("maxOutputTokens",spec.maxTokens());
+        if(spec.temperature()!=null)config.put("temperature",spec.temperature());if(spec.topP()!=null)config.put("topP",spec.topP());
+        if(!config.isEmpty())body.put("generationConfig",config);
+        return body;
     }
 
     private static boolean isMissingDoChatContract(RuntimeException failure) {

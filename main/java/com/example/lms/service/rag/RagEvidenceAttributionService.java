@@ -1198,20 +1198,52 @@ public class RagEvidenceAttributionService {
             if (uri.getHost() == null || uri.getHost().isBlank()) {
                 return null;
             }
+            String host = uri.getHost().toLowerCase(Locale.ROOT);
+            if (uri.getRawUserInfo() != null || !host.contains(".")
+                    || host.matches("[0-9.]+") || host.contains(":")
+                    || host.endsWith(".localhost") || host.endsWith(".local")
+                    || host.endsWith(".internal")) return null;
+            // Hash routers select documents; dropping their fragment changes identity.
+            String fragment = uri.getFragment();
+            if (fragment != null && (fragment.startsWith("/") || fragment.startsWith("!"))) return null;
+            String query = publicDocumentQuery(uri.getRawQuery());
+            if (uri.getRawQuery() != null && query == null) return null;
             URI clean = new URI(
                     scheme.toLowerCase(Locale.ROOT),
                     null,
-                    uri.getHost(),
+                    host,
                     uri.getPort(),
                     null,
                     null,
                     null);
-            String publicUrl = clean.toString() + (uri.getRawPath() == null ? "" : uri.getRawPath());
+            String publicUrl = clean.toString() + (uri.getRawPath() == null ? "" : uri.getRawPath())
+                    + (query == null || query.isEmpty() ? "" : "?" + query);
             return publicUrl.length() <= 1000 ? publicUrl : null;
         } catch (Throwable ignore) {
             log.debug("[RagEvidenceAttributionService] fail-soft stage={}", "sanitizePublicUrl");
             return null;
         }
+    }
+
+    /** Unknown query semantics fail closed instead of collapsing distinct documents. */
+    private static String publicDocumentQuery(String rawQuery) {
+        if (rawQuery == null || rawQuery.isEmpty()) return "";
+        if (rawQuery.length() > 256) return null;
+        Set<String> seen = new java.util.HashSet<>();
+        List<String> kept = new ArrayList<>();
+        for (String part : rawQuery.split("&", -1)) {
+            int separator = part.indexOf('=');
+            if (separator <= 0) return null;
+            String key = part.substring(0, separator).toLowerCase(Locale.ROOT);
+            String value = part.substring(separator + 1);
+            if (!key.matches("[a-z][a-z0-9_]*") || !seen.add(key)) return null;
+            if (key.startsWith("utm_") || Set.of("gclid", "fbclid").contains(key)) continue;
+            if (!Set.of("id", "docid", "profileid", "articleid", "seq", "idx").contains(key)) return null;
+            String decoded = java.net.URLDecoder.decode(value, java.nio.charset.StandardCharsets.UTF_8);
+            if (!decoded.matches("[A-Za-z0-9][A-Za-z0-9._~-]{0,63}")) return null;
+            kept.add(part);
+        }
+        return String.join("&", kept);
     }
 
     private record Candidate(RagEvidenceMetadata metadata, String text, String snippetHash) {

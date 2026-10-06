@@ -168,6 +168,10 @@ public class ChatRequestDto {
         @Builder.Default
         private java.lang.Boolean useWebSearch = null;
 
+        /** Main-only request opt-in, independent of Display settings and main-model selection. */
+        @Builder.Default
+        private boolean googleSearchRescueEnabled = false;
+
         /** true → RAG 단독 실행 / false → 컨텍스트 주입 */
         private Boolean ragStandalone;
 

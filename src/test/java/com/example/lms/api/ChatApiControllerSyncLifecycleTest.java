@@ -30,6 +30,193 @@ import static org.mockito.Mockito.*;
 
 class ChatApiControllerSyncLifecycleTest {
 
+    @org.junit.jupiter.api.Test
+    void cancelledOwnerDoesNotBlockOtherControllersOrReplayTheirResult(
+            @org.junit.jupiter.api.io.TempDir java.nio.file.Path directory) throws Exception {
+        var dataSource = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:file:" + directory.resolve("admission") + ";MODE=MySQL;DB_CLOSE_ON_EXIT=FALSE", "sa", "");
+        new org.springframework.jdbc.datasource.init.ResourceDatabasePopulator(
+                new org.springframework.core.io.FileSystemResource("main/resources/db/migration/V20260912_02__chat_requests.sql"),
+                new org.springframework.core.io.FileSystemResource("main/resources/db/migration/V20260912_04__chat_request_results.sql"))
+                .execute(dataSource);
+        var redis = mock(com.example.lms.infra.upstash.UpstashRedisClient.class);
+        when(redis.enabled()).thenReturn(true);
+        when(redis.eval(anyString(), anyList(), anyList())).thenReturn(reactor.core.publisher.Mono.just(List.of(1L, 0L)));
+        var guard = new PublicChatAdmissionGuard(2, 1, 4);
+        var entered = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
+        var exited = new CountDownLatch(1);
+        var run = new java.util.concurrent.atomic.AtomicReference<ChatRunExecutionContext>();
+        var subscription = new java.util.concurrent.atomic.AtomicReference<reactor.core.Disposable>();
+        try (Fixture a = new Fixture(); Fixture b = new Fixture("owner-b", 43L, a.registry)) {
+            ReflectionTestUtils.setField(a.controller, "publicChatAdmissionGuard", guard);
+            ReflectionTestUtils.setField(b.controller, "publicChatAdmissionGuard", guard);
+            var filterA = new ChatGenerationAdmissionFilter(redis, dataSource, a.owners);
+            var filterB = new ChatGenerationAdmissionFilter(redis, dataSource, b.owners);
+            when(a.chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+                run.set(ChatRunExecutionContext.current());
+                entered.countDown();
+                try {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
+                    while (release.getCount() != 0) {
+                        long remaining = deadline - System.nanoTime();
+                        if (remaining <= 0) throw new IllegalStateException("synthetic worker timeout");
+                        try { release.await(remaining, TimeUnit.NANOSECONDS); }
+                        catch (InterruptedException ignored) { /* Non-cooperative transport returns late. */ }
+                    }
+                    return ChatResult.of("owner-a late answer", "mock-model", false);
+                } finally {
+                    exited.countDown();
+                }
+            });
+            var requestA = a.admittedRequest("ordinary question", "shared-key");
+            var responseA = new org.springframework.mock.web.MockHttpServletResponse();
+            try {
+                filterA.doFilter(requestA, responseA, (rq, rs) -> {
+                    subscription.set(a.controller.chat(a.requestDto("ordinary question"), null,
+                            (jakarta.servlet.http.HttpServletRequest) rq).subscribe(ignored -> {}, ignored -> {}));
+                    rq.startAsync(rq, rs);
+                });
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                assertNotNull(run.get());
+                assertTrue(a.registry.cancelExact(42L, run.get().clientToken()));
+                subscription.get().dispose();
+                var async = (org.springframework.mock.web.MockAsyncContext) requestA.getAsyncContext();
+                for (var listener : async.getListeners()) listener.onTimeout(new jakarta.servlet.AsyncEvent(async));
+                assertEquals(1, guard.activeLeaseCountForTest());
+                assertEquals(1, guard.availableGlobalPermitsForTest());
+
+                var responseB = new org.springframework.mock.web.MockHttpServletResponse();
+                filterB.doFilter(b.admittedRequest("ordinary question", "shared-key"), responseB, (rq, rs) -> {
+                    var entity = b.controller.chat(b.requestDto("ordinary question"), null,
+                            (jakarta.servlet.http.HttpServletRequest) rq).block(Duration.ofSeconds(5));
+                    assertNotNull(entity);
+                    assertEquals(HttpStatus.OK, entity.getStatusCode());
+                    assertEquals(43L, entity.getBody().getSessionId());
+                    assertEquals("generated answer", entity.getBody().getContent());
+                    var method = java.util.Arrays.stream(ChatApiController.class.getMethods())
+                            .filter(m -> m.getName().equals("chat")).findFirst().orElseThrow();
+                    new ChatRequestCompletionAdvice().beforeBodyWrite(entity.getBody(),
+                            new org.springframework.core.MethodParameter(method, -1),
+                            org.springframework.http.MediaType.APPLICATION_JSON,
+                            org.springframework.http.converter.json.MappingJackson2HttpMessageConverter.class,
+                            new org.springframework.http.server.ServletServerHttpRequest((jakarta.servlet.http.HttpServletRequest) rq),
+                            new org.springframework.http.server.ServletServerHttpResponse((jakarta.servlet.http.HttpServletResponse) rs));
+                    rs.getWriter().write(new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(entity.getBody()));
+                });
+                assertEquals(1, exited.getCount(), "B completes while A's cancelled delegate is still alive");
+                assertFalse(a.registry.isRunning(43L));
+                assertEquals(1, guard.activeLeaseCountForTest());
+                verify(b.history, times(1)).appendMessageReturningId(43L, "assistant", "generated answer");
+                verify(b.history, never()).appendMessageReturningId(eq(42L), anyString(), anyString());
+
+                var replayB = new org.springframework.mock.web.MockHttpServletResponse();
+                filterB.doFilter(b.admittedRequest("ordinary question", "shared-key"), replayB,
+                        (rq, rs) -> fail("completed B retry must replay without controller generation"));
+                assertEquals(200, replayB.getStatus());
+                assertEquals("true", replayB.getHeader("X-Idempotent-Replay"));
+                assertEquals(responseB.getContentAsString(), replayB.getContentAsString());
+                assertFalse(replayB.getContentAsString().contains(run.get().clientToken()));
+                for (String message : List.of("ordinary question", "changed question")) {
+                    var retryA = new org.springframework.mock.web.MockHttpServletResponse();
+                    filterA.doFilter(a.admittedRequest(message, "shared-key"), retryA,
+                            (rq, rs) -> fail("cancelled A claim must never execute or replay B's result"));
+                    assertEquals(409, retryA.getStatus());
+                    assertTrue(retryA.getContentAsString().contains("ordinary question".equals(message)
+                            ? "idempotency_duplicate" : "idempotency_payload_mismatch"));
+                    assertFalse(retryA.getContentAsString().contains("generated answer"));
+                }
+                var jdbc = new org.springframework.jdbc.core.JdbcTemplate(dataSource);
+                assertEquals("OUTCOME_UNKNOWN", jdbc.queryForObject(
+                        "SELECT state FROM awx_chat_requests WHERE owner_hash=?", String.class,
+                        org.apache.commons.codec.digest.DigestUtils.sha256Hex("owner:owner-a")));
+                assertEquals("COMPLETED", jdbc.queryForObject(
+                        "SELECT state FROM awx_chat_requests WHERE owner_hash=?", String.class,
+                        org.apache.commons.codec.digest.DigestUtils.sha256Hex("owner:owner-b")));
+                assertEquals(1, jdbc.queryForObject("SELECT COUNT(*) FROM awx_chat_request_results", Integer.class));
+                release.countDown();
+                assertTrue(exited.await(2, TimeUnit.SECONDS));
+                assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                    while (guard.activeLeaseCountForTest() != 0) Thread.sleep(1);
+                });
+                assertEquals(0, guard.activeOwnerCountForTest());
+                assertEquals(2, guard.availableGlobalPermitsForTest());
+                verify(a.chat, times(1)).continueChat(any(ChatRequestDto.class), any());
+                verify(b.chat, times(1)).continueChat(any(ChatRequestDto.class), any());
+                verify(a.history, never()).appendMessageReturningId(anyLong(), eq("assistant"), anyString());
+                verify(a.history, never()).updateRollingSummary(anyLong(), nullable(Long.class));
+            } finally {
+                release.countDown();
+                if (subscription.get() != null) subscription.get().dispose();
+                if (entered.getCount() == 0) assertTrue(exited.await(2, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"chat", "stream"})
+    void cancelledBlockingWorkerRetainsAdmissionUntilItActuallyExits(String route) throws Exception {
+        try (Fixture f = new Fixture()) {
+            PublicChatAdmissionGuard guard = new PublicChatAdmissionGuard(1, 1, 4);
+            ReflectionTestUtils.setField(f.controller, "publicChatAdmissionGuard", guard);
+            CountDownLatch entered = new CountDownLatch(1);
+            CountDownLatch release = new CountDownLatch(1);
+            CountDownLatch exited = new CountDownLatch(1);
+            var run = new java.util.concurrent.atomic.AtomicReference<ChatRunExecutionContext>();
+            when(f.chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+                run.set(ChatRunExecutionContext.current());
+                entered.countDown();
+                try {
+                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                    while (release.getCount() != 0) {
+                        long remaining = deadline - System.nanoTime();
+                        if (remaining <= 0) throw new IllegalStateException("synthetic worker timeout");
+                        try { release.await(remaining, TimeUnit.NANOSECONDS); }
+                        catch (InterruptedException ignored) { /* Deliberately non-cooperative transport. */ }
+                    }
+                    throw new CancellationException("synthetic cancelled worker");
+                } finally {
+                    exited.countDown();
+                }
+            });
+            ChatRequestDto request = ChatRequestDto.builder().message("ordinary question")
+                    .sessionId(42L).useRag(false).useWebSearch(false).build();
+            reactor.core.Disposable subscription = "chat".equals(route)
+                    ? f.controller.chat(request, null, new MockHttpServletRequest()).subscribe()
+                    : f.controller.chatStream(request, false, false, null, new MockHttpServletRequest()).subscribe();
+            try {
+                assertTrue(entered.await(2, TimeUnit.SECONDS));
+                assertNotNull(run.get());
+                assertTrue(f.registry.cancelExact(42L, run.get().clientToken()));
+                subscription.dispose();
+                assertEquals(1, exited.getCount(), "cancellation has not stopped the blocking delegate");
+                var otherOwner = com.example.lms.service.AttachmentOwnerIdentity
+                        .forActor("anonymousUser", "owner-b").hash();
+                var unexpected = guard.tryAcquire(otherOwner);
+                unexpected.ifPresent(PublicChatAdmissionGuard.Lease::close);
+                assertTrue(unexpected.isEmpty(), "running cancelled work must still occupy global capacity");
+                assertEquals(1, guard.activeLeaseCountForTest());
+                assertEquals(0, guard.availableGlobalPermitsForTest());
+                release.countDown();
+                assertTrue(exited.await(2, TimeUnit.SECONDS));
+                assertTimeoutPreemptively(Duration.ofSeconds(2), () -> {
+                    while (guard.activeLeaseCountForTest() != 0) Thread.sleep(1);
+                });
+                try (var available = guard.tryAcquire(otherOwner).orElseThrow()) {
+                    assertEquals(1, guard.activeLeaseCountForTest());
+                }
+                assertEquals(0, guard.activeOwnerCountForTest());
+                assertEquals(1, guard.availableGlobalPermitsForTest());
+                verify(f.chat, times(1)).continueChat(any(ChatRequestDto.class), any());
+                verify(f.history, never()).appendMessageReturningId(anyLong(), eq("assistant"), anyString());
+            } finally {
+                release.countDown();
+                subscription.dispose();
+                assertTrue(exited.await(2, TimeUnit.SECONDS));
+            }
+        }
+    }
+
     @ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
             "failure,FAIL_SOFT", "empty,OK", "no-provider,SKIPPED", "off,SKIPPED"
@@ -377,7 +564,10 @@ class ChatApiControllerSyncLifecycleTest {
     private static final class Fixture implements AutoCloseable {
         final ChatHistoryService history = mock(ChatHistoryService.class);
         final ChatService chat = mock(ChatService.class);
-        final ChatRunRegistry registry = spy(new ChatRunRegistry());
+        final ChatRunRegistry registry;
+        final ClientOwnerKeyResolver owners = mock(ClientOwnerKeyResolver.class);
+        final long sessionId;
+        final boolean ownsRegistry;
         final ExecutorService executor = Executors.newFixedThreadPool(2);
         final AtomicBoolean deleted = new AtomicBoolean();
         final AtomicInteger appendAfterDelete = new AtomicInteger();
@@ -385,43 +575,65 @@ class ChatApiControllerSyncLifecycleTest {
         final ChatApiController controller;
 
         Fixture() {
+            this("owner-a", 42L, null);
+        }
+
+        Fixture(String owner, long sessionId, ChatRunRegistry sharedRegistry) {
+            this.sessionId = sessionId;
+            ownsRegistry = sharedRegistry == null;
+            registry = ownsRegistry ? spy(new ChatRunRegistry()) : sharedRegistry;
             ReflectionTestUtils.setField(registry, "replayCapacity", 32);
             ReflectionTestUtils.setField(registry, "ttlSeconds", 60);
             SettingsService settings = mock(SettingsService.class);
-            ClientOwnerKeyResolver owners = mock(ClientOwnerKeyResolver.class);
             when(settings.getAllSettings()).thenReturn(Map.of());
-            when(owners.ownerKey()).thenReturn("owner-a");
+            when(owners.ownerKey()).thenReturn(owner);
+            when(owners.clientIpHash(any())).thenReturn("f".repeat(64));
             controller = new ChatApiController(history, chat, null, settings, null,
                     null, null, null, null, null, null, null, null, null, null, null,
                     new com.fasterxml.jackson.databind.ObjectMapper(), null, registry, owners);
-            ChatSession session = new ChatSession("lifecycle", "owner-a", "ANON");
-            session.setId(42L);
-            when(history.getSessionWithMessages(42L)).thenAnswer(invocation -> deleted.get() ? null : session);
-            when(history.getSessionForRequest(42L)).thenAnswer(invocation -> deleted.get() ? null : session);
-            when(history.getSessionWithMessages(42L, 1)).thenAnswer(invocation -> deleted.get() ? null : session);
+            ChatSession session = new ChatSession("lifecycle", owner, "ANON");
+            session.setId(sessionId);
+            when(history.getSessionWithMessages(sessionId)).thenAnswer(invocation -> deleted.get() ? null : session);
+            when(history.getSessionForRequest(sessionId)).thenAnswer(invocation -> deleted.get() ? null : session);
+            when(history.getSessionWithMessages(sessionId, 1)).thenAnswer(invocation -> deleted.get() ? null : session);
             doAnswer(invocation -> {
                 events.add("delete-history");
                 deleted.set(true);
                 return null;
-            }).when(history).deleteSession(42L);
-            when(history.appendMessageReturningId(42L, "assistant", "generated answer")).thenAnswer(invocation -> {
+            }).when(history).deleteSession(sessionId);
+            when(history.appendMessageReturningId(sessionId, "assistant", "generated answer")).thenAnswer(invocation -> {
                 if (deleted.get()) appendAfterDelete.incrementAndGet();
-                return deleted.get() ? null : 421L;
+                return deleted.get() ? null : sessionId * 10 + 1;
             });
             when(chat.continueChat(any(ChatRequestDto.class), any()))
                     .thenReturn(ChatResult.of("generated answer", "mock-model", false));
         }
 
         ResponseEntity<ChatResponseDto> request(String route) {
-            ChatRequestDto request = ChatRequestDto.builder().message("ordinary question")
-                    .sessionId(42L).useRag(false).useWebSearch(false).build();
+            ChatRequestDto request = requestDto("ordinary question");
             return "sync".equals(route) ? controller.chatSync(request, null, new MockHttpServletRequest())
                     : controller.chat(request, null, new MockHttpServletRequest()).block(Duration.ofSeconds(5));
         }
 
+        ChatRequestDto requestDto(String message) {
+            return ChatRequestDto.builder().message(message).sessionId(sessionId)
+                    .useRag(false).useWebSearch(false).build();
+        }
+
+        MockHttpServletRequest admittedRequest(String message, String key) throws Exception {
+            var request = new MockHttpServletRequest("POST", "/api/chat");
+            byte[] body = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsBytes(requestDto(message));
+            request.setContentType("application/json");
+            request.setContent(body);
+            request.setAttribute("chat.admission.bodySha256", org.apache.commons.codec.digest.DigestUtils.sha256Hex(body));
+            request.addHeader("Idempotency-Key", key);
+            request.setAsyncSupported(true);
+            return request;
+        }
+
         @Override public void close() {
             executor.shutdownNow();
-            ReflectionTestUtils.invokeMethod(registry, "shutdown");
+            if (ownsRegistry) ReflectionTestUtils.invokeMethod(registry, "shutdown");
         }
     }
 }

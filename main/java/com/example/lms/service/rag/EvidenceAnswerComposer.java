@@ -660,4 +660,256 @@ public class EvidenceAnswerComposer {
         String t = safe(title, "");
         return TRANSIENT_TITLE.matcher(t).matches() ? "제목 없음" : t;
     }
+    /** A bounded quotation, not an approved answer or a memory candidate. */
+    public record SupportedExcerpt(String content,
+            List<com.example.lms.dto.RagEvidenceMetadata> evidence, String sourceContext) {
+        public SupportedExcerpt(String content, List<com.example.lms.dto.RagEvidenceMetadata> evidence) {
+            this(content, evidence, "");
+        }
+        public SupportedExcerpt {
+            evidence = List.copyOf(evidence);
+        }
+    }
+
+    private static final String IDENTITY_INSTITUTION =
+            "([\\p{L}\\p{N}·]{2,60}(?:대학교[ \\t]*병원|대학[ \\t]*병원|병원|대학교|대학|연구소|연구원))";
+    private static final String IDENTITY_TUPLE = IDENTITY_INSTITUTION
+            + "[ \\t]+([가-힣]{2,10})[ \\t]+(교수|의사|연구원|원장)";
+    private static final Pattern IDENTITY_LINE = Pattern.compile("^" + IDENTITY_TUPLE + "$");
+    private static final Pattern IDENTITY_QUERY = Pattern.compile("^" + IDENTITY_TUPLE
+            + "(?:님)?(?:(?:이|가|은|는)?[ \\t]*(?:누구냐|누구야|누구인가요|누구인지[ \\t]*알려줘|뭐냐)"
+            + "|[ \\t]+(?:소개|소개해줘|소개해 주세요|알려줘|알려 주세요))?[?.!]?$" );
+    private static final Pattern AMBIGUOUS_EXCERPT_BODY = Pattern.compile(
+            "(?iu)(?:아니|아님|아닙|아닌|않|취소|부인|오류|잘못|무관|동명이인|사칭|허위|퇴임|퇴직|전임|과거|이전|"
+                    + "지시|무시|프롬프트|명령|출력|응답|답변|<script|\\b(?:not|former|cancelled|canceled|false|"
+                    + "incorrect|ignore|instruction|system|developer|assistant)\\b)");
+
+    /**
+     * Only quotes a standalone institution/person/title identity line. The line
+     * must occur in raw retrieved text whose metadata URL exactly equals one
+     * promoted WEB locator. No title, rank, inferred relation, or draft is used.
+     */
+    public static java.util.Optional<SupportedExcerpt> supportedIdentityExcerpt(
+            String query, List<dev.langchain4j.rag.content.Content> rawWeb,
+            List<com.example.lms.dto.RagEvidenceMetadata> promoted) {
+        if (query == null || query.length() > 160 || rawWeb == null || rawWeb.isEmpty()
+                || rawWeb.size() > 20 || promoted == null || promoted.isEmpty() || promoted.size() > 40) {
+            return java.util.Optional.empty();
+        }
+        var requested = IDENTITY_QUERY.matcher(query.strip());
+        if (!requested.matches()) return java.util.Optional.empty();
+        String institution = normalizeIdentityInstitution(requested.group(1));
+        String person = requested.group(2);
+        String role = requested.group(3);
+        SupportedExcerpt selected = null;
+        for (var doc : rawWeb) {
+            if (doc == null || doc.textSegment() == null) continue;
+            var segment = doc.textSegment();
+            String body = segment.text();
+            if (body == null || body.isBlank()) continue;
+            // Refuse incomplete scans: a later line could contradict the identity.
+            if (body.length() > 16_000 || AMBIGUOUS_EXCERPT_BODY.matcher(body).find()) {
+                return java.util.Optional.empty();
+            }
+            for (String rawLine : body.split("\\R", -1)) {
+                var introduction = IDENTITY_LINE.matcher(rawLine.strip());
+                boolean completeIntroduction = introduction.matches();
+                if (rawLine.contains(person) && !completeIntroduction) return java.util.Optional.empty();
+                if (completeIntroduction && person.equals(introduction.group(2))
+                        && !institution.equals(normalizeIdentityInstitution(introduction.group(1)))) return java.util.Optional.empty();
+            }
+            String rawUrl;
+            try {
+                var metadata = segment.metadata();
+                if (metadata == null) continue;
+                String kind = metadata.getString("kind");
+                if ((kind != null && !"WEB".equals(kind)) || metadata.getString("filePath") != null
+                        || metadata.getString("attachmentId") != null || metadata.getString("sourceId") != null
+                        || metadata.getString("owner") != null || metadata.getString("private") != null) {
+                    return java.util.Optional.empty();
+                }
+                if (metadata.getString("_nova.compressed") != null
+                        || metadata.getString("_nova.origHash") != null) return java.util.Optional.empty();
+                rawUrl = metadata.getString("url");
+                String source = metadata.getString("source");
+                if (rawUrl == null) rawUrl = source;
+                else if (source != null && !rawUrl.equals(source)) return java.util.Optional.empty();
+            } catch (RuntimeException malformedMetadata) {
+                return java.util.Optional.empty();
+            }
+            rawUrl = RagEvidenceAttributionService.sanitizePublicUrl(rawUrl);
+            if (!isPublicExcerptUrl(rawUrl)) continue;
+            com.example.lms.dto.RagEvidenceMetadata locator = null;
+            for (var item : promoted) {
+                if (item == null || !"WEB".equals(item.kind()) || item.attachment() != null
+                        || !rawUrl.equals(item.source()) || item.marker() == null
+                        || !item.marker().matches("W[1-9][0-9]{0,3}")) continue;
+                if (locator != null) return java.util.Optional.empty();
+                locator = item;
+            }
+            for (String rawLine : body.split("\\R", -1)) {
+                String line = rawLine.strip();
+                var introduction = IDENTITY_LINE.matcher(line);
+                if (!introduction.matches()) continue;
+                if (locator == null || !institution.equals(normalizeIdentityInstitution(introduction.group(1)))
+                        || !person.equals(introduction.group(2)) || !role.equals(introduction.group(3))) continue;
+                // strip() preserves a contiguous source span; no compression or paraphrase.
+                if (selected == null) {
+                    String content = "[UNVERIFIED · 검증 미완료 / 원문 일부]\n\n> " + line
+                            + "\n\n[" + locator.marker() + "](" + rawUrl + ")";
+                    selected = new SupportedExcerpt(content, List.of(locator));
+                }
+            }
+        }
+        return java.util.Optional.ofNullable(selected);
+    }
+
+    private static final String DESCRIPTION_DOMAIN = "^([\\p{L}\\p{N}·]{2,30}?)(?:에서|에)\\s+";
+    private static final String DESCRIPTION_ENTITY = "([\\p{L}\\p{N}·]{2,24}?)";
+    private static final Pattern DESCRIPTION_QUERY = Pattern.compile(DESCRIPTION_DOMAIN + DESCRIPTION_ENTITY
+            + "(?:이|가|은|는)?\\s*(?:뭐냐|뭐야|무엇인가요|알려줘|소개해줘)[?.!]?$");
+    private static final Pattern ALTERNATIVE_DESCRIPTION_QUERY = Pattern.compile(DESCRIPTION_DOMAIN
+            + DESCRIPTION_ENTITY + "인가\\s*" + DESCRIPTION_ENTITY
+            + "인가\\s*(?:그게\\s*)?(?:뭐냐|뭐야|무엇인가요)[?.!]?$");
+    private static final Pattern COMPARISON_DESCRIPTION_QUERY = Pattern.compile(DESCRIPTION_DOMAIN
+            + DESCRIPTION_ENTITY + "(?:이|가|은|는)?\\s*(?:쎄냐|세냐)\\??\\s*"
+            + DESCRIPTION_ENTITY + "(?:이|가|은|는)?\\s*(?:쎄냐|세냐)[?.!]?$");
+    private static final Pattern DESCRIPTION_LINE = Pattern.compile(
+            "^([\\p{L}\\p{N}·]{2,24})(?:\\(별칭[ :]+([\\p{L}\\p{N}·]{2,24})\\))?"
+                    + "(?:은|는|이|가)\\s+(.{8,380}[.!?])$");
+
+    /** Direct public-source descriptions; spelling similarity never confirms identity. */
+    public static java.util.Optional<SupportedExcerpt> supportedDescriptionExcerpt(
+            String query, List<dev.langchain4j.rag.content.Content> rawWeb,
+            List<com.example.lms.dto.RagEvidenceMetadata> promoted) {
+        if (query == null || query.length() > 160 || com.example.lms.search.SearchQueryConstraints.hasConstraints(query)
+                || rawWeb == null || rawWeb.isEmpty() || rawWeb.size() > 20
+                || promoted == null || promoted.isEmpty() || promoted.size() > 40) return java.util.Optional.empty();
+        Set<String> markers = new HashSet<>();
+        for (var item : promoted) {
+            if (item != null && "WEB".equals(item.kind()) && item.marker() != null
+                    && !markers.add(item.marker())) return java.util.Optional.empty();
+        }
+        var request = DESCRIPTION_QUERY.matcher(query.strip());
+        boolean comparison = false, alternatives = false;
+        if (!request.matches()) {
+            request = COMPARISON_DESCRIPTION_QUERY.matcher(query.strip());
+            comparison = request.matches();
+            if (!comparison) {
+                request = ALTERNATIVE_DESCRIPTION_QUERY.matcher(query.strip());
+                alternatives = request.matches();
+                if (!alternatives) return java.util.Optional.empty();
+            }
+        }
+        String domain = request.group(1);
+        List<String> entities = comparison || alternatives
+                ? List.of(request.group(2), request.group(3)) : List.of(request.group(2));
+        Pattern domainAnchor = Pattern.compile("(?<![\\p{L}\\p{N}])" + Pattern.quote(domain)
+                + "(?=에서|에|의|은|는|[\\s·,:.!?]|$)");
+        Pattern domainRelationship = Pattern.compile("^" + Pattern.quote(domain)
+                + "(?:의\\s+|에(?:서)?\\s+등장(?:하는|한)\\s+|\\s+버전\\s+[\\p{L}\\p{N}.]+에서\\s+)");
+        var lines = new java.util.LinkedHashMap<String, String>();
+        var citations = new java.util.LinkedHashMap<String, com.example.lms.dto.RagEvidenceMetadata>();
+        String identifiedSubject = null;
+        for (var doc : rawWeb) {
+            if (doc == null || doc.textSegment() == null) continue;
+            String body = doc.textSegment().text();
+            if (body == null || body.isBlank()) continue;
+            // Do not select a safe-looking line from a contradictory/instruction-bearing document.
+            if (body.length() > 16_000 || AMBIGUOUS_EXCERPT_BODY.matcher(body).find()
+                    || body.indexOf('<') >= 0 || body.indexOf('>') >= 0) return java.util.Optional.empty();
+            var locator = descriptionLocator(doc, promoted);
+            if (locator == null) continue;
+            for (String rawLine : body.split("\\R", -1)) {
+                String line = rawLine.strip();
+                var subject = DESCRIPTION_LINE.matcher(line);
+                if (!subject.matches() || !domainAnchor.matcher(line).find()
+                        || !domainRelationship.matcher(subject.group(3)).find()
+                        || line.matches(".*[\\[\\]*_].*") || line.indexOf((char) 96) >= 0 || line.contains("://")) continue;
+                for (String entity : entities) {
+                    if (!entity.equals(subject.group(1)) && !entity.equals(subject.group(2))) continue;
+                    if (!comparison && identifiedSubject != null && !identifiedSubject.equals(subject.group(1)))
+                        return java.util.Optional.empty();
+                    identifiedSubject = subject.group(1);
+                    lines.putIfAbsent(entity, line);
+                    citations.putIfAbsent(entity, locator);
+                    break;
+                }
+            }
+        }
+        if (lines.isEmpty()) return java.util.Optional.empty();
+        StringBuilder content = new StringBuilder("[UNVERIFIED · 검증 미완료 / 자료의 직접 설명]\n");
+        StringBuilder sourceContext = new StringBuilder();
+        var used = new java.util.LinkedHashMap<String, com.example.lms.dto.RagEvidenceMetadata>();
+        for (String entity : entities) {
+            String line = lines.get(entity);
+            if (line == null) {
+                if (comparison) content.append("\n").append(entity).append(": 같은 대상의 설명 근거를 찾지 못했습니다.\n");
+                continue;
+            }
+            var locator = citations.get(entity);
+            content.append("\n> ").append(line).append("\n\n[").append(locator.marker()).append("](")
+                    .append(locator.source()).append(")\n");
+            sourceContext.append("[").append(locator.marker()).append("](").append(locator.source())
+                    .append(")\n").append(line).append("\n");
+            used.putIfAbsent(locator.marker(), locator);
+            if (!comparison) break;
+        }
+        if (comparison) content.append("\n각 자료의 조건을 그대로 제시했습니다. 동일 조건의 성능 측정 근거가 없어 우열은 확인되지 않았습니다.");
+        return java.util.Optional.of(new SupportedExcerpt(content.toString(), List.copyOf(used.values()),
+                sourceContext.toString()));
+    }
+
+    private static com.example.lms.dto.RagEvidenceMetadata descriptionLocator(
+            dev.langchain4j.rag.content.Content doc, List<com.example.lms.dto.RagEvidenceMetadata> promoted) {
+        try {
+            var metadata = doc.textSegment().metadata();
+            if (metadata == null) return null;
+            String kind = metadata.getString("kind");
+            if (kind != null && !"WEB".equals(kind)) return null;
+            for (String key : List.of("filePath", "attachmentId", "sourceId", "owner", "private",
+                    "_nova.compressed", "_nova.origHash")) {
+                if (metadata.getString(key) != null) return null;
+            }
+            String url = metadata.getString("url"), source = metadata.getString("source");
+            if (url == null) url = source;
+            else if (source != null && !url.equals(source)) return null;
+            url = RagEvidenceAttributionService.sanitizePublicUrl(url);
+            if (!isPublicExcerptUrl(url)) return null;
+            com.example.lms.dto.RagEvidenceMetadata selected = null;
+            for (var item : promoted) {
+                if (item == null || !"WEB".equals(item.kind()) || item.attachment() != null
+                        || !url.equals(item.source()) || item.marker() == null
+                        || !item.marker().matches("W[1-9][0-9]{0,3}")) continue;
+                if (selected != null) return null;
+                selected = item;
+            }
+            return selected;
+        } catch (RuntimeException invalidMetadata) { return null; }
+    }
+
+    private static String normalizeIdentityInstitution(String institution) {
+        // This spelling-only normalization must not merge arbitrary entity tokens.
+        return institution.replaceAll("(대학교|대학)[ \\t]+병원", "$1병원");
+    }
+
+    private static boolean isPublicExcerptUrl(String value) {
+        if (value == null || value.length() > 2_000 || value.matches(".*[\\s<>\"()\\[\\]{}].*")) return false;
+        try {
+            var uri = java.net.URI.create(value);
+            String scheme = uri.getScheme();
+            String host = uri.getHost();
+            if (!("https".equals(scheme) || "http".equals(scheme)) || host == null
+                    || uri.getUserInfo() != null || (uri.getPort() != -1 && uri.getPort() != 80 && uri.getPort() != 443)) return false;
+            host = host.toLowerCase(java.util.Locale.ROOT);
+            // DNS names only: no IP literals, local/reserved hosts, or network probes.
+            return host.matches("[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\\.[a-z]{2,63}")
+                    && !host.endsWith(".localhost") && !host.endsWith(".local")
+                    && !host.endsWith(".internal") && !host.endsWith(".test")
+                    && !host.endsWith(".invalid") && !host.endsWith(".example");
+        } catch (IllegalArgumentException invalidUrl) {
+            return false;
+        }
+    }
+
 }

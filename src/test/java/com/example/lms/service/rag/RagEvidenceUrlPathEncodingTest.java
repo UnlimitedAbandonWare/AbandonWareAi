@@ -29,8 +29,8 @@ class RagEvidenceUrlPathEncodingTest {
             "/p%3Fq%23f", "/literal%2520", "/%7ename", "/escaped%25value",
             "//other.example/a%2Fb", "/", "", "/plain/path"})
     void publicPromotionPreservesRawPathWithoutLeakingAuthorityQueryOrFragment(String rawPath) {
-        String input = "HTTPS://fixture-user:fixture-password@example.com:8443" + rawPath
-                + "?ownerToken=fixture-query-value#fixture-fragment";
+        String input = "HTTPS://example.com:8443" + rawPath
+                + "?utm_source=fixture-query-value#fixture-fragment";
         String expected = "https://example.com:8443" + rawPath;
         RagEvidenceAttributionService service = service();
 
@@ -52,8 +52,10 @@ class RagEvidenceUrlPathEncodingTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = {"javascript:alert(1)", "file:///fixture/path", "https:/missing-host", "https://example.com/%broken"})
-    void nonHttpHostlessOrMalformedLocatorStillDoesNotPromote(String url) {
+    @ValueSource(strings = {"javascript:alert(1)", "file:///fixture/path", "https:/missing-host", "https://example.com/%broken",
+            "https://fixture-user:fixture-password@example.com/manual%20one.pdf",
+            "https://example.com/manual%20one.pdf?ownerToken=fixture-query-value"})
+    void privateNonHttpHostlessOrMalformedLocatorStillDoesNotPromote(String url) {
         assertTrue(promote(service(), url).isEmpty());
     }
 

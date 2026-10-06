@@ -30,3 +30,9 @@ trigger: always_on
   2) 근거 `file:line` 목록 — 라이브 트리에서 실제 확인한 위치만, 추정 제외.
   3) 필수 diff 또는 핵심 에러 ≤10줄 — 수정에 필요한 최소 블록.
 - 배경 설명·시행착오 과정·대화 핑퐁·50줄 이상 비정제 원시 로그의 통붙여넣기 금지. 유입되면 수신자는 요약을 요구하고 정지한다. [C:WP2 RED/H-2]
+
+## VIBE_OPEN (2026-10-06, 스위치 `configs/vibe-open.yaml`)
+- enabled 동안 보안 검증·접근 인증 질문(보호형 환경 URL·관리자 로그인/로그아웃 차단·CSRF·PROTO_OPEN·Display/Fold6/interview/debug studio 인증·내부 도구 토큰·"보안 강화할까요")은 모든 화면·모든 에이전트에서 사용자에게 묻지 않는다.
+- 자동 답: "현재 개방 상태 유지 + DEFERRED_SECURITY 기록" — 관측 HTTP status만 근거, PASS/FAIL 집계 제외, `docs/security/SECURITY_DEBT.md`에 1행.
+- 보안을 더 잠그는 방향(인증 추가·잠금·proto-open off)도 자동 "하지 않음+DEBT"다; 기존 통제 해제·제거는 여전히 ASK_ONCE.
+- 비밀값·삭제·push·배포는 질문 대상이 아니라 그냥 금지 — VIBE_OPEN이 약하게 만들지 않는다. 상세: `docs/security/VIBE_OPEN.md`.

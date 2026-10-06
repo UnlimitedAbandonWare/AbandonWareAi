@@ -68,11 +68,11 @@ Grok Bot 앱 규격 차이(2026-10-02 인계 팩, `references/grokbot-current/HA
 - `[ANTI-STOP]`은 위·아래 두 군데 둔다(맨 위 + 맨 아래).
 - 섹션 순서 고정: 0 한 줄 목표 → 사실(KST 시각 포함) → 공통 규칙 → 항목(DV/WP) →
   HOLD → ASK_ONCE(기본값 포함) → 절대 금지 → Acceptance(미실행은 NOT_RUN+사유) → 보고 형식.
-- **Devin 지시서**: 라우팅 표기는 단계당 resolved primary 하나(+ 독립 필요 시 보조 ≤1).
-  `@<primary>` 줄 또는 명시 경로 `.agents/skills/<name>/SKILL.md` 참조 둘 다 인정된다 —
-  태그 문법 지원이 미확인일 때 경로 참조로 충분하고, brief_lint/brief_save도 두 형태를
-  받아들이며 참조 스킬의 실존을 검사한다. 5개 이상의 @태그 나열은 라우팅 실패다.
-  첫 명령 `Set-Location C:\AbandonWare\demo-1\demo-1\src`, 보고는 `외부 API:` 줄로 시작.
+- **Devin 지시서**:
+  - 첫 줄은 사용자의 **표준 18개 스킬 태그 프리셋**(17개 스킬 + `@SKILL.md`)을 **누락 없이 반드시 자동 포함/배치**한다:
+    `@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md`
+  - 사용자가 다른 특정 스킬만 명시하지 않는 한 이 올라운더 표준 프리셋이 상시 기본값이다. `objective-executor`가 주 실행 역할을 맡으므로 임의 5개+ 태그 산포(SKILL_SCATTER) 제한의 예외로 자동 승인되며, brief_lint/brief_save에서도 정상 PASS된다.
+  - 첫 명령 `Set-Location C:\AbandonWare\demo-1\demo-1\src`, 보고는 `외부 API:` 줄로 시작.
 - **Codex 지시서**: 첫 줄은 `$skill` 줄 — resolved primary 하나(+ 독립 필요 시 보조 ≤1),
   고정 세트 나열 금지. Codex는 목표 파일만 읽고 멈추는 버릇이 있어 [ANTI-STOP]이 필수.
 Fragmentary user ideas go through `references/idea-burst-rubric.md` first:
@@ -90,6 +90,15 @@ loop (self-fix ≤ 3 → finite stop: hand off to the task's explicitly granted 
 FOR_<owner>, or ASK — roles are the default convention, not fixed routing) ·
 AUTO for local reversible in-contract work · ≤ 6 user decisions, each with a recommended value.
 Verify every FQCN/path/script you cite exists (Test-Path / Select-String) before writing it.
+
+### 스킬 생성·개편 WP — Skill Pack 등급 (2026-10-05)
+- WP가 `.agents/skills/` 스킬을 만들거나 개편하면 등급 S/M/L을 먼저 고르고
+  `docs/agents-rules/DEMO1-AGY-SKILL-PACK.md`의 최소 산출표를 지시서
+  § SKILL_PACK 칸(template §4-1)에 옮긴다. "스킬 만들어"는 **M이 기본** —
+  SKILL.md 단독 산출 WP는 pack check FAIL이다.
+- 저장 전 `python -B scripts/agy_skill_pack_check.py --brief <파일>`:
+  WARN 이하여야보낸다. `@skill` 5개+ 나열에 primary 불명이면
+  `SKILL_SCATTER` FAIL — companion은 태그 산포가 아니라 파일 산출이다.
 
 ### 채팅 HOLD/검증 보류 지시서 체크 (2026-10-05 실수 재발 방지)
 - `applyEvidenceReleasePolicy`(근거 0 → 공개)와 `applyFinalVerificationReleaseGate`(검증 결과)를 분리해 적는다.

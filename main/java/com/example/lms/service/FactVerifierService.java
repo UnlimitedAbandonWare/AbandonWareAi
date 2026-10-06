@@ -155,30 +155,59 @@ public class FactVerifierService {
             String model,
             boolean isFollowUp) {
         com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        TraceStore.put("claimVerifier.judge.disabledReason", null);
+        TraceStore.put("factStatusClassifier.judge.disabledReason", null);
+        TraceStore.put("factVerifier.input.evidenceChars", context == null ? 0 : context.length());
+        TraceStore.put("factVerifier.input.memoryChars", memory == null ? 0 : memory.length());
+        TraceStore.put("factVerifier.meta.status", "not_run");
+        TraceStore.put("factVerifier.classifier.status", "not_run");
         VerificationState state = new VerificationState();
         String answer = verifyInternal(question, context, memory, draft, model, isFollowUp, 0, state);
+        TraceStore.put("factVerifier.terminalStage", state.terminalStage);
+        TraceStore.put("factVerifier.terminalReason", state.status);
         return new DetailedVerificationResult(
                 answer,
                 state.status,
                 state.outcomeKnown,
-                state.acceptedForMemory);
+                state.acceptedForMemory,
+                !state.partialReleaseBlocked && "unknown".equals(state.status)
+                        && (state.judgeUnavailable
+                        || judgeDependencyUnavailable(TraceStore.get("claimVerifier.judge.disabledReason"))
+                        || judgeDependencyUnavailable(TraceStore.get("factStatusClassifier.judge.disabledReason"))));
     }
 
     public record DetailedVerificationResult(
             String answer,
             String status,
             boolean outcomeKnown,
-            boolean acceptedForMemory) {
+            boolean acceptedForMemory,
+            boolean verificationUnavailable) {
+        public DetailedVerificationResult(String answer, String status, boolean outcomeKnown, boolean acceptedForMemory) {
+            this(answer, status, outcomeKnown, acceptedForMemory, false);
+        }
+    }
+
+    private static boolean judgeDependencyUnavailable(Object reason) {
+        return "judge_call_failed".equals(reason) || "judge_model_unavailable".equals(reason);
+    }
+
+    private static boolean claimOutcomeKnown(ClaimVerifierService.VerificationResult result) {
+        // A fail-soft receipt cannot establish a negative verdict, even if a
+        // fallback accidentally reports a known outcome. A later successful
+        // claim invocation clears its own receipt and remains authoritative.
+        return result.outcomeKnown() && TraceStore.get("claimVerifier.judge.disabledReason") == null;
     }
 
     private String verifyInternal(String question, String context, String memory, String draft, String model,
                                   boolean isFollowUp, int attempt, VerificationState state) {
+        state.terminalStage = "draft_presence";
         if (!StringUtils.hasText(draft)) {
             state.reject("unknown");
             return "";
         }
 
         if (namedEntityValidator != null) {
+            state.terminalStage = "entity_validation";
             List<String> evidenceList = new ArrayList<>();
             if (StringUtils.hasText(context)) evidenceList.add(context);
             if (StringUtils.hasText(memory)) evidenceList.add(memory);
@@ -203,10 +232,19 @@ public class FactVerifierService {
 
         boolean hasSufficientContext = StringUtils.hasText(context) && context.length() >= MIN_CONTEXT_CHARS;
         boolean hasSufficientMemory = StringUtils.hasText(memory) && memory.length() >= 40;
+        state.terminalStage = "context_presence";
 
         if (!hasSufficientContext && !hasSufficientMemory) {
+            state.partialReleaseBlocked = true;
+            if (!StringUtils.hasText(context) && !StringUtils.hasText(memory)) {
+                // Missing evidence cannot establish a negative verdict. Publication remains
+                // subject to the existing scope/safety release gate; memory stays disabled.
+                state.reject("unknown");
+                return draft;
+            }
             var result = claimVerifier.verifyClaims("", draft, model);
-            state.reject(result.outcomeKnown() ? "insufficient" : "unknown");
+            state.terminalStage = "claim_verification";
+            state.reject(claimOutcomeKnown(result) ? "insufficient" : "unknown");
             return result.verifiedAnswer();
         }
 
@@ -216,6 +254,7 @@ public class FactVerifierService {
         }
 
         try {
+            state.terminalStage = "source_credibility";
             String mergedContext = mergeContext(context, memory);
             SourceCredibility credibility = sourceAnalyzer.analyze(question, mergedContext);
             // [FUTURE_TECH FIX] 미출시/세대형 제품은 루머/유출 기반 요약을 "차단"하지 않고, 라벨링하여 허용
@@ -244,9 +283,12 @@ public class FactVerifierService {
         }
 
         try {
+            state.terminalStage = "meta_check";
             String metaPrompt = buildVerifierPrompt("FACT_META_CHECK", META_TEMPLATE, question, context);
-            String metaVerdict = callChatModel(metaPrompt);
+            String metaVerdict = callChatModel(metaPrompt, state);
             MetaVerdict parsedMetaVerdict = parseMetaVerdict(metaVerdict);
+            TraceStore.put("factVerifier.meta.status",
+                    parsedMetaVerdict == null ? "malformed" : parsedMetaVerdict.name());
             if (parsedMetaVerdict == null) {
                 state.markFailSoft();
                 log.debug("[Verify] META-CHECK malformed rawHash={} rawLength={}",
@@ -264,6 +306,7 @@ public class FactVerifierService {
                         boolean futureTechMeta = FutureTechDetector.isFutureTechQuery(question);
                         if (futureTechMeta) {
                             // Preserve the labeled answer but keep memory fail-closed.
+                            state.partialReleaseBlocked = true;
                             log.debug("[Verify] META-CHECK detected MISMATCH (FutureTech) -> continue with labeling");
                             state.markFailSoft();
                         } else {
@@ -281,7 +324,9 @@ public class FactVerifierService {
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
         }
 
+        state.terminalStage = "fact_classification";
         FactVerificationStatus status = classifier.classify(question, context, draft, model);
+        TraceStore.put("factVerifier.classifier.status", status.name());
         if (TraceStore.get("factStatusClassifier.judge.disabledReason") != null) {
             state.markFailSoft();
         }
@@ -304,6 +349,8 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
         }
 
         if (!isGrounded || !hasEnoughEvidence) {
+            state.terminalStage = "evidence_coverage";
+            state.partialReleaseBlocked = true;
             log.debug("[Verify] 근거 부족(grounded: {}, evidence: {})", isGrounded, hasEnoughEvidence);
             if (attempt < MAX_HEALING_RETRIES) {
                 List<String> uc = computeUnsupportedEntities(context, memory, draft);
@@ -313,12 +360,14 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                 }
             }
             var result = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
-            state.reject(result.outcomeKnown() ? "insufficient" : "unknown");
+            state.terminalStage = "claim_verification";
+            state.reject(claimOutcomeKnown(result) ? "insufficient" : "unknown");
             return result.verifiedAnswer().isBlank() ? "정보 없음" : result.verifiedAnswer();
         }
 
         switch (status) {
             case PASS:
+                state.terminalStage = "claim_verification";
                 var passResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
                 String passAnswer = passResult.verifiedAnswer();
                 if (attempt < MAX_HEALING_RETRIES) {
@@ -330,20 +379,22 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                 }
                 state.accept(
                         "pass",
-                        passResult.outcomeKnown(),
+                        claimOutcomeKnown(passResult),
                         passResult.acceptedForMemory());
                 return passAnswer;
 
             case INSUFFICIENT:
+                state.partialReleaseBlocked = true;
                 var insufficientResult = claimVerifier.verifyClaims(mergeContext(context, memory), draft, model);
-                state.reject(insufficientResult.outcomeKnown() ? "insufficient" : "unknown");
+                state.reject(claimOutcomeKnown(insufficientResult) ? "insufficient" : "unknown");
                 return insufficientResult.verifiedAnswer();
 
             case CORRECTED:
+                state.terminalStage = "correction";
                 log.debug("[Verify] CORRECTED 상태이며 근거 충분 -> LLM 기반 수정 시도");
                 String correctionPrompt = buildVerifierPrompt("FACT_CORRECTION", CORRECTION_TEMPLATE, question, context, draft);
                 try {
-                    String rawResponse = callChatModel(correctionPrompt);
+                    String rawResponse = callChatModel(correctionPrompt, state);
                     CorrectionEnvelope correction = parseCorrectionEnvelope(rawResponse);
                     if (!correction.valid()) {
                         state.markFailSoft();
@@ -356,6 +407,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                     String correctedText = correction.content();
 
                     var finalResult = claimVerifier.verifyClaims(mergeContext(context, memory), correctedText, model);
+                    state.terminalStage = "claim_verification";
                     String finalAns = finalResult.verifiedAnswer();
                     if (attempt < MAX_HEALING_RETRIES) {
                         List<String> ucFinal = computeUnsupportedEntities(context, memory, finalAns);
@@ -369,7 +421,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                             : "corrected";
                     state.accept(
                             verifiedStatus,
-                            finalResult.outcomeKnown(),
+                            claimOutcomeKnown(finalResult),
                             finalResult.acceptedForMemory() && StringUtils.hasText(finalAns));
                     return finalAns;
                 } catch (Exception e) {
@@ -453,6 +505,10 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
     }
 
     private String callChatModel(String factVerifierPrompt) {
+        return callChatModel(factVerifierPrompt, null);
+    }
+
+    private String callChatModel(String factVerifierPrompt, VerificationState state) {
         com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
         try {
             TimeBudget requestBudget = TimeBudgetContext.get();
@@ -477,6 +533,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             return ai.text() == null ? "" : ai.text();
         } catch (Exception e) {
             TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
+            if (state != null) state.judgeUnavailable = true;
             log.debug("[FactVerifier] ChatModel call failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
             return "";
@@ -495,10 +552,13 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
     }
 
     private static final class VerificationState {
+        private String terminalStage = "not_run";
         private String status = "unknown";
         private boolean outcomeKnown;
         private boolean acceptedForMemory;
         private boolean failSoft;
+        private boolean judgeUnavailable;
+        private boolean partialReleaseBlocked;
 
         private void markFailSoft() {
             failSoft = true;
@@ -540,6 +600,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
                 return;
             }
             status = safeStatus;
+            partialReleaseBlocked = true;
             outcomeKnown = true;
             acceptedForMemory = false;
         }

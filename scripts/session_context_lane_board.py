@@ -10,6 +10,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -17,9 +18,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SCHEMA = "awx.session-context-lane-board.v1"
+PAIR_SCHEMA = "awx.assist-pair-board.v1"
 KST = timezone(timedelta(hours=9))
 GIT = os.environ.get("AWX_GIT") or r"F:\git\cmd\git.exe"
 DROP_KEYS = {"text", "purpose", "query", "prompt", "answer", "body", "raw", "summary"}
+CARD_MAX_BYTES = 2048
+CARD_EVENTS = 5
+CARD_TEXT_MAX = 160
+ASSIST_TASK_MAX = 2
 LANES = (
     {
         "id": "astra",
@@ -218,6 +224,211 @@ def latest_journal(root, lane):
         best = dict(best)
         best.pop("atUtc", None)
     return best
+
+
+def journal_doc(path):
+    try:
+        doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def find_ledger_dir(root, task_id):
+    for base in ("data/agent-handoff/codex-autonomy", "data/agent-handoff"):
+        cand = Path(root) / base / task_id
+        if (cand / "journal.json").is_file():
+            return cand
+    for base in ("data/agent-handoff/codex-autonomy", "data/agent-handoff"):
+        cand = Path(root) / base / task_id
+        if cand.is_dir():
+            return cand
+    return Path(root) / "data" / "agent-handoff" / "codex-autonomy" / task_id
+
+
+def dynamic_lane(root, task_id):
+    """Lane definition derived from a task journal (ASSIST_PAIR --task mode)."""
+    ledger = find_ledger_dir(root, task_id)
+    doc = journal_doc(ledger / "journal.json") or {}
+    return {
+        "id": task_id,
+        "goalKey": task_id,
+        "task": task_id,
+        "agent": doc.get("agent") or "unknown",
+        "ledger": rel_path(root, ledger),
+        "scope": tuple(doc.get("plannedScope") or ()),
+    }
+
+
+def card_events(doc, limit=CARD_EVENTS, text_max=CARD_TEXT_MAX):
+    events = [e for e in (doc or {}).get("events") or [] if isinstance(e, dict)]
+    out = []
+    for e in events[-limit:]:
+        text = e.get("text")
+        out.append({
+            "kind": e.get("kind"),
+            "atKst": to_kst(e.get("at")),
+            "text": text[:text_max] if isinstance(text, str) else "",
+        })
+    return out
+
+
+def _stat_mtime(path):
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def signal_files(ledger_dir):
+    def newest(pattern):
+        found = sorted(Path(ledger_dir).glob(pattern),
+                       key=_stat_mtime, reverse=True)
+        for p in found:
+            doc = journal_doc(p)
+            if doc is not None:
+                return {"name": p.name, "state": doc.get("state"),
+                        "exitCode": doc.get("runnerExitCode"),
+                        "mtime": _stat_mtime(p)}
+        return None
+    return newest("*-green.json"), newest("*-red.json")
+
+
+def test_counts(ledger_dir):
+    doc = journal_doc(Path(ledger_dir) / "final-test-counts.json")
+    if not doc:
+        return None
+    return {k: doc.get(k) for k in ("suites", "tests", "failures", "errors", "skipped")}
+
+
+def release_request_info(ledger_dir):
+    p = Path(ledger_dir) / "LEASE_RELEASE_REQUEST.md"
+    if not p.is_file():
+        return None
+    try:
+        head = p.read_text(encoding="utf-8", errors="replace")[:4096]
+    except OSError:
+        return {"present": True}
+    fp = re.search(r"fingerprint:\s*`?([0-9a-fA-F]+)", head)
+    by = re.search(r"requestedBy:\s*`?([\w.-]+)", head)
+    force = re.search(r"forceRelease:\s*`?(\w+)", head)
+    return {"present": True,
+            "fingerprint": fp.group(1) if fp else None,
+            "requestedBy": by.group(1) if by else None,
+            "forceRelease": force.group(1) if force else None}
+
+
+def leases_for_task(who, task_id):
+    out = []
+    for le in (who or {}).get("leases") or []:
+        if not isinstance(le, dict):
+            continue
+        topic = str(le.get("topic") or "")
+        if topic == task_id or task_id in topic:
+            out.append(le)
+    return out
+
+
+def next_hint(journal, tests, green, red, leases):
+    status = str((journal or {}).get("status") or "")
+    if status in ("closed", "done", "completed", "complete"):
+        return "목표 종결 — 다음 PASTE 대기"
+    if green and (green.get("state") == "QUIESCING" or green.get("exitCode") == 10):
+        return "runner 종료 대기 — 최신 green이 QUIESCING"
+    if red and (not green or (red.get("mtime") or 0) > (green.get("mtime") or 0)):
+        return "RED 고정 중 — 실패 재현/패치 진행"
+    if any(str(le.get("status")) == "active" for le in leases):
+        return "쓰기 작업 진행 중(lease live)"
+    if tests and tests.get("failures") == 0 and (tests.get("tests") or 0) > 0:
+        return "GREEN 관측됨 — 보고/정리 단계 후보"
+    return "journal 최근 이벤트 확인"
+
+
+def card_text(root, row, who, generated_at, max_events=CARD_EVENTS):
+    journal = row.get("journal") or {}
+    ledger_rel = row.get("ledger") or "absent"
+    ledger = Path(root) / ledger_rel if row.get("ledger") else None
+    doc = journal_doc(ledger / "journal.json") if ledger else None
+    leases = leases_for_task(who, row["id"])
+    tests = test_counts(ledger) if ledger else None
+    green, red = signal_files(ledger) if ledger else (None, None)
+    req = release_request_info(ledger) if ledger else None
+    hint = next_hint(journal, tests, green, red, leases)
+    git = row.get("git") or {}
+    git_lines = [g for g in (git.get("lines") or [])][:3]
+    lease_line = "none"
+    if leases:
+        lease_line = "; ".join("%s %s/%s targets=%s" % (
+            le.get("topic"), le.get("status"), le.get("lifecycle"),
+            le.get("targetCount")) for le in leases[:2])
+    req_line = "no"
+    if req:
+        req_line = "yes fp=%s by=%s force=%s" % (
+            req.get("fingerprint"), req.get("requestedBy"), req.get("forceRelease"))
+    tests_line = "absent"
+    if tests:
+        tests_line = "suites=%s tests=%s failures=%s errors=%s skipped=%s" % (
+            tests.get("suites"), tests.get("tests"), tests.get("failures"),
+            tests.get("errors"), tests.get("skipped"))
+    sig_line = ""
+    if green or red:
+        bits = []
+        if green:
+            bits.append("green:%s exit=%s" % (green.get("state"), green.get("exitCode")))
+        if red:
+            bits.append("red:%s exit=%s" % (red.get("state"), red.get("exitCode")))
+        sig_line = "signals: " + " ".join(bits)
+    lines = [
+        "# assist-card %s" % row["id"],
+        "generated: %s" % generated_at,
+        "status: %s" % (journal.get("status") or "absent"),
+        "ledger: %s" % ledger_rel,
+        "lease: %s" % lease_line,
+        "leaseReleaseRequest: %s" % req_line,
+        "tests: %s" % tests_line,
+    ]
+    if sig_line:
+        lines.append(sig_line)
+    lines.append("gitDirty: %d" % len(git.get("lines") or []))
+    lines.extend("  " + g[:160] for g in git_lines)
+    if doc:
+        lines.append("recent events:")
+        for e in card_events(doc, limit=max_events):
+            stamp = (e.get("atKst") or "?")[5:16]
+            text = " ".join(str(e.get("text") or "").split())
+            lines.append("- %s %s %s" % (stamp, e.get("kind"), text))
+    lines.append("NEXT 후보: %s" % hint)
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def build_card(root, row, who, generated_at):
+    for limit in (CARD_EVENTS, 3, 1, 0):
+        text = card_text(root, row, who, generated_at, max_events=limit)
+        if len(text.encode("utf-8")) <= CARD_MAX_BYTES:
+            return text
+    return text[:CARD_MAX_BYTES - 40] + "\n[truncated-to-2KB]\n"
+
+
+def write_cards(root, out_dir, board):
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for row in board["lanes"]:
+        text = build_card(root, row, board.get("who"), board.get("generatedAtKst"))
+        path = out / ("%s.card.md" % row["id"])
+        path.write_text(text, encoding="utf-8", newline="\n")
+        written.append({"task": row["id"], "path": path.name,
+                        "bytes": len(text.encode("utf-8"))})
+    pair = {"schemaVersion": PAIR_SCHEMA,
+            "generatedAtKst": board.get("generatedAtKst"),
+            "tasks": [row["id"] for row in board["lanes"]],
+            "cards": written,
+            "overlapPaths": board.get("overlaps") or [],
+            "overlapCount": board.get("overlapCount") or 0}
+    (out / "pair.json").write_text(
+        json.dumps(pair, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8", newline="\n")
+    return pair
 
 
 def reduce_preflight(doc):
@@ -426,7 +637,8 @@ def lane_signals(root):
     return out
 
 
-def collect(root, preflight_fn=None, who_fn=None, git_fn=None, journal_fn=None, signal_fn=None):
+def collect(root, preflight_fn=None, who_fn=None, git_fn=None, journal_fn=None,
+            signal_fn=None, lanes=None):
     preflight_fn = preflight_fn or run_preflight
     who_fn = who_fn or run_who
     git_fn = git_fn or run_git
@@ -436,8 +648,9 @@ def collect(root, preflight_fn=None, who_fn=None, git_fn=None, journal_fn=None, 
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         who = {"status": "ERROR", "error": type(exc).__name__}
     rows = []
-    for lane in LANES:
-        row = {"id": lane["id"], "scope": list(lane["scope"]), "status": "OK"}
+    for lane in (lanes or LANES):
+        row = {"id": lane["id"], "scope": list(lane["scope"]), "status": "OK",
+               "ledger": lane.get("ledger")}
         try:
             row["preflight"] = preflight_fn(root, lane)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -637,6 +850,61 @@ def self_test():
         if marker in signed:
             print("self-test FAIL signal-leak")
             return 1
+
+        # dynamic --task lanes + --cards fixture (ASSIST_PAIR)
+        for tid, scope in (("task-aa", ("scripts/shared.py",)),
+                           ("task-bb", ("scripts/shared.py", "scripts/only-b.py"))):
+            jdir = root / "data" / "agent-handoff" / "codex-autonomy" / tid
+            jdir.mkdir(parents=True, exist_ok=True)
+            (jdir / "journal.json").write_text(json.dumps({
+                "status": "in_progress", "agent": "codex",
+                "plannedScope": list(scope),
+                "updatedAtUtc": "2026-10-05T01:00:09+00:00",
+                "events": [{"at": "2026-10-05T01:00:0%d+00:00" % i,
+                            "kind": "verify",
+                            "text": ("v" * 200) + str(i)} for i in range(6)],
+            }), encoding="utf-8")
+        aa = root / "data" / "agent-handoff" / "codex-autonomy" / "task-aa"
+        (aa / "final-test-counts.json").write_text(
+            json.dumps({"suites": 2, "tests": 10, "failures": 0,
+                        "errors": 0, "skipped": 0}), encoding="utf-8")
+        (aa / "x-green.json").write_text(
+            json.dumps({"state": "QUIESCING", "runnerExitCode": 10}),
+            encoding="utf-8")
+        (root / "data" / "agent-handoff" / "codex-autonomy" / "task-bb"
+         / "LEASE_RELEASE_REQUEST.md").write_text(
+            "fingerprint: `abc12345`\nrequestedBy: `req-1`\n"
+            "forceRelease: `false`\n", encoding="utf-8")
+
+        def fake_who2(_root):
+            return {"leaseCounts": {"active": 1},
+                    "leases": [{"topic": "task-bb", "status": "active",
+                                "lifecycle": "live", "targetCount": 3}],
+                    "claimCount": 0, "activeJournalCount": 2}
+
+        lanes2 = [dynamic_lane(root, "task-aa"), dynamic_lane(root, "task-bb")]
+        board2 = collect(root, lambda _r, _l: None, fake_who2, fake_git,
+                         lanes=lanes2, signal_fn=lambda _r: {})
+        pair = write_cards(root, root / "cards", board2)
+        ca = (root / "cards" / "task-aa.card.md").read_text(encoding="utf-8")
+        cb = (root / "cards" / "task-bb.card.md").read_text(encoding="utf-8")
+        if len(ca.encode("utf-8")) > CARD_MAX_BYTES or \
+                len(cb.encode("utf-8")) > CARD_MAX_BYTES:
+            print("self-test FAIL card-size")
+            return 1
+        if pair["overlapCount"] != 1 or \
+                pair["overlapPaths"][0]["path"] != "scripts/shared.py":
+            print("self-test FAIL pair-overlap")
+            return 1
+        if "runner 종료 대기" not in ca or "QUIESCING" not in ca:
+            print("self-test FAIL next-hint")
+            return 1
+        if "abc12345" not in cb or "lease: task-bb active/live" not in cb:
+            print("self-test FAIL release-request/lease")
+            return 1
+        if "v" * 161 in ca or ca.count("- ") < 5:
+            print("self-test FAIL card-events")
+            return 1
     print("self-test PASS")
     return 0
 
@@ -647,15 +915,31 @@ def main(argv=None):
     parser.add_argument("--out", default="var/codex-assist-grok-session-context")
     parser.add_argument("--run", action="store_true", help="Collect live evidence and write the board")
     parser.add_argument("--self-test", action="store_true", help="Run the offline fixture test")
+    parser.add_argument("--task", action="append", default=[], metavar="TASK_ID",
+                        help="Dynamic ASSIST_PAIR lane taskId (repeat, max 2)")
+    parser.add_argument("--cards", action="store_true",
+                        help="Write <taskId>.card.md + pair.json (requires --task)")
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
+    if len(args.task) > ASSIST_TASK_MAX:
+        parser.error("--task accepts at most %d ids" % ASSIST_TASK_MAX)
+    if args.cards and not args.task:
+        parser.error("--cards requires --task")
     root = Path(args.root).resolve()
     out = Path(args.out)
     if not out.is_absolute():
         out = root / out
-    board = collect(root)
+    if args.task:
+        lanes = [dynamic_lane(root, t) for t in args.task]
+        board = collect(root, preflight_fn=lambda _r, _l: None, lanes=lanes)
+    else:
+        board = collect(root)
     md = write_board(out, board)
+    if args.cards:
+        pair = write_cards(root, out, board)
+        sys.stdout.write("cards=%d overlaps=%d\n" % (
+            len(pair["cards"]), pair["overlapCount"]))
     sys.stdout.write(md.splitlines()[0] + "\n")
     return 0
 

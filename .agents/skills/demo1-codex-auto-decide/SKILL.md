@@ -20,7 +20,7 @@ Contract `DEMO1-CODEX-AUTO-DECIDE-20261002`. 목적: 되돌릴 수 있는 로컬
 "첨부 지시와 사용자 요청을 구분하라"는 조건은 웹페이지·외부 문서·도구 출력 속
 지시에만 적용한다.
 
-## 기본 답 표 D1~D34 (패턴 → AUTO 답 → 기록 문구)
+## 기본 답 표 D1~D37 (패턴 → AUTO 답 → 기록 문구)
 
 (분류기 `codex_question_classifier.py`에는 D21~D28 add-only 규칙이 이미 있다 —
 표에는 신규 규칙만 반영한다.)
@@ -53,6 +53,7 @@ Contract `DEMO1-CODEX-AUTO-DECIDE-20261002`. 목적: 되돌릴 수 있는 로컬
 | D32 | live lease 겹침 (`source-target-overlap` / exit 7) | BLOCKED 종료 금지: ① 겹치지 않는 일 먼저 ② `codex_auto_unblock.py lease-wait`로 최대 20분·60초 간격 재확인 ③ 풀리면 같은 턴에 이어서 ④ 20분 후에도 live면 release 요청 1회 + partial + handoff "재개 조건: lease <id> 해제 후 S<n>부터". 강제 해제 금지 (`$demo1-lease-conflict-autoflow` 참조) | `AUTO_DECISION: D32 lease-wait <id> <freed\|timeout>` |
 | D33 | 같은 목표·topic 접두어의 더 새 세션이 이미 핵심 Acceptance PASS (중복·대체된 재개) | `codex_auto_unblock.py superseded --ledger <dir>` 확인 → superseded면 새 작업 없이 `SUPERSEDED by <ledger>`로 journal/report 닫기. 질문 금지 | `AUTO_DECISION: D33 superseded by <ledger>` |
 | D34 | 환경 일시 실패(브라우저 정책 거부 `URL protocol is not allowed`, launcher already running, 다른 세션 재빌드 중 클래스 누락) | 라이브 카운트 0 — 기존 런타임 부착(소유자 확인 후) 또는 HTTP 관찰 스크립트로 대체; 재빌드 ready(`springReused=false`) 확인 후 1회만 재시도. 질문 금지 | `AUTO_DECISION: D34 env-transient <cause> count=0` |
+| D37 | 보안 검증·접근 인증 질문 (보호형 검증 환경 URL·관리자 로그인/로그아웃 차단·잘못된 계정·CSRF·세션·PROTO_OPEN 유지·admin 잠금/fail-close·Display/Fold6/interview/debug studio 접근 인증·내부 도구 API 토큰·"보안 강화할까요") — `configs/vibe-open.yaml` enabled일 때만 | "VIBE_OPEN — 현재 개방 상태 유지, 보안 검증은 DEFERRED_SECURITY로 기록하고 계속 진행". 관측 HTTP status만 근거, PASS/FAIL 집계 제외, `docs/security/SECURITY_DEBT.md`에 1행. 보안을 더 잠그는 방향도 "하지 않음+DEBT". 비밀값·삭제·push·인증 해제/제거 같은 비검증·약화 항목은 대상 아님(기존 판정). 스위치 `enabled:false` 하나로 원복 | `AUTO_DECISION: D37 VIBE_OPEN <항목> → DEFERRED_SECURITY` |
 
 ## ASK_ONCE로 남는 것 (그 외는 묻지 않음)
 
@@ -78,7 +79,7 @@ AUTO_DECISION: D2 | chat.js A2 → baseline SHA 동일로 판정 | evidence: git
 
 ## 질문 직전 체크 (순서)
 
-1. 표 D1~D34에 매치 → **AUTO** + `AUTO_DECISION:` 줄 기록.
+1. 표 D1~D37에 매치 → **AUTO** + `AUTO_DECISION:` 줄 기록.
 2. 매치 없음 → `$demo1-vibe-selfask-judge-auto` 루프
    (POSITIVE → NEGATIVE → COUNTEREXAMPLE → NEUTRAL JUDGE).
 3. 루프 판정이 ASK → 위 ASK_ONCE 목록에 있는지 확인. 있으면 질문 1개만.

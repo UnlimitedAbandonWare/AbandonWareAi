@@ -254,6 +254,26 @@ class SourceExpressionCheckpointTest(unittest.TestCase):
                 CP.secret_free(('class T { String s = ' + evil + ' }').encode(),
                                "src/test/java/com/example/T.java")
 
+    def test_public_locator_invalid_query_fixture_stays_exact_and_test_scoped(self):
+        path = "src/test/java/com/example/lms/service/PublicEvidenceLocatorIdentityTest.java"
+        fixture = '"https://example.org/profile?id=alpha&to' + 'ken=synthetic"'
+        opening = 'for(String url:List.of("https://user@example.org/profile?id=alpha",'
+        body = 'class T { void test() {\n' + opening + '\n' + fixture + ',\n"safe")) {} }}'
+        CP.secret_free(body.encode(), path)
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(body.replace(opening + '\n', opening + '\nprefix +\n').encode(), path)
+        for other in ("main/java/com/example/T.java", "src/test/java/com/example/T.java", "docs/e.md"):
+            with self.subTest(path=other), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(body.encode(), other)
+        for changed in (fixture + ' + "-ish"', fixture + ' + credentialSuffix',
+                        'prefix + ' + fixture,
+                        fixture.replace("synthetic", "synthetic-ish"),
+                        fixture.replace("synthetic", "opaque-credential-value"),
+                        fixture + '; String real = "api' + 'Key=opaque-value"',
+                        fixture.replace('synthetic"', 'synthetic&extra=value"')):
+            with self.subTest(length=len(changed)), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(('class T { String s = ' + changed + '; }').encode(), path)
+
     def zero_loop(self):
         name = self.counter
         return 'for(int ' + name + '=0;' + name + '<n;' + name + '++){}'

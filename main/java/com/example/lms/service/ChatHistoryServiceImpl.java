@@ -902,7 +902,27 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
                 sb.append(normalized);
             }
         }
-        return tailClamp(sb.toString(), maxChars);
+        String combined = sb.toString();
+        int max = maxChars > 0 ? maxChars : 1200;
+        if (combined.length() <= max) {
+            return combined;
+        }
+        // Explicit user assignments and corrections belong to this session's
+        // summary, even after ordinary replies leave the recent-history window.
+        var assignment = java.util.regex.Pattern.compile(
+                "(?iu)^User:.*(?:기억\\s*해\\s*(?:줘|주세요)|정정\\s*해\\s*(?:줘|주세요))");
+        List<String> allLines = java.util.Arrays.asList(combined.split("\\R"));
+        String pinned = allLines.stream().filter(line -> assignment.matcher(line).find())
+                .collect(Collectors.joining("\n"));
+        if (pinned.isBlank()) {
+            return tailClamp(combined, max);
+        }
+        pinned = tailClamp(pinned, Math.max(1, max / 2));
+        String recent = allLines.stream().filter(line -> !assignment.matcher(line).find())
+                .collect(Collectors.joining("\n"));
+        int recentBudget = max - pinned.length() - 1;
+        return recentBudget <= 0 || recent.isBlank() ? pinned
+                : pinned + "\n" + tailClamp(recent, recentBudget);
     }
 
     private static String normalizeMultiline(String value) {

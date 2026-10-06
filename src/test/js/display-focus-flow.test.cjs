@@ -2,6 +2,26 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {createFlow,segment,settings}=require('../../../main/resources/static/assets/display/display-focus-flow.js');
 const snapshot=(text,extra={})=>({active:true,serverInstanceId:'boot',activationId:'activation',turnId:'turn',stateVersion:1,answerVersion:1,answerText:text,...extra});
+test('server stable sentence becomes useful before terminal completion with a separate UI duration',()=>{
+ const f=fixture({fitsLine:()=>true});f.flow.accept(snapshot('첫 유용 문장입니다.',{answerComplete:false,answerPrefixStable:true}));f.run(2000);
+ assert.equal(f.flow.state().lines.join(''),'첫 유용 문장입니다.');
+ const useful=f.events.filter(e=>e.name==='first_useful_visible');assert.equal(useful.length,1);
+ assert.ok(useful[0].detail.elapsedMs>=f.events.find(e=>e.name==='first_visible').at-20);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,0);
+ f.flow.accept(snapshot('첫 유용 문장입니다. 최종 문장입니다.',{stateVersion:2,answerComplete:true,answerPrefixStable:false}));f.run(3000);
+ assert.equal(f.events.filter(e=>e.name==='first_useful_visible').length,1);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('late final receipt ticket acknowledges an already visible prefix without replay',()=>{
+ const f=fixture({fitsLine:()=>true});f.flow.accept(snapshot('첫 문장입니다. ',{answerComplete:false}));f.run(1500);
+ const before=f.flow.state().index;
+ f.flow.accept(snapshot('첫 문장입니다. ',{stateVersion:2,answerComplete:true,renderReceiptTicket:'synthetic-ticket'}));f.run(400);
+ const acknowledged=f.events.filter(e=>e.name==='first_visible'&&e.detail.renderReceiptTicket==='synthetic-ticket');
+ assert.equal(acknowledged.length,1);assert.ok(f.flow.state().index>=before);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done'&&e.detail.renderReceiptTicket==='synthetic-ticket').length,1);
+ f.flow.accept(snapshot('첫 문장입니다. ',{stateVersion:2,answerComplete:true,renderReceiptTicket:'synthetic-ticket'}));
+ assert.equal(f.events.filter(e=>e.name==='first_visible'&&e.detail.renderReceiptTicket==='synthetic-ticket').length,1);
+});
 function fixture(options={}){let now=0,id=0;const pending=new Map(),events=[],paints=[];
  const flow=createFlow({requestFrame(fn){pending.set(++id,fn);return id;},cancelFrame(id){pending.delete(id);},fitsLine:text=>segment(text).units.length<=12,onEvent:(name,detail)=>events.push({name,detail,at:now}),onPaint:value=>paints.push(value),...options});
  return {flow,pending,events,paints,step(ms=80){now+=ms;const calls=[...pending.values()];pending.clear();calls.forEach(fn=>fn(now));},run(ms){for(let t=0;t<ms;t+=20)this.step(20);}};
@@ -48,4 +68,49 @@ test('sentence fallback does not acknowledge an oversized sentence before its re
  const f=fixture({Segmenter:null});f.flow.accept(snapshot('가'.repeat(600)+'.'));f.run(20000);
  assert.equal(f.events.some(e=>e.name==='presentation_done'),false);
  f.run(50000);assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('nonterminal cumulative text appends once and waits for completion before final receipt',()=>{
+ const f=fixture();f.flow.accept(snapshot('가나다 ',{answerComplete:false}));f.run(500);
+ assert.ok(f.events.some(e=>e.name==='first_visible'));assert.equal(f.events.some(e=>e.name==='presentation_done'),false);
+ const first=f.flow.state().index;
+ assert.equal(f.flow.accept(snapshot('가나다 라마바 ',{stateVersion:2,answerComplete:false})),true);f.run(700);
+ assert.ok(f.flow.state().index>first);assert.equal(f.events.some(e=>e.name==='presentation_done'),false);
+ assert.equal(f.flow.accept(snapshot('가나다 라마바 ',{stateVersion:3,answerComplete:true})),true);f.run(500);
+ assert.equal(f.flow.state().lines.join(''),'가나다 라마바 ');
+ assert.equal(f.events.filter(e=>e.name==='first_visible').length,1);assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('streaming text rejects revisions and post-completion growth under the same identity',()=>{
+ const f=fixture();f.flow.accept(snapshot('같은 답변 ',{answerComplete:false}));f.run(500);
+ assert.equal(f.flow.accept(snapshot('다른 답변 ',{stateVersion:2,answerComplete:false})),false);
+ assert.equal(f.flow.accept(snapshot('같은 답변 끝.',{stateVersion:3,answerComplete:true})),true);f.run(2000);
+ assert.equal(f.flow.accept(snapshot('같은 답변 끝. 추가',{stateVersion:4,answerComplete:false})),false);
+ assert.equal(f.flow.accept(snapshot('같은 답변 끝.',{stateVersion:5,answerComplete:'false'})),false);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('nonterminal Unicode tail cannot display a partial emoji grapheme',()=>{
+ const f=fixture();f.flow.accept(snapshot('첫 문장. 👨',{answerComplete:false}));f.run(2000);
+ assert.equal(f.flow.state().lines.join('').includes('👨'),false);
+ f.flow.accept(snapshot('첫 문장. 👨‍👩‍👧‍👦 ',{stateVersion:2,answerComplete:false}));f.run(1200);
+ assert.ok(f.flow.state().lines.join('').includes('👨‍👩‍👧‍👦'));assert.equal(f.events.some(e=>e.name==='presentation_done'),false);
+ f.flow.accept(snapshot('첫 문장. 👨‍👩‍👧‍👦 ',{stateVersion:3,answerComplete:true}));f.run(500);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+ assert.ok(f.paints.every(p=>!p.lines.join('').includes('👨')||p.lines.join('').includes('👨‍👩‍👧‍👦')));
+});
+test('sentence degradation withholds its growing tail until final completion',()=>{
+ const f=fixture({Segmenter:null});f.flow.accept(snapshot('완결 문장. 미완',{answerComplete:false}));f.run(2500);
+ assert.equal(f.flow.state().lines.join(''),'완결 문장.');assert.equal(f.events.some(e=>e.name==='presentation_done'),false);
+ f.flow.accept(snapshot('완결 문장. 미완성입니다.',{stateVersion:2,answerComplete:true}));f.run(3000);
+ assert.equal(f.flow.state().lines.join(''),' 미완성입니다.');assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('changed streaming payload cannot reuse the accepted state version',()=>{
+ const f=fixture();f.flow.accept(snapshot('이 문장 ',{answerComplete:false}));f.run(700);
+ assert.equal(f.flow.accept(snapshot('이 문장 다음',{answerComplete:false})),false);
+ assert.equal(f.flow.accept(snapshot('이 문장 ',{answerComplete:true})),false);
+ assert.equal(f.flow.accept(snapshot('이 문장 다음',{stateVersion:2,answerComplete:true})),true);f.run(2000);
+ assert.equal(f.flow.state().lines.join(''),'이 문장 다음');assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+});
+test('explicit replay keeps final answer metadata compatible with subsequent polling',()=>{
+ const f=fixture(),s=snapshot('다시 보기');f.flow.accept(s);f.run(1000);
+ f.flow.replay();assert.equal(f.flow.accept(s),true);f.run(1000);
+ assert.equal(f.flow.state().lines.join(''),'다시 보기');assert.equal(f.flow.state().done,true);
 });

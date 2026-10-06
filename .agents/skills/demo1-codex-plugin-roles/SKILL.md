@@ -51,6 +51,9 @@ This skill owns only the work-type allowlist and the per-plugin contract.
   HTTP status, server reasonCode, requestId, time-to-first-body. HTTP 200,
   SSE start, or a restored saved login are never success evidence. Admin /
   lock / logout-block results are observation-only (PROTO_OPEN).
+  VIBE_OPEN이면 이 3항목은 HTTP status만 기록하고 `DEFERRED_SECURITY`로 표기
+  (PASS/FAIL 제외) — 보호형 환경 URL·자격 증명을 사용자에게 묻지 않는다
+  (`configs/vibe-open.yaml`, `docs/security/VIBE_OPEN.md`).
 - **GitHub** — auxiliary evidence only: check local `status` / `HEAD` /
   `branch` first, then compare origin (AbandonWareAi) SHA. GitHub
   commit/diff/CI counts only for files clean locally and SHA-matched; a file

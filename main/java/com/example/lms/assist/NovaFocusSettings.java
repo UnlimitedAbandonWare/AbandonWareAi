@@ -6,7 +6,10 @@ import java.util.*;
 public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQuietMs,int followupIdleMs,
                                 int wakeListenTimeoutMs,Presentation presentation,boolean recallEnabled,boolean rememberFactsEnabled,
                                 Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory,
-                                @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled) {
+                                @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled,Boolean webSearchEnabled) {
+    public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory,Integer length,Boolean quick){
+        this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,length,quick,null);
+    }
     public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory){
         this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,null,null);
     }
@@ -56,7 +59,7 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
         }
         public static AnswerSelection defaults(){return new AnswerSelection(Mode.AUTO,null);}
     }
-    public enum ExecutionTarget { AUTO,API_ONLY,LOCAL_ONLY }
+    public enum ExecutionTarget { AUTO,API_ONLY,LOCAL_ONLY,GEMINI_WEBSEARCH_ONLY }
     /** RAM-only final input; bounds are rejected, never silently clamped. */
     public record RecentContext(boolean enabled,int maxAgeSeconds,int maxUtterances,int tokenBudget) {
         public RecentContext {range(maxAgeSeconds,30,180);range(maxUtterances,1,12);range(tokenBudget,256,2000);}
@@ -64,6 +67,9 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
     }
     /** Optional for old clients; an explicit block constrains every primary/fallback attempt. */
     public record Routing(ExecutionTarget executionTarget,boolean fallbackAllowed,List<String> allowedFallbackIds) {
+        /** Stored general-mode preference survives strict mode; this is the execution policy. */
+        @com.fasterxml.jackson.annotation.JsonProperty(access=com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
+        public boolean effectiveFallbackAllowed(){return fallbackAllowed&&executionTarget!=ExecutionTarget.GEMINI_WEBSEARCH_ONLY;}
         public Routing {
             if(executionTarget==null)throw new IllegalArgumentException("invalid_nova_settings");
             allowedFallbackIds=allowedFallbackIds==null?List.of():List.copyOf(allowedFallbackIds);
@@ -96,6 +102,8 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
     }
     public int effectiveAnswerLengthChars(){return answerLengthChars==null?400:answerLengthChars;}
     public boolean quickAnswer(){return Boolean.TRUE.equals(quickAnswerEnabled);}
+    /** null retains the existing intent-based policy; false dominates every search decision. */
+    public boolean webSearchAllowed(){return !Boolean.FALSE.equals(webSearchEnabled);}
     public Presentation effectivePresentation(){var p=presentation;return !quickAnswer()?p:new Presentation(false,p.charIntervalMs(),p.maxVisibleLines(),p.autoFadeEnabled(),p.tailHoldMs(),p.fadeMs());}
     public Snapshot snapshotOrDefault(){return snapshot==null?Snapshot.defaults():snapshot;}
     public AnswerSelection answerSelectionOrDefault(){return answerSelection==null?AnswerSelection.defaults():answerSelection;}

@@ -712,8 +712,62 @@ button:disabled {
 }
 
 .message.assistant[data-state="pending"]::before {
-    content: "Assistant is preparing";
+    content: "답변 준비 중";
     display: inline-block;
+}
+
+.message.assistant[data-state="pending"]::after {
+    content: "";
+    display: inline-block;
+    width: 0.7em;
+    height: 0.7em;
+    margin-inline-start: 0.5em;
+    border: 2px solid currentColor;
+    border-inline-end-color: transparent;
+    border-radius: 50%;
+    animation: chat-wait-spin 0.9s linear infinite;
+}
+
+.message.assistant[data-wait-progress]::before,
+.message.assistant[data-wait-progress]::after {
+    content: none;
+}
+
+.chat-wait-progress {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4em;
+    min-width: 0;
+    font-size: 0.85em;
+    font-style: normal;
+    overflow-wrap: anywhere;
+}
+
+.chat-wait-spinner {
+    flex: 0 0 auto;
+    width: 0.7em;
+    height: 0.7em;
+    border: 2px solid currentColor;
+    border-inline-end-color: transparent;
+    border-radius: 50%;
+    animation: chat-wait-spin 0.9s linear infinite;
+}
+
+.chat-wait-elapsed {
+    color: #53676d;
+    font-variant-numeric: tabular-nums;
+}
+
+@keyframes chat-wait-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .message.assistant[data-state="pending"]::after,
+    .chat-wait-spinner {
+        animation: none;
+    }
 }
 
 .message.assistant[data-state="ready"] {

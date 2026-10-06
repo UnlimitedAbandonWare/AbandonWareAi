@@ -28,7 +28,7 @@ TTL still `context-ttl-ms` (default 120s). Oldest turns drop first.
 
 ## Cue models (admission + fallback) ??Meta Display profile
 
-Admission: `ConversateCueRoutingPolicy` + `llmrouter.models.*` (stage=`chat`). Locals (`ollama`/`local`) are **skipped** in cue admission; `ConversateLocalCardGenerator` is **post-cloud** support fallback only.
+Admission: `ConversateCueRoutingPolicy` + `llmrouter.models.*` (stage=`chat`). Locals (`ollama`/`local`) are **skipped** in cue admission. **NO_LOCAL_ON_DISPLAY (2026-10-06)**: 실시간 디스플레이 런타임의 post-cloud 폴백도 로컬 금지 — `ConversateLocalCardGenerator`는 오프라인/테스트 전용 스탠드바이(`conversate.cue.local-support-enabled` 기본 false, 명시 opt-in 시에만 재활용).
 
 | Route key | Model (default) | Provider | Role | Gate? | Quality | Est. $/1M in/out | Context window (vendor) | Max out (vendor) | Our sent context | Our out tokens | Fallback notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -39,7 +39,7 @@ Admission: `ConversateCueRoutingPolicy` + `llmrouter.models.*` (stage=`chat`). L
 | `gemini-pro` | `gemini-3.8-flash` | gemini | Higher quality | no | 3 | 0.75 / 3.75* | ~1M | 65k | same | 640 | *intro rates thru 2026-12-31 |
 | `openai-balanced` | `gpt-5.6-terra` | openai | Mid | no | 3 | 2.00 / 12.00 | large | large | same | 640 | quality?? only |
 | `openai-premium` | `gpt-5.6-sol` | openai | Premium | no | 4 | 4.00 / 20.00 | large | large | same | 640 | rare |
-| local-support | `conversate.generation.model` | ollama | After null cloud hint | ??| ??| $0 | local VRAM | local | 8 turns / 4096 | model cfg | `conversate.generation.enabled` often false |
+| local-support | `conversate.generation.model` | ollama | 오프라인/테스트 전용 스탠드바이 (**실시간 디스플레이 사용 금지 — NO_LOCAL_ON_DISPLAY**) | ??| ??| $0 | local VRAM | local | 8 turns / 4096 | model cfg | `conversate.cue.local-support-enabled` 기본 false; 명시 opt-in + 오프라인/격리 모드에서만 재활용 |
 
 Sort: primary providers (openai/gemini) preferred, then cost/success, then latency. Failures cool down route 20??0s.
 

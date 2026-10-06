@@ -19,6 +19,11 @@ public final class FinalAnswerPostProcessor {
         this.outputSanitizer = Objects.requireNonNull(outputSanitizer, "outputSanitizer");
     }
 
+    public boolean requiresWholeAnswer(String query) {
+        return !"not_applicable".equals(s7AnswerContractPolicy.evaluate(query, "").reasonCode())
+                || s8AnswerContractPolicy.inspect(query, "").applicable();
+    }
+
     public Result process(Request request) {
         Objects.requireNonNull(request, "request");
         OutputSanitizer.Result sanitized = outputSanitizer.sanitize(request.candidate());

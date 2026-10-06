@@ -1,0 +1,87 @@
+# [ANTI-STOP] 이 지시서는 완료 조건이 모두 충족될 때까지 중단 없이 자율 실행합니다.
+@meta-rayban-display
+# [DEVIN 지시서] Meta Ray-Ban Display 노바 집중 대화 메인 모델(Luna vs Gemini) 프리셋 선택 UI 연동
+# Project Root: C:\AbandonWare\demo-1\demo-1\src
+# 파일 ID: PASTE_DEVIN_NOVA_FOCUS_MODEL_PRESET_20261006
+
+## 0. 한 줄 목표
+노바 집중 대화(Nova Focus) 설정창에 '루나(Luna - 초고속/경제)'와 '제미나이(Gemini - 웹검색/구글그라운딩)' 메인 모델 프리셋 원클릭 선택 버튼을 추가하고, 기존 AnswerSelection 및 executionTarget과 동기화하여 검증한다.
+
+## 1. 사실 (2026-10-06 13:10 KST 기준)
+- 백엔드 `NovaFocusSettings.java`와 `NovaFocusAnswerService.java`는 이미 `AnswerSelection(mode, modelId, routing)` 및 `executionTarget`(`AUTO`, `API_ONLY`, `LOCAL_ONLY`, `GEMINI_WEBSEARCH_ONLY`)을 수용하고 있음.
+- 백엔드 `application-meta-display.yml`에 `openai-economy`(gpt-5.6-luna)와 `gemini-cue`(gemini-3.5-flash-lite), `gemini-pro`(gemini-3.8-flash) 라우트가 정의되어 있음.
+- 프론트엔드 `main/resources/static/assets/display/index.html`과 `display-focus-controls.js`에는 전체 모델 드롭다운(`nf-answer-model`)과 실행 경로 셀렉트(`nf-answer-target`)만 존재하여, 일반 사용자가 Luna와 Gemini 중 메인을 직관적으로 고를 수 있는 프리셋 버튼이 없음.
+- 백엔드 Java(`NovaFocusAnswerService.java`)는 Codex 레이턴시 패치 저널(`display-luna-latency-ae358856`) 범위이므로 Devin은 제품 Java 수정 0을 유지하고 프론트엔드 정적 파일(`index.html`, `display-focus-controls.js`, 테스트 `display-focus-client.test.cjs`)만 수정함.
+- 기준 해시 (2026-10-06 KST):
+  - `main/resources/static/assets/display/index.html` | C55CBBA0273E | 수정
+  - `main/resources/static/assets/display/display-focus-controls.js` | FF1F10982E68 | 수정
+  - `src/test/js/display-focus-client.test.cjs` | 40BDFD4E2E10 | 수정
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 안 돌린 확인은 NOT_RUN + 사유(PASS 전환 금지). 돌린 범위만 PASS.
+- 실행 전 `Set-Location C:\AbandonWare\demo-1\demo-1\src` 수행.
+
+## 3. 항목 (WP1~WP2)
+
+### WP1 [Devin] 설정창 노바 대화 메인 모델 프리셋 선택 UI 추가
+- 대상: `main/resources/static/assets/display/index.html` (L83-L86 부근)
+- 구현 내용:
+  - `nf-answer-target` 및 `nf-answer-model` 설정 부근에 직관적인 메인 모델 프리셋 버튼/선택기 추가:
+    - ID `nf-preset-luna`: "루나 (Luna · 초고속/경제)" 버튼
+    - ID `nf-preset-gemini`: "제미나이 (Gemini · 웹검색)" 버튼
+    - ID `nf-preset-auto`: "자동 (기본)" 버튼
+    - 상태 안내 라벨: `nf-preset-status`
+- 최소 수정: 기존 레이아웃을 깨지 않고 `lens-grid` 또는 직후 `actions` 구역에 버튼 추가.
+
+### WP2 [Devin] 프리셋 클릭 이벤트 및 모델/타겟 자동 동기화 로직 연동
+- 대상: `main/resources/static/assets/display/display-focus-controls.js`, `src/test/js/display-focus-client.test.cjs`
+- 구현 내용:
+  - `display-focus-controls.js`:
+    - Luna 프리셋 클릭 시:
+      - `nf-answer-target`을 `API_ONLY`(또는 `AUTO`)로 설정
+      - 카탈로그에서 `openai-economy` 또는 `gpt-5.6-luna`가 포함된 모델을 찾아 `nf-answer-model` 값으로 설정 (없으면 `llmrouter.openai-economy` 기본값)
+      - `nf-web-search`를 `false`로 제안하거나 현재 유지
+      - `modelStatus()` 호출 및 `settingsEdits++`
+      - `nf-preset-status`에 '루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.' 갱신
+    - Gemini 프리셋 클릭 시:
+      - `nf-answer-target`을 `GEMINI_WEBSEARCH_ONLY`로 설정
+      - 카탈로그에서 `gemini`가 포함된 모델(`gemini-cue` 또는 `gemini-pro`)을 찾아 `nf-answer-model`로 설정
+      - `nf-web-search`를 `true`로 설정
+      - `modelStatus()` 호출 및 `settingsEdits++`
+      - `nf-preset-status`에 '제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.' 갱신
+    - 자동(기본) 프리셋 클릭 시:
+      - `nf-answer-target`을 `AUTO`로 설정, `nf-answer-model`을 빈 문자열(자동 선택)로 설정
+      - `modelStatus()` 호출 및 `settingsEdits++`
+  - `src/test/js/display-focus-client.test.cjs`:
+    - Luna 프리셋 및 Gemini 프리셋 클릭 시 `nf-answer-target`, `nf-answer-model` 값이 올바르게 전환되고 폼 제출(`nova-settings-form`) 시 설정 페이로드(`answerSelection`, `executionTarget`)에 반영되는지 검증하는 단위 테스트 추가.
+
+## 4. HOLD 조건
+- `main/resources/static/assets/display/index.html` 또는 `display-focus-controls.js`에 타 에이전트의 충돌하는 live lease가 발생한 경우.
+- `node --test src/test/js/display-focus-client.test.cjs` 기존 17개 테스트 중 회귀 실패가 발생하는 경우.
+
+## 5. ASK_ONCE (기본값 포함)
+- U-1: Gemini 프리셋 기본 라우트를 `gemini-cue`(gemini-3.5-flash-lite)로 할지 `gemini-pro`(gemini-3.8-flash)로 할지?
+  - (a) 권장: 카탈로그에서 지원 확인된 gemini 모델 자동 탐색 우선, 기본값 `llmrouter.gemini-pro`
+  - (b) 고정 `llmrouter.gemini-cue`
+
+## 6. 절대 금지
+- git push, git commit, git add -A, git remote 추가 금지.
+- 제품 Java 소스(`main/java/**`) 수정 금지 (Java는 Codex 작업 범위).
+- Gradle build/test 실행 금지 (Node.js 단위 테스트만 실행).
+- 비밀 번호나 API 키, 토큰 출력 및 하드코딩 금지.
+- 인증 게이트 강제 추가나 PROTO_OPEN 규칙 훼손 금지.
+
+## 7. Acceptance (완료 기준)
+- WP1: `index.html`에 Luna, Gemini, Auto 프리셋 버튼 및 상태 라벨 요소가 존재함.
+- WP2: `display-focus-controls.js`에서 각 프리셋 버튼 클릭 시 목표 모델과 executionTarget이 정상 전환되고, `node --test src/test/js/display-focus-client.test.cjs` 실행 시 기존 17개 테스트 포함 신규 프리셋 테스트까지 전부 PASS (exit 0).
+- 미실행 검증은 NOT_RUN(사유)로 기록하며 임의로 PASS 처리하지 않음.
+- 제품 Java 코드 및 build 설정 변경 0건.
+
+## 8. 보고 형식
+외부 API: 실호출 0, 비밀 열람 0, 제품 Java diff 0, Gradle 0, 종료 시 lease 0
+- 실행 명령 및 exit code
+- 변경된 파일 목록 및 git diff 요약
+- `node --test` 테스트 통과 결과 (총 건수 및 PASS)
+
+# [ANTI-STOP] 지시서의 모든 완료 조건이 충족될 때까지 멈추지 마십시오.

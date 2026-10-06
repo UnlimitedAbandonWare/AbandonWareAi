@@ -621,7 +621,7 @@ public class BraveSearchService implements WebSearchProvider {
     private BraveSearchResult requestBudgetExhaustedResult(String query, int requestedCount, long t0Ns) {
         long elapsedMs = Math.max(0L, (System.nanoTime() - t0Ns) / 1_000_000L);
         TraceStore.put("web.brave.requestBudgetExhausted", true);
-        traceBraveFailure(query, requestedCount, -1, "request_budget_exhausted", false, true, null, elapsedMs);
+        traceBraveFailure(query, requestedCount, -1, "request_budget_exhausted", false, false, null, elapsedMs);
         return new BraveSearchResult(
                 java.util.List.of(),
                 BraveSearchResult.Status.EXCEPTION,

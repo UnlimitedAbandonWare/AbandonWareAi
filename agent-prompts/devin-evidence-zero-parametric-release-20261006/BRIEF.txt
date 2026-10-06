@@ -1,0 +1,92 @@
+[ANTI-STOP] 이 지시서는 선언된 WP1-WP3 작업을 순서대로 완료한 뒤 보고서를 작성해야 한다.
+[DEVIN 지시서] 근거 부족 시 본문 보류 금지 및 주의 표기 동반 사전학습 지식 출력 정책 개정 및 Codex 유도 — 2026-10-06 13:40 KST
+파일 ID: PASTE_DEVIN_EVIDENCE_ZERO_PARAMETRIC_RELEASE_20261006
+@demo1-devin-directive-loop
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스 직접 수정 0 · git push/pull/add -A/commit 0 · 비밀값 출력 0 · 유료 API 호출 0
+
+0. 한 줄 목표
+검색 근거가 부족/부재할 때 답변을 HOLD(보류)하지 않고 "근거 부족 주의" 표기와 함께 모델 사전학습 지식 기반 답변을 반드시 출력하도록 룰을 개정하고, Codex가 Java 제품 소스를 안전하게 패치하도록 유도 Handoff를 산출한다.
+
+## 1. 사실 (2026-10-06 13:35 KST)
+- [대기 조건] 현재 활성 세션(`chat-browser10-20261006-dba2a4ab`, `devin-03f29a29`) 완료 및 저널/리스 반납 후 시작.
+- 사용자 관측 증상: 원신 공지 질의 시 근거 부족으로 "검증 결과 제시된 근거가 답변을 충분히 뒷받침하지 못해 본문을 보류했습니다." 한 줄 보류문만 출력되고 본문 차단.
+- 현행 코드:
+  1) `ChatWorkflow.java:8329`: `normalizedStatus="insufficient"` 시 `HOLD` 및 `releaseAllowed=false`.
+  2) `RagControlProjectionRenderer.java:31-32, 54`: `plan.shouldStop()` 시 `semanticAnswer`를 버리고 보류문 대체.
+  3) `RagControlRuntimeAdapter.java:233-243`: hardGuardHeld 시 `Action.HOLD` 발생.
+- 현행 룰: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md:13`의 "기존 HOLD/거절을 유지하며" 규정이 본문 차단 유발.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+| 경로 | sha12 | 권한 |
+|---|---|---|
+| docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md | 4700ECC8BA41 | 수정 |
+| main/java/com/example/lms/service/ChatWorkflow.java | 83C3A9D5A46D | 읽기(Codex) |
+| main/java/com/example/lms/orchestration/control/RagControlProjectionRenderer.java | 391CBB43F057 | 읽기(Codex) |
+| main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java | B227DCB74DC7 | 읽기(Codex) |
+| src/test/java/com/example/lms/service/ChatWorkflowFinalVerificationReleaseGateTest.java | 9963B71A5E3D | 읽기(Codex) |
+| scripts/probe_parametric_release_contract.py | 신규 | 생성 |
+| data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md | 신규 | 생성 |
+
+## 3. 항목 (WP1-WP3)
+
+### WP1 [Devin] 근거 부족 시 사전학습 지식 출력 및 주의 표기 정책 개정
+- 대상: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md`
+- 수정:
+  1) 근거 부족(`insufficient`, `citation_miss`, `evidence zero`) 시 일방적 HOLD/보류문 치환 금지, 주의 표기(Parametric Warning Disclaimer)를 결속한 답변 공개(Release with Warning)를 정식 기본 정책으로 명문화.
+  2) 표준 주의 표기:
+     `> ⚠️ 주의: 외부 검색 근거가 충분하지 않아 모델의 사전학습 지식(Parametric Knowledge)을 바탕으로 작성된 답변입니다. 최신 사실이나 공식 발표는 반드시 1차 출처를 직접 확인해 주세요.`
+  3) 신뢰도 경계: `knowledgeWriteAllowed=false` (자동 메모리/RAG 벡터 저장 차단) 유지.
+- RED: `Select-String -Path docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md -Pattern "기존 HOLD/거절을 유지하며"`
+- GREEN: `python -B -c "t=open('docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md', encoding='utf-8').read(); assert '사전학습 지식' in t and '주의' in t; print('WP1 PASS')"` ; "exit=$LASTEXITCODE"
+
+### WP2 [Devin] 오프라인 릴리스 계약 정적 프로브 스크립트 작성
+- 대상: `scripts/probe_parametric_release_contract.py`
+- 수정:
+  1) Python 표준 라이브러리 기반 정적 검증 스크립트.
+  2) `DEMO1-EVIDENCE-ZERO-RELEASE.md` 요건 충족 및 `ChatWorkflow.java`, `RagControlProjectionRenderer.java`의 현재 릴리스 게이트 패턴 스캔 (`DEFECT_PRESENT` vs `PATCH_READY` 판정).
+- RED: `python -B scripts/probe_parametric_release_contract.py ; "exit=$LASTEXITCODE"` (미존재)
+- GREEN: `python -B scripts/probe_parametric_release_contract.py ; "exit=$LASTEXITCODE"` (exit==0, 결함 지점 2곳 진단 보고)
+
+### WP3 [Devin] Codex Java 패치 유도 Handoff 스펙 작성
+- 대상: `data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md`
+- 수정: Codex가 그대로 적용할 최소 diff 사양 및 단위 테스트 가이드 작성:
+  1) `ChatWorkflow.java`: `normalizedStatus.equals("insufficient")` 시 `releaseAllowed: true`, `releaseStatus: "UNVERIFIED"`, `reasonCode: "verification_insufficient_parametric_release"`, `knowledgeWriteAllowed: false`, 본문 앞 표준 주의 표기 접두사 부착.
+  2) `RagControlProjectionRenderer.java`: `verification_insufficient` 시 `plan.shouldStop()`에서 본문 삭제 금지.
+  3) `ChatWorkflowFinalVerificationReleaseGateTest.java`: `releaseAllowed=true` 기대값 갱신.
+- RED: `Test-Path data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md`
+- GREEN: `python -B -c "import os; assert os.path.exists('data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md'); print('WP3 PASS')"` ; "exit=$LASTEXITCODE"
+
+## 4. HOLD
+- 선행 작업(`chat-browser10`, `devin-03f29a29`) 완료 전에는 대기(HOLD).
+- Java 제품 소스 직접 수정 금지 (발견 시 즉시 중단 후 Codex 인계).
+
+## 5. ASK_ONCE
+- U-1: 경고 문구 위치 — (a) 권장: 본문 최상단 인라인 경고 블록 (b) 본문 최하단 각주 (c) RAG 상태 테이블 내. (무응답 시 (a))
+
+## 6. 절대 금지
+- git push, git pull, git add -A, git commit, git reset, remote 추가 절대 금지.
+- .secrets, .env, 토큰, 비밀값 열람 및 출력 절대 금지.
+- 유료 외부 API 실호출 0.
+- Devin의 Java 제품 소스(`main/java/**`, `src/test/java/**`) 직접 수정 금지.
+- PROTO_OPEN 보안 경계 해제 금지.
+
+## 7. Acceptance
+- WP1: `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md`에 근거 부족 시 본문 보류 금지 및 주의 표기 동반 사전학습 지식 출력 정책 명시, `knowledgeWriteAllowed=false` 경계 보존.
+- WP2: `scripts/probe_parametric_release_contract.py` 생성되어 exit 0으로 현재 결함 지점 보고.
+- WP3: `data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md`에 Codex Java 소스 수정 최소 diff 및 테스트 가이드 완비.
+- NOT_RUN: 실행하지 못한 항목은 NOT_RUN + 사유 기재 (임의 PASS 전환 금지).
+
+## 8. 보고 형식
+외부 API: 호출 0회 (비용 $0)
+비밀 열람: 0건
+제품 소스 diff: 0줄 (Codex 이관 사양 산출)
+종료 시 lease: 0건
+산출물:
+- `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` (개정)
+- `scripts/probe_parametric_release_contract.py` (생성)
+- `data/agent-handoff/devin/FOR_CODEX_PARAMETRIC_RELEASE_SPEC.md` (생성)
+
+[ANTI-STOP] 이 지시서는 중간 질문으로 멈추지 않고 선언된 WP1-WP3 작업을 순서대로 완료한 뒤 최종 보고서를 작성해야 한다.

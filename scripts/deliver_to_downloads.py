@@ -9,6 +9,15 @@ carries the tool's DELIVERED line. Three layers: rule doc, this tool, hook.
   --scan [--since-minutes N] [--roots ...]   copy matching recent outputs that
                         are not already present with the same sha256
   --quiet               print only when something was copied
+  --hook-stop           Codex Stop-hook entry (contract PASTE_DEVIN_dot-only-
+                        downloads_20261004): read the hook event JSON on stdin,
+                        open transcript_path (or resolve ~/.codex/sessions via
+                        session_id), and deliver only when the transcript's
+                        FIRST user-role message contains the literal tag
+                        [DOT-BRIEF]. stop_hook_active, missing/broken stdin or
+                        transcript -> no writes, exit 0. stdout is always a
+                        single `{}` JSON line (Stop hooks reject plain text);
+                        details go to the log file.
   --downloads <dir>     destination override (tests); default = registry
                         user.downloads, fallback %USERPROFILE%\\Downloads
   --log <path>          jsonl log override; default <repo>/var/deliver/deliver-log.jsonl
@@ -24,6 +33,7 @@ import glob
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -86,6 +96,12 @@ def matches_scan_name(name):
     if low.endswith(".md"):
         return ("directive" in low) or ("_report_" in low) or ("brief" in low)
     return False
+
+
+def matches_dot_name(name):
+    """dot brief session matcher: scan rules plus PASTE_*.md (dot's own format)."""
+    low = name.lower()
+    return matches_scan_name(name) or (low.startswith("paste_") and low.endswith(".md"))
 
 
 def classify(path):
@@ -171,7 +187,7 @@ def iter_root_files(root_spec, warnings):
             yield p
 
 
-def scan(roots, since_minutes, downloads, deadline):
+def scan(roots, since_minutes, downloads, deadline, name_fn=matches_scan_name):
     warnings, delivered, skipped, refused, seen = [], [], [], [], set()
     cutoff = time.time() - since_minutes * 60
     truncated = False
@@ -198,7 +214,7 @@ def scan(roots, since_minutes, downloads, deadline):
                         continue
                 except OSError:
                     continue
-                if not matches_scan_name(path.name):
+                if not name_fn(path.name):
                     continue
                 action, dest, sha12, size = deliver_one(path, downloads)
                 entry = (str(path), action, str(dest) if dest else "", sha12, size)
@@ -225,10 +241,184 @@ def append_log(log_path, record):
         pass
 
 
+# ---------- --hook-stop (dot-session-scoped Stop hook) ----------
+
+DOT_TAG = "[DOT-BRIEF]"
+TRANSCRIPT_MAX_BYTES = 2 * 1024 * 1024
+TRANSCRIPT_MAX_LINES = 400
+SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,128}$")
+HOOK_STOP_MAX_MINUTES = 2880  # 48h cap on the session-start-derived window
+
+
+def _parse_iso_epoch(text):
+    if not isinstance(text, str) or not text.strip():
+        return None
+    try:
+        from datetime import timezone as _tz
+        dt = datetime.fromisoformat(text.strip().replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def read_first_user_message(path):
+    """Text of the first user-role message in a codex rollout jsonl, else None."""
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(TRANSCRIPT_MAX_BYTES + 1)
+    except OSError:
+        return None
+    for raw in data.splitlines()[:TRANSCRIPT_MAX_LINES]:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line.decode("utf-8-sig", "replace"))
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("type") not in ("response_item", "user_message"):
+            continue
+        pl = rec.get("payload") if isinstance(rec.get("payload"), dict) else rec
+        if pl.get("role") != "user":
+            continue
+        content = pl.get("content")
+        parts = []
+        if isinstance(content, list):
+            for item in content:
+                if isinstance(item, dict) and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+        elif isinstance(content, str):
+            parts.append(content)
+        elif isinstance(pl.get("message"), str):
+            parts.append(pl["message"])
+        return "\n".join(parts)
+    return None
+
+
+def session_start_epoch(path):
+    """First record timestamp (session_meta/turn start), else file mtime."""
+    try:
+        with open(path, "rb") as fh:
+            for _ in range(20):
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                ts = _parse_iso_epoch(rec.get("timestamp")) or \
+                    _parse_iso_epoch((rec.get("payload") or {}).get("timestamp")) or \
+                    _parse_iso_epoch((rec.get("payload") or {}).get("started_at"))
+                if ts:
+                    return ts
+    except OSError:
+        pass
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def find_transcript_by_session(session_id):
+    """Locate a rollout jsonl by session id under ~/.codex/sessions."""
+    if not session_id or not SESSION_ID_RE.match(str(session_id)):
+        return None
+    home = Path(os.environ.get("USERPROFILE", str(Path.home())))
+    base = home / ".codex" / "sessions"
+    if not base.is_dir():
+        return None
+    needle = str(session_id).lower()
+    try:
+        cands = [p for p in base.glob("**/rollout-*.jsonl")
+                 if needle in p.name.lower() and p.is_file()]
+    except OSError:
+        return None
+    if not cands:
+        return None
+    cands.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return str(cands[0])
+
+
+def hook_stop_roots(event):
+    home = Path(os.environ.get("USERPROFILE", str(Path.home())))
+    roots = [
+        str(home / "Documents" / "Codex" / "**" / "task*"),
+        str(ROOT / "var" / "codex-assist-*"),
+        str(ROOT / "agent-prompts" / "**"),
+    ]
+    cwd = event.get("cwd")
+    if isinstance(cwd, str) and cwd and Path(cwd).is_dir():
+        rp = str(Path(cwd).resolve())
+        if rp not in roots:
+            roots.append(rp)
+    return roots
+
+
+def run_hook_stop(args, downloads, record):
+    """Stop-hook gate. Returns (out_lines_append, extra_record_fields)."""
+    lines, extra = [], {}
+    try:
+        raw = sys.stdin.buffer.read(65537) if not sys.stdin.isatty() else b""
+    except OSError:
+        raw = b""
+    if len(raw) > 65536:
+        return lines, {"dot": False, "reason": "stdin-oversize"}
+    try:
+        event = json.loads(raw.decode("utf-8-sig")) if raw.strip() else {}
+    except ValueError:
+        return lines, {"dot": False, "reason": "stdin-unreadable"}
+    sid = str(event.get("session_id") or "")[:8]
+    extra["session8"] = sid or None
+    if event.get("stop_hook_active"):
+        return lines, {"dot": False, "reason": "stop-hook-active", **extra}
+    transcript = event.get("transcript_path") or event.get("transcriptPath")
+    reason = None
+    if not transcript and event.get("session_id"):
+        transcript = find_transcript_by_session(event["session_id"])
+    if not transcript or not Path(transcript).is_file():
+        reason = "transcript-missing"
+    if reason is None:
+        first_user = read_first_user_message(Path(transcript))
+        if first_user is None:
+            reason = "no-user-message"
+        elif DOT_TAG not in first_user:
+            reason = "tag-absent"
+    if reason is not None:
+        return lines, {"dot": False, "reason": reason, **extra}
+    start = session_start_epoch(Path(transcript))
+    if start:
+        since = int((time.time() - start) / 60) + 5
+        since = max(5, min(HOOK_STOP_MAX_MINUTES, since))
+    else:
+        since = args.since_minutes
+    roots = hook_stop_roots(event)
+    deadline = time.monotonic() + args.deadline_sec
+    res = scan(roots, since, downloads, deadline, name_fn=matches_dot_name)
+    for src, _a, dest, sha12, size in res["delivered"]:
+        lines.append(f"DELIVERED {dest} {size}B sha12={sha12} MATCH")
+    extra.update({"dot": True, "roots": roots, "since_minutes": since,
+                  "scanned": res["scanned"], "truncated": res["truncated"],
+                  "delivered": len(res["delivered"]),
+                  "skipped": len(res["skipped"]), "refused": len(res["refused"]),
+                  "warnings": res["warnings"][:20]})
+    return lines, extra
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", action="append", default=[])
     ap.add_argument("--scan", action="store_true")
+    ap.add_argument("--hook-stop", action="store_true",
+                    help="Codex Stop hook: deliver only for [DOT-BRIEF] first-"
+                         "user-message sessions; stdout is a single {} line")
     ap.add_argument("--since-minutes", type=int, default=DEFAULT_SINCE_MINUTES)
     ap.add_argument("--roots", nargs="*", default=None)
     ap.add_argument("--quiet", action="store_true")
@@ -257,6 +447,11 @@ def main(argv=None):
                 else:
                     out_lines.append(f"{action.split(':')[0]} {f} {action.split(':', 1)[-1]}")
             record["results"] = results
+        elif args.hook_stop:
+            record["mode"] = "hook-stop"
+            hs_lines, hs_extra = run_hook_stop(args, downloads, record)
+            record.update(hs_extra)
+            out_lines = hs_lines  # logged below; stdout stays JSON-only
         elif args.scan:
             record["mode"] = "scan"
             roots = args.roots if args.roots else default_roots()
@@ -283,12 +478,17 @@ def main(argv=None):
             return 0
 
         append_log(log_path, record)
-        if not args.quiet or out_lines:
+        if args.hook_stop:
+            # Codex Stop hooks parse stdout as JSON; plain text is invalid.
+            print("{}")
+        elif not args.quiet or out_lines:
             for line in out_lines:
                 print(line)
         return 0
     except Exception as e:  # noqa: BLE001 - hook safety: never block a turn
         warn(str(e))
+        if getattr(args, "hook_stop", False):
+            print("{}")
         return 0
 
 

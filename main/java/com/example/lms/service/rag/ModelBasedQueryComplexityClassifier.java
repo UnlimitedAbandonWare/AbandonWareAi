@@ -19,12 +19,9 @@ public class ModelBasedQueryComplexityClassifier implements QueryComplexityClass
     @Value("${rag.queryComplexity.model.path:}")
     private String modelPath;
 
-    private volatile boolean modelUnavailable;
-
     @PostConstruct
     void init() {
         // This implementation has no inference session. A file is not a loaded model.
-        modelUnavailable = true;
         if (modelPath != null && !modelPath.isBlank())
             log.info("[AWX][rag][query-complexity] model disabled reason=inference_not_implemented");
     }
@@ -48,9 +45,6 @@ public class ModelBasedQueryComplexityClassifier implements QueryComplexityClass
         if (hasDigits) score++;
         if (hasMultipleClauses) score++;
         if (lower.contains("compare") || lower.contains("analyze") || lower.contains("explain")) score++;
-        if (modelUnavailable) {
-            log.debug("[AWX][rag][query-complexity] reason=heuristic_only");
-        }
 
         if (score >= 3) {
             return QueryComplexityGate.Level.COMPLEX;

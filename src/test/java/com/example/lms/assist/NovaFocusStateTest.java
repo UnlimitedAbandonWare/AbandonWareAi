@@ -4,6 +4,53 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NovaFocusStateTest {
+    @Test void foldPartialKeepsLensEmptyAndFinalVersionStable() {
+        var s=state(true);s.input(u("partial",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(s,"foldPartial",r,"turn","첫 문장입니다.");
+        var early=s.view(1300);assertEquals("THINKING",early.phase());
+        assertEquals("첫 문장입니다.",early.forTarget("fold").answerText());
+        assertEquals("",early.forTarget("lens").answerText());assertEquals("",early.renderReceiptTicket());
+        var wire=new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(early.forTarget("fold"));
+        assertFalse(wire.path("answerComplete").booleanValue());assertTrue(wire.path("answerPrefixStable").booleanValue());
+        assertEquals("",new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(early.forTarget("lens")).path("answerText").asText());
+        long reserved=early.answerVersion();
+        s.answer(r,"turn","첫 문장입니다. 다음 문장입니다.","ticket",1400);
+        assertEquals(reserved,s.view(1400).answerVersion());
+        assertEquals("첫 문장입니다. 다음 문장입니다.",s.view(1400).forTarget("lens").answerText());
+    }
+    @Test void stalePartialAndFailedStreamCannotPublishOrComplete() {
+        var s=state(true);s.input(u("partial-fail",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(s,"foldPartial",r,"wrong-turn","잘못된 문장입니다.");
+        assertEquals("",s.view(1300).forTarget("fold").answerText());
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(s,"foldPartial",r,"turn","첫 문장입니다.");
+        s.failed(r,"focus_stream_failed");
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(s,"foldPartial",r,"turn","늦게 온 문장입니다.");
+        assertEquals("",s.view(1400).forTarget("fold").answerText());assertFalse(s.active());
+        assertFalse(s.receipt("server",r.activationId(),"turn",s.view(1400).answerVersion(),"ticket","presentation_done",1500));
+    }
+    @Test void groundedOriginalIsPhoneOnlyAndLateCompletionPublishesNeitherBodyNorMetadata(){
+        var s=state(true);s.input(u("ground",0,true,"노바 질문"),0);var request=s.tick(1200);s.accepted(request,"turn");
+        String original="원문".repeat(5000);
+        var metadata=new com.example.lms.learning.gemini.GeminiGateway.GroundingMetadata(java.util.List.of("query"),java.util.List.of(),java.util.List.of(),
+            new com.example.lms.learning.gemini.GeminiGateway.SearchEntryPoint("<div>Suggestions</div>"));
+        var grounded=new com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer(original,"gemini-fixture",metadata,java.util.List.of(original),true);
+        s.answer(request,"turn",original,"receipt",1300,grounded);
+        var phone=s.view(1300).forTarget("fold");assertSame(grounded,phone.grounding());assertEquals(original,phone.grounding().originalText());
+        assertEquals("fold",phone.renderTarget());assertEquals("receipt",phone.renderReceiptTicket());
+        var lens=s.view(1300).forTarget("lens");assertNull(lens.grounding());assertNull(lens.renderReceiptTicket());assertFalse(lens.answerText().contains("원문"));
+        s.close("user_closed");s.answer(request,"turn",original,"late",1400,grounded);
+        assertNull(s.view(1400).grounding());assertEquals("",s.view(1400).answerText());assertFalse(s.active());
+    }
+    @Test void acceptedQuestionFreezesSearchSettingUntilNextQuestion() throws Exception {
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(NovaFocusSettings.defaults());
+        node.put("enabled",true);node.put("webSearchEnabled",false);
+        var s=new NovaFocusState("server",mapper.treeToValue(node,NovaFocusSettings.class));
+        s.input(u("search",0,true,"노바 공식 자료를 찾아줘"),0);var request=s.tick(1200);
+        node.put("webSearchEnabled",true);s.settings=mapper.treeToValue(node,NovaFocusSettings.class);
+        assertFalse(mapper.valueToTree(request).path("webSearchEnabled").booleanValue());
+        assertTrue(mapper.valueToTree(request).hasNonNull("webSearchEnabled"));
+    }
     @Test void audioEpochDropsOnlyUnconfirmedPartsAndSeparatesReusedAsrIds(){
         var s=state(true);s.sourceNamespace("assist:1");
         s.input(u("a",0,true,"노바 first"),0);s.input(u("b",0,false,"unfinished"),10);

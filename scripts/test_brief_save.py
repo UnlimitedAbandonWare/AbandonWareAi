@@ -142,6 +142,12 @@ class BriefSaveTest(unittest.TestCase):
         self.assertEqual(res2["verdict"], "WARN")
         self.assertTrue(any(f["id"] == "skill-duplicate" for f in res2["findings"]))
 
+    def test_4b_skill_md_mention_passes_and_not_missing_skill(self):
+        with_skill_md = GOOD.replace("@demo1-project-root", "@demo1-project-root @SKILL.md")
+        res = self.lint(with_skill_md)
+        self.assertEqual(res["verdict"], "PASS", res["findings"])
+        self.assertFalse(any(f["id"] == "skill-not-found" for f in res["findings"]))
+
     def test_5_secret_pattern_fails(self):
         # 스캐너 규칙상 소스에 비밀값 형태 리터럴을 두지 않는다(기존 fixture 관례와 동일하게 런타임 조립).
         bad = GOOD + "\n참고: " + "pass" + "word=Sup3rSecret!\n"

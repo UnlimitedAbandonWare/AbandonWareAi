@@ -5,7 +5,10 @@ import java.util.*;
 /** Pure, clock-driven Focus state; callers serialize access per assist session. */
 final class NovaFocusState {
     record Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,
-                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled) {
+                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled) {
+        Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version,int length,boolean quick){
+            this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,selection,version,length,quick,null);
+        }
         Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version){
             this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,selection,version,400,false);
         }
@@ -24,14 +27,24 @@ final class NovaFocusState {
     record View(String serverInstanceId,String activationId,String turnId,long stateVersion,long answerVersion,
                 boolean active,String phase,String draftText,String questionText,String answerText,
                 String renderTarget,String renderReceiptTicket,long idleRemainingMs,String reason,
-                NovaFocusSettings.Presentation presentation,boolean answerTruncated,boolean hasMoreOnFold,int answerLengthChars) {
+                NovaFocusSettings.Presentation presentation,boolean answerTruncated,boolean hasMoreOnFold,int answerLengthChars,
+                com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,boolean answerComplete) {
+        View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more,int length,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){
+            this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,length,grounding,true);
+        }
+        View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more,int length){
+            this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,length,null);
+        }
         View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more){
             this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,8000);
         }
         @Override public String toString(){return "NovaFocusView[redacted]";}
-        View forTarget(String surface){String visible="lens".equals(surface)?NovaFocusAnswerService.boundDisplay(answerText,answerLengthChars):answerText;
+        @com.fasterxml.jackson.annotation.JsonProperty("answerPrefixStable")
+        public boolean answerPrefixStable(){return !answerComplete;}
+        View forTarget(String surface){boolean lens="lens".equals(surface);
+            String visible=lens&&!answerComplete?"":lens&&grounding!=null?"검색 답변은 휴대폰에서 확인하세요.":lens?NovaFocusAnswerService.boundDisplay(answerText,answerLengthChars):answerText;
             boolean clipped=answerTruncated||!Objects.equals(visible,answerText);
-            return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars);}
+            return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars,lens?null:grounding,answerComplete);}
     }
     final String server;
     NovaFocusSettings settings;
@@ -39,6 +52,9 @@ final class NovaFocusState {
     private final NovaFocusTurnAssembler draft=new NovaFocusTurnAssembler();
     private final Set<String> committed=new LinkedHashSet<>();
     private String phase="OFF",activation="",turn="",question="",answer="",receipt="",candidate="",target="lens",reason="";
+    private String foldPartial="";
+    private boolean partialVersionReserved;
+    private com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding;
     private long version,answerVersion,listenUntil,generationUntil,presentationUntil,idleUntil;
     private boolean inFlight,firstVisible,done,answerTruncated;
     private int runAnswerLength=400;
@@ -86,10 +102,12 @@ final class NovaFocusState {
         if(!Set.of("lens","fold").contains(renderTarget))throw new IllegalArgumentException("invalid_focus_target");
         if(active())return;
         activation=UUID.randomUUID().toString();target=renderTarget;phase="LISTENING";draft.clear();draftKeys.clear();
-        answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();version++;
+        foldPartial="";partialVersionReserved=false;answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();version++;
+        grounding=null;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
     }
-    void close(String cause){phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+    void close(String cause){phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+        grounding=null;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
     private String key(ConversateQuestionPolicy.Utterance u){
         String source=u.questionId()+":"+u.utteranceId();
@@ -161,7 +179,7 @@ final class NovaFocusState {
         if(phase.equals("SNAPSHOT")&&!snapshotReady&&now>=snapshotUntil)snapshotFailed("snapshot_timeout",now);
         if(capacity&&phase.equals("SNAPSHOT")&&snapshotReady){
             var request=new Request(activation,pendingRequest.requestId(),pendingRequest.question(),snapshotImageBase64,snapshotImageMediaType,pendingRequest.sourceIds(),
-                pendingRequest.answerSelection(),pendingRequest.settingsVersion(),pendingRequest.answerLengthChars(),pendingRequest.quickAnswerEnabled());
+                pendingRequest.answerSelection(),pendingRequest.settingsVersion(),pendingRequest.answerLengthChars(),pendingRequest.quickAnswerEnabled(),pendingRequest.webSearchEnabled());
             pendingRequest=null;snapshotImageBase64=null;snapshotImageMediaType=null;clearCapture();snapshotReady=false;
             phase="THINKING";inFlight=true;inFlightRequest=request.requestId();generationUntil=now+90000;version++;return request;
         }
@@ -170,10 +188,11 @@ final class NovaFocusState {
             String source=String.join("\n",draftKeys);
             String requestKey=NovaFocusHistoryService.digest((draftKeys.size()==1&&source.startsWith("typed-")?"typed:":"")+source);
             var request=new Request(activation,requestKey,question,null,null,draftKeys.stream().map(NovaFocusHistoryService::digest).collect(java.util.stream.Collectors.toSet()),
-                settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer());
+                settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer(),settings.webSearchEnabled());
             runPresentation=settings.effectivePresentation();
             committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
-            draft.clear();draftKeys.clear();answer=receipt="";turn="";
+            draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";
+            grounding=null;
             if(snapshotEnabled()){
                 pendingRequest=request;pendingCaptureId=newCaptureId();pendingCaptureSource=settings.snapshotOrDefault().source();
                 claimedCaptureId=null;snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;
@@ -240,9 +259,22 @@ final class NovaFocusState {
     }
     boolean accepts(Request request){return inFlight&&activation.equals(request.activationId())&&inFlightRequest.equals(request.requestId())&&phase.equals("THINKING");}
     void accepted(Request request,String turnId){if(accepts(request)){turn=turnId;version++;}}
+    void foldPartial(Request request,String turnId,String text){
+        if(!accepts(request)||!turn.equals(turnId)||text==null||text.length()>8000
+                ||text.length()<=foldPartial.length()||!text.startsWith(foldPartial))return;
+        if(!partialVersionReserved){answerVersion++;partialVersionReserved=true;}
+        foldPartial=text;version++;
+    }
+    boolean foldPrefixMatches(String text){return foldPartial.isEmpty()||text!=null&&text.startsWith(foldPartial);}
     void answer(Request request,String turnId,String text,String ticket,long now){
+        answer(request,turnId,text,ticket,now,null);
+    }
+    void answer(Request request,String turnId,String text,String ticket,long now,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounded){
         if(!accepts(request)||!turnId.equals(turn))return;
-        inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);answerVersion++;receipt=ticket;phase="ANSWER_READY";reason="";
+        if(grounded!=null&&(!grounded.publicationReady()||!Objects.equals(text,grounded.originalText()))){close("focus_grounding_publication_held");return;}
+        if(!foldPrefixMatches(text)){close("focus_stream_final_mismatch");return;}
+        grounding=grounded;
+        inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);if(!partialVersionReserved)answerVersion++;foldPartial="";partialVersionReserved=false;receipt=ticket;phase="ANSWER_READY";reason="";
         firstVisible=done=false;idleUntil=0;
         presentationUntil=now+Math.max(120000,Math.min(1500000L,answer.codePointCount(0,answer.length())*(long)settings.presentation().charIntervalMs()+120000));
         version++;
@@ -255,7 +287,7 @@ final class NovaFocusState {
         if(!done){done=true;phase=draft.hasInput()?"LISTENING":"WAITING";idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
     }
     View view(long now){return new View(server,activation,turn,version,answerVersion,active(),phase,
-        NovaFocusHistoryService.clip(draft.text(),2000),question,answer,target,receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength);}
+        NovaFocusHistoryService.clip(draft.text(),2000),question,inFlight&&!foldPartial.isEmpty()?foldPartial:answer,grounding==null?target:"fold",receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength,grounding,!inFlight||foldPartial.isEmpty());}
     Map<String,Object> diagnostics(){var m=new LinkedHashMap<String,Object>();
         m.put("active",active());m.put("phase",phase);m.put("stateVersion",version);m.put("answerVersion",answerVersion);
         m.put("bufferedQuestions",draft.hasInput()?1:0);m.put("snapshotPending",phase.equals("SNAPSHOT")&&pendingRequest!=null);

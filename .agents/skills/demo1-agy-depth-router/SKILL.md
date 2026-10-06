@@ -22,7 +22,10 @@ in `configs/agy-depth.json` — re-read it before applying the numbers below.
    will implement from. 0=trivial, 1=moderate, 2=directive/report downstream.
 
 Bands (from json `lBands`): total ≤ `l1Max` → **L1**; ≤ `l2Max` → **L2**;
-else **L3**. Directive/brief writing for other agents is **at least L2**.
+else **L3**. Directive/brief writing for other agents is **at least L2**;
+skill authoring (`demo1-agy-skill-pack` 팩 산출) is **at least L2** too, and
+"앞으로 방식/관문/ratchet" asks go L3 with pack grade L (depth-checklist
+addendum).
 
 ## L1 — light (same as today)
 

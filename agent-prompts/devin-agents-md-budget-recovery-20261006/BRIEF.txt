@@ -1,0 +1,73 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라, 아래 명시된 작업을 실제로 수행하고 검증하는 실행 지시서입니다.
+[DEVIN 지시서] AGENTS.md Byte Budget 30,300B 초과 복구 및 규칙 스텁 외주화 — 2026-10-06 15:55 KST
+파일 ID: PASTE_DEVIN_AGENTS_MD_BUDGET_RECOVERY_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 Java/JS 소스 수정 0 · git push / add -A / commit 0 · 비밀값 출력 0 · remote 추가 0 · PROTO_OPEN 정책 임의 변경 0
+
+## 한 줄 목표
+AGENTS.md의 Byte Budget 초과(현재 31,626B > 30,300B)를 긴 인라인 블록(DEMO1-GIT-REMOTE-SOLE 등)을 docs/agents-rules/로 외주화하고 2줄 포인터 스텁으로 교체하여 python -B scripts/agents_md_budget.py check 통과(exit 0) 상태로 정상 복원한다.
+
+## 1. 사실 (2026-10-06 15:48~15:52 KST 읽기 전용 관측)
+- python -B scripts/agents_md_budget.py check 실행 결과: FAIL SIZE_OVER totalBytes=31626 > 30300 (exit 1).
+- 현재 AGENTS.md 크기: 31,626 바이트 (상한 30,300 바이트 대비 1,326 바이트 초과).
+- 최근 Devin 세션(silly-notebook.md, geode-pastry.md)에서 규칙 추가 후 예산 초과(31,626B)를 "pre-existing drift"로 남겨두고 정상화하지 않아 누적 부채로 남아 있음.
+- 최상위 블록 중 DEMO1-GIT-REMOTE-SOLE (L276-285)이 943 바이트로 8줄의 긴 상세 본문이 인라인으로 방치되어 있음.
+- agy 등 타 도구는 AGENTS.md의 24,000 바이트 이후를 읽지 못하므로 30,300B 초과는 도구 간 룰 정합성을 훼손함.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 제품 소스 수정 0, lease 시작/종료 준수, 비밀값/토큰 출력 0, git push/pull/commit/add -A/remote 추가 금지, PROTO_OPEN 기조 유지.
+- 실행하지 못하거나 환경이 갖춰지지 않은 항목은 NOT_RUN + 이유 표기하며 PASS로 바꾸지 않는다.
+
+## 3. 항목 (WP1~WP4)
+- WP1 [Devin] AGENTS.md 현재 예산 상태 진단 및 baseline 실패 관측
+  - 증거: AGENTS.md:276-285, scripts/agents_md_budget.py:35
+  - RED 검사: python -B scripts/agents_md_budget.py check; "exit=$LASTEXITCODE" (기대: exit 1)
+  - 최소 확인: python -B scripts/agents_md_budget.py report 로 30,300B 초과 원인 블록 식별
+
+- WP2 [Devin] DEMO1-GIT-REMOTE-SOLE 블록 외주화 및 2줄 포인터 스텁화
+  - 대상: AGENTS.md (L276-285), docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md
+  - 작업: DEMO1-GIT-REMOTE-SOLE 블록의 긴 8줄 본문(AbandonWare3 폐기, 브랜치 위상 등)을 docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md에 누락 없이 수용하고, AGENTS.md에는 표준 2줄 포인터 스텁(- 단일 유효 원격 및 브랜치 위상. — 상세: `docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md`)으로 대체한다.
+  - 원칙: CRITICAL_IDS(DEMO1-PROJECT-ROOT, DEMO1-PRIMARY-SURFACE, DEMO1-CORE-AUTO)는 절대 건드리지 않고 인라인 유지.
+
+- WP3 [Devin] AGENTS.md 예산 재검증 및 check exit 0 달성
+  - GREEN 검사: python -B scripts/agents_md_budget.py check; "exit=$LASTEXITCODE" (기대: exit 0)
+  - 보조 확인: python -B scripts/agents_md_budget.py report 로 totalBytes <= 30,300 B 확인
+
+- WP4 [Devin] Devin 규약 개선 보고서 작성
+  - 산출 경로: data/agent-handoff/devin/REPORT_AGENTS_MD_BUDGET_RECOVERY_20261006.md
+  - 내용: 향후 Devin 세션에서 룰/포인터 추가 시 pre-existing drift로 회피하지 않고, 본문은 docs/agents-rules/에 분리하고 AGENTS.md에는 2줄 포인터 스텁만 남기며 scripts/agents_md_budget.py check 통과를 필수 완료 조건으로 삼는다는 규약 명시.
+
+## 4. HOLD
+- CRITICAL_IDS (DEMO1-PROJECT-ROOT, DEMO1-PRIMARY-SURFACE, DEMO1-CORE-AUTO)의 위치를 24,000B 뒤로 밀거나 헤딩을 훼손하는 편집은 즉시 HOLD.
+- AGENTS.md의 필수 헤딩(REQUIRED_HEADINGS)을 삭제하는 변경은 즉시 HOLD.
+
+## 5. ASK_ONCE
+- U-1: DEMO1-GIT-REMOTE-SOLE 외주화 후에도 30,300B를 미세하게 초과할 경우 -> (a) 권장: 빈 공백 라인 및 긴 설명 주석 1~2줄을 docs로 추가 외주화, (b) 사용자 질의 후 추가 블록 선정.
+
+## 6. 절대 금지
+- git push / git pull / git add -A / git commit -a 금지.
+- .secrets, .env, API 토큰 등 비밀값 열람 및 출력 금지.
+- remote 추가 또는 remote URL 변조 금지.
+- PROTO_OPEN 기조를 무시하고 임의 인증 절차 추가 금지.
+- 제품 소스(main/java, static/js 등) 수정 금지.
+
+## 7. Acceptance (완료 기준)
+- A1 (WP1): python -B scripts/agents_md_budget.py check 실행 시 exit 1 실패 baseline 기록
+- A2 (WP2): AGENTS.md 내 DEMO1-GIT-REMOTE-SOLE 블록이 2줄 포인터 스텁으로 교체됨
+- A3 (WP3): python -B scripts/agents_md_budget.py check 실행 시 exit 0 통과 확인
+- A4 (WP3): python -B scripts/agents_md_budget.py report 확인 시 totalBytes <= 30300 B 달성
+- A5 (WP4): data/agent-handoff/devin/REPORT_AGENTS_MD_BUDGET_RECOVERY_20261006.md 보고서 생성
+- A6: 제품 소스 diff 0 라인, 비밀값 노출 0, git push/add -A 0 건
+
+## 8. 보고 형식
+- 외부 API: 실호출 0회 ($0)
+- 보고서 필수 항목:
+  - Acceptance 6개 항목 결과 (A1~A6)
+  - 수정 전/후 AGENTS.md 바이트 수 비교
+  - python -B scripts/agents_md_budget.py check 실행 명령 및 exit code
+  - 생성된 핸드오프 보고서 경로 및 sha12
+
+[ANTI-STOP] 작업을 중간에 멈추거나 가짜 통과를 선언하지 말고, 반드시 python -B scripts/agents_md_budget.py check 가 exit 0으로 통과하는 실제 증거를 제시하고 종료하십시오.

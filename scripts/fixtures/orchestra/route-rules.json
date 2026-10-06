@@ -5,7 +5,7 @@
     "liveCalls": 0,
     "restarts": 0
   },
-  "controlTower": {"agent": "dot", "role": "plan+brief+dispatch+ratchet", "delivery": "chatgpt-file-card", "appliesTo": ["CODEX_DIRECT", "GPTPRO_THEN_CODEX", "DEVIN"], "note": "lane은 기존 규칙으로 결정, tower는 누가 지휘하는지 표시만"},
+  "controlTower": {"agent": "dot", "role": "brief-write+downloads-delivery", "delivery": "downloads-paste-file", "serialLane": true, "assistPair": {"maxLanes": 2, "mode": "read-only"}, "appliesTo": ["CODEX_DIRECT", "GPTPRO_THEN_CODEX", "DEVIN"], "note": "아침 페이스(2026-10-05): dot은 지시서 작성→Downloads 배달까지만. 세션 적용·발송·감시·룰갱신은 사용자 손수/요청 단건 — 오토 다역할 금지. SERIAL_LANE: 한 세션 = 활성 지시서 1개, 목표 교체는 닫은 뒤 새 세션/새 PASTE (DEMO1-DOT-CONTROL-TOWER §1-B). lane은 기존 규칙으로 결정"},
   "roundtripLimit": 2,
   "costOrder": ["codex-credit", "external-paid", "free", "ollama-local"],
   "lanes": {

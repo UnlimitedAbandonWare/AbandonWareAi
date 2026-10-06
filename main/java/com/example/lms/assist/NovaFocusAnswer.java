@@ -2,6 +2,17 @@ package com.example.lms.assist;
 
 /** Internal adapter: never exposed as a client-supplied history/model request. */
 public interface NovaFocusAnswer {
+    record Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding) {
+        @Override public String toString(){return "NovaFocusResult[redacted]";}
+    }
+    default Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context context,FocusMemoryScope scope,java.util.function.BooleanSupplier current){
+        return new Result(imageBase64!=null&&!imageBase64.isBlank()
+                ?answer(room,question,imageBase64,imageMediaType,context,scope,current)
+                :answer(room,question,context,scope,current),null);
+    }
+    default Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context context,FocusMemoryScope scope,java.util.function.BooleanSupplier current,java.util.function.Consumer<String> foldPartial){
+        return answerResult(room,question,imageBase64,imageMediaType,context,scope,current);
+    }
     String answer(Long chatSessionId,String question,NovaFocusHistoryService.Context context);
     default String answer(Long room,String question,NovaFocusHistoryService.Context context,java.util.function.BooleanSupplier current){
         if(!current.getAsBoolean())throw new java.util.concurrent.CancellationException("focus_closed");

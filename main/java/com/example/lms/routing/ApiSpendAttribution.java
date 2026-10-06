@@ -78,6 +78,45 @@ public final class ApiSpendAttribution {
                 safe(estCostClass));
     }
 
+    /** Payload-free local observation, not the provider account-wide billing meter. Never an admission gate. */
+    public static synchronized GroundingUsage recordGrounding(java.nio.file.Path path, java.time.YearMonth month,
+            int queryCount, long monthlyAllowance) {
+        long allowance = Math.max(1, monthlyAllowance);
+        try {
+            var target = path.toAbsolutePath().normalize();
+            java.nio.file.Files.createDirectories(target.getParent());
+            try (var channel = java.nio.channels.FileChannel.open(target, java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE);
+                 var lock = channel.tryLock()) {
+                if (lock == null || channel.size() > 1024) throw new java.io.IOException("usage_ledger_unavailable");
+                var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                long previous = 0;
+                if (channel.size() > 0) {
+                    var buffer = java.nio.ByteBuffer.allocate((int)channel.size());
+                    while (buffer.hasRemaining() && channel.read(buffer) >= 0) {}
+                    var saved = mapper.readTree(buffer.array());
+                    if (!saved.path("month").isTextual() || !saved.path("observedQueries").isIntegralNumber()
+                            || saved.path("observedQueries").asLong(-1) < 0) throw new java.io.IOException("invalid_usage_ledger");
+                    if (month.toString().equals(saved.path("month").asText())) previous = saved.path("observedQueries").asLong();
+                }
+                long observed = Math.addExact(previous, Math.max(0, queryCount));
+                byte[] bytes = mapper.writeValueAsBytes(java.util.Map.of("month", month.toString(), "observedQueries", observed));
+                channel.position(0);channel.truncate(0);var buffer = java.nio.ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) channel.write(buffer);
+                channel.force(false);
+                boolean near = observed >= Math.ceil(allowance * .9d);
+                LOG.log(near ? System.Logger.Level.WARNING : System.Logger.Level.INFO,
+                        "[AWX][api-spend] purpose=gemini-grounding month={0} observedQueries={1} requestQueries={2} monthlyAllowance={3} nearAllowance={4} meter=local_observed lowerBound=true admission=unchanged",
+                        month, observed, Math.max(0,queryCount), allowance, near);
+                return new GroundingUsage(month.toString(), observed, near, true);
+            }
+        } catch (Exception failure) {
+            LOG.log(System.Logger.Level.WARNING, "[AWX][api-spend] purpose=gemini-grounding meter=unavailable admission=unchanged");
+            return new GroundingUsage(month.toString(), null, false, false);
+        }
+    }
+    public record GroundingUsage(String month, Long observedQueries, boolean nearAllowance, boolean accountingAvailable) {}
+
     public static String fingerprint(String purpose, String provider, String model, String caller, String probeId) {
         return String.join("|",
                 Objects.toString(purpose, ""),

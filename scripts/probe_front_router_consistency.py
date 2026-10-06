@@ -43,6 +43,40 @@ RE_PROMOTE_METHOD = re.compile(r"boolean\s+(?:shouldPromote|complexMainRequest)"
 RE_CONFIDENCE = re.compile(r"confidenceAccepted")
 
 
+def load_accepted(root: Path) -> list:
+    """Verified acceptances from configs/probe-front-router-accepted.json.
+
+    Entries: {"id","file","reason","evidence","verifiedAt"}. A missing or
+    unreadable file yields no acceptances — behaviour identical to before."""
+    cfg = root / "configs" / "probe-front-router-accepted.json"
+    if not cfg.is_file():
+        return []
+    try:
+        data = json.loads(cfg.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(data, list):
+        return []
+    return [e for e in data if isinstance(e, dict)
+            and e.get("id") and e.get("file")]
+
+
+def apply_accepted(findings: list, accepted: list) -> list:
+    """Downgrade a violation to severity "accepted" only on exact id+file
+    match. An id or file that drifts keeps the finding a violation."""
+    out = []
+    for f in findings:
+        match = next((e for e in accepted
+                      if e["id"] == f["id"] and e["file"] == f["file"]), None)
+        if match and f["severity"] == "violation":
+            f = dict(f, severity="accepted",
+                     acceptedReason=match.get("reason", ""),
+                     acceptedEvidence=match.get("evidence", ""),
+                     acceptedVerifiedAt=match.get("verifiedAt", ""))
+        out.append(f)
+    return out
+
+
 def scan_tree(root: Path) -> list:
     findings = []
     java_root = root / "main" / "java"
@@ -153,6 +187,7 @@ def main(argv=None) -> int:
     root = Path(args.root).resolve()
 
     findings = [] if args.mock_only else scan_tree(root)
+    findings = apply_accepted(findings, load_accepted(root))
     mock = mock_rerank_check()
     violations = [f for f in findings if f["severity"] == "violation"]
     if mock["naiveViolatesContract"] and not mock["guardedPreservesContract"]:
@@ -160,15 +195,21 @@ def main(argv=None) -> int:
                            "severity": "violation",
                            "detail": "guarded rerank dropped protected "
                                      "candidates"})
+    accepted_hits = [f for f in findings if f["severity"] == "accepted"]
     payload = {"schemaVersion": SCHEMA, "root": str(root),
                "ok": not violations,
                "violationCount": len(violations),
+               "acceptedCount": len(accepted_hits),
                "findings": findings, "mock": mock}
     print(json.dumps(payload, ensure_ascii=False))
     ids = sorted({f["id"] for f in violations})
     print(f"violations={len(violations)} rules={','.join(ids) or '-'} "
+          f"accepted={len(accepted_hits)} "
           f"mockNaiveDrops={len(mock['naiveDroppedProtected'])} "
           f"mockGuardedDrops={len(mock['guardedDroppedProtected'])}")
+    for f in accepted_hits:
+        print(f"accepted {f['id']} {f['file']}:{f.get('line')} "
+              f"reason={f.get('acceptedReason', '')[:120]}")
     return 2 if violations else 0
 
 

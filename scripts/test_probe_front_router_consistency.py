@@ -80,6 +80,19 @@ class Choice {
 }
 """
 
+TOKEN_ONLY_POLICY = """package com.example.lms.service.routing;
+class RouterPolicy {
+    private final com.example.lms.service.rag.QueryComplexityGate gate;
+    RouterPolicy(com.example.lms.service.rag.QueryComplexityGate gate) {
+        this.gate = gate;
+    }
+    public boolean shouldPromote(RouteSignal s) {
+        if (s.maxTokens() >= tokensThreshold) { return true; }
+        return false;
+    }
+}
+"""
+
 
 def run_tool(*args: str) -> tuple[int, dict]:
     proc = subprocess.run(
@@ -142,16 +155,61 @@ def main() -> int:
                       and "c3" in mock.get("naiveDroppedProtected", [])
                       and "c4" in mock.get("naiveDroppedProtected", []), out))
 
-        # live tree sanity: today the divergence + token-cap findings exist;
-        # assert only that the tool runs and reports JSON (post-fix trees may
-        # legitimately be clean).
+        # accepted-config behaviour: exact id+file match downgrades a finding
+        # to severity "accepted" (out of the exit count); a file mismatch keeps
+        # the violation; a missing config file changes nothing.
+        acc_root = Path(tmp) / "accepted"
+        put(acc_root, "com/example/lms/service/routing/RouterPolicy.java",
+            TOKEN_ONLY_POLICY)
+        put(acc_root, "com/example/lms/service/rag/QueryComplexityGate.java",
+            GATE)
+        acc_cfg = acc_root / "configs" / "probe-front-router-accepted.json"
+        acc_cfg.parent.mkdir(parents=True, exist_ok=True)
+        acc_cfg.write_text(json.dumps([{
+            "id": "R-TOKEN-CAP-PROMO",
+            "file": "main/java/com/example/lms/service/routing/"
+                    "RouterPolicy.java",
+            "reason": "test-accepted", "evidence": "t",
+            "verifiedAt": "t"}]), encoding="utf-8")
+        code, out = run_tool("--root", str(acc_root))
+        acc_hits = [f for f in out.get("findings", [])
+                    if f.get("severity") == "accepted"]
+        cases.append(("accepted-match-exit0", code == 0
+                      and out.get("violationCount") == 0
+                      and len(acc_hits) == 1
+                      and acc_hits[0]["id"] == "R-TOKEN-CAP-PROMO", out))
+
+        acc_cfg.write_text(json.dumps([{
+            "id": "R-TOKEN-CAP-PROMO",
+            "file": "main/java/com/example/lms/service/other/Other.java",
+            "reason": "wrong-file", "evidence": "t",
+            "verifiedAt": "t"}]), encoding="utf-8")
+        code, out = run_tool("--root", str(acc_root))
+        cases.append(("accepted-file-mismatch-stays-violation", code == 2
+                      and any(f["id"] == "R-TOKEN-CAP-PROMO"
+                              and f["severity"] == "violation"
+                              for f in out.get("findings", [])), out))
+
+        acc_cfg.unlink()
+        code, out = run_tool("--root", str(acc_root))
+        cases.append(("accepted-config-absent-unchanged", code == 2
+                      and out.get("violationCount") == 1, out))
+
+        # live tree sanity: the tool runs and reports JSON; post-fix the two
+        # repaired rules stay absent and the token-cap finding is either gone
+        # (FIX) or severity "accepted" (KEEP) — never a live violation.
         code, out = run_tool("--root", str(ROOT))
         cases.append(("live-tree-json-report", code in (0, 2)
                       and out.get("schemaVersion") == SCHEMA, out))
-        live_ids = {f["id"] for f in out.get("findings", [])}
-        cases.append(("live-tree-known-findings-visible",
-                      {"R-GATE-DIVERGENCE", "R-TOKEN-CAP-PROMO"}
-                      <= live_ids, out))
+        live_findings = out.get("findings", [])
+        live_ids = {f["id"] for f in live_findings}
+        cases.append(("live-tree-fixed-rules-absent",
+                      "R-GATE-DIVERGENCE" not in live_ids
+                      and "R-MODEL-FILE-FLIP" not in live_ids, out))
+        cases.append(("live-tree-token-cap-not-violation",
+                      all(f["severity"] != "violation"
+                          for f in live_findings
+                          if f["id"] == "R-TOKEN-CAP-PROMO"), out))
 
     failed = [n for n, ok, _ in cases if not ok]
     for name, ok, out in cases:

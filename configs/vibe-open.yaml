@@ -1,0 +1,6 @@
+# VIBE_OPEN (2026-10-06 사용자 결정) — 바이브코딩 단계 보안 질문 자동처리 스위치.
+# SSOT 정책 본문: docs/security/VIBE_OPEN.md · 보류 목록: docs/security/SECURITY_DEBT.md
+# enabled:false 하나로 분류기 D37·스킬 문구가 예전 동작(ASK_ONCE)으로 돌아간다.
+enabled: true
+schema: awx.vibe-open.v1
+note: "보안 일괄 상향 시 사용자 지시 1건으로 SECURITY_DEBT.md 위에서부터 처리"

@@ -14,6 +14,14 @@ Run against the draft before delivering. Every NO is a fix, not a comment.
 6. One more verification pass was done on the riskiest claim; "likely"/"아마"
    appears zero times outside the 미확인 list.
 
+## Skill authoring (addendum)
+
+- 스킬 생성·개편 지시서/작업은 **≥L2**로 판정한다 (blast cost ≥1: 다른
+  에이전트가 그 산출물을 그대로 쓴다).
+- 키워드가 "앞으로 방식 / 관문 / ratchet / 게이트"이면 L3로 올리고,
+  산출물은 `demo1-agy-skill-pack`의 **L 팩**을 요구한다
+  (`docs/agents-rules/DEMO1-AGY-SKILL-PACK.md`).
+
 ## Origin note
 
 Items 5–6 port the principles of agy's internal `<deepagent_effort>` prompt

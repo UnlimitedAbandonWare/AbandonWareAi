@@ -1,0 +1,46 @@
+{
+  "schemaVersion": "awx.behavior-ratchet.v1",
+  "locks": {
+    "INV-K1": {
+      "lockedAtUtc": "2026-10-05T13:17:09+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-AGY-SKILL-PACK.md"
+      ]
+    },
+    "INV-K2": {
+      "lockedAtUtc": "2026-10-05T13:17:09+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-agy-skill-pack/SKILL.md"
+      ]
+    },
+    "INV-K3": {
+      "lockedAtUtc": "2026-10-05T13:17:09+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/agy_skill_pack_check.py"
+      ]
+    },
+    "INV-K4": {
+      "lockedAtUtc": "2026-10-05T13:17:09+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-agy-directive-writer/references/directive-template.md"
+      ]
+    }
+  },
+  "history": [
+    {
+      "at": "2026-10-05T13:17:09+00:00",
+      "action": "lock",
+      "ids": [
+        "INV-K1",
+        "INV-K2",
+        "INV-K3",
+        "INV-K4"
+      ],
+      "task": null
+    }
+  ]
+}

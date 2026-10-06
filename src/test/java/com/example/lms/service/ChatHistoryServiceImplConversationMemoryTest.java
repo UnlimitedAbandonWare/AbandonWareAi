@@ -42,6 +42,87 @@ import static org.mockito.Mockito.when;
 class ChatHistoryServiceImplConversationMemoryTest {
 
     @Test
+    void sessionAssignmentsAndCorrectionsSurviveTenLaterExchangesWithinTheSummaryBudget() {
+        ChatSessionRepository sessions = mock(ChatSessionRepository.class);
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        Map<Long, ChatSession> sessionById = new HashMap<>();
+        Map<Long, List<ChatMessage>> rows = new HashMap<>();
+        AtomicLong nextId = new AtomicLong();
+        for (long id : new long[] {41L, 42L}) {
+            ChatSession session = new ChatSession("synthetic bounded memory");
+            session.setId(id);
+            sessionById.put(id, session);
+            rows.put(id, new ArrayList<>());
+        }
+        when(sessions.findById(anyLong())).thenAnswer(call ->
+                Optional.ofNullable(sessionById.get(call.getArgument(0))));
+        when(messages.save(any(ChatMessage.class))).thenAnswer(call -> {
+            ChatMessage row = call.getArgument(0);
+            long id = nextId.incrementAndGet();
+            row.setId(id);
+            row.setCreatedAt(LocalDateTime.of(2026, 1, 1, 0, 0).plusSeconds(id));
+            rows.get(row.getSession().getId()).add(row);
+            return row;
+        });
+        when(messages.findTopBySession_IdAndRoleAndContentStartingWithOrderByIdDesc(
+                anyLong(), eq("system"), eq("⎔RSUM⎔"))).thenAnswer(call ->
+                rows.get((Long) call.getArgument(0)).stream()
+                        .filter(row -> "system".equals(row.getRole()) && row.getContent().startsWith("⎔RSUM⎔"))
+                        .max(java.util.Comparator.comparing(ChatMessage::getId)));
+        when(messages.findBySession_IdOrderByCreatedAtDesc(anyLong(), any(Pageable.class)))
+                .thenAnswer(call -> rows.get((Long) call.getArgument(0)).stream()
+                        .sorted(java.util.Comparator.comparing(ChatMessage::getId).reversed()).toList());
+        when(messages.findBySession_IdAndIdGreaterThanOrderByIdAsc(
+                anyLong(), anyLong(), any(Pageable.class))).thenAnswer(call ->
+                rows.get((Long) call.getArgument(0)).stream()
+                        .filter(row -> row.getId() > (Long) call.getArgument(1)).toList());
+        when(messages.findNewestWindowBySessionId(anyLong(), any(Pageable.class))).thenAnswer(call -> {
+            List<ChatMessage> newest = rows.get((Long) call.getArgument(0)).stream()
+                    .sorted(java.util.Comparator.comparing(ChatMessage::getId).reversed()).toList();
+            Pageable page = call.getArgument(1);
+            int start = (int) Math.min(newest.size(), page.getOffset());
+            return newest.subList(start, Math.min(newest.size(), start + page.getPageSize()));
+        });
+        ChatHistoryServiceImpl history = newService(sessions, messages);
+        try {
+            Long first = history.appendMessageReturningId(41L, "user",
+                    "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, 비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. 계정의 장기 기억에 저장할 필요는 없어.");
+            history.updateRollingSummary(41L, first);
+            Long correction = history.appendMessageReturningId(41L, "user",
+                    "방금 정한 프로젝트 이름·색상·비교 기준을 다시 말하고, 색상만 남색으로 정정해줘.");
+            history.updateRollingSummary(41L, correction);
+            for (int turn = 0; turn < 10; turn++) {
+                history.appendMessageReturningId(41L, "user",
+                        "Explain climate change in general terms, without storing anything. Question " + turn);
+                Long last = history.appendMessageReturningId(41L, "assistant",
+                        ("보통의 설명 문장으로 최근 맥락을 채웁니다. ").repeat(18) + turn);
+                history.updateRollingSummary(41L, last);
+            }
+            history.appendMessageReturningId(42L, "user", "독립 세션의 일반 질문입니다.");
+            MemoryHandler loader = new MemoryHandler(history);
+            ReflectionTestUtils.setField(loader, "maxTurns", 8);
+            String memory = loader.loadForSession(41L);
+            ContextOrchestrator orchestrator = new ContextOrchestrator(new StandardPromptBuilder());
+            NovaOrchestrationProperties properties = new NovaOrchestrationProperties();
+            properties.getRagCompressor().setMemoryMaxLines(3);
+            ReflectionTestUtils.setField(orchestrator, "promptContextCompressor",
+                    new DynamicContextCompressor(properties));
+            String prompt = orchestrator.orchestrate("이 대화의 프로젝트 이름·색상·비교 기준을 다시 말해줘.",
+                    List.of(), List.of(), Map.of(), null, memory);
+            assertTrue(prompt.contains("해솔-42"), "the initial session assignment must survive recent-history eviction");
+            assertTrue(prompt.contains("공식 자료 우선·확인 가능한 갱신일"));
+            assertTrue(prompt.contains("남색으로 정정"), "the later correction must survive with its ordering");
+            assertTrue(prompt.indexOf("해솔-42") < prompt.indexOf("남색으로 정정"));
+            assertTrue(history.getConversationMemorySnapshot(41L).summary().length() <= 1200);
+            String other = loader.loadForSession(42L);
+            assertFalse(other.contains("해솔-42"));
+            assertFalse(other.contains("남색"));
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
     void threeSessionStoredMemoryLoadsCompressesAndEntersOnlyItsOwnPrompt() {
         ChatSessionRepository sessions = mock(ChatSessionRepository.class);
         ChatMessageRepository messages = mock(ChatMessageRepository.class);

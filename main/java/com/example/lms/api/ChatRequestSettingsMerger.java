@@ -152,6 +152,12 @@ public final class ChatRequestSettingsMerger {
                 .orElse(cfg.getOrDefault(SettingsService.KEY_OPENAI_MODEL, ModelCapabilities.DEFAULT_LOCAL_CHAT_MODEL));
 
         String effectiveModel = ModelCapabilities.canonicalModelName(model);
+        int answerMaxTokens = ui.getMaxTokens() != null ? ui.getMaxTokens() : 2048;
+        if (effectiveModel != null && effectiveModel.matches("(?i)(?:chatgpt-oauth:|openai:)?(?:gpt-5(?:[.-].*)?|o[134](?:[.-].*)?)")
+                && answerMaxTokens > 0 && answerMaxTokens < com.example.lms.llm.TimedChatModelCaller.ANSWER_MIN_OUTPUT_TOKENS) {
+            answerMaxTokens = com.example.lms.llm.TimedChatModelCaller.ANSWER_MIN_OUTPUT_TOKENS;
+            com.example.lms.search.TraceStore.put("llm.answer.outputBudgetFloorApplied", true);
+        }
         // Preserve preferences until endpoint/final-effort policy runs, retaining omitted-value defaults.
         boolean supportedPreferences = com.example.lms.llm.OpenAiSamplingContract.defersMergerClamp(effectiveModel);
         boolean deferTemperature = supportedPreferences && temperaturePreferencePresent
@@ -234,7 +240,7 @@ public final class ChatRequestSettingsMerger {
                 .topP(topP)
                 .frequencyPenalty(frequencyPenalty)
                 .presencePenalty(presencePenalty)
-                .maxTokens(ui.getMaxTokens() != null ? ui.getMaxTokens() : 2048)
+                .maxTokens(answerMaxTokens)
                 .useVerification(ui.getUseVerification())
                 .useRag(normUseRag)
                 .useWebSearch(normUseWeb)

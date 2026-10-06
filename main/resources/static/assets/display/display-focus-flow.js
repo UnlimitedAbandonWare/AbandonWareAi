@@ -18,8 +18,9 @@
     const host=options.host||globalThis,element=options.element;
     const raf=options.requestFrame||host.requestAnimationFrame.bind(host),caf=options.cancelFrame||host.cancelAnimationFrame.bind(host);
     let cfg=settings(options.settings),frame=null,disposed=false,paused=false,previous=null,elapsed=0,credit=0;
-    let key='',units=[],index=0,lines=[''],doneAt=null,pendingDone=false,firstPending=false,firstSent=false,shift=null,sentenceScroll=null,mode='grapheme',identity=null;
-    const retired=new Set();let highestVersion=-1,server='',activation='';
+    let key='',answerText='',answerComplete=true,units=[],index=0,lines=[''],doneAt=null,pendingDone=false,firstPending=false,firstSent=false,shift=null,sentenceScroll=null,mode='grapheme',identity=null;
+    const retired=new Set();let highestVersion=-1,server='',activation='',firstUsefulUnits=0,usefulPending=false,firstUsefulSent=false;
+    const usefulBoundary=text=>{const end=text.match(/[.!?。！？](?=\s|$)/u);return segment(end?text.slice(0,end.index+1):text,options.Segmenter===undefined?Intl.Segmenter:options.Segmenter).units.length;};
     const emit=(event,extra={})=>{try{options.onEvent?.(event,{...identity,...extra});}catch{}};
     const view=()=>({key,index,total:units.length,remaining:units.length-index,lines:[...lines],mode,done:doneAt!==null,paused,elapsed});
     function lineHeight(){try{const style=host.getComputedStyle(element);return parseFloat(style.lineHeight)||parseFloat(style.fontSize)*1.25||32.5;}catch{return 32.5;}}
@@ -40,8 +41,8 @@
       const row=element.lastElementChild;if(!row)return true;
       const old=row.textContent;row.textContent=text;const ok=row.scrollHeight<=lineHeight()+1;row.textContent=old;return ok;
     }
-    function schedule(){if(frame===null&&!disposed&&!paused&&key&&(doneAt===null||cfg.autoFadeEnabled&&elapsed<doneAt+cfg.tailHoldMs+cfg.fadeMs))frame=raf(tick);}
-    function reset(){if(frame!==null)caf(frame);frame=null;previous=null;elapsed=credit=0;units=[];index=0;lines=[''];doneAt=null;pendingDone=firstPending=firstSent=false;shift=sentenceScroll=null;}
+    function schedule(){if(frame===null&&!disposed&&!paused&&key&&(doneAt===null&&(index<units.length||firstPending||usefulPending||pendingDone||shift||sentenceScroll)||doneAt!==null&&cfg.autoFadeEnabled&&elapsed<doneAt+cfg.tailHoldMs+cfg.fadeMs))frame=raf(tick);}
+    function reset(){if(frame!==null)caf(frame);frame=null;previous=null;elapsed=credit=0;answerText='';answerComplete=true;firstUsefulUnits=0;usefulPending=firstUsefulSent=false;units=[];index=0;lines=[''];doneAt=null;pendingDone=firstPending=firstSent=false;shift=sentenceScroll=null;}
     function retire(){if(key){retired.add(key);if(retired.size>32)retired.delete(retired.values().next().value);}}
     function append(unit){
       const last=lines.length-1;
@@ -65,6 +66,7 @@
       // A suspended browser never pays back a long animation backlog.
       const step=delta>1000?0:delta;elapsed+=step;credit+=step;
       if(firstPending){firstPending=false;firstSent=true;emit('first_visible',{mode});}
+      if(usefulPending){usefulPending=false;firstUsefulSent=true;emit('first_useful_visible',{mode,elapsedMs:elapsed});}
       if(sentenceScroll){
         const ratio=Math.min(1,(elapsed-sentenceScroll.start)/sentenceScroll.duration);paint(1,ratio*sentenceScroll.offset);
         if(ratio>=1){sentenceScroll=null;credit=0;}schedule();return;
@@ -86,7 +88,8 @@
             if(index<units.length&&!shift){lines.push('');if(lines.length>lineLimit())shift={start:elapsed,height:lineHeight()};paint();}
           }
           if(!firstSent)firstPending=true;
-          if(index===units.length)pendingDone=true;
+          if(!firstUsefulSent&&firstUsefulUnits>0&&index>=firstUsefulUnits)usefulPending=true;
+          if(index===units.length&&answerComplete)pendingDone=true;
         }
       }
       schedule();
@@ -97,21 +100,43 @@
       if(typeof focus.serverInstanceId!=='string'||typeof focus.activationId!=='string'||!Number.isSafeInteger(focus.stateVersion))return false;
       if(server===focus.serverInstanceId&&focus.stateVersion<highestVersion)return false;
       if(server!==focus.serverInstanceId||activation!==focus.activationId){retire();reset();key='';highestVersion=-1;}
+      const previousVersion=highestVersion;
       server=focus.serverInstanceId;activation=focus.activationId;highestVersion=focus.stateVersion;
       cfg=settings(focus.presentation||cfg);
       if(!focus.answerText){if(key){retire();reset();key='';paint();}return true;}
       if(typeof focus.answerText!=='string'||Array.from(focus.answerText).length>8000||!Number.isSafeInteger(focus.answerVersion)||typeof focus.turnId!=='string')return false;
+      if(focus.answerComplete!==undefined&&typeof focus.answerComplete!=='boolean')return false;
+      if(focus.answerPrefixStable!==undefined&&typeof focus.answerPrefixStable!=='boolean')return false;
+      const complete=focus.answerComplete!==false,stable=focus.answerPrefixStable===true;
       const next=[server,activation,focus.turnId,focus.answerVersion].join('/');
-      if(next===key){schedule();return true;}if(retired.has(next))return false;
+      if(next===key){
+        if(focus.answerText===answerText&&complete===answerComplete){schedule();return true;}
+        if(focus.stateVersion<=previousVersion||answerComplete||!focus.answerText.startsWith(answerText))return false;
+        const parts=segment(focus.answerText,options.Segmenter===undefined?Intl.Segmenter:options.Segmenter);
+        if(!complete&&!stable)parts.units.pop();
+        if(parts.units.length<index||units.slice(0,index).some((unit,i)=>unit!==parts.units[i]))return false;
+        answerText=focus.answerText;answerComplete=complete;units=parts.units;
+        if(!firstUsefulUnits&&(complete||stable))firstUsefulUnits=usefulBoundary(answerText);
+        if(!firstUsefulSent&&firstUsefulUnits>0&&index>=firstUsefulUnits)usefulPending=true;
+        if(complete&&focus.renderReceiptTicket&&!identity.renderReceiptTicket){
+          identity={...identity,renderReceiptTicket:focus.renderReceiptTicket};
+          if(firstSent)emit('first_visible',{mode});
+        }
+        pendingDone=complete&&index===units.length&&(firstSent||firstPending);schedule();return true;
+      }if(retired.has(next))return false;
       retire();reset();key=next;identity={serverInstanceId:server,activationId:activation,turnId:focus.turnId,answerVersion:focus.answerVersion,renderReceiptTicket:focus.renderReceiptTicket};
       // Snapshot the font for this answer. Settings affect the next answer without replay/reflow.
       if(element){element.style.fontSize='';const px=element.ownerDocument?.defaultView?.getComputedStyle?.(element)?.fontSize;if(px)element.style.fontSize=px;}
       const parts=segment(focus.answerText,options.Segmenter===undefined?Intl.Segmenter:options.Segmenter);units=parts.units;mode=parts.mode;
+      answerText=focus.answerText;answerComplete=complete;
+      if(complete||stable)firstUsefulUnits=usefulBoundary(answerText);
+      // Keep the growing last grapheme (or degraded sentence) off the lens.
+      if(!complete&&!stable)units.pop();
       if(mode!=='grapheme')emit('presentation_degraded',{mode});
       paint();schedule();return true;
     }
     function pause(value=true){if(paused===value)return;paused=value;previous=null;credit=0;if(frame!==null)caf(frame);frame=null;if(!paused)schedule();}
-    function replay(){if(!key||disposed)return;const saved=units;reset();units=saved;paint();schedule();}
+    function replay(){if(!key||disposed)return;const saved=units,text=answerText,complete=answerComplete,useful=firstUsefulUnits;reset();units=saved;answerText=text;answerComplete=complete;firstUsefulUnits=useful;paint();schedule();}
     function dispose(){retire();reset();key='';disposed=true;identity=null;paint();}
     return {accept,pause,replay,dispose,state:view};
   }

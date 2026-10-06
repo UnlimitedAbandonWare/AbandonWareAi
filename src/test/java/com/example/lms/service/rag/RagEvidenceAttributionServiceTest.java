@@ -287,7 +287,7 @@ class RagEvidenceAttributionServiceTest {
                 "alpha body with public URL",
                 Metadata.from(Map.of(
                         "title", "Citable Alpha",
-                        "url", "https://example.com/alpha?ownerToken=secret#frag"))));
+                        "url", "https://example.com/alpha?utm_source=synthetic#frag"))));
 
         List<RagEvidenceMetadata> promoted = service.promoteForPrompt(
                 "alpha",
@@ -330,7 +330,7 @@ class RagEvidenceAttributionServiceTest {
                 model: "gpt-5.5"
                 { type: "web_search" }
 
-                [출처] https://developers.openai.com/api/docs/guides/tools-web-search?ownerToken=secret#frag
+                [출처] https://developers.openai.com/api/docs/guides/tools-web-search?utm_source=synthetic#frag
                 """);
 
         List<RagEvidenceMetadata> promoted = service.promoteForPrompt(
@@ -358,7 +358,7 @@ class RagEvidenceAttributionServiceTest {
         RagEvidenceAttributionService service = newService(true);
         Document localOfficialFallback = Document.from("""
                 Official fallback evidence from the docs result pool.
-                [source] https://developers.openai.com/api/docs/guides/tools-web-search?ownerToken=secret#frag
+                [source] https://developers.openai.com/api/docs/guides/tools-web-search?utm_source=synthetic#frag
                 """, new Metadata(Map.of("title", "OpenAI web search docs fallback")));
 
         List<RagEvidenceMetadata> promoted = service.promoteForPrompt(

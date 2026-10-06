@@ -56,6 +56,10 @@ public class ChatModelCatalogService {
     private final boolean allowRemote;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.example.lms.llm.ChatGptOAuthRegistration chatGptOAuth;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private com.example.lms.learning.gemini.GeminiGateway geminiGateway;
+    @org.springframework.beans.factory.annotation.Autowired(required=false)
+    private ai.abandonware.nova.config.LlmRouterProperties routerConfig;
     @Value("${app.ai.remote-model-selection-routes:}")
     private String remoteSelectionRoutes = "";
     private final Object stateLock = new Object();
@@ -204,7 +208,7 @@ public class ChatModelCatalogService {
                         "server_catalog", false, row.capabilities(), ready ? List.of() : List.copyOf(reasons),
                         row.eligible(), health != null && health.snapshot(row.provider(),row.modelId())
                                 .filter(s -> s.lastSuccess() && s.successCount() > 0).isPresent(),
-                        auxiliaryMetadata(row.metadata())));
+                        focusSearchMetadata(row.metadata(),route,row.provider(),row.modelId())));
             }
         }
         List<Choice> snapshot = rows.stream().distinct().sorted(Comparator.comparing(Choice::provider)
@@ -245,6 +249,24 @@ public class ChatModelCatalogService {
             if (source.containsKey(key)) result.put(key,source.get(key));
         }
         return Map.copyOf(result);
+    }
+
+    private Map<String,Object> focusSearchMetadata(Map<String,Object> source,String route,String provider,String model){
+        var metadata=new LinkedHashMap<>(auxiliaryMetadata(source));
+        String reason="focus_search_unsupported";
+        var cfg=routerConfig==null||route==null?null:routerConfig.getModels().get(route);
+        if("gemini".equalsIgnoreCase(provider)&&cfg!=null&&"gemini".equalsIgnoreCase(cfg.getProvider())
+                &&java.util.Objects.equals(model,cfg.getName())){
+            if(geminiGateway==null)reason="focus_search_disabled";
+            else{
+                var ready=geminiGateway.focusSearchReadiness(new com.example.lms.learning.gemini.GeminiGateway.RouterSpec(
+                    cfg.getBaseUrl(),cfg.getName(),Duration.ofSeconds(2),0,null,null,null,null,null));
+                reason=ready.ready()?"supported":ready.reasons().get(0);
+            }
+        }
+        metadata.put("googleSearchSupported","supported".equals(reason));
+        metadata.put("googleSearchReason",reason);
+        return Map.copyOf(metadata);
     }
 
     public List<Choice> observedServerChoices() { return List.copyOf(cached); }

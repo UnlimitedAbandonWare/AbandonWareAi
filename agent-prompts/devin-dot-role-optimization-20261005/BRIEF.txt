@@ -1,0 +1,85 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 아래 작업을 실제로 수행하고 산출물과 검증 결과를 보고하는 Devin 실행 지시서다.
+@demo-1-agent-config-repair-brief
+
+# DEVIN 지시서 — dot의 Downloads 지시서 생성 최적화 및 서브딜링 패치 가드레일 확립
+- 대상 에이전트: Devin
+- 작업 일시: 2026-10-05 20:55 KST
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 최초 작업 경로: Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+## 0. 한 줄 목표
+스킬 태그 입력 없이도 dot이 지시서 생성 시 Downloads 폴더에 자동 배달되도록 훅/룰을 복원하고, 오늘 세션에서 발생한 drift/파손 기록을 격리·정리하며, dot의 역할을 "지시서 다운로드 생성 1순위 + 가끔 패치는 서브딜링(보조)"으로 최적화한다.
+
+## 1. 사실 (2026-10-05 20:55 KST 기준 라이브 확인)
+- 2026-10-04 세션(devin-dot-file-card-delivery-3530304b)에서 DEMO1-DOT-FILE-CARD.md 도입 명목으로 .codex/hooks.json의 Stop hook(deliver_to_downloads.py --scan)을 삭제하고 scripts/test_deliver_to_downloads.py:152에 삭제 assertion(T9)을 강제함.
+- docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md 상단에 폐기 표기가 추가되어 dot의 자동 다운로드 복사 경로가 차단됨.
+- .agents/skills/dot-brief-save/SKILL.md:16이 [DOT-BRIEF] 리터럴 태그 필수 모드로 잠겨 일반 구두 명령("지시서 써줘") 시 저장 스킬이 트리거되지 않음.
+- 오늘(2026-10-05) 사용자가 스킬 태그 없이 dot에 명령한 결과:
+  1) 지시서가 Downloads로 배달되지 못하고 Documents\Codex\2026-10-05\task-*에 고립됨.
+  2) dot이 지시서 생성만 하지 않고 메인 소스 수정을 직접 시도하여 task-7의 POST_VERIFICATION_DRIFT.md (ChatApiController drift, trace JSON 검증 HOLD) 및 task-8의 focused-contract-audit.md (view-layer, admission-recovery contract FAIL) 발생.
+  3) git status에 100건의 dirty 잔여물(스킬 파일 21개 삭제, 임시 출력 파일 등)이 누적됨.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 3. 작업 항목 (WPs)
+
+### WP1. Stop Hook 복원 및 Downloads 자동 배달 테스트 정상화
+- .codex/hooks.json의 Stop 훅에 deliver_to_downloads.py 스캔 훅을 복원한다 (.codex/hooks.json.bak-20261004-dotcard:75-76 참조):
+  - commandWindows/command: python -B scripts/deliver_to_downloads.py --scan --since-minutes 240 --quiet
+  - statusMessage: Delivering outputs to Downloads, timeout: 5
+- scripts/test_deliver_to_downloads.py의 test_t9_hooks_json_no_deliver_hook를 정상 복원 테스트로 수정:
+  - hooks.json 내 Stop 이벤트에 deliver_to_downloads 명령이 올바르게 등록되어 있음을 검증(test_t9_hooks_json_has_deliver_hook).
+- docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md의 폐기 헤더(L1-2)를 제거하고 정식 SSOT로 재활성화 (ChatGPT Library 파일 카드가 지원되더라도 Downloads 복사는 안전망이자 기본 배달 수단으로 상시 보장).
+
+### WP2. dot 스킬 완화 및 서브딜링(Sub-dealing) 패치 가드레일 확립
+- .agents/skills/dot-brief-save/SKILL.md 수정:
+  - DOT-BRIEF 태그가 첫 메시지에 없더라도, dot과의 대화에서 지시서 작성/저장 의도("지시서 써줘", "PASTE_", "브리프", "만들어줘")가 있으면 기본으로 작업 폴더 생성 + Downloads 저장(deliver_to_downloads.py 또는 dot_brief_save.py)을 수행하도록 범위 완화.
+- docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md 및 docs/agents-rules/DEMO1-DOT-FILE-CARD.md 갱신:
+  - "Downloads 복사 금지" 단정 문구를 "ChatGPT 파일 카드와 함께 Downloads 사본도 기본 생성하여 사용자가 다운로드 폴더에서 즉시 접근 가능하도록 보장"으로 정정.
+  - dot의 역할 경계 3계층 확립:
+    - 1순위 (Primary): 실행 지시서(PASTE_CODEX_*.md, PASTE_DEVIN_*.txt) 작성 및 Downloads 배달.
+    - 2순위 (Sub-dealing): 가끔 수행하는 패치 작업은 scripts/, tools/, mock/fixture, 보조 문서, disjoint 단위의 검증 스크립트 등 보조 작업에 한정.
+    - 금지 (Direct Main Mutation): 메인 프로덕트 소스(main/java/, chat.js, Spring API 코어)를 dot이 직접 대규모 수정하여 drift를 유발하는 행위 금지 -> 반드시 Codex/Devin 실행 지시서로 위임.
+
+### WP3. 오늘 발생한 세션 파손 잔여물(Dirty & Drift) 정리 및 격리
+- task-7의 POST_VERIFICATION_DRIFT.md 및 task-8의 contract audit 실패 내역을 확인하고, dot의 무단 직접 수정으로 인해 발생한 충돌 여부 분석.
+- git status 상의 미추적 임시 로그/산출물(_compile_out.txt, _final_tests_out.txt, _mm_test_out.txt, TRACE983_VERIFIER_CANCEL_FIX_20261005.md 등)을 정리.
+- 의도치 않게 삭제 마킹(D)된 스킬 파일(21개)이 dot 세션의 오작동 잔여물인지 확인하고 깨끗하게 복구(git checkout HEAD -- .agents/skills/ 등 필요한 경우 안전 복구).
+- 활성 lease 및 journal 상태 점검: python -B scripts/agent_scope_lease.py who 실행 후 잔여 리스가 없도록 해제.
+
+### WP4. 통합 검증 및 회귀 확인
+- python -B -m unittest scripts.test_deliver_to_downloads -v 실행 (10/10 PASS 확인).
+- python -B scripts/test_dot_brief_save.py 실행 (10/10 PASS 확인).
+- python -B scripts/dot_tower_status.py --since-hours 24 실행하여 dot tower 상태 정상 확인.
+- python -B scripts/deliver_to_downloads.py --scan --since-minutes 240 실행하여 최근 240분 동안 작성된 PASTE 파일들이 Downloads에 온전히 동기화되는지 실측 확인.
+
+## 4. HOLD
+- 다른 에이전트가 점유 중인 foreign live lease가 존재할 경우 강제 해제하지 말고 HOLD.
+- main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java 등 제품 소스 수정 사항은 사전 baseline 확인 없이 함부로 되돌리지 말고 HOLD.
+
+## 5. ASK_ONCE
+- 스킬 파일 21건의 git 삭제 상태(D)가 이전 작업자의 의도된 deprecation이었는지 여부 (기본값: 원본 보존을 위해 복구 진행).
+
+## 6. 절대 금지
+- git push, git commit -a, git add -A, git reset --hard 금지.
+- remote 추가 및 수정 금지.
+- PROTO_OPEN 인증 완화 규칙 파괴 금지.
+- 실제 외부 유료 API 호출 0회 (테스트는 mock/fixture로만).
+- 비밀값, 토큰, 환경변수 값 노출 금지 (환경변수 이름만 허용).
+
+## 7. Acceptance (미실행은 NOT_RUN+사유)
+- AC1 (WP1): .codex/hooks.json의 Stop 훅에 deliver_to_downloads.py --scan이 등록되고 scripts/test_deliver_to_downloads.py 10/10 단위 테스트가 전부 PASS한다.
+- AC2 (WP2): dot-brief-save 스킬이 [DOT-BRIEF] 태그 없이도 작동하며, dot의 역할(지시서 1순위, 서브딜링 보조)이 DEMO1-DOT-CONTROL-TOWER.md에 명시된다.
+- AC3 (WP3): task-7/task-8 파손 내역 격리 및 임시 파일 정리 완료, 종료 시 active lease가 0이다.
+- AC4 (WP4): scripts/test_dot_brief_save.py 10/10 PASS 및 deliver_to_downloads.py --scan 실행 결과 정상 동기화가 확인된다.
+
+## 8. 보고 형식
+외부 API: 0
+실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- WP1~WP4 결과 (PASS / FAIL / NOT_RUN + 사유)
+- 단위 테스트 실행 결과 (명령어, exit code, pass/fail 수)
+- Downloads 폴더 배달 상태 확인 결과
+- 잔여 git dirty 및 lease 상태
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라 위 작업을 실제로 수행하고 산출물과 검증 결과를 보고하는 Devin 실행 지시서다.

@@ -29,6 +29,21 @@ public final class OutputSanitizer {
             "nightmare:state"
     };
 
+    /** Keep the marker lookahead and an unfinished sentence private during Focus streaming. */
+    public int streamingDiagnosticStart(String content) {
+        Cut cut = cutAtFirstMarker(content);
+        return cut.applied() ? cut.cleaned().length() : -1;
+    }
+    public String streamingPrefix(String content, int diagnosticStart) {
+        int lookahead = java.util.Arrays.stream(CUT_MARKERS).mapToInt(String::length).max().orElse(0);
+        int limit = diagnosticStart >= 0 ? diagnosticStart : Math.max(0, content.length()-lookahead);
+        String candidate = content.substring(0, Math.min(8000, Math.min(content.length(), limit)));
+        var endings = java.util.regex.Pattern.compile("[.!?。！？](?=\\s)").matcher(candidate);
+        int end = 0; while (endings.find()) end = endings.end();
+        String prefix = candidate.substring(0, end);
+        return prefix.isBlank() ? "" : prefix;
+    }
+
     public Result sanitize(String content) {
         if (content == null || content.isBlank()) {
             return new Result(BLANK_FALLBACK, true, "blank_content", null, 0L, null);

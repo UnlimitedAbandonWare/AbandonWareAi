@@ -20,6 +20,68 @@ public final class ChatRunExecutionContext {
     private final String runId;
     private final Object commitLease;
 
+    // Internal Focus capability on this exact run, never a public request field.
+    private static final ThreadLocal<String> PROVIDER_TEXT_STAGE = new ThreadLocal<>();
+    private volatile java.util.function.Consumer<String> foldTextConsumer;
+    private volatile boolean foldStreamingAllowed;
+    private final StringBuilder foldDeltas = new StringBuilder();
+    private String foldPublished = "";
+    private int foldDiagnosticStart = -1;
+    private final long foldStartedNanos = System.nanoTime();
+    private long foldFirstDeltaNanos, foldFirstUsefulNanos, foldFinalNanos;
+
+    public void installFoldTextConsumer(java.util.function.Consumer<String> consumer) {
+        if (foldTextConsumer != null) throw new IllegalStateException("focus_stream_already_installed");
+        foldTextConsumer = Objects.requireNonNull(consumer);
+    }
+    public AutoCloseable permitFoldStreaming(boolean allowed) {
+        boolean previous = foldStreamingAllowed;
+        foldStreamingAllowed = allowed;
+        return () -> foldStreamingAllowed = previous;
+    }
+    public static AutoCloseable bindProviderTextStage(String stage) {
+        String previous = PROVIDER_TEXT_STAGE.get(); PROVIDER_TEXT_STAGE.set(stage);
+        return () -> { if (previous == null) PROVIDER_TEXT_STAGE.remove(); else PROVIDER_TEXT_STAGE.set(previous); };
+    }
+    public static java.util.function.Consumer<String> providerTextConsumer() {
+        var run = current();
+        return run != null && run.foldTextConsumer != null && run.foldStreamingAllowed
+                && "chat_draft".equals(PROVIDER_TEXT_STAGE.get()) ? run::acceptFoldDelta : null;
+    }
+    private synchronized void acceptFoldDelta(String delta) {
+        if (!permitsEmission()) throw new java.util.concurrent.CancellationException("focus_stream_cancelled");
+        if (!foldStreamingAllowed || delta == null) return;
+        if (foldFirstDeltaNanos == 0) foldFirstDeltaNanos = System.nanoTime();
+        if (foldDeltas.isEmpty()) delta = delta.stripLeading();
+        foldDeltas.append(delta);
+        var sanitizer = new com.example.lms.service.postprocess.OutputSanitizer();
+        int cut = sanitizer.streamingDiagnosticStart(foldDeltas.toString());
+        if (cut >= 0) foldDiagnosticStart = foldDiagnosticStart < 0 ? cut : Math.min(cut, foldDiagnosticStart);
+        String safe = sanitizer.streamingPrefix(foldDeltas.toString(), foldDiagnosticStart);
+        if (safe.length() <= foldPublished.length()) return;
+        if (!safe.startsWith(foldPublished)) throw new IllegalStateException("focus_stream_final_mismatch");
+        foldTextConsumer.accept(safe);
+        foldPublished = safe;
+        if (foldFirstUsefulNanos == 0) foldFirstUsefulNanos = System.nanoTime();
+    }
+    public synchronized boolean foldHasPublished() { return !foldPublished.isEmpty(); }
+    public boolean foldStreamingRequested() { return foldTextConsumer != null; }
+    public synchronized void requireFoldPrefix(String completed) {
+        if (foldTextConsumer == null) return;
+        if (!foldPublished.isEmpty() && (completed == null || !completed.stripLeading().startsWith(foldPublished)))
+            throw new IllegalStateException("focus_stream_final_mismatch");
+        if (foldFinalNanos == 0) foldFinalNanos = System.nanoTime();
+    }
+    public synchronized java.util.Map<String,Object> foldTimings() {
+        var result = new java.util.LinkedHashMap<String,Object>();
+        if (foldTextConsumer == null) return result;
+        if (foldFirstDeltaNanos != 0) result.put("focus.stream.firstProviderDeltaMs", (foldFirstDeltaNanos-foldStartedNanos)/1_000_000L);
+        if (foldFirstUsefulNanos != 0) result.put("focus.stream.firstUsefulPublishedMs", (foldFirstUsefulNanos-foldStartedNanos)/1_000_000L);
+        if (foldFinalNanos != 0) result.put("focus.stream.finalValidatedMs", (foldFinalNanos-foldStartedNanos)/1_000_000L);
+        result.put("focus.stream.publishedChars", foldPublished.length());
+        return result;
+    }
+
     ChatRunExecutionContext(ChatRunRegistry registry, Long sessionId, String runId, Object commitLease) {
         this.registry = Objects.requireNonNull(registry, "registry");
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId");

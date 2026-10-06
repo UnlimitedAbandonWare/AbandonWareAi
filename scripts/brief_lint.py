@@ -47,7 +47,7 @@ COMMON_RULE_SECTION_RE = re.compile(
     r"^\s*#{1,6}\s*\d*\.?\s*(공통\s*규칙|진행\s*규칙|규칙|하지\s*않음|절대\s*금지|금지)", re.IGNORECASE
 )
 
-SKILL_LINE_RE = re.compile(r"^\s*@[\w-]+(\s+@[\w-]+)*\s*$")
+SKILL_LINE_RE = re.compile(r"^\s*@[\w.-]+(\s+@[\w.-]+)*\s*$")
 SKILL_PATH_RE = re.compile(r"\.agents[\\/]skills[\\/]([\w-]+)[\\/]SKILL\.md")
 DEVIN_BRIEF_RE = re.compile(r"devin", re.IGNORECASE)
 

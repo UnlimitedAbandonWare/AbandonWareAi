@@ -25,7 +25,8 @@ class ChatApiControllerRagControlPresentationContractTest {
                 "String persistableFinalText = streamRagControlProjection.persistableAnswer();", streamProjection);
         int streamPersist = source.indexOf(
                 "persistenceSessionId, \"assistant\", persistableFinalText", streamPersistable);
-        int streamHoldGate = source.indexOf("if (!streamRagControlProjection.held())", streamPersist);
+        int streamHoldGate = source.indexOf(
+                "if (!streamRagControlProjection.held() && finalAnswerMemorySaveAllowed)", streamPersist);
         int syncSemantic = source.indexOf("String semanticFinalContent = result.content();");
         int syncProjection = source.indexOf("syncRagControlProjection = projectRagControlForUser(", syncSemantic);
         int syncProjectionArgs = source.indexOf(
@@ -34,7 +35,8 @@ class ChatApiControllerRagControlPresentationContractTest {
                 "String persistableFinalContent = syncRagControlProjection.persistableAnswer();", syncProjection);
         int syncPersist = source.indexOf(
                 "completedSession.getId(), \"assistant\", persistableFinalContent", syncPersistable);
-        int syncHoldGate = source.indexOf("if (!syncRagControlProjection.held())", syncPersist);
+        int syncHoldGate = source.indexOf(
+                "if (!syncRagControlProjection.held() && finalAnswerMemorySaveAllowed)", syncPersist);
         int syncResponse = source.indexOf(
                 "new ChatResponseDto(visibleFinalContent,", syncPersist);
 

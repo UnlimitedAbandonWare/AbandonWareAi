@@ -50,7 +50,7 @@ SECTION_ANCHORS = (
 )
 
 FORBID_KEYWORDS = ("push", "add -A", "비밀", "remote 추가", "PROTO_OPEN")
-SKILL_NAME_RE = re.compile(r"@([\w-]+)")
+SKILL_NAME_RE = re.compile(r"@([\w.-]+)")
 CODEX_DOLLAR_RE = re.compile(r"^\s*\$\s*\S")
 PROJECT_ROOT_RE = re.compile(r"Project\s*Root", re.IGNORECASE)
 
@@ -121,7 +121,9 @@ def lint_brief_text(text: str, *, agent: str, name: str, repo_root: Path) -> dic
     if agent == "DEVIN":
         head = lines[:SKILL_LINE_WINDOW]
         skill_lines = [i for i, l in enumerate(head, 1) if brief_lint.SKILL_LINE_RE.match(l)]
-        names = [n for i in skill_lines for n in SKILL_NAME_RE.findall(head[i - 1])]
+        raw_names = [n for i in skill_lines for n in SKILL_NAME_RE.findall(head[i - 1])]
+        # .md, .txt 등 파일 참조(예: @SKILL.md)는 스킬 폴더 검사에서 제외
+        names = [n for n in raw_names if not n.endswith((".md", ".txt", ".json", ".yaml", ".yml"))]
         names += brief_lint.SKILL_PATH_RE.findall(text)
         missing_skills = [n for n in names
                           if not (repo_root / ".agents" / "skills" / n / "SKILL.md").is_file()]

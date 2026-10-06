@@ -1039,7 +1039,7 @@ public class StandardPromptBuilder implements PromptBuilder {
         return error == null ? "unknown" : error.getClass().getSimpleName();
     }
 
-    private static String truncate(String text, int max) {
+    public static String truncate(String text, int max) {
         if (text == null) {
             return "";
         }

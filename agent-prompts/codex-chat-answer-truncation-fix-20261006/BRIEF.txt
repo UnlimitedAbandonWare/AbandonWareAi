@@ -1,0 +1,115 @@
+$demo1-rag-platform + $demo1-evidence-debugging
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니다. 아래 WP를 끝까지 실행하고 §8 판정 항목을 전부 채운 뒤 §9 양식으로 회신한다.
+[depth L2: file:line 앵커 다수 + 다른 에이전트가 그대로 실행하는 문서]
+
+# PASTE_CODEX_CHAT_ANSWER_TRUNCATION_FIX_20261006
+
+## 0. 한 줄 목표
+메인 /chat 답변이 출력 토큰 상한(incomplete: max_output_tokens / FinishReason.LENGTH)으로 문장 중간에서 잘린 채 최종 답변처럼 렌더되는 결함을 없앤다 — 절단 감지 시 1회 한정 계속 생성(continuation) 또는 상향 예산 재시도로 본문이 완결되게 한다.
+
+## 1. 사실 (이 체크아웃 라이브 소스 + 영상 증거 기준)
+
+### 1-1. 영상 증거 (2026-10-06 14:00:53~14:04:19 KST, F:\CAM\2026-10-06 14-00-53.mkv, 64,909,311 B, 207초, 1280x720)
+- 표면: https://abandonwareai.kro.kr/chat · 모델 `chatgpt-oauth:gpt-5.6-sol` · RAG ON · 익명 세션.
+- 질문 "원신에서 산드로네가 뭐냐?" → `Response pending` client-wait 80→130초+ (`next:stop_or_wait`) → 최종 렌더된 답변:
+  `## 요약` + `산드로네는 게임 《원신》에 등장하는 **우인단` — 단어 중간(**우인단에서 끊김)에서 절단.
+- 본문 바로 뒤 붙는 `전략: 자동 → 자동 · 검색 질의 1개 · 검색 전송 1회 · 안전 제한`은 답변 본문이 아니라 UI 실행 영수증(F2).
+- 화면 디버그 FX: `Native route:native promptChars:1144 maxTokens:256`, `Model warn`, `GPU / API Failover warn`, `Verification fail_soft fallback judge_call_failed`, `MLA FINAL search zero-result`, `Evidence 1검색됨·미인용 [W1 namu.wiki]`, `Harmony degraded:false smooth_chat answer_flow_balanced`, `Answer mode: rag`.
+
+### 1-2. 코드 앵커 (사실 = 이 체크아웃에서 확인한 것)
+- F1 `main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java` (sha12 4CD5A93164D7):
+  - L661-674: OAuth 스트림에서 `response.incomplete` 수신 시 `LlmResponseTerminalException`(status=incomplete, incompleteReason=max_output_tokens) throw — 이미 스트리밍된 부분 델타는 그대로 화면에 남고 계속 생성 없음.
+  - L755-761 `responseState`: incomplete+max_output_tokens → `FinishReason.LENGTH` + `output_limit_reached` (비스트림 경로는 부분 텍스트+LENGTH 반환).
+  - L686-697 `responsesPayload`: `max_output_tokens`는 `request.maxOutputTokens()` 또는 ctor `maxOutputTokens`가 있을 때만 페이로드에 실림.
+- F2 `main/resources/static/js/chat.js` (9FE4CADC8D6E):
+  - `renderExecutionModeReceipt` L3442-3466: `<small>`을 assistant 메시지 노드 말미에 append → 영수증 텍스트가 본문에 붙어 보임(복사 시 한 문장처럼 이어짐).
+  - L278 `STREAM_STALE_WAIT_MS = 60000`: pending 표식일 뿐 절단 원인 아님.
+  - L3634-3700 디버그 FX `Native` 라인은 `ollamaNative*` 라벨 표시부.
+- F3 `main/java/com/example/lms/api/ChatRequestSettingsMerger.java` (E23277B681A6) L237: UI `maxTokens` 미지정 시 2048로 병합. `main/resources/static/js/settings-page.js`(C5DCF5B5840E) L11,93 + `chat-settings-bridge.js`(E241845DEFF0) L88-107: 고급 `Max tokens` 설정(범위 1~2147483647)이 사용자 저장값으로 모든 답변 상한이 됨 — gpt-5.6 계열 추론 모델은 reasoning 토큰이 같은 출력 예산을 소모.
+- F4 `main/java/com/example/lms/llm/TimedChatModelCaller.java` (CC5CB1D0069C) L602-624: `finishReason`은 blank 응답일 때만 trace — 비어있지 않은 절단 답변은 상류에서 아무 표식 없이 통과.
+- F5 `main/java/com/example/lms/dto/ChatResponseDto.java`: `GenerationTermination(status,reason,incompleteReason,…)`가 클라이언트까지 전달되나 UI는 부분 본문을 그대로 최종 렌더.
+- F6 `main/java/com/example/lms/service/postprocess/FinalAnswerPostprocessor.java` (3A012A13699C, 파일 전체 확인): LENGTH/continuation 처리 없음.
+- F7 `main/java/com/example/lms/api/ChatHarmonyTracePostprocessor.java` (ECD58A140614) L375-388: `requestedSentenceCount("원신에서 산드로네가 뭐냐?")=0` → 한 문장 자르기(shape) 해당 없음. 영상 FX도 `answer_flow_balanced`(shape 미적용). 절단 원인 아님 — 건드리지 말 것.
+- F8 `main/java/com/example/lms/llm/OllamaNativeChatModel.java` (9ED39A928CEE) L1249-1250: `llm.ollamaNative.maxTokens` 라벨은 Ollama-native 호출 자체 상한 — 영상의 256은 보조(aux) 호출 값, API 본답 상한 아님.
+- F9 `main/java/com/example/lms/llm/ChatGptOAuthRegistration.java` (CD0F6ECFED4D) L243: OAuth 모델은 `reasoningEffort`/`maxOutputTokens` 미주입 — 와이어 예산은 요청 DTO maxTokens(병합 후)에 의존.
+- F10 `main/java/com/example/lms/service/ChatWorkflow.java` (1FB67D35DE42) L6630-6764 `applyFinalAnswerSamplingOverrides`: plan override `llm.answer.max_tokens|maxTokens`로 답변 상한 축소 가능(현재 이 값을 설정한 plan은 발견 못함 — 확인 대상).
+
+### 1-3. 추정 (확인 필요 — WP1에서 확정)
+- 가설 A (유력): 와이어 `max_output_tokens`가 추론 토큰 포함 기준으로 부족(병합값 2048 또는 저장된 더 작은 값) → 추론이 예산 소모 후 가시 본문 첫 문장 도중 LENGTH 절단.
+- 가설 B: OAuth 스트림 `response.incomplete` 수신 후 부분 델타가 최종으로 굳고 continuation 미구현(F1 L661-674).
+- 가설 A가 아니면 가설 B 외 제3 원인을 WP1 finding으로 보고하고 WP2 범위를 재확인.
+
+## 2. 공통 규칙
+- Project Root: C:\AbandonWare\demo-1\demo-1\src
+- 최소 diff·기존 의도 보존·커밋/푸시/`add -A` 금지·비밀값 출력 금지.
+- live 유료 호출 없음 — 검증은 픽스처/루프백 서버(`OpenAiResponsesChatModelTest`의 fake responses 서버 재사용).
+- 브라우저 실황 검증은 local `http://127.0.0.1:18180/chat`만. 퍼블릭(kro.kr) 전송 금지.
+- §3 외부 lease 경로는 만료까지 건드리지 않음 — lease 잡히면 그 WP는 BLOCKED_LEASE 보고 후 진행 가능 WP부터.
+- mutable spec 정책: 모델명·예산 수치는 구현 전 SSOT 재확인(configs/api-routing.yaml, docs/API_ROUTING_SPEC.md, 기존 상수).
+- 실행 못 한 항목은 NOT_RUN+이유로 남기고 PASS로 바꾸지 않는다. 도구 PASS ≠ 대상 검증.
+
+## 3. 리스/병렬 세션 상황 (2026-10-06 14:13 KST, `agent_scope_lease.py who` 기준)
+- 외부 lease 활성(소유: 다른 세션, display-luna 계열):
+  - `main/java/com/example/lms/service/ChatWorkflow.java` → `display-luna-fold-workflow`, 만료 ~16:50 KST
+  - `main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java` · `main/java/com/example/lms/llm/TimedChatModelCaller.java` · `main/java/com/example/lms/service/postprocess/FinalAnswerPostprocessor.java` · `OutputSanitizer.java` · NovaFocus 계열 → `display-luna-fold-source`, 만료 ~16:28 KST
+- 활성 저널 `chat-browser10-20261006-dba2a4ab`(codex-browser10)도 ChatWorkflow.java+chat.js 범위 — 진행 중으로 간주.
+- lease 없음: `chat.js`, `ChatHarmonyTracePostprocessor.java`, `ChatRequestSettingsMerger.java`, `ChatGptOAuthRegistration.java`, `settings-page.js`, `chat-settings-bridge.js`, 테스트 파일들.
+
+## 4. 작업 항목
+
+### WP1 — 절단 원인 확정 (읽기 전용)
+- `python -B scripts/chat_session_debug_export.py show <sessionId|runId>`로 session `hash:d30a7a810da5` / trace `hash:a4f28488ab22` 런 조회. 없으면 `list`로 최근 `chatgpt-oauth` 완료 런 중 동일 증상을 찾는다.
+- 확인 키: `chat.stream.outcome.finalEmitResult|finalDeliveryAccepted`, terminal status/incompleteReason, `llm.output.doneReason`, 병합 후 요청 maxTokens(저장된 `Max tokens`/`chat.defaults` 포함), `llm.answer.max_tokens` plan override 유무.
+- 산출: 3줄 finding — 원인=가설 A|B|기타, 실제 와이어 상한값, 근거 키. 소스 편집 없음.
+- 검증: export 출력 파일 경로를 보고에 첨부.
+
+### WP2 — 최종 답변 LENGTH 계속 생성 (핵심)
+- 감지 지점: 최종 답변 호출 직후 `response.finishReason()==LENGTH`(비스트림) 및 OAuth 스트림 `LlmResponseTerminalException`(status=incomplete + incompleteReason=max_output_tokens) 둘 다 포착.
+- 계속 생성 정책(둘 중 더 작은 diff):
+  a) 동일 메시지 + 지금까지 출력을 seed로 1회 continuation 요청, 상한을 max(현재 상한 x2, 추론형 하한값)으로 상향(천장은 설정값 — mutable spec 재확인).
+  b) 재시도 1회: 동일 요청, 상한 상향 + reasoning effort 낮춤(모델 capability 확인 후).
+- 완결 후에도 LENGTH면 거기서 종료하되 `generationTermination`은 실제 reason 유지 + `llm.output.truncatedFinal` 류 trace 라벨 1개.
+- 금지: 무한 continuation, 모든 요청 무조건 상향, aux/judge 호출 경로 변경, 프롬프트 계약 변경, releaseAllowed/verification 게이트 계약 변경.
+- 검증: `src/test/java/ai/abandonware/nova/orch/llm/`에 LENGTH→continuation 단위 테스트 1개 신설(루프백 fake responses 서버로 incomplete→완결 시나리오, 수정 전 RED 확인) + `.\gradlew.bat :test --tests ai.abandonware.nova.orch.llm.OpenAiResponsesChatModelTest --no-daemon --console=plain; "exit=$LASTEXITCODE"`.
+
+### WP3 — 추론 모델 출력 예산 하한
+- chatgpt-oauth/추론 모델 경로에서 요청 maxTokens가 하한(권고 4096 — 구현 전 SSOT·기존 상수 재확인) 미만이면 하한으로 올리고 trace 라벨 1개. 사용자 저장 `Max tokens` 포함 — 저장값 존중보다 잘림 방지 하한 우선. 하한값은 설정키로 노출 가능.
+- 검증: `.\gradlew.bat :test --tests com.example.lms.api.ChatRequestSettingsMergerTest --no-daemon --console=plain` + 신규 단위 테스트(하한 미만→하한 적용, 이상→유지).
+
+### WP4 — 실행 영수증 분리 (UI, lease-free)
+- `renderExecutionModeReceipt`의 `<small>`이 답변 텍스트에 붙어 읽히지 않게 진단/메타 영역으로 이동(또는 명확한 구분 스타일). 계약: `assistant.dataset.executionMode*` 유지.
+- 검증: `node --test src/test/js/chat-execution-mode.test.cjs` — 기존 `children[0]` 단정을 새 위치 기준으로 갱신해 PASS.
+
+### WP5 — 회귀·보고
+- 변경 관련 `.\gradlew.bat :test --tests <FQCN> --no-daemon --console=plain` 전부 PASS.
+- 가능하면 로컬 18180 /chat 1턴으로 문장 중간 없는 완결 답변 확인(실행하면 결과 기록).
+- 미실행 항목은 NOT_RUN+사유로 명시.
+
+## 5. HOLD 조건
+- WP1에서 원인이 가설 A/B 모두 아니면 근거 들고 중지 보고(범위 확장 금지).
+- 대상 파일 lease가 만료까지 점유 유지면 해당 WP는 BLOCKED_LEASE.
+
+## 6. ASK_ONCE (기본값 — 무응답이면 기본값으로 진행)
+- U1 continuation 상한 천장: 기본 8192 토큰(추론 모델 기준, SSOT 확인 후 조정 가능).
+- U2 사용자 저장 Max tokens에 하한 적용: 기본 적용(잘림 방지 우선).
+- U3 영수증 분리 방식: 기본 진단/메타 영역 이동.
+- U4 퍼블릭 /chat 실송 스모크: 기본 금지(로컬만).
+
+## 7. 절대 금지
+- git commit/push/`add -A`/`commit -a`, remote 추가·원격 쓰기, lease 강제 해제.
+- 비밀값(.secrets/.env/토큰/쿠키) 출력, PROTO_OPEN·인증 정책 변경.
+- Display/Nova Focus·hint TTL·`hintsEnabled`·`ld-*` 관련 변경, evidence-zero-release/`verification_unknown_release` 계약 변경.
+- Ollama-native aux 256 상한 변경(aux 예산은 본 과업 아님), 검색/근거 정책 변경.
+- 유료 라이브 API 호출(픽스처 검증만), 퍼블릭 전송.
+
+## 8. Acceptance
+- A1 (WP1): finding에 terminal reason + 실제 와이어 상한값 + 근거 키 명시(NOT_RUN 불가).
+- A2 (WP2): LENGTH→continuation 단위 테스트 신규 PASS + `OpenAiResponsesChatModelTest` PASS.
+- A3 (WP3): 하한 적용 단위 테스트 PASS + `ChatRequestSettingsMergerTest` PASS.
+- A4 (WP4): `chat-execution-mode.test.cjs` PASS(새 위치 기준).
+- A5 (WP5): 보고 — WP별 verdict + file:line diff 요약 + 실행 명령/exit 코드, NOT_RUN은 사유 첨부.
+
+## 9. 보고 형식
+- 첫 줄 `외부 API:` 사용 여부. WP별 verdict(PASS/FAIL/BLOCKED_LEASE/NOT_RUN+사유), file:line 증거, 명령+exit. 미실행 PASS 주장 금지.
+
+[ANTI-STOP] §8 판정 항목을 전부 채울 때까지 멈추지 않는다. 목표 파일을 읽고 끝내는 것은 완료가 아니다.

@@ -37,8 +37,25 @@ public record ChatStreamEvent(
         ChatResponseDto.GenerationTermination generationTermination,
         @com.fasterxml.jackson.annotation.JsonUnwrapped GenerationObservation observation,
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-        String evidenceHint
+        String evidenceHint,
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+        com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue
 ) {
+        public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
+                Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
+                List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
+                ScoreDeltaSignal scoreDelta, PipelineSnapshot pipelineSnapshot, DebugFxSignal debugFxSignal,
+                List<TransformerBlockSignal> transformerBlocks, SelectionEntropySignal selectionEntropySignal,
+                ChatResponseDto.GenerationTermination generationTermination, GenerationObservation observation, String evidenceHint) {
+                this(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId, learningContext,
+                        evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot, debugFxSignal,
+                        transformerBlocks, selectionEntropySignal, generationTermination, observation, evidenceHint, null);
+        }
+        public ChatStreamEvent withGoogleSearchRescue(com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult result) {
+                return new ChatStreamEvent(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId,
+                        learningContext, evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot,
+                        debugFxSignal, transformerBlocks, selectionEntropySignal, generationTermination, observation, evidenceHint, result);
+        }
         public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
                 Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,
                 List<RagEvidenceMetadata> evidence, StatusSignal statusSignal, TraceSignal traceSignal,
@@ -63,7 +80,7 @@ public record ChatStreamEvent(
                 return new ChatStreamEvent(type, data, html, modelUsed, ragUsed, sessionId, answerMode, traceTurnId,
                         learningContext, evidence, statusSignal, traceSignal, scoreDelta, pipelineSnapshot,
                         debugFxSignal, transformerBlocks, selectionEntropySignal, generationTermination,
-                        GenerationObservation.from(trace), ChatResponseDto.evidenceHintFrom(trace));
+                        GenerationObservation.from(trace), ChatResponseDto.evidenceHintFrom(trace), googleSearchRescue);
         }
         public ChatStreamEvent(String type, String data, String html, String modelUsed, Boolean ragUsed,
                 Long sessionId, String answerMode, Long traceTurnId, LearningContextMetadata learningContext,

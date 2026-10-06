@@ -21,6 +21,16 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatRequestSettingsMergerTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"gpt-5.6-sol,256,4096", "chatgpt-oauth:gpt-5.6-sol,2048,4096",
+            "gpt-5.6-sol,6000,6000", "gemma4:26b,256,256"})
+    void reasoningAnswerBudgetHasAFloorWithoutChangingHigherOrLocalCaps(String model, int requested, int expected) {
+        var merged = ChatRequestSettingsMerger.merge(ChatRequestDto.builder().model(model)
+                .message("synthetic probe").maxTokens(requested).build(), Map.of(), false,
+                LoggerFactory.getLogger(ChatRequestSettingsMergerTest.class));
+        assertEquals(expected, merged.getMaxTokens());
+    }
+
 
     @Test
     void responsePreferencesRemainValidatedAndReachTheEffectiveRequest() throws Exception {

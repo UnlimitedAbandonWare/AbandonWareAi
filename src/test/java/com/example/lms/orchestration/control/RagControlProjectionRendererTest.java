@@ -12,6 +12,26 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RagControlProjectionRendererTest {
 
+    @Test
+    void verificationHoldUsesActualReleaseReasonWithoutDisclosingDraft() {
+        for (String reason : List.of("verification_insufficient", "verification_rejected",
+                "verification_state_inconsistent")) {
+            var hold = new RagControlFinding("release-guard", RagControlFinding.Stage.PROMPT_EVIDENCE,
+                    RagControlFinding.FailureClass.POLICY_DENIED, RagControlFinding.EvidenceStatus.VERIFIED,
+                    RagControlFinding.Authority.HARD_GUARD, RagActionPlan.Action.HOLD,
+                    "existing_release_guard_hold", null, RagControlFinding.LineageStatus.MISSING,
+                    Map.of("releaseGuardHeld", true, "releaseReason", reason));
+            var plan = composer.compose(List.of(hold));
+            String rendered = renderer.append("PRIVATE_DRAFT_SENTINEL", true, plan);
+            String notice = reason.equals("verification_insufficient")
+                    ? "검증 결과 제시된 근거가 답변을 충분히 뒷받침하지 못해 본문을 보류했습니다."
+                    : "검증 단계가 답변을 기각해 본문을 보류했습니다.";
+            assertTrue(rendered.startsWith(notice), reason);
+            assertFalse(rendered.contains("PRIVATE_DRAFT_SENTINEL"));
+            assertEquals(notice, RagControlPresentationBoundary.Projection.heldNoticeFor(plan));
+        }
+    }
+
     private final RagGuardProbeComposer composer = new RagGuardProbeComposer();
     private final RagControlProjectionRenderer renderer = new RagControlProjectionRenderer();
 

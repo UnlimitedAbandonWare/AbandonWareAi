@@ -15,8 +15,70 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RagControlRuntimeAdapterTest {
 
+    @Test
+    void hardGuardFindingCarriesOnlyAllowlistedSameRequestReleaseReason() {
+        TraceStore.clear();
+        try {
+            TraceStore.put("finalAnswer.releaseReason", "verification_rejected");
+            var input = new RagControlRuntimeAdapter.RuntimeInput(
+                    true, 2, 2, false, true, false, true, true, true);
+            var findings = adapter.collect(input, "timeline", completeTimeline(), completeAttempts());
+            assertEquals("verification_rejected", stage(findings,
+                    RagControlFinding.Stage.PROMPT_EVIDENCE).evidence().get("releaseReason"));
+            TraceStore.put("finalAnswer.releaseReason", "PRIVATE_REASON_SENTINEL");
+            findings = adapter.collect(input, "timeline", completeTimeline(), completeAttempts());
+            assertFalse(stage(findings, RagControlFinding.Stage.PROMPT_EVIDENCE)
+                    .evidence().containsKey("releaseReason"));
+        } finally { TraceStore.clear(); }
+    }
+
     private final RagControlRuntimeAdapter adapter = new RagControlRuntimeAdapter();
     private final RagGuardProbeComposer composer = new RagGuardProbeComposer();
+
+    @Test
+    void unknownVerdictReleaseKeepsModelLineageAndDegradesWithoutHolding() {
+        var input = new RagControlRuntimeAdapter.RuntimeInput(
+                true, 3, 2, false, false, false, false, true, true);
+        input = input.withVerificationUnknownRelease(true);
+        var findings = adapter.collect(input, "timeline-raw-id", completeTimeline(), completeAttempts());
+        var verification = stage(findings, RagControlFinding.Stage.VERIFICATION);
+        assertEquals("verification_unknown_release", verification.reasonCode());
+        assertEquals(RagActionPlan.Action.DEGRADE, verification.proposedAction());
+        assertEquals("runtime_lineage_verified", stage(findings, RagControlFinding.Stage.LLM).reasonCode());
+        assertEquals(RagActionPlan.Action.DEGRADE, composer.compose(findings).action());
+        assertFalse(composer.compose(findings).shouldStop());
+        var tracker = org.mockito.Mockito.mock(com.example.lms.llm.ModelRuntimeHealthTracker.class);
+        org.mockito.Mockito.when(tracker.redactedRequestTimeline("timeline-raw-id")).thenReturn(completeTimeline());
+        org.mockito.Mockito.when(tracker.redactedRequestAttemptLedger("timeline-raw-id")).thenReturn(completeAttempts());
+        TraceStore.put(com.example.lms.llm.ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, "timeline-raw-id");
+        RagControlRuntimeAdapter.capturePresentationInput(input);
+        try {
+            var boundary = new RagControlPresentationBoundary(new RagControlCoordinator(composer,
+                    new RagControlRolloutState(new RagControlProperties(20, 0.01d, 20))),
+                    adapter, new RagControlProjectionRenderer(), tracker);
+            var projection = boundary.projectResult("ordinary draft", true);
+            assertFalse(projection.held());
+            assertEquals("ordinary draft", projection.visibleAnswer());
+            assertEquals("ordinary draft", projection.persistableAnswer());
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
+    void unknownVerdictCannotBypassMissingLineageOrExistingHardGuard() {
+        for (boolean hardGuard : new boolean[]{false, true}) {
+            var input = new RagControlRuntimeAdapter.RuntimeInput(
+                    true, 3, 2, false, false, false, hardGuard, true, true);
+            input = input.withVerificationUnknownRelease(true);
+            var findings = adapter.collect(input, "timeline-raw-id",
+                    hardGuard ? completeTimeline() : List.of(),
+                    hardGuard ? completeAttempts() : List.of());
+            assertEquals(RagActionPlan.Action.HOLD, composer.compose(findings).action());
+            assertFalse(stage(findings, RagControlFinding.Stage.VERIFICATION).reasonCode()
+                    .equals("verification_unknown_release"));
+        }
+    }
 
     @Test
     void completeRuntimeProofProducesAllSevenTypedStages() {

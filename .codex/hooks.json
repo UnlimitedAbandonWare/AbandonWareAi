@@ -66,6 +66,19 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "commandWindows": "python -B scripts/deliver_to_downloads.py --hook-stop --quiet",
+            "command": "python -B scripts/deliver_to_downloads.py --hook-stop --quiet",
+            "timeout": 30,
+            "statusMessage": "Checking dot-session brief delivery"
+          }
+        ]
+      }
     ]
   }
 }

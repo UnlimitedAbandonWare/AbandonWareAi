@@ -46,7 +46,8 @@ conversate:
     past-max-chars: ${CONVERSATE_CUE_PAST_MAX_CHARS:1600}
     max-output-tokens: ${CONVERSATE_CUE_MAX_OUTPUT_TOKENS:1536}
     max-request-usd: ${CONVERSATE_MAX_REQUEST_USD:0.50}
-    local-support-enabled: true
+    # Explicit opt-in only: real-time lens cues never wait on a slow local model.
+    local-support-enabled: ${CONVERSATE_CUE_LOCAL_SUPPORT_ENABLED:false}
     # Operator preference tier: eligible candidates from this provider sort first.
     preferred-provider: ${CONVERSATE_CUE_PREFERRED_PROVIDER:gemini}
     # Process-local spending ceilings. A fresh, externally verified snapshot may

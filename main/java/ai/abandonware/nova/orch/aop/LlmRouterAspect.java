@@ -181,6 +181,13 @@ public class LlmRouterAspect {
         }
 
         CallArgs ca = CallArgs.parse(args);
+        if(ca!=null&&ca.requireNativeGoogleSearch){
+            String id=ca.requestedModelId;
+            var cfg=id!=null&&id.startsWith("llmrouter.")?props.getModels().get(id.substring("llmrouter.".length())):null;
+            if(!ca.focusGoogleSearchAllowed||!com.example.lms.llm.RequestedModelSelection.matches(id)
+                    ||cfg==null||!cfg.isEnabled()||!"gemini".equalsIgnoreCase(cfg.getProvider()))
+                throw new com.example.lms.llm.ModelSelectionException("protocol_unsupported");
+        }
         if (ca == null) {
             return argsRewritten ? pjp.proceed(args) : pjp.proceed();
         }
@@ -706,6 +713,8 @@ public class LlmRouterAspect {
         CallArgs copy = new CallArgs(ca.requestedModelId, ca.temperature, ca.topP, ca.frequencyPenalty,
                 ca.presencePenalty, ca.maxTokens, ca.timeoutSeconds, 0,ca.observedContext,ca.routingInvocation);
         copy.cueJson=ca.cueJson;copy.cueJsonSchema=ca.cueJsonSchema;copy.cueTimeoutMs=ca.cueTimeoutMs;
+        copy.focusGoogleSearchAllowed=ca.focusGoogleSearchAllowed;
+        copy.requireNativeGoogleSearch=ca.requireNativeGoogleSearch;
         return copy;
     }
 
@@ -1585,8 +1594,7 @@ public class LlmRouterAspect {
                         ca);
             }
             LlmRouterContext.set(key, baseUrl, modelName);
-            ChatModel gatewayModel = geminiGateway.buildOpenAiCompatibleChatModel(
-                    new GeminiGateway.RouterSpec(
+            var selectedSpec = new GeminiGateway.RouterSpec(
                             baseUrl,
                             modelName,
                             Duration.ofMillis(routeTimeoutMs),
@@ -1595,13 +1603,18 @@ public class LlmRouterAspect {
                             topP,
                             freq,
                             pres,
-                            ca.maxTokens), ca.cueJson, ca.cueJsonSchema);
+                            ca.maxTokens);
+            ChatModel gatewayModel = ca.requireNativeGoogleSearch
+                    ? geminiGateway.buildOpenAiCompatibleChatModel(selectedSpec,ca.cueJson,ca.cueJsonSchema,ca.focusGoogleSearchAllowed,true)
+                    : geminiGateway.buildOpenAiCompatibleChatModel(selectedSpec,ca.cueJson,ca.cueJsonSchema,ca.focusGoogleSearchAllowed);
             GeminiGateway.ProviderStatus gatewayStatus = geminiGateway.latestStatus();
             if (gatewayStatus == null || !gatewayStatus.enabled()) {
                 LlmRouterContext.clear();
             }
             traceGeminiGatewayRoute(key, baseUrl, gatewayStatus);
-            ChatModel routedModel = verifyResponseModelIfRequired(gatewayModel, modelName, cfg);
+            ChatModel routedModel = ca.requireNativeGoogleSearch
+                    ? new ResponseModelVerifyingChatModel(gatewayModel, modelName, cfg.getResponseModelAliases())
+                    : verifyResponseModelIfRequired(gatewayModel, modelName, cfg);
             publishSelectedRoute(
                     key,
                     modelName,
@@ -2565,6 +2578,8 @@ public class LlmRouterAspect {
         final com.example.lms.llm.spec.ModelSpecSnapshot observedContext;
         final com.example.lms.routing.RoutingInvocation routingInvocation;
         boolean cueJson;
+        boolean focusGoogleSearchAllowed;
+        boolean requireNativeGoogleSearch;
         dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema;
         long cueTimeoutMs;
 
@@ -2632,8 +2647,8 @@ public class LlmRouterAspect {
             }
 
             // overload 3: (String, Double, Double, Double, Double, Integer, int, Integer)
-            if (args.length >= 8 && args.length <= 10) {
-                return new CallArgs(
+            if (args.length >= 8 && args.length <= 12) {
+                CallArgs parsed = new CallArgs(
                         modelId,
                         safeDouble(args[1]),
                         safeDouble(args[2]),
@@ -2643,7 +2658,10 @@ public class LlmRouterAspect {
                         safeInt(args[6]),
                         safeIntObj(args[7]),
                         args.length>=9 && args[8] instanceof com.example.lms.llm.spec.ModelSpecSnapshot snapshot ? snapshot : null,
-                        args.length==10 && args[9] instanceof com.example.lms.routing.RoutingInvocation invocation ? invocation : null);
+                        args.length>=10 && args[9] instanceof com.example.lms.routing.RoutingInvocation invocation ? invocation : null);
+                parsed.focusGoogleSearchAllowed=args.length>=11&&Boolean.TRUE.equals(args[10]);
+                parsed.requireNativeGoogleSearch=args.length==12&&Boolean.TRUE.equals(args[11]);
+                return parsed;
             }
 
             return null;

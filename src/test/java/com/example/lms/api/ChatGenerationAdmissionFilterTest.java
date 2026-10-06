@@ -18,6 +18,25 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class ChatGenerationAdmissionFilterTest {
+    @Test void auxiliaryGoogleResultIsLiveOnlyAndNeverStoredOrReplayed() throws Exception {
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var answer=new com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer("GOOGLE_RAW_SENTINEL","gemini-fixture",null,List.of("GOOGLE_RAW_SENTINEL"),true);
+        var rescue=new com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult("READY_FOR_DISPLAY",true,true,true,true,1,"gemini-requested","gemini-fixture",null,answer);
+        var sync=new com.example.lms.dto.ChatResponseDto("main original",1L,"main-fixture",false).withGoogleSearchRescue(rescue);
+        var stream=com.example.lms.dto.ChatStreamEvent.doneWithAnswer("main original","main-fixture",false,1L,"FACT",2L,null,List.of(),null).withGoogleSearchRescue(rescue);
+        var filter=new ChatGenerationAdmissionFilter(redis,ds,owners);
+        int n=0;
+        for(Object live:List.of(sync,stream)) {
+            boolean streaming=live instanceof com.example.lms.dto.ChatStreamEvent;String path=streaming?"/api/chat/stream":"/api/chat";String key="grounding-"+(n++);
+            assertTrue(mapper.writeValueAsString(live).contains("GOOGLE_RAW_SENTINEL"));
+            filter.doFilter(request(path,key,"{}"),new MockHttpServletResponse(),(rq,rs)->ChatGenerationAdmissionFilter.completion((jakarta.servlet.http.HttpServletRequest)rq).accept(live));
+            var replay=new MockHttpServletResponse();filter.doFilter(request(path,key,"{}"),replay,(rq,rs)->fail("must replay main result"));
+            assertEquals(200,replay.getStatus());assertTrue(replay.getContentAsString().contains("main original"));assertTrue(replay.getContentAsString().contains("main-fixture"));
+            assertFalse(replay.getContentAsString().contains("GOOGLE_RAW_SENTINEL"));
+            for(String saved:new JdbcTemplate(ds).queryForList("SELECT result_json FROM awx_chat_request_results",String.class))assertFalse(saved.contains("GOOGLE_RAW_SENTINEL"));
+            assertTrue(mapper.writeValueAsString(live).contains("GOOGLE_RAW_SENTINEL"));
+        }
+    }
     @TempDir Path directory;
     DriverManagerDataSource ds;
     UpstashRedisClient redis;

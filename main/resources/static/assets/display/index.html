@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
 <title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
-<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-memory-3" defer></script><script src="app.js?v=lens-preview-2" defer></script>
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=audio-policy-0926" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-model-preset-20261006" defer></script><script src="app.js?v=lens-preview-2" defer></script>
 <style>
 #app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
 #app > * { margin-bottom:16px; }
@@ -80,9 +80,11 @@
 <label for="nf-web-unknown">모를 때 웹 재시도</label><select id="nf-web-unknown" class="focusable"><option value="">서버 정책 따름(기본)</option><option value="false">이 프로필에서는 끔</option><option value="true">허용(서버가 켠 경우에만)</option></select>
 <label for="nf-wake">호출어</label><input id="nf-wake" class="focusable" type="text" value="노바" maxlength="16">
 <label for="nf-target">답변을 읽을 화면</label><select id="nf-target" class="focusable"><option value="auto">연결된 안경 · 없으면 휴대폰</option><option value="lens">안경</option><option value="fold">이 휴대폰</option></select>
-<label for="nf-answer-target">답변 위치</label><select id="nf-answer-target" class="focusable"><option value="AUTO">자동</option><option value="API_ONLY">API만</option><option value="LOCAL_ONLY">로컬만</option></select>
+<label for="nf-answer-target">답변 실행 경로</label><select id="nf-answer-target" class="focusable"><option value="AUTO">자동</option><option value="API_ONLY">API만</option><option value="LOCAL_ONLY">로컬만</option><option value="GEMINI_WEBSEARCH_ONLY">Gemini 검색 고정</option></select>
+<span>전용 모드는 선택 Gemini로 웹검색을 요청하며 검색·출처·Google 검색 제안이 확인된 답변만 제공합니다. 다른 모델로 자동 전환하지 않습니다.</span><button id="nf-general-mode" class="focusable" type="button">일반 자동 모드로 전환</button><span>전환 후 설정을 저장하면 다음 질문부터 적용합니다. 질문을 자동 재전송하지 않습니다.</span>
 <label for="nf-answer-model">답변 모델</label><select id="nf-answer-model" class="focusable"><option value="">자동 선택</option></select>
-<label for="nf-answer-fallback">다른 답변 모델 허용</label><input id="nf-answer-fallback" class="focusable" type="checkbox">
+<span>메인 모델 프리셋</span><div class="actions"><button id="nf-preset-luna" class="focusable" type="button">루나 (Luna · 초고속/경제)</button><button id="nf-preset-gemini" class="focusable" type="button">제미나이 (Gemini · 웹검색)</button><button id="nf-preset-auto" class="focusable" type="button">자동 (기본)</button></div><span id="nf-preset-status" class="hint" role="status" style="grid-column:1/-1">프리셋은 모델과 실행 경로를 한 번에 맞춥니다. 저장하면 다음 질문부터 적용됩니다.</span>
+<label for="nf-answer-fallback">모델 자동 전환 ON/OFF</label><input id="nf-answer-fallback" class="focusable" type="checkbox">
 <label for="nf-answer-backup-1">첫 번째 대체 모델</label><select id="nf-answer-backup-1" class="focusable"><option value="">대체 모델 없음</option></select>
 <label for="nf-answer-backup-2">두 번째 대체 모델</label><select id="nf-answer-backup-2" class="focusable"><option value="">대체 모델 없음</option></select>
 <label for="nf-answer-backup-3">세 번째 대체 모델</label><select id="nf-answer-backup-3" class="focusable"><option value="">대체 모델 없음</option></select>
@@ -95,6 +97,7 @@
 <label for="nf-answer-length">생성 목표·안경 표시 상한(80~800자)</label><input id="nf-answer-length" class="focusable" type="number" min="80" max="800" step="1" value="400">
 <span>짧은 답변도 허용하며 공백·문장부호와 Unicode 글자 묶음을 셉니다.</span><button id="nf-answer-length-reset" class="focusable" type="button">답변 길이 기본값</button>
 <label for="nf-quick">빠른 답변·완성 답변 빠른 표시</label><input id="nf-quick" class="focusable" type="checkbox"><span>이 질문에서는 웹·도구 검색을 끕니다. 생성 완료 후 줄 단위로 표시합니다.</span>
+<label for="nf-web-search">웹 검색</label><select id="nf-web-search" class="focusable"><option value="">저장된 정책 유지</option><option value="true">허용</option><option value="false">끄기</option></select><span>다음 질문부터 적용합니다. 빠른 답변에서는 검색하지 않습니다. 지원하는 Gemini 답변은 Google 검색 근거와 검색 제안을 휴대폰에 함께 표시합니다.</span>
 <label for="nf-snapshot-enabled">사진 기반 AI 힌트(질문당 1장)</label><input id="nf-snapshot-enabled" class="focusable" type="checkbox">
 <label for="nf-snapshot-source">촬영 장치</label><select id="nf-snapshot-source" class="focusable"><option value="FOLD_REAR">폴드 후면 카메라</option><option value="META_GLASSES" disabled>Meta 안경 카메라(미지원)</option></select>
 <label for="nf-snapshot-test">카메라 시험 촬영</label><button id="nf-snapshot-test" class="focusable" type="button">이 폴드에서만 확인 · AI 전송 안 함</button>

@@ -1,0 +1,174 @@
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 아래 항목을 실제로 끝까지 수행하는 실행 지시서다. 단계별 증거를 수집하고 지정된 테스트를 통과한 뒤 지정된 결과 리포트로 회신하라.
+
+@demo1-devin-source-orchestrator
+
+[DEVIN 지시서] 코덱스 빈발 검색 패턴 기반 4대 Zero-Search 치트시트·llms.txt 및 초고속 CLI 구축 — 2026-10-05 21:40 KST
+파일 ID: PASTE_DEVIN_CODEX_ZERO_SEARCH_CHEATSHEETS_20261005
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 코어 소스 수정 0 · git commit/push/add -A 0 · 비밀값 출력 0 · 유료 호출 0
+
+## 0. 한 줄 목표
+코덱스(Codex)가 코딩·검증 과정에서 반복 검색·실수하는 기술 영역(WebClient SSE/Resilience4j, H2 락/db_agent, PowerShell 진단, 듀얼 GPU/OAuth)의 Zero-Search 치트시트를 `docs/tri-agent-context/`에 구축하고, 표준 루트 인덱스 `llms.txt`와 밀리초 단위 초고속 로컬 조회 CLI(`scripts/codex_quick_doc.py`)를 신설·검증한다.
+
+## 1. 사실 (라이브 사실, 2026-10-05 21:40 KST)
+- 관찰 사실:
+  1. 코덱스 검색 패턴 및 병목 분석: 코덱스가 코딩 및 디버깅 시 (1) Spring Boot 3.3.4 WebClient SSE 및 Resilience4j 2.2.0 스트리밍/타임아웃, (2) H2 임베디드 파일 DB 락(exit 3) 및 db_agent.py 조작, (3) Windows PowerShell 문법($LASTEXITCODE, UTF-8 no-BOM, 포트 리스), (4) RTX 3060 vs 3090 듀얼 GPU 엔드포인트 및 ChatGPT OAuth direct 토큰 규격 등에서 웹 검색에 의존하거나 일반 웹 문서의 안티패턴(예: AUTO_SERVER=TRUE 추가, 0.3x ChatLanguageModel 사용 등)으로 빌드 실패를 유발함.
+  2. 컨텍스트 규격 현황: `docs/tri-agent-context/`에 01~06 문서가 존재하며 `scripts/validate_agent_context_docs.py`가 7개 문서의 메타데이터(Context-Freshness)와 상호 링크를 exit 0으로 검증 중임.
+  3. AI 에이전트 표준 웹 규격(llms.txt): 루트 경로 `llms.txt`를 통해 에이전트가 단일 파일에서 프로젝트의 고신호(high-signal) 핵심 문서 위치를 파악할 수 있는 표준 규격 존재.
+  4. 도구 및 리스 상태: 제품 코어 소스(main/java, templates, static/js 등) 수정 0건, 소스 리스 점유 없이 문서 및 Python stdlib 스크립트만으로 완결 가능함.
+
+기준 해시 표:
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| docs/tri-agent-context/07_SPRING_WEBCLIENT_SSE_RESILIENCE_CHEATSHEET.md | - | - | 생성 |
+| docs/tri-agent-context/08_H2_DBAGENT_AND_LOCK_RECOVERY_CHEATSHEET.md | - | - | 생성 |
+| docs/tri-agent-context/09_POWERSHELL_AND_GPU_ENDPOINTS_CHEATSHEET.md | - | - | 생성 |
+| llms.txt | - | - | 생성 |
+| scripts/codex_quick_doc.py | - | - | 생성 |
+| scripts/test_codex_quick_doc.py | - | - | 생성 |
+| docs/tri-agent-context/README.md | 97C9E7B765F0 | - | 수정 |
+| scripts/validate_agent_context_docs.py | 601999B2DA86 | - | 수정 |
+| build.gradle.kts | 39A07D7B1C16 | - | 읽기 |
+| main/java/com/example/lms/config/LlmConfig.java | E3B8D090C2EC | - | 읽기 |
+| scripts/db_agent.py | B686165280FA | - | 읽기 |
+
+입력 판정표:
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| 코덱스가 LangChain4j 0.3x 및 starter 의존성을 검색하여 혼동 | RIGHT | build.gradle.kts:150-161 checkLangchain4jVersionPurity 게이트 존재, LlmConfig.java:79-110 수동 빈 등록 확인 |
+| H2 락 발생 시 AUTO_SERVER=TRUE 추가가 해결책이라는 일반 웹 검색 결과 | WRONG | 06_SPRING_BOOT_3_3_4_LANGCHAIN4J_1_0_1_SSOT.md:42 단일 소유 embedded 계약 위반. db_agent.py exit 3은 JVM 점유 시 정상 락 |
+| 에이전트용 llms.txt 루트 인덱스가 미구축 상태 | RIGHT | Test-Path llms.txt -> False 확인 |
+| context docs 유효성 검증기가 01~06 7개 파일에 고정됨 | RIGHT | scripts/validate_agent_context_docs.py:27-35 REQUIRED_FILES 리스트 확인 |
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 작업 경로: `Set-Location C:\AbandonWare\demo-1\demo-1\src` (Project Root 엄수).
+- 범위 한정: `docs/tri-agent-context/`, `llms.txt`, `scripts/` 만 생성/수정. 제품 코어 소스(`main/java`, `frontend/`, `static/`, `templates/`) 수정 0건.
+- 외부 API 라이브 유료 호출 0회 ($0 local).
+- 모든 신규 마크다운 파일은 UTF-8 no BOM 저장 및 필수 YAML 프론트매터 헤더(`doc_id`, `title`, `created_at`, `expires_at`, `ttl_days`, `lifecycle`, `validity_basis`) 포함.
+
+## 3. 항목 (WP1 ~ WP4 작업 패키지)
+
+### WP1 [DEVIN] Spring Boot WebClient SSE & Resilience4j 2.2.0 치트시트 구축
+- 대상: `docs/tri-agent-context/07_SPRING_WEBCLIENT_SSE_RESILIENCE_CHEATSHEET.md`
+- 프론트매터:
+  * `doc_id: TRI-CTX-07`
+  * `title: Spring Boot WebClient SSE and Resilience4j 2.2.0 Invariant Cheatsheet`
+  * `created_at: "2026-10-05T21:40:00+09:00"`
+  * `expires_at: "PERPETUAL"`
+  * `ttl_days: null`
+  * `lifecycle: INVARIANT`
+  * `validity_basis: "build.gradle.kts 의존성 및 ChatApiController, SSE 스트리밍 표준"`
+- 요구사항:
+  1) WebClient SSE 스트리밍 패턴: `bodyToFlux(String.class)` / `Flux<ServerSentEvent<String>>` 패턴 명시.
+  2) 필수 응답 헤더: `Content-Type: text/event-stream;charset=UTF-8`, `Cache-Control: no-cache`, `X-Accel-Buffering: no`.
+  3) 타임아웃 격리: Netty `HttpClient` 연결 타임아웃 vs 개별 이벤트 `Flux.timeout(Duration)` 분리. 전체 SSE 스트림에 Mono.timeout() 적용 금지(연결 끊김 방지).
+  4) Resilience4j 2.2.0: CircuitBreakerOperator, TimeLimiter(`cancelRunningFuture: true`), Retry 백오프 설정 스니펫.
+  5) 안티패턴 방어: 역방향 프록시 버퍼링으로 인한 클라이언트 지연, 타임아웃 리소스 누수 방지.
+- 검증:
+  python -B scripts/validate_agent_context_docs.py; "exit=$LASTEXITCODE"
+
+### WP2 [DEVIN] H2 DB 단일 임베디드 점유 & db_agent.py 락 복구 치트시트 구축
+- 대상: `docs/tri-agent-context/08_H2_DBAGENT_AND_LOCK_RECOVERY_CHEATSHEET.md`
+- 프론트매터:
+  * `doc_id: TRI-CTX-08`
+  * `title: H2 Database Embedded Lock and db_agent CLI Cheatsheet`
+  * `created_at: "2026-10-05T21:40:00+09:00"`
+  * `expires_at: "PERPETUAL"`
+  * `ttl_days: null`
+  * `lifecycle: INVARIANT`
+  * `validity_basis: "scripts/db_agent.py 및 H2_DATABASE_LOCKING_SPEC.md 계약"`
+- 요구사항:
+  1) 라이브 DB URL 계약: `jdbc:h2:file:./var/meta-display-db/lmsdb;MODE=MariaDB;DATABASE_TO_UPPER=false` (단일 소유 embedded).
+  2) Error 90020/90067 방어: `AUTO_SERVER=TRUE` 추가 금지(SSOT 위반). JVM 점유 중 `db_agent.py`의 `exit 3`은 정상적인 Lock 상태임을 명시.
+  3) `db_agent.py` CLI 사용법: `status`, `query "<SQL>"`, `tables`, `admin` upsert 패턴 정리.
+  4) 프로세스 확인 및 락 해제 절차: JVM 프로세스 종료 확인 후 재시도 절차, `.lock.db` 잔여물 안전 검사.
+- 검증:
+  python -B scripts/validate_agent_context_docs.py; "exit=$LASTEXITCODE"
+
+### WP3 [DEVIN] Windows PowerShell 진단 & 듀얼 GPU/OAuth 엔드포인트 치트시트 구축
+- 대상: `docs/tri-agent-context/09_POWERSHELL_AND_GPU_ENDPOINTS_CHEATSHEET.md`
+- 프론트매터:
+  * `doc_id: TRI-CTX-09`
+  * `title: Windows PowerShell Diagnostics and Dual GPU OAuth Endpoints Cheatsheet`
+  * `created_at: "2026-10-05T21:40:00+09:00"`
+  * `expires_at: "2027-01-03T09:00:00+09:00"`
+  * `ttl_days: 90`
+  * `lifecycle: VOLATILE`
+  * `validity_basis: "AGENTS.md, application-llm.yaml, LlmConfig.java"`
+- 요구사항:
+  1) PowerShell 명령 실행 관례: `.\gradlew.bat :test ...; "exit=$LASTEXITCODE"`, UTF-8 no BOM 출력 강제(`[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`).
+  2) 프로세스 & 포트 점유 검사: `python -B scripts/agent_port_lease.py`, `Get-NetTCPConnection -LocalPort 18180`, `Stop-Process -Id <pid> -Force`.
+  3) 듀얼 GPU 레인 잠금: RTX 3060 (포트 11434, Chat/Fast) vs RTX 3090 (포트 11435/전용 레인, Embed/RAG).
+  4) ChatGPT OAuth 엔드포인트: Responses API, Scope `chatgpt.tokens.use.direct`, `store: false`, `stream: true` 필수.
+  5) `LlmConfig.java` 빈 이름표: `chatModel`, `miniModel`, `fastChatModel`, `judgeChatModel`, `exploreChatModel`, `highModel`.
+- 검증:
+  python -B scripts/validate_agent_context_docs.py; "exit=$LASTEXITCODE"
+
+### WP4 [DEVIN] 표준 `llms.txt` 루트 인덱스 & 초고속 조회 CLI (`scripts/codex_quick_doc.py`) 신설 및 검증기 연동
+- 대상: `llms.txt`, `scripts/codex_quick_doc.py`, `scripts/test_codex_quick_doc.py`, `docs/tri-agent-context/README.md`, `scripts/validate_agent_context_docs.py`
+- 요구사항:
+  1) `llms.txt` (Root): llms.txt 공식 표준(H1, Blockquote, H2 카테고리, `- [이름](링크): 요약`)에 맞춰 `docs/tri-agent-context/` 01~09 및 핵심 spec 링크 큐레이션.
+  2) `scripts/codex_quick_doc.py`:
+     - Python stdlib만 사용, 외부 의존성 0.
+     - CLI 모드:
+       * `--list`: 사용 가능한 치트시트 키(`sse`, `h2`, `ps-gpu`, `langchain4j`, `arch`) 및 제목 목록 JSON/테이블 반환.
+       * `--get <key>`: 지정 키의 마크다운 치트시트 전문을 즉시 stdout 출력 (실행 시간 <50ms, zero-search).
+       * `--search <keyword>`: 치트시트 본문 내 키워드 매칭 섹션 고속 추출.
+  3) `scripts/test_codex_quick_doc.py`:
+     - 단위 테스트: list 조회, get 각 토픽 조회, search 조회, 유효하지 않은 키 처리(exit 1) 검증.
+  4) `docs/tri-agent-context/README.md`: 07~09 치트시트 링크 및 내비게이션 테이블 추가.
+  5) `scripts/validate_agent_context_docs.py`: REQUIRED_FILES에 07~09 추가하고 10개 문서 전체 검증 통과.
+- RED/GREEN 검증:
+  python -B scripts/test_codex_quick_doc.py; "exit=$LASTEXITCODE" (기대 exit 0)
+  python -B scripts/codex_quick_doc.py --list; "exit=$LASTEXITCODE" (기대 exit 0)
+  python -B scripts/validate_agent_context_docs.py; "exit=$LASTEXITCODE" (기대 exit 0)
+
+## 4. HOLD 조건
+- 제품 코어 소스(`main/java`, `frontend/`, `static/`, `templates/`, `configs/`) 수정이 요구되는 경우 즉시 HOLD.
+- 대상 파일에 타 에이전트의 유효 리스 경합이 발견될 경우 즉시 HOLD.
+- validate_agent_context_docs.py 검증 실패가 자가 수정 3회를 초과할 경우 즉시 HOLD.
+
+## 5. ASK_ONCE (자동 결정 및 기본값)
+- U-1: `llms.txt` 외에 전체 내용을 인라인한 `llms-full.txt` 생성 여부
+  - (a) 권장 (AUTO): 루트 토큰 절약을 위해 `llms.txt`만 먼저 생성하고, `llms-full.txt`는 필요 시 차후 별도 WP로 생성.
+  - (b) 이번 WP4에서 `llms.txt`와 `llms-full.txt`를 동시 생성.
+- U-2: `codex_quick_doc.py`의 출력 포맷 기본값
+  - (a) 권장 (AUTO): 마크다운 원문(Markdown text)을 기본 출력으로 하여 터미널 및 LLM 컨텍스트 주입에 최적화.
+  - (b) `--json` 플래그를 기본값으로 하여 메타데이터 래퍼 반환.
+
+## 6. 절대 금지
+- push, add -A, commit -a, git reset, git checkout 등 위험 Git 명령 실행 금지.
+- API 키, 시크릿, 패스워드 등 비밀 정보 노출 및 출력 절대 금지 (환경변수 이름만 표기).
+- 원격 저장소 remote 추가/변경 금지.
+- PROTO_OPEN 보안 완화 정책 임의 수정 금지.
+- 제품 코어 소스 수정 금지 (문서, 인덱스, 헬퍼 스크립트만 수정).
+
+## 7. Acceptance (완료 기준)
+- 실행 못 한 항목은 NOT_RUN + 이유, PASS로 바꾸지 않는다.
+- A1 (WP1): `docs/tri-agent-context/07_SPRING_WEBCLIENT_SSE_RESILIENCE_CHEATSHEET.md`가 생성되고 유효한 YAML 프론트매터를 갖는다.
+- A2 (WP2): `docs/tri-agent-context/08_H2_DBAGENT_AND_LOCK_RECOVERY_CHEATSHEET.md`가 생성되고 H2 락/db_agent 계약이 기술된다.
+- A3 (WP3): `docs/tri-agent-context/09_POWERSHELL_AND_GPU_ENDPOINTS_CHEATSHEET.md`가 생성되고 PowerShell 실행 문법 및 GPU 규격이 기술된다.
+- A4 (WP4): `llms.txt`가 생성되고, `scripts/codex_quick_doc.py` 및 `scripts/test_codex_quick_doc.py`가 구현되어 단위 테스트를 통과한다.
+- A5 (검증 일체): 아래 검증 명령이 모두 exit 0으로 종료된다:
+  python -B scripts/test_codex_quick_doc.py; "exit=$LASTEXITCODE"
+  python -B scripts/codex_quick_doc.py --list; "exit=$LASTEXITCODE"
+  python -B scripts/validate_agent_context_docs.py; "exit=$LASTEXITCODE"
+
+## 8. 보고 형식
+외부 API: 0회 ($0 local)
+비밀 열람: 0건
+제품 소스 diff: 0건
+Gradle 실행: 0건
+종료 시 lease: 0건
+종료 상태: DONE_OFFLINE
+
+| 항목 | 결과 | 증거 경로 |
+|---|---|---|
+| WP1 (SSE & Resilience4j 치트시트) | PASS | docs/tri-agent-context/07_SPRING_WEBCLIENT_SSE_RESILIENCE_CHEATSHEET.md |
+| WP2 (H2 & db_agent 치트시트) | PASS | docs/tri-agent-context/08_H2_DBAGENT_AND_LOCK_RECOVERY_CHEATSHEET.md |
+| WP3 (PowerShell & GPU 치트시트) | PASS | docs/tri-agent-context/09_POWERSHELL_AND_GPU_ENDPOINTS_CHEATSHEET.md |
+| WP4 (llms.txt & codex_quick_doc.py) | PASS | llms.txt, scripts/codex_quick_doc.py, scripts/test_codex_quick_doc.py |
+| 검증기 통과 (10개 문서 전체) | PASS | scripts/validate_agent_context_docs.py (exit 0) |
+
+[ANTI-STOP] 이 지시서는 여기까지 읽고 멈추는 것이 아니라 실제 파일 생성과 검증 명령을 수행한 후 보고서를 반환해야 한다.

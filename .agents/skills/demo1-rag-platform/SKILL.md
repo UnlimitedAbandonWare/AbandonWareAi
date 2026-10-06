@@ -14,6 +14,13 @@ description: "Use when changing the Dynamic RAG Orchestration Platform backend i
 - Route all prompt construction through `PromptBuilder.build(PromptContext)` or the existing equivalent. Do not assemble final RAG prompts with string concatenation in ChatService paths.
 - Patch only the confirmed blocker. Prefer gating, report generation, and fail-soft branches over wrapper classes or duplicated routes.
 
+## P0 목표와 증거 경계
+
+- 10/13 면접 백엔드 마감의 현재 목표 계약·다음 한 가지는 [Primary/P0 entry](../../../docs/PRIMARY_SURFACE.md)를 읽는다. 기존 Spring 메인 생성/복구와 사용자·세션·자원 격리부터 단계별로 검증한다.
+- [답변 공개 계약](../../../docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md)을 적용하되 정책 요구와 구현 상태를 구분한다. 검색/검증 장애는 유용한 한계 안내·지원 부분/저위험 일반 설명으로 처리하고 초안 전체를 일괄 공개하지 않는다. 취소·known-negative·개인정보·scope·메모리 차단을 유지한다.
+- SOURCE_PRESENT, focused 단위/통합 검증, 실기/배포·부하 실측을 별도 상태로 보고한다. 단위 PASS를 실측 PASS로 확대하지 않으며, 개인정보 캐시 타인 재사용·무한 timeout 확대·보호 assert 완화를 금지한다.
+- RRF 확장·추가 로깅·보조 기능은 핵심 P0 통과 후 필요한 범위만 처리한다. 문서/지침 작업 권한은 제품 패치·재시작·실모델/유료 호출 권한이 아니다.
+
 ## Standard Workflow
 
 1. Reconfirm the root: run `Get-Location`, list `settings.gradle*`, `build.gradle*`, and inspect `sourceSets`.

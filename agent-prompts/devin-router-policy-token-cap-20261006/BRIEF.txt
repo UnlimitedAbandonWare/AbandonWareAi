@@ -1,0 +1,90 @@
+[ANTI-STOP] 읽고 멈추지 마세요. 이 지시서의 모든 단계를 끝까지 수행하세요.
+@demo1-rag-strategy-orchestration
+[DEVIN 지시서] RouterPolicy 토큰 한도 기반 무조건 고비용 모델 강제 승격 및 Gate 우회 결함 수리 — 2026-10-06 12:15 KST
+파일 ID: PASTE_DEVIN_ROUTER_POLICY_TOKEN_CAP_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지 (이 작업 전체): 제품 외 소스 수정 0 · commit/push/add -A 0 · remote 추가 0 · PROTO_OPEN 변경 0 · 비밀값/secret 출력 0 · 전체 테스트(:test) 0 · chat.js 수정 0 · 유료 외부 API 실호출 0
+
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+
+# 0. 한 줄 목표
+RouterPolicy의 토큰 한도(maxTokens >= 280) 기반 무조건 고비용 모델 강제 승격 결함(R-TOKEN-CAP-PROMO) 및 FALLBACK_GATE 우회 결함(R-GATE-DIVERGENCE)을 수리하고 probe_front_router_consistency를 통과시킨다.
+
+# 1. 사실 (2026-10-06 12:05~12:15 KST 관측)
+- scripts/probe_front_router_consistency.py 진단 결과 R-TOKEN-CAP-PROMO(RouterPolicy:133) 및 R-GATE-DIVERGENCE(RouterPolicy:24) 2건 위반 관측됨.
+- RouterPolicy.java:133에서 `s.maxTokens() >= tokensThreshold` (기본 280 토큰)로 인해 모든 일반 채팅 요청이 고비용 유료 모델로 강제 승격되고 있음 (P6 원칙 4 SSOT 정면 위반).
+- RouterPolicy.java:23-24에서 `FALLBACK_GATE = new QueryComplexityGate()`로 인스턴스를 직접 생성하여 스프링 DI 빈과 규칙 불일치가 발생하는 버그 존재.
+- ModelBasedQueryComplexityClassifier.java:51에서 classify() 내부에 `if (modelUnavailable)`이 남아있어 R-MODEL-FILE-FLIP 진단에 걸림.
+
+# 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- git commit, git push, git add -A, remote 추가, reset, clean 일체 금지
+- PROTO_OPEN 해제/확장 금지 및 비밀값(secret) 출력 금지
+- 전체 테스트 (:test, full suite) 금지, 포커스 단위 테스트만 실행
+- chat.js 수정 금지
+
+# 3. WP 항목 (작업 패키지)
+
+WP0 [DEVIN] RouterPolicy.java의 R-TOKEN-CAP-PROMO 및 R-GATE-DIVERGENCE 수리
+- 증거: main/java/com/example/lms/service/routing/RouterPolicy.java:23-24, 96, 133
+- RED 검사: `python -B scripts/probe_front_router_consistency.py --root . ; "exit=$LASTEXITCODE"` (현재 exit=2)
+- 최소 수정:
+  1) `RouterPolicy.java`에서 `FALLBACK_GATE = new com.example.lms.service.rag.QueryComplexityGate();` 및 이를 사용하는 1-arg 생성자 제거하고, `@Autowired`가 붙은 2-arg 생성자 `(MoeRoutingProps props, QueryComplexityGate complexityGate)`만 남김.
+  2) `shouldPromote(RouteSignal s)`에서 `if (s.maxTokens() >= tokensThreshold) { return true; }` 조건 제거 (P6 원칙 4: 출력 토큰 수량 단독으로 고티어 승격 금지, 복잡도·불확실성·증거 신호로만 판정).
+- GREEN: `python -B scripts/probe_front_router_consistency.py --root . ; "exit=$LASTEXITCODE"`
+- 완료 조건: RouterPolicy 관련 위반(R-TOKEN-CAP-PROMO, R-GATE-DIVERGENCE) 제거.
+
+WP1 [DEVIN] ModelBasedQueryComplexityClassifier.java의 R-MODEL-FILE-FLIP 정리
+- 증거: main/java/com/example/lms/service/rag/ModelBasedQueryComplexityClassifier.java:51-53
+- RED 검사: `python -B scripts/probe_front_router_consistency.py --root . ; "exit=$LASTEXITCODE"`
+- 최소 수정: `classify(String query)` 메서드 내의 `if (modelUnavailable)` 분기 제거 (해당 로그는 `init()` 시점에 이미 기록됨). 분류는 순수 휴리스틱 규칙으로 일관되게 동작하도록 유지.
+- GREEN: `python -B scripts/probe_front_router_consistency.py --root . ; "exit=$LASTEXITCODE"` (exit=0)
+- 완료 조건: R-MODEL-FILE-FLIP 위반 제거되어 프로브 exit=0 통과.
+
+WP2 [DEVIN] 포커스 단위 테스트 및 프로브 자가검증
+- 증거: src/test/java/com/example/lms/service/rag/P6SharedComplexityContractTest.java
+- 실행 명령:
+  1) `.\gradlew.bat :test --tests com.example.lms.service.rag.P6SharedComplexityContractTest --no-daemon --console=plain ; "exit=$LASTEXITCODE"`
+  2) `python -B scripts/test_probe_front_router_consistency.py ; "exit=$LASTEXITCODE"`
+- 완료 조건: 계약 테스트 PASS 및 프로브 6/6 cases behaved 통과.
+
+# 4. HOLD 조건
+- RouterPolicy 이외의 타 라우터 인터페이스에 컴파일 오류가 파급되는 경우 HOLD 후 이관.
+- Foreign lease 충돌 발견 시 해당 파일 작업 즉시 HOLD.
+
+# 5. ASK_ONCE
+- U-1 tokensThreshold 프로퍼티 유지 여부: (a) 권장: 호환성을 위해 프로퍼티 필드는 남겨두되 shouldPromote 판정에서는 제외 (b) 필드 완전 제거
+
+# 6. 절대 금지
+- git commit, push, add -A, remote 추가, rebase, reset 금지
+- PROTO_OPEN 해제/확장 금지 및 비밀(secret) 파일 열람/출력 금지
+- 전체 테스트 (:test) 금지
+- chat.js 파일 수정 금지
+- 외부 유료 API 실호출 0
+
+수정 허용 (allow-list):
+- main/java/com/example/lms/service/routing/RouterPolicy.java
+- main/java/com/example/lms/service/rag/ModelBasedQueryComplexityClassifier.java
+
+기준 해시 표:
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| main/java/com/example/lms/service/routing/RouterPolicy.java | c4e5311fbbb8 | - | 수정 허용 |
+| main/java/com/example/lms/service/rag/ModelBasedQueryComplexityClassifier.java | d6532ca3ff0e | - | 수정 허용 |
+| src/test/java/com/example/lms/service/rag/P6SharedComplexityContractTest.java | 3b548ee45427 | - | 읽기 전용 |
+| scripts/probe_front_router_consistency.py | ffde433e486c | - | 읽기 전용 |
+
+# 7. Acceptance
+| 항목 | 통과 조건 | 결과 |
+|---|---|---|
+| WP0 | R-TOKEN-CAP-PROMO 및 R-GATE-DIVERGENCE 0건 | PASS (미실행 시 NOT_RUN) |
+| WP1 | R-MODEL-FILE-FLIP 0건 및 프로브 exit=0 | PASS (미실행 시 NOT_RUN) |
+| WP2 | P6SharedComplexityContractTest 및 test_probe PASS | PASS (미실행 시 NOT_RUN) |
+- 주의: 실제로 돌리지 않은 항목은 반드시 NOT_RUN으로 표기하며, NOT_RUN이 남아있으면 완료가 아님.
+
+# 8. 보고 형식
+외부 API: 실호출 0회, 비밀 열람 0건, 전체 테스트 0회, chat.js diff 0줄
+종료 상태: DONE_OFFLINE
+ledger: data/agent-handoff/devin/router-policy-repair-ledger.json
+
+[ANTI-STOP] 읽고 멈추지 마세요. 이 지시서의 모든 단계를 끝까지 수행하세요.

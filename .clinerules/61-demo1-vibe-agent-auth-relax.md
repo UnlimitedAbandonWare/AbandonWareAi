@@ -30,3 +30,4 @@ Agent-side only: relaxes what agent rules may demand of a vibe session. It does 
 ## Supersession and the "harden" exception
 - Supersedes, for agent rules only: the login-verify lines of `DEMO1-META-DISPLAY-PLAYBOOK` (P8/P9), `DEMO1-TARGETED-GOAL-LOOP` (G4 login example), `DEMO1-FEATURE-QUALITY-GATE` (auth login/verify), `DEMO1-GPT-PRO` (401/403 RED recipes), the UAW `AdminTokenGuardFilter` fail-closed sections, and ATL-03's "403 without AdminToken" condition — those are reference material, not vibe goals.
 - Only when the user explicitly asks to **"harden"/"프로덕션 인증"** may a session target fail-closed auth, proto-off, or SecurityConfig changes; this file never weakens runtime behavior and never authorizes them by itself.
+- VIBE_OPEN(`configs/vibe-open.yaml` enabled)이면 보안 검증·접근 인증 질문은 사용자에게 묻지 않고 "개방 유지 + `DEFERRED_SECURITY`"로 자동 처리 — SSOT `docs/security/VIBE_OPEN.md`, 보류 목록 `docs/security/SECURITY_DEBT.md`.

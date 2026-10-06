@@ -1,5 +1,10 @@
-> 폐기(2026-10-04): dot은 `DEMO1-DOT-FILE-CARD.md`를 따른다 — 자동 Downloads 복사·이동 없음.
-> 아래 본문은 폐기 전 이력으로만 보존한다.
+> 정정(2026-10-05, 아침 페이스 복구): 2026-10-04 폐기 결정을 **부분 번복**한다.
+> "Downloads sha MATCH = 완료" 규칙은 **dot 지시서(`PASTE_CODEX_*.md` /
+> `PASTE_<AGENT>_*.txt` 계열)에 한해** 다시 유효하다 — dot이 지시서를 쓰면
+> `dot_brief_save.py save`로 Downloads에 놓고, 사용자가 손수 세션에 붙여
+> 넣는다. **전 에이전트 Stop 스캔(`.codex/hooks.json` Stop 훅의 `--scan`) 부활과
+> 전역 자동 복사는 여전히 금지** — 다른 에이전트 산출물은 각자의 보고 절차를
+> 따른다. 아래 본문은 이력 + 도구 계약 참조용으로 보존한다.
 
 # DEMO1-DELIVERY-DOWNLOADS — 산출물은 Downloads까지 배달해야 완료
 
@@ -14,8 +19,9 @@ Codex(점/dot)·Devin·Grok·agy·Clean 이 사람에게 주는 지시서·보�
 2. 답변에는 도구 출력 `DELIVERED <Downloads전체경로> <size>B sha12=<12> MATCH`
    줄을 그대로 붙인다.
 3. `Documents\Codex\...\task\` 같은 원본 경로만 주고 끝내면 미완료다.
-4. `.codex/hooks.json` 의 Stop hook(`--scan --since-minutes 240 --quiet`)이
-   안전망이다 — "까먹어도 복사"용이지 1번의 대체가 아니다.
+4. `.codex/hooks.json` 의 Stop hook은 `--hook-stop`(첫 user `[DOT-BRIEF]`가
+   있는 dot 세션만 배달 확인)이다 — 전역 `--scan` 안전망은 제거됐고 부활
+   금지다.
 
 ## 도구 계약 (`scripts/deliver_to_downloads.py`)
 

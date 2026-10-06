@@ -3,6 +3,59 @@ const {createClient}=require('../../../main/resources/static/assets/display/disp
 const {mount}=require('../../../main/resources/static/assets/display/display-focus-controls.js');
 const flush=()=>new Promise(setImmediate);
 
+test('dedicated Gemini search is an explicit existing target option with a manual general-mode action',()=>{
+ const html=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../../main/resources/static/assets/display/index.html'),'utf8');
+ assert.match(html,/value="GEMINI_WEBSEARCH_ONLY"/);
+ assert.match(html,/id="nf-general-mode"/);
+});
+
+test('dedicated reload preserves disabled backups and manual mode change only saves the next-request policy',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',textContent:'',append(){},replaceChildren(){},removeAttribute(){}});return elements.get(id);};
+ let settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:false,presentation:{},
+  answerSelection:{mode:'FIXED',modelId:'llmrouter.gemini-pro',routing:{executionTarget:'GEMINI_WEBSEARCH_ONLY',fallbackAllowed:false,allowedFallbackIds:['llmrouter.backup']}}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}}};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  assert.equal(element('nf-answer-target').value,'GEMINI_WEBSEARCH_ONLY');assert.equal(element('nf-web-search').value,'false');
+  assert.equal(element('nf-answer-backup-1').value,'llmrouter.backup');assert.equal(element('nf-answer-backup-1').disabled,true);
+  const before=calls.length;element('nf-general-mode').onclick();assert.equal(calls.length,before);assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-backup-1').disabled,false);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  assert.equal(calls.at(-1).route,'settings');assert.equal(calls.at(-1).body.settingsVersion,1);
+  assert.equal(calls.at(-1).body.settings.answerSelection.modelId,'llmrouter.gemini-pro');assert.equal(calls.at(-1).body.settings.answerSelection.routing.executionTarget,'AUTO');
+  assert.deepEqual(calls.at(-1).body.settings.answerSelection.routing.allowedFallbackIds,['llmrouter.backup']);assert.equal(calls.at(-1).body.settings.webSearchEnabled,false);
+  assert.equal(calls.filter(c=>c.route==='input').length,0);
+ }finally{controls.dispose();}
+});
+
+test('strict mode shows effective fallback OFF, preserves raw preference and explicit ON leaves strict atomically',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',textContent:'',append(){},replaceChildren(){},removeAttribute(){}});return elements.get(id);};
+ let settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:true,presentation:{},
+  answerSelection:{mode:'FIXED',modelId:'llmrouter.gemini-pro',routing:{executionTarget:'GEMINI_WEBSEARCH_ONLY',fallbackAllowed:true,effectiveFallbackAllowed:false,allowedFallbackIds:['llmrouter.backup']}}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}}};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  assert.equal(element('nf-answer-fallback').checked,false);assert.equal(element('nf-answer-fallback').disabled,false);
+  assert.equal(element('nf-answer-backup-1').disabled,true);assert.match(element('nf-model-status').textContent,/OFF/);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  assert.equal(calls.at(-1).body.settings.answerSelection.routing.fallbackAllowed,true);
+  assert.equal(calls.at(-1).body.settings.answerSelection.routing.executionTarget,'GEMINI_WEBSEARCH_ONLY');
+  const before=calls.length;element('nf-answer-fallback').checked=true;element('nf-answer-fallback').onchange();
+  assert.equal(calls.length,before);assert.equal(element('nf-answer-target').value,'AUTO');
+  assert.equal(element('nf-answer-model').value,'llmrouter.gemini-pro');assert.equal(element('nf-web-search').value,'true');
+  assert.equal(element('nf-answer-backup-1').disabled,false);assert.match(element('nf-model-status').textContent,/전환 ON/);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  const saved=calls.at(-1).body.settings;
+  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'llmrouter.gemini-pro');
+  assert.equal(saved.answerSelection.routing.executionTarget,'AUTO');assert.equal(saved.answerSelection.routing.fallbackAllowed,true);
+  assert.deepEqual(saved.answerSelection.routing.allowedFallbackIds,['llmrouter.backup']);assert.equal(saved.webSearchEnabled,true);
+  assert.equal(calls.filter(c=>c.route==='input').length,0);
+ }finally{controls.dispose();}
+});
+
 test('lens font save sends its CAS version and rejects a late response from the previous scope',async()=>{
  const a='12345678-1234-4234-8234-123456789abc',b='12345678-1234-4234-8234-123456789abd';
  const timers=new Map();let n=0,completeFont,scope=a;
@@ -110,10 +163,11 @@ test('settings load from server, send CAS version, and never write localStorage'
   assert.equal(element('nova-open').disabled,false);
   assert.equal(element('nf-speed').value,80);assert.equal(element('nf-enabled').checked,false);
   assert.equal(element('nf-answer-length').value,480);
-  element('nf-answer-length').value='320';element('nf-quick').checked=true;
+  element('nf-answer-length').value='320';element('nf-quick').checked=true;element('nf-web-search').value='false';
   element('nf-speed').value='100';await element('nova-settings-form').onsubmit({preventDefault(){}});
   assert.equal(calls.at(-1).body.settingsVersion,7);assert.equal(calls.at(-1).body.settings.presentation.charIntervalMs,100);
   assert.equal(calls.at(-1).body.settings.answerLengthChars,320);assert.equal(calls.at(-1).body.settings.quickAnswerEnabled,true);
+  assert.equal(calls.at(-1).body.settings.webSearchEnabled,false);
   assert.equal(localWrites,0);controls.dispose();
 });
 test('late settings save cannot re-enable a previous producer after scope loss',async()=>{
@@ -225,4 +279,69 @@ test('unavailable settings stop automatic retries and retain an explicit reload 
  const controls=mount({host,document:{getElementById:element,removeEventListener(){},createElement:()=>({textContent:'',append(){}}),addEventListener(){}},client:{async focusRequest(){attempts++;throw Error('unavailable');}}});
  for(let i=0;i<12;i++){controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();}
  assert.equal(attempts,3);await element('nf-reload').onclick();assert.equal(attempts,4);controls.dispose();
+});
+
+test('main-model preset buttons exist next to the answer model settings',()=>{
+ const html=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../../main/resources/static/assets/display/index.html'),'utf8');
+ assert.match(html,/id="nf-preset-luna"/);assert.match(html,/id="nf-preset-gemini"/);assert.match(html,/id="nf-preset-auto"/);assert.match(html,/id="nf-preset-status"/);
+});
+test('Luna preset selects the economy API model and saves a FIXED API_ONLY selection',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
+ const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:true,presentation:{},
+  answerSelection:{mode:'AUTO',modelId:null,routing:{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]}}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.openai-economy',provider:'synthetic',selectable:true},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  element('nf-preset-luna').onclick();
+  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
+  assert.equal(element('nf-web-search').value,'false');assert.match(element('nf-preset-status').textContent,/루나/);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  const saved=calls.at(-1).body.settings;
+  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'llmrouter.openai-economy');
+  assert.equal(saved.answerSelection.routing.executionTarget,'API_ONLY');assert.equal(saved.webSearchEnabled,false);
+  assert.equal(calls.filter(c=>c.route==='input').length,0);
+ }finally{controls.dispose();}
+});
+test('Gemini preset selects the dedicated websearch route, prefers the pro route, and enables web search',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
+ const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:false,presentation:{},
+  answerSelection:{mode:'AUTO',modelId:null,routing:{executionTarget:'AUTO',fallbackAllowed:true,allowedFallbackIds:['llmrouter.backup']}}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.gemini-cue',provider:'synthetic',selectable:true},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  element('nf-preset-gemini').onclick();
+  assert.equal(element('nf-answer-target').value,'GEMINI_WEBSEARCH_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.gemini-pro');
+  assert.equal(element('nf-web-search').value,'true');assert.match(element('nf-preset-status').textContent,/제미나이/);
+  assert.equal(element('nf-answer-backup-1').disabled,true);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  const saved=calls.at(-1).body.settings;
+  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'llmrouter.gemini-pro');
+  assert.equal(saved.answerSelection.routing.executionTarget,'GEMINI_WEBSEARCH_ONLY');
+  assert.equal(saved.answerSelection.routing.fallbackAllowed,true);assert.deepEqual(saved.answerSelection.routing.allowedFallbackIds,['llmrouter.backup']);
+  assert.equal(saved.webSearchEnabled,true);
+ }finally{controls.dispose();}
+});
+test('auto preset restores server AUTO and presets still resolve without a catalog',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
+ const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:false,presentation:{},
+  answerSelection:{mode:'AUTO',modelId:null,routing:{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]}}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:()=>new Promise(()=>{})};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  element('nf-preset-luna').onclick();
+  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
+  element('nf-preset-auto').onclick();
+  assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-model').value,'');
+  assert.match(element('nf-preset-status').textContent,/자동/);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  const saved=calls.at(-1).body.settings;
+  assert.equal(saved.answerSelection.mode,'AUTO');assert.equal(saved.answerSelection.modelId,null);
+  assert.equal(saved.answerSelection.routing.executionTarget,'AUTO');assert.equal(saved.webSearchEnabled,false);
+ }finally{controls.dispose();}
 });

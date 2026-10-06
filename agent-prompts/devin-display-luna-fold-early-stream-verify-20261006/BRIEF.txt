@@ -1,0 +1,109 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니라 선언된 WP1-WP4 작업을 순서대로 완료한 뒤 보고서를 작성하는 Devin 실행 지시서다.
+[DEVIN 지시서] NovaFocus Fold 조기 문장 스트리밍 런타임 검증 및 모의 지연시간 벤치마크 — 2026-10-06 14:35 KST
+파일 ID: PASTE_DEVIN_display-luna-fold-early-stream-verify_20261006
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+금지: 제품 소스(main/java, main/resources) 직접 수정 0 · git push/pull/add -A/commit 0 · 비밀값 출력 0 · 유료 API 호출 0
+
+0. 한 줄 목표
+Codex가 구현 완료한 NovaFocus의 strict OAuth(gpt-5.6-luna) FACT 경로 "Fold 조기 문장 스트리밍 및 렌즈 빈 본문 유지" 패치에 대해 제품 소스 수정 없이 Display 프론트엔드 6종 JS 검증, 라이브 SSE 엔드포인트 스모크, 그리고 미실행(NOT_RUN) 상태인 모의 지연시간 벤치마크 스크립트를 작성·실행하여 런타임 완료 증거를 완결한다.
+
+## 1. 사실 (2026-10-06 14:35 KST)
+- 라이브 런타임: Java PID 53676 가동 중 (18180 포트 LISTEN, http://127.0.0.1:18180/chat 200 OK, `build/desktop-meta-display`).
+- Codex 작업 현황: Task `display-luna-latency-ae358856`에서 Java 10 + JS 1 + Test 7 합계 18개 파일(+550/-25줄) 구현 완료.
+  - `main/resources/static/assets/display/display-focus-flow.js` (sha12: AB00477E45CE)
+  - `src/test/js/display-focus-flow.test.cjs` (sha12: 71235F9C9833)
+  - `main/java/com/example/lms/assist/NovaFocusAnswerService.java` (sha12: 539F763C950E)
+  - `main/java/com/example/lms/assist/NovaFocusState.java` (sha12: D884153818A5)
+- 프론트엔드 검증 상태: `node --test src/test/js/display-focus-*.test.cjs` 6개 스위트 58/58 PASS (160ms 소요).
+- 백엔드 테스트 상태: focused 45/45 PASS, 213개 필터 중 211 PASS / 2 FAIL (2 FAIL은 API-only/local AUTO 오래된 baseline 충돌).
+- 남은 확인 한계: provider → Fold first-useful latency benchmark 및 실물 Fold6/렌즈/마이크 E2E는 `NOT_RUN` 상태.
+
+## 2. 공통 규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+## 기준 해시 표
+| 경로 | sha12 | git 상태 | 권한 |
+|---|---|---|---|
+| `main/resources/static/assets/display/display-focus-flow.js` | AB00477E45CE | - | 읽기 |
+| `src/test/js/display-focus-flow.test.cjs` | 71235F9C9833 | - | 읽기/검증 |
+| `src/test/js/display-focus-client.test.cjs` | 11343DA1894A | - | 읽기/검증 |
+| `src/test/js/display-focus-projection.test.cjs` | D42C43DF68AA | - | 읽기/검증 |
+| `src/test/js/display-focus-privacy.test.cjs` | CE7895316C40 | - | 읽기/검증 |
+| `src/test/js/display-focus-mount.test.cjs` | D8F0DD343EED | - | 읽기/검증 |
+| `src/test/js/display-focus-memory.test.cjs` | BC94924C7D9B | - | 읽기/검증 |
+| `main/java/com/example/lms/assist/NovaFocusAnswerService.java` | 539F763C950E | - | 읽기 |
+| `main/java/com/example/lms/assist/NovaFocusState.java` | D884153818A5 | - | 읽기 |
+| `scripts/benchmark_focus_fold_latency.py` | 신규 | - | 생성 |
+| `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json` | 신규 | - | 생성 |
+
+## 3. 항목 (WP1-WP4)
+
+### WP1 [Devin] Display 프론트엔드 조기 문장 렌더링 및 모의 JS 6종 독립 검증
+- 대상: `src/test/js/display-focus-*.test.cjs` (6개 파일)
+- 목적: Codex가 반영한 Fold 조기 스트리밍 누적 append 및 렌즈 빈 본문 유지 계약이 프론트엔드 모의 런타임에서 완벽하게 통과하는지 독립 실행 확인.
+- 검증 명령: `node --test src/test/js/display-focus-flow.test.cjs src/test/js/display-focus-client.test.cjs src/test/js/display-focus-projection.test.cjs src/test/js/display-focus-privacy.test.cjs src/test/js/display-focus-mount.test.cjs src/test/js/display-focus-memory.test.cjs ; "exit=$LASTEXITCODE"`
+- 완료 조건: 58개 테스트 전부 PASS, exit 0 확인.
+
+### WP2 [Devin] 라이브 서버 PID 53676 /chat 및 /api/chat/stream 직통 SSE 응답 계약 스모크
+- 대상: 라이브 HTTP 엔드포인트 `http://127.0.0.1:18180`
+- 목적: 가동 중인 런타임(PID 53676)의 엔드포인트 무결성 검증.
+  1) `http://127.0.0.1:18180/chat` GET 요청 시 HTTP 200 반환 확인.
+  2) `http://127.0.0.1:18180/api/chat/stream` 엔드포인트에 curl/python으로 기본 ping 또는 health 점검.
+  3) 관리자 엔드포인트(`/admin/pipeline-status`)가 PROTO_OPEN 규격에 따라 열려있는지 확인하고, 보안 강화를 시도하거나 질문하지 않고 DEFERRED_SECURITY로 기록.
+- 완료 조건: 엔드포인트 관측 결과 HTTP 상태 코드 영수증 확보.
+
+### WP3 [Devin] NOT_RUN 상태인 Focus Fold 조기 문장 모의 레이턴시 벤치마크 도구 작성 및 1차 측정
+- 대상: `scripts/benchmark_focus_fold_latency.py` (신규) 및 `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json`
+- 목적: 실물 기기 부재로 Codex 보고서에서 `NOT_RUN` 처리된 "provider → Fold first-useful latency benchmark"를 보완하기 위해, 모의 스트림 또는 로컬 SSE 수신 이벤트를 파싱하여 firstProviderDeltaMs, firstUsefulPublishedMs, terminalMs 사이의 구간별 지연시간을 계측하는 독립 스크립트 작성 및 실행.
+  1) 외부 유료 API 실호출 0: 로컬 loopback 또는 가상 SSE 시뮬레이션 모드 기본 지원.
+  2) 결과 지표: TTFT(첫 토큰 시간), First Useful Sentence(첫 유용 문장 시간), Final Completion(완료 시간), Sequence Dedupe 동작 확인.
+  3) 계측 결과를 `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json`에 저장.
+- RED: `python -B scripts/benchmark_focus_fold_latency.py --dry-run ; "exit=$LASTEXITCODE"` (스크립트 미존재 시 실패)
+- GREEN: `python -B scripts/benchmark_focus_fold_latency.py --dry-run ; "exit=$LASTEXITCODE"` (exit 0 및 json 산출)
+- 완료 조건: `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json` 생성 및 exit 0.
+
+### WP4 [Devin] 2개 baseline FAIL 및 PROTO_OPEN 관리자 엔드포인트 격리 상태 확인 보고
+- 대상: `docs/agents-rules/DEMO1-PROTOTYPE-AUTH-LIGHT.md`, Codex 보고서의 2개 실패 테스트
+- 목적:
+  1) Codex가 언급한 2개 baseline 실패(`fixedModeIgnoresFocusDefaultModel`, `autoRoutingFallsBackToLocalDefaultWhenFocusDefaultUnavailable`)가 이번 Fold 스트리밍과 무관한 구형 baseline 충돌임을 격리 확인 (단위 테스트 어서션을 임의로 약화하거나 소스를 고치지 말 것).
+  2) 관리자 URL(/admin/pipeline-status)의 PROTO_OPEN 동작이 시스템 기본 규격에 부합함을 확인하고 불필요한 인증 강화 질문을 차단.
+- 완료 조건: 검증 보고서에 baseline 격리 분석 1행 및 PROTO_OPEN 관측 상태 기록.
+
+## 4. HOLD (차단 조건)
+- 제품 소스(`main/java`, `main/resources`)를 수정하려는 변경 시도가 감지되면 즉시 HOLD.
+- git 커밋/푸시/브랜치 조작 명령이 필요해지면 즉시 HOLD.
+- 외부 유료 API 실호출이나 비용 발생 시도가 발생하면 즉시 HOLD.
+
+## 5. ASK_ONCE (기본값 포함)
+- U-1: 실물 기기(Fold6, 메타 렌즈) 연결 테스트가 불가능한 환경에서 모의 벤치마크(WP3) 결과로 종결할 것인가?
+  - 권장(AUTO): 모의 SSE 벤치마크 영수증을 채택하고 실물 기기 테스트는 NOT_RUN(기기 환경 미비)으로 명시하여 완료.
+
+## 6. 절대 금지
+- 제품 Java/JS 소스 직접 수정 금지 (Codex 소유권 보존).
+- git push, pull, add -A, commit -a, reset, clean, remote 추가 등 Git 조작 절대 금지.
+- .secrets, API Key 등 비밀값 노출/출력 절대 금지.
+- 외부 유료 API 라이브 호출 금지 (비용 0).
+- 전체 :test 스위트 실행 금지 (focused 테스트 및 node --test만 허용).
+- PROTO_OPEN 관리자 엔드포인트에 보안 인증 게이트를 임의로 추가하거나 사용자에게 질문하는 행위 금지 (VIBE_OPEN 준수).
+
+## 7. Acceptance (완료 기준)
+실행 못 한 항목은 NOT_RUN + 이유로 명시하며 PASS로 바꾸지 않는다.
+- [ ] A1. [WP1] `src/test/js/display-focus-*.test.cjs` 6개 파일 58/58 PASS 확인 (exit 0).
+- [ ] A2. [WP2] 라이브 서버 PID 53676 /chat 200 OK 및 /api/chat/stream 엔드포인트 관측 확인.
+- [ ] A3. [WP3] `scripts/benchmark_focus_fold_latency.py` 작성 및 모의 벤치마크 실행으로 `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json` 산출 완료.
+- [ ] A4. [WP4] baseline 2 FAIL 및 PROTO_OPEN 관리자 엔드포인트 격리 상태 보고 완료.
+- [ ] A5. 제품 소스 diff 0 라인 (수정 없음 보존).
+- [ ] A6. 비밀값 출력 0, 유료 API 실호출 0.
+
+## 8. 보고 형식
+외부 API: 실호출 0회 ($0)
+종료 상태: DONE_OFFLINE (또는 DONE_LIVE)
+제품 소스 diff: 0 라인 (불가침 유지)
+프론트엔드 JS 검증: [WP1] 58/58 PASS (exit 0)
+라이브 엔드포인트: [WP2] /chat 200 OK, PID 53676 관측
+모의 벤치마크: [WP3] `data/agent-handoff/devin/BENCHMARK_FOCUS_FOLD_LATENCY.json` 생성 완료
+기기 실측 상태: NOT_RUN (실물 Fold6/렌즈 환경 부재)
+
+[ANTI-STOP] 이 지시서는 읽고 끝내는 것이 아니라 위의 WP1-WP4 작업을 완결하고 산출물과 증거를 보고하는 실행 지시서다.

@@ -915,5 +915,25 @@ class ConversateApiCueServiceTest {
         verify(retrieval,times(1)).query(any());assertEquals(1,calls.size());
         assertEquals("web_already_attempted",result.stages().cue().get("unknownWeb"));
     }
+    @Test void lightGateRouteServesFixedSuggestionWhenHintQualityLadderFails(){
+        route("light",1,true);route("strong",3,false);
+        respond(k->k.equals("strong")?"{}":"{\"choice\":2}");
+        var result=service().answer("그러면 여러 조건을 고려해 어떻게 답하면 좋을까요?",List.of("앞선 조건","[assistant cue] 앞선 힌트"),List.of(),true);
+        assertEquals("API_SUPPORT_FALLBACK",result.reason());
+        assertEquals(ConversateCardPrompt.SUGGESTIONS.get(2),result.card().text());
+        assertEquals("api_support",result.stages().cue().get("decisionSource"));
+        assertEquals("model-light",result.stages().cue().get("selectedModel"));
+        assertNotNull(result.stages().cue().get("apiSupportAttempts"));
+        assertEquals(List.of("strong","light"),calls);
+        verifyNoInteractions(retrieval);
+    }
+    @Test void explicitLocalSupportOffKeepsTheGeneratorOnStandby(){
+        var svc=service();var support=mock(ConversateLocalCardGenerator.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc,"localSupport",support);
+        env.withProperty("conversate.cue.local-support-enabled","false");
+        var result=svc.answer("도움을 받을 수 있나요?",List.of(),List.of(),true);
+        assertEquals("API_UNAVAILABLE",result.reason());assertNull(result.card());
+        verifyNoInteractions(support);
+    }
 
 }

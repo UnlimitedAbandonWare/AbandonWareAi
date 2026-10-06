@@ -4,10 +4,24 @@ from codex_question_classifier import classify
 
 import io
 import json
+import tempfile
 from contextlib import redirect_stdout
+from pathlib import Path
 from codex_question_classifier import (
     classify_with_options, main, pick_option,
     session_checkpoint_advisory)
+
+
+def _disabled_vibe_cfg():
+    """enabled:false 임시 vibe-open.yaml — D37 비활성 비교용."""
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8")
+    tmp.write("enabled: false\n")
+    tmp.close()
+    return Path(tmp.name)
+
+
+_VIBE_MISSING = Path("nonexistent-vibe-open-config.yaml")
 
 
 class CodexQuestionClassifierTest(unittest.TestCase):
@@ -455,6 +469,76 @@ class CodexQuestionClassifierTest(unittest.TestCase):
             ["1) 경량 패스로 바로 구현", "2) 3축 심의 후 구현"])
         self.assertEqual("AUTO", result["verdict"])
         self.assertIsNotNone(result["picked_option"])
+
+    # --- add-only: D37 VIBE_OPEN 보안 검증 질문 자동 개방유지 (2026-10-06) ---
+    # configs/vibe-open.yaml enabled:true가 기본이라 아래는 실제 파일 기준.
+
+    _VIBE_Q1 = ("현재 PROTO_OPEN 상태에서 실제 로그인 보호 검증용 환경 URL이 "
+                "따로 존재하는지 정보가 필요하다. 인증 설정을 바꾸지 않는다.")
+
+    def test_vibe_q1_protected_env_url_is_auto_d37(self):
+        result = classify_with_options(
+            self._VIBE_Q1,
+            ["기존 보호형 검증 환경 URL 제공", "현재 개발 환경 유지"])
+        self.assertEqual("AUTO", result["verdict"])
+        self.assertEqual("D37", result["rule"])
+        self.assertEqual("현재 개발 환경 유지", result["picked_option"])
+        self.assertIn("VIBE_OPEN", result["log_line"])
+        self.assertIn("DEFERRED_SECURITY", result["default_answer"])
+
+    def test_vibe_q2_admin_login_proof_is_auto_d37(self):
+        self.assertVerdict(
+            "관리자 로그인 실제 성공을 증명해야 하나요?", "AUTO", "D37")
+
+    def test_vibe_q3_logout_reblock_is_auto_d37(self):
+        self.assertVerdict(
+            "로그아웃 후 다시 차단되는지 확인할까요?", "AUTO", "D37")
+
+    def test_vibe_q4_display_token_auth_is_auto_d37(self):
+        result = self.assertVerdict(
+            "Display에 토큰 인증을 붙일까요?", "AUTO", "D37")
+        self.assertIn("유지", result["default_answer"])
+
+    def test_vibe_q5_csrf_env_is_auto_d37(self):
+        self.assertVerdict(
+            "CSRF 검증 환경이 필요합니다", "AUTO", "D37")
+
+    def test_vibe_disabled_restores_ask_once(self):
+        off = _disabled_vibe_cfg()
+        try:
+            result = classify(self._VIBE_Q1, vibe_open_path=off)
+        finally:
+            off.unlink(missing_ok=True)
+        self.assertEqual("ASK_ONCE", result["verdict"])
+        self.assertEqual("ask-auth-policy", result["rule"])
+
+    def test_vibe_missing_config_is_identical(self):
+        enabled = classify(self._VIBE_Q1)
+        missing = classify(self._VIBE_Q1, vibe_open_path=_VIBE_MISSING)
+        self.assertEqual(enabled["verdict"], "AUTO")
+        self.assertEqual(missing["verdict"], "ASK_ONCE")
+        self.assertEqual(missing["rule"], "ask-auth-policy")
+
+    def test_vibe_secret_value_question_not_d37(self):
+        enabled = classify("API 키 값을 출력해도 될까요?")
+        off = _disabled_vibe_cfg()
+        try:
+            disabled = classify(
+                "API 키 값을 출력해도 될까요?", vibe_open_path=off)
+        finally:
+            off.unlink(missing_ok=True)
+        self.assertNotEqual("D37", enabled["rule"])
+        self.assertEqual(disabled["verdict"], enabled["verdict"])
+        self.assertEqual(disabled["rule"], enabled["rule"])
+
+    def test_vibe_delete_dataset_stays_ask_once(self):
+        self.assertVerdict("데이터셋을 삭제할까요?",
+                           "ASK_ONCE", "ask-delete-data")
+
+    def test_vibe_compound_delete_not_d37(self):
+        self.assertVerdict(
+            "로그아웃 차단 여부를 확인하고 데이터셋을 삭제할까요?",
+            "ASK_ONCE", "ask-delete-data")
 
 
 if __name__ == "__main__":

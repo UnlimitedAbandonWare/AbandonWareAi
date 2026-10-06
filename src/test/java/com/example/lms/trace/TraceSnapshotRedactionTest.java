@@ -29,6 +29,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TraceSnapshotRedactionTest {
 
+    @Test
+    void typedVerifierCauseSurvivesSnapshotEntryBudgetWithoutRawEvidence() {
+        TraceSnapshotStore store = enabledStore();
+        Map<String, Object> raw = new LinkedHashMap<>();
+        for (int i = 0; i < 130; i++) raw.put("synthetic.counter." + i, i);
+        raw.put("factVerifier.input.evidenceChars", 224);
+        raw.put("factVerifier.input.memoryChars", 54);
+        raw.put("factVerifier.meta.status", "CONSISTENT");
+        raw.put("factVerifier.classifier.status", "INSUFFICIENT");
+        raw.put("factVerifier.rawContext", "synthetic private evidence sentence");
+
+        String id = store.captureCustom("unit_test", "POST", "/api/chat", 200, null, raw, null);
+        assertNotNull(id);
+        Map<String, Object> captured = store.get(id).orElseThrow().trace();
+        assertEquals(224, captured.get("factVerifier.input.evidenceChars"));
+        assertEquals(54, captured.get("factVerifier.input.memoryChars"));
+        assertEquals("CONSISTENT", captured.get("factVerifier.meta.status"));
+        assertEquals("INSUFFICIENT", captured.get("factVerifier.classifier.status"));
+        assertFalse(captured.toString().contains("synthetic private evidence sentence"));
+    }
+
     @AfterEach
     void clearMdc() {
         TraceStore.clear();

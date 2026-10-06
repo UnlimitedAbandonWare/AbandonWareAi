@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "awx.behavior-ratchet.config.v1",
+  "doc": "docs/agents-rules/DEMO1-STAGED-METHOD.md",
+  "note": "STAGED_METHOD 6-gate default invariants (2026-10-05 directive). Add entries freely; removing/loosening a LOCKED entry needs a user-approved ADR + `behavior_ratchet.py --config <this> --lock configs/staged-method-ratchet.lock.json unlock`. Dedicated pack so it never entangles configs/behavior-ratchet.json.",
+  "entries": [
+    {"id": "staged-method.doc-present", "kind": "present", "contract": "INV-M1 (STAGED_METHOD 20261005)",
+     "file": "docs/agents-rules/DEMO1-STAGED-METHOD.md", "pattern": "STAGED_METHOD"},
+    {"id": "staged-method.skill-gates", "kind": "present", "contract": "INV-M2",
+     "file": ".agents/skills/demo1-staged-method/SKILL.md", "pattern": "G1|6게이트|staged-method"},
+    {"id": "staged-method.agents-pointer", "kind": "present", "contract": "INV-M3",
+     "file": "AGENTS.md", "pattern": "DEMO1-STAGED-METHOD"},
+    {"id": "staged-method.checker-present", "kind": "present", "contract": "INV-M4",
+     "file": "scripts/staged_method_check.py", "pattern": "STAGED_METHOD|staged_method"}
+  ]
+}

@@ -70,7 +70,7 @@ Sections: `0) EXTEND/SUPERSEDE` (relation to earlier packets, handoff folder) �
 - (R7b) Lease verbs: `__patch_drop__\source_edit_session.ps1 -Action` accepts only begin·end·status·verify·bind-scope·heartbeat·recover — no other verb exists. Overlap check `scripts/agent_scope_lease.py`, records `scripts/work_journal.py`.
 - (R20) The allowed-edit list is a budget: a small (≤3 files · ≤300 lines) reversible file needed by the cause chain may be AUTO-added when it is not forbidden and not under a foreign lease — journal `SCOPE_EXPAND: <file> <reason>`.
 - For Codex: never let the goal title be "목표 파일 읽기". Add `[ANTI-STOP] 읽기=intake, Done은 구현+검증 증거`. If the user wants full push-through, add an OVERRIDE table (what is released vs what stays OUT) and keep the hard stops.
-- For Devin skill lines: one deduplicated `@skill` line, only skills that exist under `.agents/skills`.
+- For Devin skill lines: default to the user's standard 18-token preset line (`@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md`).
 
 ## 5. Deliver
 1. Save the brief as UTF-8 to `%USERPROFILE%\Downloads\PASTE_<AGENT>_<topic>_<yyyymmdd>.txt` — that one file is the deliverable; no `agent-prompts/<agent>-<topic>-<yyyymmdd>/BRIEF.txt` copy (retired 2026-10-03, R6). Writing to the user's PC needs local-tool approval.

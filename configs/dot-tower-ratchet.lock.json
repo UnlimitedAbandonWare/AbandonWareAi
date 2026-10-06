@@ -319,6 +319,119 @@
         "docs/agents-rules/path-registry-codex-proposals.md"
       ],
       "lockedByTask": "devin-dot-control-tower-keep-cd80e87d"
+    },
+    "INV-D1": {
+      "lockedAtUtc": "2026-10-05T12:08:09+00:00",
+      "kind": "present",
+      "files": [
+        ".codex/hooks.json"
+      ]
+    },
+    "INV-D2": {
+      "lockedAtUtc": "2026-10-05T12:08:09+00:00",
+      "kind": "absent",
+      "files": [
+        ".codex/hooks.json"
+      ]
+    },
+    "INV-D3": {
+      "lockedAtUtc": "2026-10-05T12:08:09+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/deliver_to_downloads.py"
+      ]
+    },
+    "INV-D4": {
+      "lockedAtUtc": "2026-10-05T12:17:27+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-FILE-CARD.md"
+      ],
+      "lockedByTask": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    "INV-R1": {
+      "lockedAtUtc": "2026-10-05T12:17:27+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md"
+      ],
+      "lockedByTask": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    "INV-R2": {
+      "lockedAtUtc": "2026-10-05T12:17:27+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-orchestra-synergy/SKILL.md"
+      ],
+      "lockedByTask": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    "INV-R3": {
+      "lockedAtUtc": "2026-10-05T12:17:27+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-FILE-CARD.md"
+      ],
+      "lockedByTask": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    "INV-R4": {
+      "lockedAtUtc": "2026-10-05T12:17:27+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/dot_session_hygiene.py"
+      ],
+      "lockedByTask": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    "INV-S1": {
+      "lockedAtUtc": "2026-10-05T12:28:06+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md"
+      ],
+      "lockedByTask": "devin-one-brief-serial-lane-4c1d2be5"
+    },
+    "INV-S2": {
+      "lockedAtUtc": "2026-10-05T12:28:06+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-dot-control-tower/SKILL.md"
+      ],
+      "lockedByTask": "devin-one-brief-serial-lane-4c1d2be5"
+    },
+    "INV-S3": {
+      "lockedAtUtc": "2026-10-05T12:28:06+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/fixtures/orchestra/route-rules.json"
+      ],
+      "lockedByTask": "devin-one-brief-serial-lane-4c1d2be5"
+    },
+    "INV-P1": {
+      "lockedAtUtc": "2026-10-05T13:21:06+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md"
+      ]
+    },
+    "INV-P2": {
+      "lockedAtUtc": "2026-10-05T13:21:06+00:00",
+      "kind": "present",
+      "files": [
+        ".agents/skills/demo1-dot-control-tower/SKILL.md"
+      ]
+    },
+    "INV-P3": {
+      "lockedAtUtc": "2026-10-05T13:21:06+00:00",
+      "kind": "present",
+      "files": [
+        "scripts/fixtures/orchestra/route-rules.json"
+      ]
+    },
+    "INV-P4": {
+      "lockedAtUtc": "2026-10-05T13:21:06+00:00",
+      "kind": "present",
+      "files": [
+        "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md"
+      ]
     }
   },
   "history": [
@@ -332,6 +445,49 @@
         "INV-T5"
       ],
       "task": "devin-dot-control-tower-keep-cd80e87d"
+    },
+    {
+      "at": "2026-10-05T12:08:09+00:00",
+      "action": "lock",
+      "ids": [
+        "INV-D1",
+        "INV-D2",
+        "INV-D3"
+      ],
+      "task": null
+    },
+    {
+      "at": "2026-10-05T12:17:27+00:00",
+      "action": "lock",
+      "ids": [
+        "INV-D4",
+        "INV-R1",
+        "INV-R2",
+        "INV-R3",
+        "INV-R4"
+      ],
+      "task": "devin-dot-role-delivery-restore-c4e81a2b"
+    },
+    {
+      "at": "2026-10-05T12:28:06+00:00",
+      "action": "lock",
+      "ids": [
+        "INV-S1",
+        "INV-S2",
+        "INV-S3"
+      ],
+      "task": "devin-one-brief-serial-lane-4c1d2be5"
+    },
+    {
+      "at": "2026-10-05T13:21:06+00:00",
+      "action": "lock",
+      "ids": [
+        "INV-P1",
+        "INV-P2",
+        "INV-P3",
+        "INV-P4"
+      ],
+      "task": null
     }
   ]
 }

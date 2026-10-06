@@ -5,7 +5,7 @@ codex_question_classifier.py
 Codex가 사용자에게 묻기 직전의 "질문 문장"을 분류해 기본 판정을 JSON으로 출력.
 
   verdict : AUTO | ASK_ONCE | HOLD
-  rule    : D1..D34 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
+  rule    : D1..D37 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
   default_answer / log_line
 
 SSOT 표: .agents/skills/demo1-codex-auto-decide/SKILL.md
@@ -279,6 +279,86 @@ D36_SUBAGENT_SPAWN = (
     r"delegate.{0,16}(sub|worker|agent)"
 )
 
+# ---------------------------------------------------------------------------
+# D37 VIBE_OPEN (2026-10-06 사용자 결정): 바이브코딩 단계 — 보호형 검증 환경
+# URL·관리자 로그인/로그아웃 차단·CSRF·PROTO_OPEN 유지·Display/Fold6/interview/
+# debug studio 접근 인증·내부 도구 토큰 같은 "보안 검증·접근 인증" 질문은 묻지
+# 않고 AUTO로 처리한다. 자동 답은 "현재 개방 유지 + DEFERRED_SECURITY 기록"이며
+# 이 항목들은 PASS/FAIL 집계에 넣지 않는다.
+# 켜짐 조건: configs/vibe-open.yaml `enabled: true`. 파일이 없거나
+# enabled:false면 이 블록은 실행되지 않아 기존 출력과 바이트 단위로 같다.
+# 보안을 더 잠그는 방향(인증 추가·잠금·proto-open off)도 VIBE_OPEN 동안
+# "하지 않음 + SECURITY_DEBT 기록"으로 자동 처리한다.
+# ---------------------------------------------------------------------------
+_VIBE_OPEN_CONFIG = (
+    Path(__file__).resolve().parent.parent / "configs" / "vibe-open.yaml")
+
+# 이 ASK 범주만 있으면 VIBE_OPEN이 가로챈다 — 그 외 범주(삭제·원격·비용·
+# 배포·스키마·환경변수·flag·oauth)가 섞이면 기존 판정 경로를 그대로 탄다.
+_VIBE_AUTH_CATS = frozenset({"ask-auth-policy", "ask-admin-scope"})
+
+D37_VIBE_OPEN = (
+    r"proto.?open|"
+    r"보호형?.{0,20}(검증|테스트|환경|url)|보호된.{0,16}(url|환경|경로|페이지)|"
+    r"(검증|테스트).{0,8}환경.{0,8}(url|주소)|환경\s*url|"
+    r"관리자.{0,16}(로그인|로그아웃|차단|인증|잠금|접근)|"
+    r"admin.{0,24}(login|logout|block|lock|auth|gate|credential)|"
+    r"로그인.{0,24}(성공|증명|실패|차단|필요|검증|보호|인증|테스트)|"
+    r"로그아웃|logout|"
+    r"잘못된.{0,8}(계정|자격|비밀번호|credential)|"
+    r"invalid.{0,16}(account|credential|login)|"
+    r"csrf|세션.{0,8}(검증|만료|인증)|session.{0,16}(verif|valid|check)|"
+    r"fail.?close|잠금|lock\s*down|"
+    r"(display|fold6?|interview|debug|디스플레이|인터뷰|스튜디오).{0,24}"
+    r"(인증|auth|접근|토큰|token|잠금)|"
+    r"(인증|auth|토큰|token).{0,24}"
+    r"(display|fold6?|interview|debug|디스플레이|인터뷰|스튜디오)|"
+    r"내부.{0,8}(도구|tool|api).{0,16}(토큰|token|인증|auth)|"
+    r"(토큰|token|인증|auth).{0,16}내부.{0,8}(도구|tool)|"
+    r"보안.{0,8}(강화|올리|상향|설정|검증)|"
+    r"접근.{0,8}인증|"
+    r"인증.{0,8}(붙일|추가|넣을|설정|요구|필요|여부|강화|적용|확인)|"
+    r"인증.{0,4}요구|계정.{0,8}차단|차단.{0,8}(계정|확인)"
+)
+
+# 기존 통제를 더 여는(인증·잠금·차단·보호의 해제·제거·비활성·우회) 변경 요청은
+# "보안 검증" 질문이 아니라 실제 인증 범위 변경 — VIBE_OPEN 대상이 아니므로
+# 기존 판정(ask-admin-scope ASK_ONCE 등)을 유지한다. 잠그는 방향만 자동
+# "하지 않음 + DEBT"다; 여는 방향은 사용자 승인 항목으로 남는다.
+D37_WEAKEN_GUARD = (
+    r"(인증|잠금|차단|보호|가드|게이트|토큰).{0,8}(해제|제거|비활성|없앨|없애|끌|끄)|"
+    r"(해제|제거|비활성|우회).{0,8}(인증|잠금|차단|보호|관리자)|"
+    r"(disable|remove|bypass|turn\s*off|unlock).{0,20}(auth|lock|admin|guard|gate)|"
+    r"(auth|admin|lock|guard).{0,16}(disable|remove|bypass|turn\s*off|unlock)"
+)
+
+# 비밀값(API 키·토큰·비밀번호·쿠키·자격 증명)의 값 열람·출력·커밋·기재 질문은
+# VIBE_OPEN이 가로채지 않는다 — 질문 대상이 아니라 그냥 금지 항목이므로
+# 기존 판정(SELFASK 포함)을 유지한다.
+D37_SECRET_GUARD = (
+    r"비밀번호|패스워드|password|"
+    r"api\s*(key|키)|비밀\s*값|비밀값|시크릿|secret|"
+    r"쿠키\s*값|cookie\s*value|토큰\s*값|token\s*value|"
+    r"(키|토큰|token|비밀번호|자격\s*증명|credential).{0,12}"
+    r"(출력|보여|노출|커밋|기재|표시|값)"
+)
+
+VIBE_OPEN_ANSWER = (
+    "VIBE_OPEN — 현재 개방 상태 유지, 보안 검증은 DEFERRED_SECURITY로 "
+    "기록하고 계속 진행 (관측 HTTP status만 근거, PASS/FAIL 집계 제외; "
+    "docs/security/VIBE_OPEN.md)")
+
+
+def _vibe_open_enabled(cfg_path=None):
+    """configs/vibe-open.yaml `enabled: true`일 때만 True — 없음/false면 False."""
+    cfg = Path(cfg_path) if cfg_path else _VIBE_OPEN_CONFIG
+    try:
+        body = cfg.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(re.search(
+        r"(?im)^\s*enabled\s*:\s*(true|yes|on)\b", body))
+
 
 def _narrow_override(text, hit_rule):
     """ask_hit 1개일 때 좁은 예외 판정 -> (d_rule, answer) or None."""
@@ -484,7 +564,18 @@ PICK_HINTS = {
     "D21": ["메시지 없이", "이 채팅만"],
     "D22": ["1회", "합성"],
     "D23": ["승인", "수정", "허용"],
+    "D37": ["개방", "유지", "현재", "나중", "defer"],
 }
+
+# D37 VIBE_OPEN 카드: 개방 유지 쪽만 고른다 — 잠그는 옵션·보호 환경 URL·
+# 자격 증명을 요구하는 옵션은 자동 선택하지 않는다.
+OPT_VIBE_EXCLUDE = (
+    r"(url|주소).{0,8}(제공|입력|알려|필요)|"
+    r"자격\s*증명|credentials?|비밀번호|"
+    r"잠금|lock\s*down|fail.?close|"
+    r"인증\s*(추가|설정|붙이|적용|요구)|보호형?.{0,8}(전환|설정|적용)|"
+    r"proto.?open.{0,8}(끄|off|해제|비활성|false)"
+)
 
 
 def _opt_kind(text):
@@ -511,6 +602,9 @@ def pick_option(options, verdict="AUTO", rule=None):
             if hint in text and not k["irrev"]:
                 return text, "rule-hint:" + hint
     reversible = [(t, k) for t, k in info if not k["irrev"]]
+    if rule == "D37":
+        reversible = [(t, k) for t, k in reversible
+                      if not re.search(OPT_VIBE_EXCLUDE, t, re.IGNORECASE)]
     if not reversible:
         return None, "all-irreversible"
     safe = [(t, k) for t, k in reversible if k["safe"]]
@@ -543,10 +637,25 @@ def _hits(rules, text):
             if re.search(pat, text, re.IGNORECASE)]
 
 
-def classify(text):
+def classify(text, vibe_open_path=None):
     """질문 문장 -> 판정 dict(verdict, rule, default_answer, log_line)."""
     excerpt = re.sub(r"\s+", " ", (text or "").strip())[:80]
     ask_hits = _hits(ASK_ONCE_RULES, text)
+    # D37 VIBE_OPEN: ask-auth-policy·ask-admin-scope·NARROW_GUARD보다 먼저.
+    # 인증 계열 ASK 범주만 섞인 보안 검증 질문 + 비밀값 가드 통과 시에만 AUTO.
+    if _vibe_open_enabled(vibe_open_path) \
+            and re.search(D37_VIBE_OPEN, text, re.IGNORECASE) \
+            and not any(r not in _VIBE_AUTH_CATS for r, _ in ask_hits) \
+            and not re.search(D37_SECRET_GUARD, text, re.IGNORECASE) \
+            and not re.search(D37_WEAKEN_GUARD, text, re.IGNORECASE):
+        return {
+            "verdict": "AUTO",
+            "rule": "D37",
+            "default_answer": VIBE_OPEN_ANSWER,
+            "log_line": f"AUTO_DECISION: D37 | VIBE_OPEN | {excerpt} → "
+                        f"{VIBE_OPEN_ANSWER} | evidence: "
+                        f"codex_question_classifier",
+        }
     if len(ask_hits) >= 2:
         cats = ",".join(r for r, _ in ask_hits)
         return {
@@ -631,9 +740,9 @@ def classify(text):
     }
 
 
-def classify_with_options(text, options):
+def classify_with_options(text, options, vibe_open_path=None):
     """classify + 카드 옵션 자동 선택. picked_option/picked_reason 필드 추가."""
-    result = classify(text)
+    result = classify(text, vibe_open_path)
     picked, reason = pick_option(list(options), result["verdict"],
                                  result["rule"])
     result["picked_option"] = picked

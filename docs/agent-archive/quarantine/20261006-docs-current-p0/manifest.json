@@ -1,0 +1,57 @@
+{
+  "schema": "demo1.docs-quarantine.v1",
+  "createdAtUtc": "2026-10-06T00:00:16.209467+00:00",
+  "projectRoot": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "retention": "사용자 별도 영구삭제 요청 전까지 보존; 자동 만료/삭제 없음",
+  "scanScope": "루트 진입점 + docs/.agents/rules/agent-prompts/scripts 안전 텍스트; archive/recovery/runtime/secret 제외",
+  "scannedFiles": 2046,
+  "scanReadFailures": [],
+  "items": [
+    {
+      "originalPath": "docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md.bak-20261004-dotcard",
+      "archivePath": "docs/agent-archive/quarantine/20261006-docs-current-p0/files/docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md.bak-20261004-dotcard",
+      "sha256": "540b6510bea390ab8c8c8e66e165b8a124aa50953de029c89dba554be362846e",
+      "bytes": 1734,
+      "canonicalPath": "docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md",
+      "canonicalSha256": "f2e728b0ce9ed1bf90ff571570541bb5f8084a6422ec9448c87188b206c5c336",
+      "reason": "기존 명시 .bak 백업; 현행 동일 진입 문서가 유지되고 활성 문서/스크립트 exact 참조 0. 역사 bytes는 격리 보존.",
+      "priority": "P2",
+      "classification": "historical-backup",
+      "deletePermanent": false,
+      "incomingReferences": []
+    },
+    {
+      "originalPath": "docs/agents-rules/DEMO1-GROKBOT-ROLE.md.bak-20261004-dotcard",
+      "archivePath": "docs/agent-archive/quarantine/20261006-docs-current-p0/files/docs/agents-rules/DEMO1-GROKBOT-ROLE.md.bak-20261004-dotcard",
+      "sha256": "d7beeef4f44767f9858694f32895c3319e1a043c0457afd417e19785aa8a99e7",
+      "bytes": 934,
+      "canonicalPath": "docs/agents-rules/DEMO1-GROKBOT-ROLE.md",
+      "canonicalSha256": "1266b447a0889ae418f24536bb0629c74b2b217a19db61297ce9dc7d780a6bc6",
+      "reason": "기존 명시 .bak 백업; 현행 동일 진입 문서가 유지되고 활성 문서/스크립트 exact 참조 0. 역사 bytes는 격리 보존.",
+      "priority": "P2",
+      "classification": "historical-backup",
+      "deletePermanent": false,
+      "incomingReferences": []
+    },
+    {
+      "originalPath": "docs/agents-rules/DEMO1-SESSION-HARMONY.md.bak-20261004-dotcard",
+      "archivePath": "docs/agent-archive/quarantine/20261006-docs-current-p0/files/docs/agents-rules/DEMO1-SESSION-HARMONY.md.bak-20261004-dotcard",
+      "sha256": "4cbda648afe34524d51345a790bb26f63696c9a656e105a2bd0c21ac0eaa3057",
+      "bytes": 6316,
+      "canonicalPath": "docs/agents-rules/DEMO1-SESSION-HARMONY.md",
+      "canonicalSha256": "4cbda648afe34524d51345a790bb26f63696c9a656e105a2bd0c21ac0eaa3057",
+      "reason": "기존 명시 .bak 백업; 현행 동일 진입 문서가 유지되고 활성 문서/스크립트 exact 참조 0. 역사 bytes는 격리 보존.",
+      "priority": "P2",
+      "classification": "historical-backup",
+      "deletePermanent": false,
+      "incomingReferences": []
+    }
+  ],
+  "restore": "Project Root에서 powershell -NoProfile -File docs/agent-archive/quarantine/20261006-docs-current-p0/restore.ps1 -WhatIf; 소유권 확인 뒤 같은 명령 -Apply. 원래 파일 존재/해시 drift면 HOLD.",
+  "historyOriginalSha256": {
+    "docs/SOFT_EVIDENCE_MODE.md": "d0716a417943c1a18e6c0ee32349c9ebd0e516d598fae369fe57fb0755ac0612",
+    "docs/OPERATIONAL_DEFAULTS.md": "5564cec560a846f8417379e7809e065a9ae7725f0e2ab7cabaf22a4f947b6336",
+    "docs/multi-agent-coordination-analysis-20260919.md": "e70cc39f27d7214af1ee46c7d64df798ec153121c1fe7dd78de202e224926cbb",
+    "docs/cleanup-audit-old-artifacts-20260919.md": "6d161d85978750a58fda9c99c1743f1b1e54e40ed2002e7f93f731ba5377c989"
+  }
+}

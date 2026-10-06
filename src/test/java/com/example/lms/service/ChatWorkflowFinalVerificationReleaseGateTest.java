@@ -60,6 +60,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.nullable;
@@ -72,6 +73,161 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ChatWorkflowFinalVerificationReleaseGateTest {
+
+    @ParameterizedTest
+    @ValueSource(strings = {"concept", "force-light", "force-deep", "evidence-only", "attachment",
+            "current", "medical", "medication", "scope-no-search", "evidence-needed", "constitutional"})
+    void explicitGeneralConceptWithoutExternalSearchPreservesDraftAndSkipsUnrelatedEvidence(String variant) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 5);
+        for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
+            ReflectionTestUtils.setField(fixture.workflow(), field, 5);
+        var plate = mock(com.example.lms.artplate.ArtPlateSpec.class);
+        when(plate.webTopK()).thenReturn(5);
+        when(plate.vecTopK()).thenReturn(5);
+        when(plate.webBudgetMs()).thenReturn(2_000);
+        var plateGate = mock(com.example.lms.artplate.NineArtPlateGate.class);
+        when(plateGate.decide(any())).thenReturn(plate);
+        ReflectionTestUtils.setField(fixture.workflow(), "nineArtPlateGate", plateGate);
+        ReflectionTestUtils.setField(fixture.workflow(), "rescueCount", new java.util.concurrent.atomic.AtomicLong());
+        ReflectionTestUtils.setField(fixture.workflow(), "env", new MockEnvironment());
+        ReflectionTestUtils.setField(fixture.workflow(), "evidenceAwareGuard", new EvidenceAwareGuard());
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService",
+                mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class));
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        var rag = mock(com.example.lms.service.rag.LangChainRAGService.class);
+        var retriever = mock(dev.langchain4j.rag.content.retriever.ContentRetriever.class);
+        when(rag.asContentRetriever(nullable(String.class))).thenReturn(retriever);
+        var unrelated = java.util.stream.IntStream.range(0, 5)
+                .mapToObj(index -> dev.langchain4j.rag.content.Content.from(
+                        dev.langchain4j.data.segment.TextSegment.from(
+                                "unrelated election votes and candidates " + index,
+                                dev.langchain4j.data.document.Metadata.from("url", "https://example.test/votes/" + index))))
+                .toList();
+        when(retriever.retrieve(any())).thenReturn(unrelated);
+        var hybrid = mock(com.example.lms.service.rag.HybridRetriever.class);
+        when(hybrid.retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap())).thenReturn(unrelated);
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridRetriever", hybrid);
+        ReflectionTestUtils.setField(fixture.workflow(), "ragSvc", rag);
+        String answer = "키워드 검색은 표현의 일치를 찾습니다. 벡터 검색은 의미의 유사성을 찾습니다. RAG에서는 둘을 함께 사용할 수 있습니다.";
+        when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from(answer)).build());
+        when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        clearWorkflowState();
+        try {
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("RAG에서 키워드 검색과 벡터 검색의 차이를 일반적인 개념으로 3문장만 설명해줘. 외부 검색이 필요한 주제는 아니야.")
+                    .model("release-gate-recording-fake").maxTokens(256)
+                    .mode("FACT").memoryMode("FULL").searchMode(SearchMode.AUTO)
+                    .useWebSearch(true).useRag(true).useVerification(true).build();
+            switch (variant) {
+                case "force-light" -> request.setSearchMode(SearchMode.FORCE_LIGHT);
+                case "force-deep" -> request.setSearchMode(SearchMode.FORCE_DEEP);
+                case "evidence-only" -> request.setRagAnswerPolicy("evidence_only");
+                case "attachment" -> {
+                    request.setAttachmentIds(List.of("release-gate-local"));
+                    request.bindAttachmentOwnerIdentity(AttachmentOwnerIdentity.forAnonymous("release-gate-owner"));
+                }
+                case "scope-no-search" -> request.setMessage("추가 검색 없이 앞에서 확인된 원신 출처만으로 그 대상의 오늘 상태까지 확정할 수 있을까? 기존 근거가 보장하는 범위와 새 확인이 필요한 부분을 구분해줘.");
+                case "current" -> request.setMessage("현재 공식 출처를 확인해줘. " + request.getMessage());
+                case "medical" -> request.setMessage("의료 진단의 차이를 " + request.getMessage());
+                case "evidence-needed" -> request.setMessage("evidence_needed: " + request.getMessage());
+                case "medication" -> request.setMessage("아스피린과 와파린을 함께 복용해도 되는지를 일반적인 개념으로 3문장만 설명해줘. 외부 검색이 필요한 주제는 아니야.");
+                case "constitutional" -> {
+                    var domainClassifier = mock(QueryDomainClassifier.class);
+                    when(domainClassifier.classify(anyString())).thenAnswer(invocation -> {
+                        TraceStore.put("blackbox.risk.routingDecision", "BLOCK");
+                        return com.example.lms.rag.model.QueryDomain.GENERAL;
+                    });
+                    ReflectionTestUtils.setField(fixture.workflow(), "queryDomainClassifier", domainClassifier);
+                }
+                default -> { }
+            }
+            ChatResult result = fixture.workflow().continueChat(request, ignored -> List.of());
+            if ("scope-no-search".equals(variant)) {
+                verify(hybrid, never()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
+                verify(retriever, never()).retrieve(any());
+            }
+            if (!"concept".equals(variant)) {
+                assertFalse("retrieval_off_direct".equals(TraceStore.get("chat.disambiguation.skipReason")),
+                        "a protected request must not enter the general-concept direct route: " + variant);
+                return;
+            }
+            assertEquals(answer, result.content());
+            verify(hybrid, never()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
+            verify(retriever, never()).retrieve(any());
+            verifyNoInteractions(fixture.verifier(), fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+        } finally {
+            clearWorkflowState();
+        }
+    }
+
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void unresolvedPriorComparisonAsksBeforeFreshRetrieval(boolean resolved) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 5);
+        for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
+            ReflectionTestUtils.setField(fixture.workflow(), field, 5);
+        var plate = mock(com.example.lms.artplate.ArtPlateSpec.class);
+        when(plate.webTopK()).thenReturn(5);
+        when(plate.vecTopK()).thenReturn(5);
+        when(plate.webBudgetMs()).thenReturn(2_000);
+        var plateGate = mock(com.example.lms.artplate.NineArtPlateGate.class);
+        when(plateGate.decide(any())).thenReturn(plate);
+        ReflectionTestUtils.setField(fixture.workflow(), "nineArtPlateGate", plateGate);
+        ReflectionTestUtils.setField(fixture.workflow(), "rescueCount", new java.util.concurrent.atomic.AtomicLong());
+        ReflectionTestUtils.setField(fixture.workflow(), "env", new MockEnvironment());
+        var clarification = new com.example.lms.service.disambiguation.DisambiguationResult();
+        clarification.setScore(resolved ? 0.9 : 0.0);
+        clarification.setRewrittenQuery(resolved ? "원신 자료 A와 자료 B의 확인 가능한 갱신일 비교" : null);
+        var disambiguation = mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class);
+        when(disambiguation.clarify(anyString(), anyList())).thenReturn(clarification);
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService", disambiguation);
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        var unrelated = List.of(dev.langchain4j.rag.content.Content.from(
+                dev.langchain4j.data.segment.TextSegment.from("unrelated election candidates",
+                        dev.langchain4j.data.document.Metadata.from("url", "https://example.test/votes"))));
+        var hybrid = mock(com.example.lms.service.rag.HybridRetriever.class);
+        when(hybrid.retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap())).thenReturn(unrelated);
+        var rag = mock(com.example.lms.service.rag.LangChainRAGService.class);
+        var retriever = mock(dev.langchain4j.rag.content.retriever.ContentRetriever.class);
+        when(rag.asContentRetriever(nullable(String.class))).thenReturn(retriever);
+        when(retriever.retrieve(any())).thenReturn(unrelated);
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridRetriever", hybrid);
+        ReflectionTestUtils.setField(fixture.workflow(), "ragSvc", rag);
+        clearWorkflowState();
+        try {
+            ChatRequestDto request = ChatRequestDto.builder()
+                    .message("앞에서 확인한 원신 자료 두 개를 비교해줘. 어느 두 자료인지 또는 비교 기준이 불명확하면 먼저 확인 질문을 해줘.")
+                    .model("release-gate-recording-fake").maxTokens(256)
+                    .mode("FACT").memoryMode("FULL").searchMode(SearchMode.AUTO)
+                    .useWebSearch(true).useRag(true).useVerification(true).build();
+            List<String> history = resolved
+                    ? List.of("USER: 비교 기준은 확인 가능한 갱신일", "ASSISTANT: 자료 A https://example.org/a 자료 B https://example.org/b")
+                    : List.of("USER: 비교 기준은 확인 가능한 갱신일", "ASSISTANT: 자료 A https://example.org/a");
+            ChatResult result = fixture.workflow().continueChat(request, ignored -> history);
+            if (resolved) {
+                verify(hybrid, atLeastOnce()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
+                assertFalse("clarification:prior-comparison".equals(result.modelUsed()));
+                return;
+            }
+            verify(hybrid, never()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
+            verify(retriever, never()).retrieve(any());
+            verifyNoInteractions(fixture.model(), fixture.verifier(), fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+            assertTrue(result.content().contains("두 자료") && result.content().contains("?") && result.content().contains("비교 기준"));
+            assertEquals("clarification:prior-comparison", result.modelUsed());
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+            assertEquals("prior_comparison_unresolved", TraceStore.get("chat.disambiguation.reasonCode"));
+        } finally {
+            clearWorkflowState();
+        }
+    }
 
     @Test
     void verificationNotRequiredPreservesDirectResponse() {
@@ -98,19 +254,57 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         }
     }
 
-    @Test
-    void unknownOutcomeCannotReleaseOriginalDraft() {
-        ChatWorkflow.FinalVerificationReleaseDecision decision = decide(
-                "unsupported draft", true, "unknown", false, false);
+    @ParameterizedTest
+    @ValueSource(strings = {"unknown", "fail_soft"})
+    void unavailableVerdictPreservesOrdinaryDraftAndDeniesMemory(String status) {
+        ChatWorkflow.FinalVerificationReleaseDecision decision = ChatWorkflow.applyFinalVerificationReleaseGate(
+                "ordinary draft", true, status, false, false, true);
 
-        assertEquals(
-                "evidence_needed: final verification outcome unknown / retry with verifiable evidence",
-                decision.content());
-        assertFalse(decision.content().contains("unsupported draft"));
+        assertEquals("ordinary draft", decision.content());
+        assertEquals("UNVERIFIED", decision.releaseStatus());
+        assertEquals("verification_unknown_release", decision.reasonCode());
+        assertTrue(decision.releaseAllowed());
+        assertFalse(decision.knowledgeWriteAllowed());
+    }
+
+    @Test
+    void failSoftTelemetryCannotBecomeInconsistentPositiveVerdict() {
+        ChatWorkflow.FinalVerificationReleaseDecision decision = ChatWorkflow.applyFinalVerificationReleaseGate(
+                "ordinary draft", true, "fail_soft", true, false, true);
+        assertEquals("ordinary draft", decision.content());
+        assertEquals("verification_unknown_release", decision.reasonCode());
+        assertTrue(decision.releaseAllowed());
+        assertFalse(decision.knowledgeWriteAllowed());
+    }
+
+    @Test
+    void emptyEvidencePreservesUnknownVerdictReleaseReasonAndMemoryDenial() {
+        for (var state : new ChatWorkflow.EvidenceReleaseState[]{
+                ChatWorkflow.EvidenceReleaseState.METADATA_INCOMPLETE,
+                ChatWorkflow.EvidenceReleaseState.CONFIRMED_EMPTY}) {
+            var base = new ChatWorkflow.FinalVerificationReleaseDecision(
+                    "ordinary draft", "UNVERIFIED", "verification_unknown_release", true, false, false);
+            var decision = ChatWorkflow.applyEvidenceReleasePolicy(base, state, false, false);
+            assertEquals("ordinary draft", decision.content());
+            assertEquals("verification_unknown_release", decision.reasonCode());
+            assertTrue(decision.releaseAllowed());
+            assertFalse(decision.knowledgeWriteAllowed());
+        }
+    }
+
+    @Test
+    void explicitEvidenceAndScopedUnknownVerdictsKeepTheirHold() {
+        var decision = ChatWorkflow.applyFinalVerificationReleaseGate(
+                "scoped draft", true, "unknown", false, false, false);
         assertEquals("HOLD", decision.releaseStatus());
-        assertEquals("verification_outcome_unknown", decision.reasonCode());
         assertFalse(decision.releaseAllowed());
         assertFalse(decision.knowledgeWriteAllowed());
+        var ordinary = ChatWorkflow.applyFinalVerificationReleaseGate(
+                "ordinary draft", true, "unknown", false, false, true);
+        var explicit = ChatWorkflow.applyEvidenceReleasePolicy(ordinary,
+                ChatWorkflow.EvidenceReleaseState.METADATA_INCOMPLETE, true, false);
+        assertFalse(explicit.releaseAllowed());
+        assertEquals("evidence_release_metadata_incomplete", explicit.reasonCode());
     }
 
     @Test
@@ -1267,13 +1461,13 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
 
     @ParameterizedTest
     @ValueSource(strings = {"unknown", "rejected"})
-    void finalVerificationDenialSurvivesPostprocessFailure(String status) {
+    void chosenReleaseSurvivesPostprocessFailureWithoutMemoryWrites(String status) {
         MemoryHoldFixture fixture = memoryHoldFixture();
         clearWorkflowState();
         try {
-            String draft = "Synthetic model draft that final verification must not release.";
+            String draft = "Synthetic ordinary model draft.";
             String expected = "unknown".equals(status)
-                    ? "evidence_needed: final verification outcome unknown / retry with verifiable evidence"
+                    ? draft
                     : "Information unavailable: final verification rejected the draft.";
             when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
                     .aiMessage(AiMessage.from(draft)).build());
@@ -1308,14 +1502,19 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
             ChatResult result = org.junit.jupiter.api.Assertions.assertDoesNotThrow(
                     () -> fixture.workflow().continueChat(request, ignored -> List.of()));
 
-            assertEquals(expected, result.content());
-            assertFalse(result.content().contains(draft));
+            if ("unknown".equals(status)) {
+                assertTrue(result.content().endsWith(expected));
+                assertTrue(result.content().contains("[품질 저하]"));
+            } else {
+                assertEquals(expected, result.content());
+            }
+            assertEquals("unknown".equals(status), result.content().contains(draft));
             assertFalse(result.content().contains("synthetic-private-postprocess-message"));
-            assertEquals("unknown".equals(status) ? "HOLD" : "REJECT",
+            assertEquals("unknown".equals(status) ? "UNVERIFIED" : "REJECT",
                     TraceStore.get("finalAnswer.releaseStatus"));
-            assertEquals("unknown".equals(status) ? "verification_outcome_unknown" : "verification_rejected",
+            assertEquals("unknown".equals(status) ? "verification_unknown_release" : "verification_rejected",
                     TraceStore.get("finalAnswer.releaseReason"));
-            assertEquals(false, TraceStore.get("finalAnswer.releaseAllowed"));
+            assertEquals("unknown".equals(status), TraceStore.get("finalAnswer.releaseAllowed"));
             assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
             assertEquals("postprocess_failed", TraceStore.get("finalAnswer.memoryDenyReason"));
             verify(fixture.verifier()).verifyDetailed(anyString(), nullable(String.class),
@@ -1422,6 +1621,123 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 attribution,
                 learningWriter,
                 memoryWriter);
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"pass,false,false", "corrected,false,false",
+            "insufficient,false,false", "rejected,false,false", "unknown,false,false",
+            "pass,true,false", "pass,false,true"})
+    void sourceSupportedComparisonMustReachSoleVerifierWithItsOwnVerdict(
+            String subsetStatus, boolean blankDraft, boolean middleBody) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 2);
+        for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
+            ReflectionTestUtils.setField(fixture.workflow(), field, 2);
+        var plate = mock(com.example.lms.artplate.ArtPlateSpec.class);
+        when(plate.webTopK()).thenReturn(2);
+        when(plate.webBudgetMs()).thenReturn(2_000);
+        var plateGate = mock(com.example.lms.artplate.NineArtPlateGate.class);
+        when(plateGate.decide(any())).thenReturn(plate);
+        ReflectionTestUtils.setField(fixture.workflow(), "nineArtPlateGate", plateGate);
+        ReflectionTestUtils.setField(fixture.workflow(), "rescueCount", new java.util.concurrent.atomic.AtomicLong());
+        var composer = mock(com.example.lms.service.rag.EvidenceAnswerComposer.class);
+        when(composer.compose(anyString(), anyList(), anyBoolean()))
+                .thenThrow(new IllegalStateException("synthetic composer unavailable"));
+        ReflectionTestUtils.setField(fixture.workflow(), "evidenceAnswerComposer", composer);
+        var guard = (EvidenceAwareGuard) ReflectionTestUtils.getField(fixture.workflow(), "evidenceAwareGuard");
+        when(guard.degradeToEvidenceList(anyList()))
+                .thenThrow(new IllegalStateException("synthetic degradation unavailable"));
+        String query = "원신에서 루미단이 쎄냐?하늘꽃이 쎄냐?";
+        String originalDraft = blankDraft ? " " : "정보 없음: 루미단이 항상 더 강하다는 주장을 확인할 수 없습니다.";
+        String left = "루미단은 원신 버전 9.9에서 기본 무기와 단독 파티 조건의 근접 공격을 사용한다.";
+        String right = "하늘꽃은 원신 버전 9.9에서 기본 무기와 단독 파티 조건의 원거리 공격을 사용한다.";
+        var rawWeb = List.of(
+                dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(
+                        middleBody ? "Left navigation. ".repeat(210) + "\n" + left + "\n" + "Left footer. ".repeat(260) : left,
+                        dev.langchain4j.data.document.Metadata.from(Map.of("url", "https://example.org/left", "kind", "WEB")))),
+                dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(
+                        middleBody ? "Right menu. ".repeat(260) + "\n" + right + "\n" + "Right footer. ".repeat(260) : right,
+                        dev.langchain4j.data.document.Metadata.from(Map.of("url", "https://example.org/right", "kind", "WEB")))));
+        var evidence = List.of(evidence("W1", "WEB", "https://example.org/left", null),
+                evidence("W2", "WEB", "https://example.org/right", null));
+        String supported = com.example.lms.service.rag.EvidenceAnswerComposer
+                .supportedDescriptionExcerpt(query, rawWeb, evidence).orElseThrow().content();
+        when(fixture.model().chat(anyList())).thenReturn(ChatResponse.builder()
+                .aiMessage(AiMessage.from(originalDraft)).build());
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService",
+                mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class));
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        when(fixture.attribution().promoteForPromptDetailed(anyString(), nullable(List.class),
+                nullable(List.class), anyList(), any(), anyBoolean()))
+                .thenReturn(promoted(evidence, 2, 2, 0, 0, 0, 0));
+        when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList()))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        when(fixture.verifier().verifyDetailed(anyString(), nullable(String.class), nullable(String.class),
+                anyString(), anyString(), anyBoolean())).thenAnswer(invocation -> {
+            String answer = invocation.getArgument(3);
+            if ("corrected".equals(subsetStatus)) answer = answer.replace(
+                    "> " + left + "\n\n[W1](https://example.org/left)\n", "");
+            return new FactVerifierService.DetailedVerificationResult(answer, subsetStatus,
+                    !"unknown".equals(subsetStatus), "pass".equals(subsetStatus) || "corrected".equals(subsetStatus), false);
+        });
+        clearWorkflowState();
+        try {
+            var request = ChatRequestDto.builder().message(query).model("release-gate-recording-fake")
+                    .maxTokens(256).mode("FACT").memoryMode("FULL").polish(false)
+                    .searchMode(SearchMode.AUTO).useWebSearch(true).useRag(false)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, false))
+                    .useVerification(true).build();
+            ChatResult result = fixture.workflow().continueChat(request,
+                    (ChatWorkflow.WebEvidenceSupplier) ignored -> rawWeb);
+            if (blankDraft) {
+                // Blank model output is rejected at the generation boundary before final verification.
+                verify(fixture.verifier(), never()).verifyDetailed(anyString(), nullable(String.class),
+                        nullable(String.class), anyString(), anyString(), anyBoolean());
+                assertFalse(result.content().isBlank());
+                assertFalse(result.content().contains("항상 더 강"));
+                verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+                assertEquals(com.example.lms.service.verification.FactVerificationStatus.INSUFFICIENT,
+                        new com.example.lms.service.verification.FactStatusClassifier(null)
+                                .classify(query, left + right, originalDraft, "synthetic"));
+                return;
+            }
+            ArgumentCaptor<String> candidate = ArgumentCaptor.forClass(String.class);
+            ArgumentCaptor<String> verifierContext = ArgumentCaptor.forClass(String.class);
+            verify(fixture.verifier(), times(1)).verifyDetailed(anyString(), verifierContext.capture(),
+                    nullable(String.class), candidate.capture(), anyString(), anyBoolean());
+            assertEquals(supported, candidate.getValue(), "supported features must be verified separately from the unsupported winner");
+            if (!blankDraft) assertFalse(candidate.getValue().contains(originalDraft));
+            assertTrue(verifierContext.getValue().contains(left));
+            assertTrue(verifierContext.getValue().contains(right));
+            assertTrue(verifierContext.getValue().contains("https://example.org/left"));
+            assertTrue(verifierContext.getValue().contains("https://example.org/right"));
+            assertTrue(verifierContext.getValue().length() <= 8_000);
+            assertFalse(verifierContext.getValue().contains("정보 없음"));
+            assertFalse(verifierContext.getValue().contains("우열은 확인되지"));
+            assertEquals("heuristic_insufficient", TraceStore.get("finalAnswer.originalDraftStatus"));
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+            if ("pass".equals(subsetStatus)) {
+                assertTrue(result.content().contains(left)); assertTrue(result.content().contains(right));
+                assertTrue(result.content().contains("[W1](https://example.org/left)"));
+                assertTrue(result.content().contains("[W2](https://example.org/right)"));
+                assertTrue(result.content().contains("9.9"));
+            } else if ("corrected".equals(subsetStatus)) {
+                assertFalse(result.content().contains(left), "final verifier correction must not be undone by prior-fallback restoration");
+                assertTrue(result.content().contains(right));
+                assertEquals(List.of("W2"), result.evidenceMetadata().stream().map(RagEvidenceMetadata::marker).toList());
+            } else if ("unknown".equals(subsetStatus)) {
+                assertEquals(true, TraceStore.get("finalAnswer.releaseAllowed"));
+                assertEquals("verification_unknown_release", TraceStore.get("finalAnswer.releaseReason"));
+                assertTrue(result.content().contains(left)); assertTrue(result.content().contains(right));
+                assertFalse(result.content().contains(originalDraft));
+            } else {
+                assertEquals(false, TraceStore.get("finalAnswer.releaseAllowed"));
+                assertFalse(result.content().contains(left)); assertFalse(result.content().contains(right));
+                assertFalse(String.valueOf(TraceStore.get("finalAnswer.releaseReason")).startsWith("verification_unavailable"));
+            }
+        } finally { clearWorkflowState(); }
     }
 
     private static void clearWorkflowState() {

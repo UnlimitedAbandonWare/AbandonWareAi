@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "awx.behavior-ratchet.config.v1",
+  "doc": "docs/agents-rules/DEMO1-AGY-SKILL-PACK.md",
+  "note": "agy Skill Pack invariants INV-K1~K4 (user directive PASTE_DEVIN_agy-skill-pack-author_20261005): thin SKILL.md-only M/L outputs must not silently come back. Same engine as configs/behavior-ratchet.json via --config/--lock.",
+  "entries": [
+    {"id": "INV-K1", "kind": "present", "contract": "PASTE_DEVIN_agy-skill-pack-author_20261005",
+     "file": "docs/agents-rules/DEMO1-AGY-SKILL-PACK.md",
+     "pattern": "Skill Pack|SKILL_PACK"},
+    {"id": "INV-K2", "kind": "present", "contract": "PASTE_DEVIN_agy-skill-pack-author_20261005",
+     "file": ".agents/skills/demo1-agy-skill-pack/SKILL.md",
+     "pattern": "demo1-agy-skill-pack"},
+    {"id": "INV-K3", "kind": "present", "contract": "PASTE_DEVIN_agy-skill-pack-author_20261005",
+     "file": "scripts/agy_skill_pack_check.py",
+     "pattern": "awx\\.agy-skill-pack-check\\.v1"},
+    {"id": "INV-K4", "kind": "present", "contract": "PASTE_DEVIN_agy-skill-pack-author_20261005",
+     "file": ".agents/skills/demo1-agy-directive-writer/references/directive-template.md",
+     "pattern": "SKILL_PACK"}
+  ]
+}

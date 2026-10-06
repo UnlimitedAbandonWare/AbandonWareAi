@@ -381,6 +381,13 @@ def synthesize(results: list[dict], fp: dict | None = None,
         "itemsTotal": len(results or []),
         "versionFlags": {str(i.get("url") or i.get("title")): i.get("versionFlags")
                          for i in scored if i.get("versionFlags")},
+        # 랭킹만 재사용하는 호출자(예: gemini_search_worker 카드 출처 정렬)용
+        # 구조화 필드 — markdown 외에 정렬된 title/url/flags를 그대로 제공.
+        "rankedItems": [{"title": str(i.get("title") or i.get("url") or "untitled")[:140],
+                         "url": str(i.get("url") or ""),
+                         "plate": str(i.get("plate") or "").upper(),
+                         "versionFlags": i.get("versionFlags") or []}
+                        for i in scored],
     }
 
 

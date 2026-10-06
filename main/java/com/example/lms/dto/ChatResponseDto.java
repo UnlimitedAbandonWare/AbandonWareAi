@@ -9,6 +9,14 @@ import java.util.List;
 @Getter
 public class ChatResponseDto {
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue;
+
+    public ChatResponseDto withGoogleSearchRescue(com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult result) {
+        this.googleSearchRescue = result;
+        return this;
+    }
+
     private final String content;
     private final Long sessionId;
     private final String modelUsed;

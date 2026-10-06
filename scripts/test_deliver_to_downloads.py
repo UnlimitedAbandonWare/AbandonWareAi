@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -20,11 +21,46 @@ TOOL = ROOT / "scripts" / "deliver_to_downloads.py"
 HOOKS = ROOT / ".codex" / "hooks.json"
 
 
-def run_tool(*args, cwd=None):
+def run_tool(*args, cwd=None, stdin_text=None):
     return subprocess.run(
         [sys.executable, "-B", str(TOOL), *args],
         capture_output=True, text=True, cwd=cwd or ROOT, timeout=30,
+        input=stdin_text,
     )
+
+
+def write_transcript(path, first_user_text, extra_user_texts=(),
+                     developer_texts=()):
+    """Synthetic codex rollout jsonl: session_meta + response_item records."""
+    now = datetime.now(timezone.utc).isoformat()
+    lines = [{"type": "session_meta", "timestamp": now,
+              "payload": {"id": "fixture-session-0001", "cwd": str(path.parent)}}]
+    for t in developer_texts:
+        lines.append({"type": "response_item", "timestamp": now,
+                      "payload": {"role": "developer", "type": "message",
+                                  "content": [{"type": "input_text", "text": t}]}})
+    lines.append({"type": "response_item", "timestamp": now,
+                  "payload": {"role": "user", "type": "message",
+                              "content": [{"type": "input_text",
+                                           "text": first_user_text}]}})
+    for t in extra_user_texts:
+        lines.append({"type": "response_item", "timestamp": now,
+                      "payload": {"role": "user", "type": "message",
+                                  "content": [{"type": "input_text", "text": t}]}})
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def hook_stop_event(transcript=None, session_id=None, stop_active=False,
+                    cwd=None):
+    ev = {"session_id": session_id or "fixture-session-0001",
+          "transcript_path": str(transcript) if transcript else None,
+          "cwd": cwd or str(ROOT),
+          "hook_event_name": "Stop", "stop_hook_active": stop_active,
+          "model": "fixture", "permission_mode": "default",
+          "last_assistant_message": None}
+    return json.dumps(ev)
 
 
 class Fixture(unittest.TestCase):
@@ -136,7 +172,7 @@ class TestDeliver(Fixture):
         self.assertEqual(r.returncode, 0)
         self.assertIn("WARN", r.stderr + r.stdout)
 
-    def test_t9_hooks_json_no_deliver_hook(self):
+    def test_t9_hooks_json_dot_scoped_deliver_hook(self):
         data = json.loads(HOOKS.read_text(encoding="utf-8"))
         hooks = data["hooks"]
         post = hooks.get("PostToolUse", [])
@@ -149,8 +185,19 @@ class TestDeliver(Fixture):
             (ev_name, e) for ev_name, entries in hooks.items() for e in entries
             if "deliver_to_downloads" in json.dumps(e, ensure_ascii=False)
         ]
-        self.assertEqual(len(deliver_entries), 0,
-                         "deliver_to_downloads hook must stay removed (DEMO1-DOT-FILE-CARD)")
+        self.assertEqual(len(deliver_entries), 1,
+                         "exactly one scoped deliver_to_downloads Stop hook")
+        ev_name, entry = deliver_entries[0]
+        self.assertEqual(ev_name, "Stop")
+        blob = json.dumps(entry, ensure_ascii=False)
+        self.assertIn("--hook-stop", blob,
+                      "Stop hook must be DOT-BRIEF-scoped, not a global --scan")
+        # a bare global --scan revival is forbidden (all-session pollution)
+        for e in deliver_entries:
+            cmd_blob = json.dumps(e[1], ensure_ascii=False)
+            self.assertNotRegex(
+                cmd_blob,
+                r"deliver_to_downloads\.py\"?\s+--scan\b")
         self.assertTrue(hooks.get("UserPromptSubmit"))
         self.assertTrue(hooks.get("PreToolUse"))
 
@@ -168,6 +215,124 @@ class TestDeliver(Fixture):
         self.assertEqual(r.returncode, 0)
         self.assertLess(elapsed, 3.0, f"scan took {elapsed:.2f}s")
         self.assertEqual(len(list(self.dl.iterdir())), 50)
+
+
+class TestHookStop(Fixture):
+    """D1-D8: --hook-stop delivers only for [DOT-BRIEF]-first-message sessions.
+
+    Contract PASTE_DEVIN_dot-only-downloads_20261004: the Stop hook never does
+    a global scan; it reads the hook event on stdin, opens the transcript, and
+    only when the FIRST user-role message carries the literal tag does it copy
+    matching deliverables. stdout is always a single `{}` JSON line.
+    """
+
+    def hook(self, event_obj, roots_dir=None):
+        """Run --hook-stop; event cwd is pointed at the temp fixture dir."""
+        cwd = str(roots_dir or self.src)
+        try:
+            ev = json.loads(event_obj)
+            ev["cwd"] = cwd
+            event_obj = json.dumps(ev)
+        except (ValueError, TypeError):
+            pass  # broken-stdin cases pass through unchanged
+        return run_tool("--hook-stop", "--quiet",
+                        "--downloads", str(self.dl), "--log", str(self.log),
+                        stdin_text=event_obj, cwd=cwd)
+
+    def read_log(self):
+        if not self.log.exists():
+            return None
+        return json.loads(self.log.read_text(encoding="utf-8").splitlines()[-1])
+
+    def test_d1_plain_session_no_tag_no_delivery(self):
+        tr = write_transcript(self.tmp / "rollout-plain.jsonl",
+                              "just fix the thing please")
+        self.write_src("PASTE_CODEX_PLAIN_20261005.md", b"brief body")
+        r = self.hook(hook_stop_event(transcript=tr))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "{}")
+        self.assertEqual(list(self.dl.iterdir()), [])
+        rec = self.read_log()
+        self.assertFalse(rec["dot"])
+        self.assertEqual(rec["reason"], "tag-absent")
+
+    def test_d2_tag_in_skill_context_not_user_message(self):
+        tr = write_transcript(
+            self.tmp / "rollout-skillctx.jsonl", "write the brief",
+            developer_texts=["skill body mentioning [DOT-BRIEF] contract"])
+        self.write_src("PASTE_CODEX_SKILLCTX_20261005.md", b"brief")
+        r = self.hook(hook_stop_event(transcript=tr))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "{}")
+        self.assertEqual(list(self.dl.iterdir()), [])
+
+    def test_d3_first_user_message_tag_delivers(self):
+        tr = write_transcript(self.tmp / "rollout-dot.jsonl",
+                              "[DOT-BRIEF] write the Codex directive")
+        self.write_src("PASTE_CODEX_SOME_BRIEF_20261005.md", b"dot brief body")
+        self.write_src("unrelated.bin", b"\x00\x01\x02")
+        r = self.hook(hook_stop_event(transcript=tr))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "{}")
+        names = [p.name for p in self.dl.iterdir()]
+        self.assertIn("PASTE_CODEX_SOME_BRIEF_20261005.md", names)
+        self.assertNotIn("unrelated.bin", names)
+        rec = self.read_log()
+        self.assertTrue(rec["dot"])
+        self.assertEqual(rec["delivered"], 1)
+        self.assertEqual(rec["session8"], "fixture-")
+
+    def test_d4_tag_in_later_user_message_only_no_delivery(self):
+        tr = write_transcript(
+            self.tmp / "rollout-late.jsonl", "plain first message",
+            extra_user_texts=["[DOT-BRIEF] now it shows up"])
+        self.write_src("PASTE_CODEX_LATE_20261005.md", b"late brief")
+        r = self.hook(hook_stop_event(transcript=tr))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(list(self.dl.iterdir()), [])
+        self.assertEqual(self.read_log()["reason"], "tag-absent")
+
+    def test_d5_broken_transcript_and_stdin_fail_closed(self):
+        broken = self.tmp / "rollout-broken.jsonl"
+        broken.write_bytes(b"\x89not-json{")
+        for ev in (hook_stop_event(transcript=broken),
+                   hook_stop_event(transcript=self.tmp / "missing.jsonl"),
+                   "{not-json",
+                   ""):
+            r = self.hook(ev)
+            self.assertEqual(r.returncode, 0)
+            self.assertEqual(r.stdout.strip(), "{}")
+            self.assertEqual(list(self.dl.iterdir()), [])
+
+    def test_d6_stop_hook_active_noop(self):
+        tr = write_transcript(self.tmp / "rollout-active.jsonl",
+                              "[DOT-BRIEF] first message")
+        self.write_src("PASTE_CODEX_ACTIVE_20261005.md", b"x")
+        r = self.hook(hook_stop_event(transcript=tr, stop_active=True))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(list(self.dl.iterdir()), [])
+        self.assertEqual(self.read_log()["reason"], "stop-hook-active")
+
+    def test_d7_dot_session_refused_files_stay_out(self):
+        tr = write_transcript(self.tmp / "rollout-dotrefuse.jsonl",
+                              "[DOT-BRIEF] go")
+        self.write_src("PASTE_CODEX_BIG_20261005.md", b"z" * (1024 * 1024 + 1))
+        self.write_src("PASTE_CODEX_token_20261005.md", b"named like a token")
+        r = self.hook(hook_stop_event(transcript=tr))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(list(self.dl.iterdir()), [])
+        rec = self.read_log()
+        self.assertTrue(rec["dot"])
+        self.assertEqual(rec["refused"], 2)
+
+    def test_d8_scan_still_ignores_stdin(self):
+        self.write_src("demo1_x_directive_20261005.md", b"scan me")
+        r = run_tool("--scan", "--since-minutes", "240",
+                     "--roots", str(self.src),
+                     "--downloads", str(self.dl), "--log", str(self.log),
+                     stdin_text="{not-json on stdin")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("DELIVERED", r.stdout)
 
 
 if __name__ == "__main__":

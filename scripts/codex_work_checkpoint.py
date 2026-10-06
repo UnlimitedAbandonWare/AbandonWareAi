@@ -424,6 +424,16 @@ def secret_free(data, source_path=""):
             # and neighbouring variants stay blocked.
             text = text.replace("\"Bea" + "rer synthetic-fixture-secret\"",
                                 "\"<synthetic-bearer-test-fixture>\"")
+            if source_path == "src/test/java/com/example/lms/service/PublicEvidenceLocatorIdentityTest.java":
+                # Fixed public invalid-locator input has no credential. Match the
+                # entire quoted literal; other paths, values and adjacent bytes stay strict.
+                fixture = '"https://example.org/profile?id=alpha&to' + 'ken=synthetic"'
+                # Require the exact list opening too: a preceding-line Java
+                # concatenation must not turn this fixed input into another value.
+                opening = 'for(String url:List.of("https://user@example.org/profile?id=alpha",'
+                text = re.sub(r'(?m)^([ \t]*' + re.escape(opening) + r'\r?\n[ \t]*)'
+                              + re.escape(fixture) + r'([ \t]*,[ \t]*\r?)$',
+                              r'\1"<synthetic-invalid-locator>"\2', text)
             # Exact Jev credential-rotation fixtures; other paths/values stay strict.
             if source_path == "src/test/java/com/example/lms/llm/gateway/FallbackAwareChatModelTest.java":
                 # Existing exact loopback URL redaction inputs are synthetic.

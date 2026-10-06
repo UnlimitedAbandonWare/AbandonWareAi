@@ -252,7 +252,7 @@ public class ConversateApiCueService {
             debug.put("hintAttempts",List.copyOf(hintDiagnostics));
             if(cost.oauthRequired)debug.put("billingSource",ChatGptOAuthRegistration.BILLING_SOURCE);
             debug.put("fallback",Boolean.TRUE.equals(debug.get("fallback"))||hint.attempts()>1||hint.value()==null);
-            if(hint.value()==null)return supportFallback(hint.failure(),question,selected,attempts,complex?1:0,searchAttempts,debug,began,true);
+            if(hint.value()==null)return supportFallback(hint.failure(),question,selected,attempts,complex?1:0,searchAttempts,debug,began,true,cost);
             if(cancelled())return outcome("CANCELLED",null,attempts,complex?1:0,searchAttempts,debug,began);
             var value=hint.value();debug.put("hintHash",org.apache.commons.codec.digest.DigestUtils.sha256Hex(value.text()));
             debug.put("evidenceInsufficient",value.insufficient());
@@ -415,7 +415,7 @@ public class ConversateApiCueService {
         double reserved=((Number)debug.getOrDefault("retrievalEstimatedCostUsd",0d)).doubleValue();
         long inputTokens=0,outputTokens=0,reasoningTokens=0;int observed=0,tracked=0,reasoningObserved=0;
         double usageEstimate=0;int costObserved=0;
-        for(String stage:List.of("gateAttempts","hintAttempts"))
+        for(String stage:List.of("gateAttempts","hintAttempts","apiSupportAttempts"))
             if(debug.get(stage) instanceof List<?> rows)for(Object row:rows)
                 if(row instanceof Map<?,?> values){
                     if("routeSelection".equals(values.get("rowKind")))continue;
@@ -620,20 +620,45 @@ public class ConversateApiCueService {
             }
         }return false;
     }
-    private ConversateAnswerPipeline.Outcome supportFallback(String reason,String question,List<String> context,int attempts,int complex,int search,Map<String,Object> debug,long began,boolean useful){
+    private ConversateAnswerPipeline.Outcome supportFallback(String reason,String question,List<String> context,int attempts,int complex,int search,Map<String,Object> debug,long began,boolean useful,RequestCost cost){
         debug.put("fallbackReason",reason);
         if(reason.startsWith("CHATGPT_OAUTH_"))return outcome(reason,null,attempts,complex,search,debug,began);
-        if(useful&&localSupport!=null&&!cancelled()&&env.getProperty("conversate.cue.local-support-enabled",Boolean.class,true)){
-            var bounded=boundedContext(context,8,4096);
-            var result=localSupport.suggestSupport(question,bounded,clock.millis());
-            debug.put("localSupportAttempts",result.attempts());debug.put("localSupportReason",result.reason());
-            if(result.attempts()>0)debug.put("localSupportCall",Map.of("selectedModel",safeLabel(env.getProperty("conversate.generation.model","local-support")),
-                    "estimatedCost",0,"actualTokens","not_observed","cacheHit","not_observed","fallbackReason",reason,
-                    "latencyMs",result.elapsedMs(),"escalationReason","LOCAL_SUPPORT_ONLY"));
-            if(result.card()!=null&&"SHOW".equals(result.card().decision())){
-                debug.put("fallback",true);debug.put("decisionSource","local_support");
-                debug.put("selectedProvider","local");debug.put("selectedModel",safeLabel(env.getProperty("conversate.generation.model","local-support")));
-                return outcome("LOCAL_SUPPORT_FALLBACK",result.card(),attempts,complex,search,debug,began);
+        // A light gate-tier route can still pick a fixed suggestion within the remaining
+        // budget when the hint-quality ladder made real attempts and failed; a request
+        // that could afford zero attempts stays silent. Local support stays explicit opt-in.
+        if(useful&&attempts>0&&!cancelled()){
+            ConversateCardPrompt.Request support=null;
+            try{support=ConversateCardPrompt.suggestion(question,boundedContext(context,4,2048));}catch(IllegalArgumentException ignored){}
+            if(support!=null){
+                var supportCost=new RequestCost(costLimitsEnforced()&&cost!=null?cost.remaining:requestCostLimit());
+                if(cost!=null){supportCost.oauthRequired=cost.oauthRequired;supportCost.oauthTerminal=cost.oauthTerminal;}
+                var fast=call(support,true,1,supportCost,node->ConversateCardVerifier.verifySuggestion(node==null?null:node.toString(),clock.millis()));
+                attempts+=fast.attempts();
+                if(!fast.diagnostics().isEmpty())debug.put("apiSupportAttempts",fast.diagnostics());
+                if(fast.value()!=null&&fast.value().card()!=null&&"SHOW".equals(fast.value().card().decision())){
+                    debug.put("fallback",true);debug.put("decisionSource","api_support");
+                    debug.put("selectedProvider",fast.provider());debug.put("selectedModel",fast.model());
+                    return outcome("API_SUPPORT_FALLBACK",fast.value().card(),attempts,complex,search,debug,began);
+                }
+                debug.put("apiSupportFailure",fast.failure());
+            }
+        }
+        if(useful&&localSupport!=null&&!cancelled()){
+            // Unset property keeps the legacy opt-in contract (offline/test standby);
+            // only an explicit value can pin local support on or off.
+            String localFlag=env.getProperty("conversate.cue.local-support-enabled");
+            if(localFlag==null||Boolean.parseBoolean(localFlag.strip())){
+                var bounded=boundedContext(context,8,4096);
+                var result=localSupport.suggestSupport(question,bounded,clock.millis());
+                debug.put("localSupportAttempts",result.attempts());debug.put("localSupportReason",result.reason());
+                if(result.attempts()>0)debug.put("localSupportCall",Map.of("selectedModel",safeLabel(env.getProperty("conversate.generation.model","local-support")),
+                        "estimatedCost",0,"actualTokens","not_observed","cacheHit","not_observed","fallbackReason",reason,
+                        "latencyMs",result.elapsedMs(),"escalationReason","LOCAL_SUPPORT_ONLY"));
+                if(result.card()!=null&&"SHOW".equals(result.card().decision())){
+                    debug.put("fallback",true);debug.put("decisionSource","local_support");
+                    debug.put("selectedProvider","local");debug.put("selectedModel",safeLabel(env.getProperty("conversate.generation.model","local-support")));
+                    return outcome("LOCAL_SUPPORT_FALLBACK",result.card(),attempts,complex,search,debug,began);
+                }
             }
         }
         return outcome(reason,null,attempts,complex,search,debug,began);
