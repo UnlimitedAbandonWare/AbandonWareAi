@@ -67,9 +67,16 @@ class RagEvidenceUrlLengthBoundaryTest {
     @Test
     void removedQueryDoesNotConsumeThePublicLocatorLengthBudget() {
         String publicUrl = ORIGIN + "a".repeat(1000 - ORIGIN.length());
-        List<RagEvidenceMetadata> evidence = promote(publicUrl + "?fixture=" + "x".repeat(2000));
+        List<RagEvidenceMetadata> evidence = promote(publicUrl + "?utm_source=" + "x".repeat(200));
         assertEquals(1, evidence.size());
         assertEquals(publicUrl, evidence.get(0).source());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"fixture", "utm_source"})
+    void oversizedQueryIsRejectedBeforePromotingAnyPublicLocator(String key) {
+        String input = ORIGIN + "document?" + key + "=" + "x".repeat(2000);
+        assertTrue(promote(input).isEmpty());
     }
 
     @Test

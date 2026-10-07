@@ -20,6 +20,46 @@ import static org.mockito.Mockito.when;
 class ChatApiControllerStateSecurityTest {
 
     @Test
+    void originalRequestReceiptCanRecoverOwnedCapabilityWithoutBroadStateTokenEcho() {
+        var history = mock(ChatHistoryService.class);
+        var owners = mock(ClientOwnerKeyResolver.class);
+        var registry = new ChatRunRegistry();
+        org.springframework.test.util.ReflectionTestUtils.setField(registry, "replayCapacity", 16);
+        var controller = controller(history, registry, owners);
+        var session = new ChatSession("synthetic", "owner-key", "ANON");
+        session.setId(9L);
+        when(owners.ownerKey()).thenReturn("owner-key");
+        when(history.getSessionWithMessages(9L)).thenReturn(session);
+        var run = registry.beginOrJoin(9L).context();
+        String requestKey = "synthetic-original-request";
+        assertTrue(java.util.Arrays.stream(ChatRunRegistry.class.getMethods())
+                .anyMatch(method -> method.getName().equals("bindRequestReceipt")), "exact receipt binding is required");
+        org.springframework.test.util.ReflectionTestUtils.invokeMethod(registry, "bindRequestReceipt", run,
+                com.example.lms.service.AttachmentOwnerIdentity.forAnonymous("owner-key").hash(),
+                org.apache.commons.codec.digest.DigestUtils.sha256Hex(requestKey));
+        var request = new org.springframework.mock.web.MockHttpServletRequest();
+        request.addHeader("Idempotency-Key", requestKey);
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+                new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try {
+            assertEquals(run.clientToken(), controller.state(9L, false, null, null).getBody().get("runToken"));
+            request.removeHeader("Idempotency-Key");
+            assertFalse(controller.state(9L, false, null, null).getBody().containsKey("runToken"));
+            request.addHeader("Idempotency-Key", "unknown-receipt");
+            var unknown = controller.state(9L, false, null, null).getBody();
+            assertFalse(unknown.containsKey("runToken"));
+            assertEquals(false, unknown.get("terminal"), "receipt miss cannot certify old-run termination");
+            request.removeHeader("Idempotency-Key");
+            request.addHeader("Idempotency-Key", requestKey);
+            when(owners.ownerKey()).thenReturn("foreign-key");
+            assertFalse(controller.state(9L, false, null, null).getBody().containsKey("runToken"));
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+            org.springframework.test.util.ReflectionTestUtils.invokeMethod(registry, "shutdown");
+        }
+    }
+
+    @Test
     void stateNeutralizesForeignGuestSessionEvenWhenCurrentRunExists() {
         ChatHistoryService historyService = mock(ChatHistoryService.class);
         ClientOwnerKeyResolver ownerKeyResolver = mock(ClientOwnerKeyResolver.class);

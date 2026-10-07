@@ -725,7 +725,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         int deltaRawChars = lines.stream().mapToInt(String::length).sum();
         int rawCharCount = Math.max(previous.rawCharCount(), 0) + deltaRawChars;
         String merged = mergeSummary(previous.summary(), lines, rollingSummaryMaxChars);
-        if (merged == null || merged.isBlank()) {
+        // An empty bounded summary invalidates superseded pins; keep its watermark.
+        if (merged == null) {
             return;
         }
         int turns = Math.max(0, previous.turns()) + lines.size();
@@ -741,7 +742,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             rawCharCount = Math.max(compressedCharCount, merged.length());
         }
         double compressionRatio = ratio(compressedCharCount, rawCharCount);
-        boolean promoted = shouldPromoteConversationMemory(turns, sentenceCount, tokenEstimate);
+        boolean promoted = !merged.isBlank() && shouldPromoteConversationMemory(turns, sentenceCount, tokenEstimate);
         String promotionHash = promoted
                 ? hash12(merged + "|" + String.join(",", anchors) + "|" + String.join("\n", importantSentences))
                 : "";
@@ -982,9 +983,14 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (pinned.isBlank()) {
             return tailClamp(combined, max);
         }
-        pinned = tailClamp(pinned, Math.max(1, max / 2));
+        // The latest correction may need more than half the existing cap. Never
+        // substitute an older assignment when that correction cannot fit.
+        int latestPinLength = pinned.length() - pinned.lastIndexOf('\n') - 1;
+        pinned = latestPinLength > max ? ""
+                : tailClamp(pinned, Math.max(Math.max(1, max / 2), latestPinLength));
         String recent = allLines.stream().filter(line -> !assignment.matcher(line).find())
                 .collect(Collectors.joining("\n"));
+        if (pinned.isBlank()) return tailClamp(recent, max);
         int recentBudget = max - pinned.length() - 1;
         return recentBudget <= 0 || recent.isBlank() ? pinned
                 : pinned + "\n" + tailClamp(recent, recentBudget);
@@ -1010,7 +1016,21 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (normalized.length() <= max) {
             return normalized;
         }
-        return normalized.substring(normalized.length() - max).strip();
+        // Cutting inside a message can remove its role, negation or uncertainty
+        // qualifier. Keep complete recent lines; an oversized latest line falls
+        // back to earlier complete lines without changing the stored transcript.
+        String[] lines = normalized.split("\\R");
+        StringBuilder retained = new StringBuilder();
+        for (int i = lines.length - 1; i >= 0; i--) {
+            int added = lines[i].length() + (retained.isEmpty() ? 0 : 1);
+            if (retained.length() + added > max) {
+                if (retained.isEmpty()) continue;
+                break;
+            }
+            if (!retained.isEmpty()) retained.insert(0, '\n');
+            retained.insert(0, lines[i]);
+        }
+        return retained.toString();
     }
 
     private static String clip(String value, int maxChars) {

@@ -27,6 +27,93 @@ class StandardPromptBuilderEvidenceMetadataTest {
     }
 
     @Test
+    void duplicateCurrentWebLocatorDoesNotConsumeSelectedBodyBudget() {
+        String relation = "Cobalt signature weapon is Azure Lantern";
+        String qualifier = "unofficial community estimate dated 2026-10-01";
+        String basis = "background ".repeat(25) + relation + "; " + qualifier + " ";
+        String selected = basis + "x".repeat(480 - basis.length());
+        for (String url : List.of("https://docs.example/x", longSourceUrl())) {
+            Content web = webWithTrailer(selected, url);
+            PromptContext ctx = PromptContext.builder().web(List.of(web))
+                    .evidence(List.of(webEvidence(url))).build();
+
+            String prompt = builder.build(ctx);
+            String snippet = webSnippet(prompt);
+
+            assertTrue(snippet.contains(relation), "selected relation lost for URL length " + url.length());
+            assertTrue(snippet.contains(qualifier), "selected qualifier lost for URL length " + url.length());
+            assertTrue(snippet.startsWith(selected));
+            assertTrue(snippet.length() <= 512);
+            assertTrue(prompt.contains("[W1] kind=WEB; title=Cobalt; source=" + url));
+        }
+    }
+
+    @Test
+    void unmatchedOrUnrenderedLocatorsKeepLegacySnippetAndSource() {
+        String url = longSourceUrl();
+        String text = "selected body\n\n[출처] " + url;
+        Content web = webWithTrailer("selected body", url);
+        for (PromptContext ctx : List.of(
+                PromptContext.builder().web(List.of(web)).build(),
+                PromptContext.builder().web(List.of(web)).evidence(List.of(webEvidence(url + "/other"))).build(),
+                PromptContext.builder().web(List.of(Content.from(TextSegment.from(text))))
+                        .evidence(List.of(webEvidence(url))).build(),
+                PromptContext.builder().web(List.of(Content.from(TextSegment.from(text,
+                        Metadata.from(Map.of("url", url + "/other", "source", url))))))
+                        .evidence(List.of(webEvidence(url))).build(),
+                PromptContext.builder().web(List.of(web)).evidence(List.of(new RagEvidenceMetadata(
+                        null, "WEB", "Cobalt", url, null, null, null, 1, null, null))).build(),
+                PromptContext.builder().web(List.of(web)).evidence(List.of(new RagEvidenceMetadata(
+                        "W2", "WEB", "Cobalt", url, null, null, null, 1, null, null))).build(),
+                PromptContext.builder().web(List.of(web)).evidence(List.of(new RagEvidenceMetadata(
+                        "W1", "RAG", "Cobalt", url, null, null, null, 1, null, null))).build())) {
+            assertEquals(text, webSnippet(builder.build(ctx)));
+        }
+        String crossContext = builder.build(List.of(PromptContext.builder().web(List.of(web)).build(),
+                PromptContext.builder().evidence(List.of(webEvidence(url))).build()), "Cobalt?");
+        assertEquals(text, webSnippet(crossContext));
+        String rag = builder.build(PromptContext.builder().rag(List.of(web))
+                .evidence(List.of(webEvidence(url))).build());
+        assertTrue(rag.contains("[V1] " + text));
+    }
+
+    @Test
+    void onlyExactTerminalTrailerIsRedundantAndTruncatedMetadataIsInsufficient() {
+        String url = longSourceUrl();
+        String body = "quoted [출처] " + url + " inside the selected body";
+        String prompt = builder.build(PromptContext.builder().web(List.of(webWithTrailer(body, url)))
+                .evidence(List.of(webEvidence(url))).build());
+        assertEquals(body, webSnippet(prompt));
+        String nonterminal = body + "\n\n[출처] " + url + "\nadditional qualifier";
+        prompt = builder.build(PromptContext.builder().web(List.of(Content.from(TextSegment.from(nonterminal,
+                Metadata.from(Map.of("url", url, "source", url))))))
+                .evidence(List.of(webEvidence(url))).build());
+        assertEquals(nonterminal, webSnippet(prompt));
+        String oversizedUrl = url + "x".repeat(200);
+        String oversizedText = "selected body\n\n[출처] " + oversizedUrl;
+        prompt = builder.build(PromptContext.builder().web(List.of(webWithTrailer("selected body", oversizedUrl)))
+                .evidence(List.of(webEvidence(oversizedUrl))).build());
+        assertEquals(oversizedText, webSnippet(prompt), "a truncated metadata locator cannot replace the trailer");
+    }
+
+    private static String longSourceUrl() {
+        return "https://docs.example.test/articles/" + "chapter-2026-".repeat(8) + "index.html";
+    }
+
+    private static Content webWithTrailer(String body, String url) {
+        return Content.from(TextSegment.from(body + "\n\n[출처] " + url,
+                Metadata.from(Map.of("url", url, "source", url))));
+    }
+
+    private static RagEvidenceMetadata webEvidence(String url) {
+        return new RagEvidenceMetadata("W1", "WEB", "Cobalt", url, null, null, null, 1, null, null);
+    }
+
+    private static String webSnippet(String prompt) {
+        return prompt.split("### SEARCH RESULTS\\n", 2)[1].split("\\n### USER QUESTION", 2)[0].substring(5).strip();
+    }
+
+    @Test
     void rendersCitableEvidenceMetadataBeforeSearchResults() {
         Content web = Content.from(TextSegment.from(
                 "alpha searchable body",

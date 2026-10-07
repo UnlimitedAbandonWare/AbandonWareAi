@@ -1,0 +1,6 @@
+interface:
+  display_name: "Demo1 Search Recovery"
+  short_description: "Request-bound search correction and cancel recovery"
+  default_prompt: "Use $demo1-search-recovery to investigate repeated search corrections and verify the earliest evidence break and recovery."
+policy:
+  allow_implicit_invocation: true

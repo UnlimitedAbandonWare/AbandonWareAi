@@ -172,14 +172,20 @@ public class ProviderRateLimitBackoffAspect {
                         && (st == BraveSearchResult.Status.HTTP_429 || st == BraveSearchResult.Status.COOLDOWN)) {
                     return out;
                 }
+                if (st == BraveSearchResult.Status.RATE_LIMIT_LOCAL) {
+                    // A caller's permit wait failed before outbound I/O. Keep the shared limiter,
+                    // but do not make another owner skip a healthy provider or open its breaker.
+                    TraceStore.put("web.brave.skipped", true);
+                    TraceStore.put("web.brave.skipped.reason", "rate_limit_local");
+                    TraceStore.put("web.brave.skipped.stage", "local_admission");
+                    return out;
+                }
                 if (st == BraveSearchResult.Status.HTTP_429
                         || st == BraveSearchResult.Status.HTTP_503
-                        || st == BraveSearchResult.Status.RATE_LIMIT_LOCAL
                         || st == BraveSearchResult.Status.COOLDOWN) {
                     Long cooldownMs = (r.cooldownMs() > 0L) ? r.cooldownMs() : null;
-                    if (st == BraveSearchResult.Status.RATE_LIMIT_LOCAL || st == BraveSearchResult.Status.COOLDOWN) {
-                        // RATE_LIMIT_LOCAL is a short client-side throttle. Use a shallow local cooldown
-                        // rather than inflating the global 429 exp-backoff streak.
+                    if (st == BraveSearchResult.Status.COOLDOWN) {
+                        // Preserve an already active provider cooldown without inflating its streak.
                         backoff.recordLocalRateLimit(RateLimitBackoffCoordinator.PROVIDER_BRAVE, cooldownMs,
                                 "brave_local_" + st);
                     } else {

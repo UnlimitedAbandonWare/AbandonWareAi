@@ -528,6 +528,55 @@ public class NaverSearchService implements WebSearchProvider {
     private static final int MAX_CONCURRENT_API = 10; // 2 -> 10, 병목 완화
     /** 네이버 API 429 방지를 위한 전역 세마포어 */
     private final Semaphore REQUEST_SEMAPHORE = new Semaphore(MAX_CONCURRENT_API, true);
+    // Local queue ceilings, independent of the provider's credential/RPS/quota entitlement.
+    @Value("${naver.search.admission.queue-capacity:10}")
+    private int admissionQueueCapacity = 10;
+    @Value("${naver.search.admission.queue-wait-ms:200}")
+    private long admissionQueueWaitMs = 200L;
+    private final java.util.concurrent.atomic.AtomicInteger admissionWaiters = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** Cancellation may abandon a consumer while its finite transport still owns this permit. */
+    private final class NaverWirePermit {
+        private final java.util.concurrent.atomic.AtomicInteger state = new java.util.concurrent.atomic.AtomicInteger();
+        boolean start() { return state.compareAndSet(0, 1); }
+        void closeUnlessRunning() { if (state.compareAndSet(0, 2)) REQUEST_SEMAPHORE.release(); }
+        void close() { if (state.getAndSet(2) != 2) REQUEST_SEMAPHORE.release(); }
+    }
+
+    private NaverWirePermit acquireNaverWirePermit(TimeBudget budget, String query, int fetch,
+            NightmareBreaker.CallPermit breakerPermit, Map<String, Object> context) throws InterruptedException {
+        int queued = admissionWaiters.incrementAndGet();
+        try {
+            if (queued > Math.max(1, admissionQueueCapacity)) {
+                throw naverLocalAdmissionFailure("queue_full", query, fetch, breakerPermit, context);
+            }
+            long waitMs = Math.max(0L, admissionQueueWaitMs);
+            if (budget != null) waitMs = budget.capWaitMillis(waitMs);
+            if (budget != null && budget.expired()) {
+                throw naverLocalAdmissionFailure("deadline_exhausted", query, fetch, breakerPermit, context);
+            }
+            // Timed tryAcquire respects the existing fair semaphore. Never run this on Netty.
+            if (!REQUEST_SEMAPHORE.tryAcquire(waitMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                throw naverLocalAdmissionFailure("queue_expired", query, fetch, breakerPermit, context);
+            }
+            return new NaverWirePermit();
+        } finally {
+            admissionWaiters.decrementAndGet();
+        }
+    }
+
+    private NaverClassifiedFailure naverLocalAdmissionFailure(String reason, String query, int fetch,
+            NightmareBreaker.CallPermit breakerPermit, Map<String, Object> context) {
+        if (breakerPermit != null) breakerPermit.completeAbandoned("local-admission", reason);
+        withTraceContext(context, () -> {
+            TraceStore.put("web.naver.admission.reason", reason);
+            TraceStore.put("web.naver.admission.stage", "local_admission");
+            traceNaverCounts(query, fetch, 0, 0, true, reason);
+            traceNaverClassifiedOutcome("LOCAL_ADMISSION", false, true);
+            return null;
+        });
+        return new NaverClassifiedFailure("LOCAL_ADMISSION");
+    }
     /*
      * ★ NEW: 한 검색당 최대 변형 쿼리 수
      * assistantAnswer 기반 딥-서치에서 QueryTransformer가 생성하는
@@ -2492,10 +2541,22 @@ public class NaverSearchService implements WebSearchProvider {
                 .header("User-Agent", randomAgent)
                 .retrieve()
                 .toEntity(String.class);
-        long subscriptionDelayMs = Math.max(0L, Math.min(200L, ratePolicy.currentDelayMs()));
-        if (requestBudget != null) subscriptionDelayMs = requestBudget.capWaitMillis(subscriptionDelayMs);
+        long subscriptionDelayMs = Math.max(0L, ratePolicy.currentDelayMs());
+        // A provider-directed wait is a minimum, not a delay to shorten to fit a request.
+        // If it cannot fit, leave the HTTP attempt available for the existing fallback.
+        if (subscriptionDelayMs >= Math.max(1L, apiTimeoutMs)
+                || (requestBudget != null
+                    && subscriptionDelayMs > requestBudget.capWaitMillis(subscriptionDelayMs))) {
+            return Mono.error(naverLocalAdmissionFailure("rate_wait_exceeds_budget", query, fetch,
+                    permit, capturedTraceContext));
+        }
         java.util.concurrent.atomic.AtomicReference<NaverObservation> latestObservation = new java.util.concurrent.atomic.AtomicReference<>();
-        Mono<ObservedNaverResponse> primary = Mono.defer(() -> {
+        Mono<ObservedNaverResponse> primary = Mono.using(
+                () -> acquireNaverWirePermit(requestBudget, query, fetch, permit, capturedTraceContext),
+                wirePermit -> Mono.defer(() -> {
+                    if (!wirePermit.start()) {
+                        return Mono.error(new java.util.concurrent.CancellationException("naver admission cancelled"));
+                    }
                     // Re-evaluated on initial subscription and every retry. Never cancel a wire
                     // operation already shared by cache waiters merely because one waiter left.
                     if (requestBudget != null && requestBudget.expired()) {
@@ -2507,7 +2568,10 @@ public class NaverSearchService implements WebSearchProvider {
                     var attemptContext = TraceStore.searchContext(capturedTraceContext, "providerAttemptId");
                     var observation = new NaverObservation(query, attemptContext, true);
                     latestObservation.set(observation);
-                    return wire.map(entity -> new ObservedNaverResponse(entity, observation))
+                    // Once started this transport may serve several detached cache waiters.
+                    // Their deadlines remain on awaitCacheFuture; one loader cannot expire B's socket.
+                    return wire.timeout(Duration.ofMillis(Math.max(1L, apiTimeoutMs)))
+                            .map(entity -> new ObservedNaverResponse(entity, observation))
                             .doOnCancel(() -> observation.put("clientCancellationDelivered", true))
                             .doOnError(error -> {
                                 int status = naverHttpStatus(error);
@@ -2519,7 +2583,9 @@ public class NaverSearchService implements WebSearchProvider {
                                         isNaverRateLimited(error), isNaverTimeoutFailure(error), naverFailureReason(error)));
                                 observation.finish();
                             });
-                })
+                }).doFinally(signal -> wirePermit.close()).cache(),
+                NaverWirePermit::closeUnlessRunning)
+                .subscribeOn(ioScheduler())
                 // 구독 지연(레이트리밋/Retry-After 반영)
                 .delaySubscription(Duration.ofMillis(subscriptionDelayMs))
                 // ECO-FIX v3.0: 일관된 타임아웃만 적용하고 재시도는 상위 WebSearchRetriever에서 수행.

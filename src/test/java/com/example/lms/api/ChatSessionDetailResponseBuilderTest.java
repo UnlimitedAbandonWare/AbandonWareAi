@@ -23,7 +23,81 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatSessionDetailResponseBuilderTest {
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .registerModule(new com.fasterxml.jackson.datatype.jsr310.JavaTimeModule());
+
+    @Test
+    void assistantOwnedPromotedEvidenceSurvivesReloadWithoutTraceExposure() throws Exception {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 7, 10, 0);
+        for (boolean exposeTrace : List.of(false, true)) {
+            ChatSession session = ChatSession.builder().id(101L).title("synthetic relation")
+                    .createdAt(now).messages(List.of(
+                            message(10L, "user", "synthetic A", now),
+                            message(11L, "assistant", "A answer [W1]", now.plusSeconds(1)),
+                            message(12L, "system", evidencePointer(11L, "https://example.test/A?view=1"), now.plusSeconds(2)),
+                            message(13L, "user", "synthetic B", now.plusSeconds(3)),
+                            message(14L, "assistant", "B answer [W1]", now.plusSeconds(4)),
+                            message(15L, "system", evidencePointer(14L, "https://example.test/B?view=2"), now.plusSeconds(5))))
+                    .build();
+            var detail = ChatSessionDetailResponseBuilder.build(session, "guest", objectMapper,
+                    Map.of(), exposeTrace, LoggerFactory.getLogger(getClass())).getBody();
+            var assistants = detail.messages().stream().filter(m -> "assistant".equals(m.role())).toList();
+            for (int index = 0; index < assistants.size(); index++) {
+                var evidence = objectMapper.valueToTree(assistants.get(index)).path("evidence");
+                assertEquals(1, evidence.size(), "reload must retain the exact answer-owned promoted source");
+                assertEquals("W1", evidence.get(0).path("marker").asText());
+                assertEquals(index == 0 ? "https://example.test/A?view=1" : "https://example.test/B?view=2",
+                        evidence.get(0).path("source").asText());
+                assertFalse(evidence.toString().contains("rawSnippet"));
+            }
+            if (!exposeTrace) assertTrue(detail.turnTraces().isEmpty());
+        }
+    }
+
+    private String evidencePointer(long assistantId, String source) throws Exception {
+        String json = objectMapper.writeValueAsString(List.of(Map.of("marker", "W1", "kind", "WEB",
+                "title", "Synthetic qualified relation", "source", source, "lineStart", 4, "lineEnd", 6)));
+        String evidence = Base64.getUrlEncoder().withoutPadding().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+        String projection = "storageMode=durable_fallback\nassistantMessageId=" + assistantId
+                + "\nreason=final\nmethod=SSE\npathHash=none\npublicEvidence=" + evidence + "\n";
+        return "?TRACESNAP?synthetic-" + assistantId + "|v3|"
+                + Base64.getUrlEncoder().withoutPadding().encodeToString(projection.getBytes(StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void conflictingPointersAndMissingAssistantCannotRestoreSourcesOntoAnotherAnswer() throws Exception {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 7, 10, 0);
+        for (boolean missingAssistant : List.of(false, true)) {
+            var messages = new java.util.ArrayList<ChatMessage>();
+            messages.add(message(11L, "assistant", "Answer [W1]", now));
+            messages.add(message(12L, "system", evidencePointer(missingAssistant ? 999L : 11L,
+                    "https://example.test/A"), now.plusSeconds(1)));
+            if (!missingAssistant) messages.add(message(13L, "system", evidencePointer(11L,
+                    "https://example.test/B"), now.plusSeconds(2)));
+            var session = ChatSession.builder().id(101L).title("synthetic").createdAt(now).messages(messages).build();
+            var detail = ChatSessionDetailResponseBuilder.build(session, "guest", objectMapper, Map.of(), true,
+                    LoggerFactory.getLogger(getClass())).getBody();
+            var answer = detail.messages().stream().filter(m -> "assistant".equals(m.role())).findFirst().orElseThrow();
+            assertEquals(0, objectMapper.valueToTree(answer).path("evidence").size());
+            assertTrue(detail.turnTraces().isEmpty());
+        }
+    }
+
+    @Test
+    void publicEvidenceEnvelopeRejectsUnknownFieldsDuplicateMarkersAndNonRecords() throws Exception {
+        for (String json : List.of(
+                "[{\"marker\":\"W1\",\"kind\":\"WEB\",\"source\":\"https://example.test/\",\"rawSnippet\":\"SYNTHETIC_PRIVATE_BODY\"}]",
+                "[{\"marker\":\"W1\",\"kind\":\"WEB\",\"source\":\"https://example.test/A\"},{\"marker\":\"W1\",\"kind\":\"WEB\",\"source\":\"https://example.test/B\"}]",
+                "[null]", "{\"marker\":\"W1\"}")) {
+            String value = Base64.getUrlEncoder().withoutPadding().encodeToString(json.getBytes(StandardCharsets.UTF_8));
+            String text = "storageMode=durable_fallback\nassistantMessageId=11\nreason=final\nmethod=SSE\npathHash=none\npublicEvidence=" + value + "\n";
+            String envelope = "?TRACESNAP?synthetic-11|v3|" + Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(text.getBytes(StandardCharsets.UTF_8));
+            var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(envelope, 12L).orElseThrow();
+            assertTrue(pointer.evidence().isEmpty());
+            org.junit.jupiter.api.Assertions.assertNull(pointer.assistantMessageId());
+        }
+    }
 
     @Test
     void buildsDetailWithoutLeakingModelMetaAndRestoresTraceSnapshotCard() {
@@ -166,7 +240,8 @@ class ChatSessionDetailResponseBuilderTest {
     void answerOverviewUsesOnlyValidatedObservedDiagnosticsAndPreservesZero() {
         LocalDateTime now = LocalDateTime.of(2026, 10, 7, 10, 0);
         String projection = "storageMode=durable_fallback\nassistantMessageId=11\nreason=scored\nmethod=rule\npathHash=none\n"
-                + "diag.observedModel=s:synthetic-model\ndiag.prompt.citableEvidenceCount=n:0\ndiag.orch.mode=s:STRIKE\n";
+                + "diag.observedModel=s:synthetic-model\ndiag.observedProvider=s:chatgpt_oauth\n"
+                + "diag.prompt.citableEvidenceCount=n:0\ndiag.orch.mode=s:STRIKE\n";
         String durable = Base64.getUrlEncoder().withoutPadding().encodeToString(projection.getBytes(StandardCharsets.UTF_8));
         ChatSession session = ChatSession.builder().id(101L).title("synthetic").createdAt(now)
                 .messages(List.of(message(11L, "assistant", "answer", now),
@@ -176,6 +251,7 @@ class ChatSessionDetailResponseBuilderTest {
         assertNotNull(detail);
         var fields = detail.turnTraces().get(0).fields();
         assertEquals("synthetic-model", fields.get("observedModel"));
+        assertEquals("chatgpt_oauth", fields.get("observedProvider"));
         assertEquals("0", fields.get("prompt.citableEvidenceCount"));
         assertEquals("STRIKE", fields.get("orch.mode"));
         assertFalse(fields.containsKey("web.brave.failureReason"));

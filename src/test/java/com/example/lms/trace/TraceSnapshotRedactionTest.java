@@ -28,6 +28,30 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TraceSnapshotRedactionTest {
+    @Test
+    void finalHtmlCapIncludesTheTruncationMarker() {
+        for (int cap : new int[] {60_000, 4096, 512}) {
+            int effectiveCap = Math.max(1024, cap);
+            for (int length : new int[] {59_999, 60_000, 60_001, 200_000}) {
+                TraceSnapshotStore store = enabledStore(false);
+                ReflectionTestUtils.setField(store, "htmlMaxLen", cap);
+                String prefix = "<!doctype html><html data-trace-redacted=\"1\"><body>";
+                String html = prefix + "x".repeat(length - prefix.length() - 14) + "</body></html>";
+                String id = store.captureCustom("chat.trace_html.final", "SSE", "/api/chat", null, null,
+                        Map.of("ui.traceHtml.kind", "splitPanel", "ui.traceHtml.length", html.length()), html);
+                var captured = store.get(id).orElseThrow();
+                assertTrue(captured.html().length() <= effectiveCap, "final cap=" + effectiveCap);
+                if (html.length() > effectiveCap) {
+                    assertTrue(captured.htmlTruncated());
+                    assertTrue(captured.html().endsWith("<!-- truncated -->"));
+                } else {
+                    assertEquals(html, captured.html());
+                    assertFalse(captured.htmlTruncated());
+                }
+            }
+        }
+    }
+
 
     @Test
     void typedVerifierCauseSurvivesSnapshotEntryBudgetWithoutRawEvidence() {

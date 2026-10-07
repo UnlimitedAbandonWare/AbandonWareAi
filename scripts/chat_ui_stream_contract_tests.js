@@ -925,6 +925,26 @@ context.window.fetch = async (url, options = {}) => {
         }
       };
     }
+    if (context.__streamMode === 'deferred-terminal') {
+      let delivered = false;
+      return { ok: true, status: 200, headers: { get: () => 'text/event-stream' }, body: {
+        getReader: () => ({ read: () => delivered ? Promise.resolve({ done: true }) : new Promise(resolve => {
+          context.__releaseOldTerminal = () => { delivered = true; resolve({ done: false,
+            value: new TextEncoder().encode(`event: ${context.__oldTerminalType}\ndata: ${JSON.stringify({
+              type: context.__oldTerminalType, sessionId: 734, data: 'old terminal'
+            })}\n\n`) }); };
+        }) })
+      } };
+    }
+    if (context.__streamMode === 'keepalive-before-token') {
+      return {
+        ok: true, status: 200, headers: { get: () => 'text/event-stream' },
+        body: { getReader: () => ({ read: () => new Promise(resolve => {
+          context.__releaseKeepalive = () => resolve({ done: false,
+            value: new TextEncoder().encode(': keepalive\n\n') });
+        }) }) }
+      };
+    }
     if (context.__streamMode === 'deferred-session-token') {
       return new Promise((resolve) => {
         context.__releaseDeferredSessionTokenStream = () => {
@@ -5830,6 +5850,11 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     delete globalThis.__selectionHydrationClearCount;
   `, context);
   const hydrateCall = fetchCalls.find((call) => String(call.url).startsWith('/api/chat/sessions/321'));
+  const savedEvidenceDetail = vm.runInContext(`validateSessionDetail(321, { id: 321, settings: {},
+    messages: [{ role: 'assistant', turnId: 101, content: 'Saved answer [W1]',
+      evidence: [{ marker: 'W1', title: 'Own saved source', source: 'https://example.test/own' }] }] })`, context);
+  assert(savedEvidenceDetail?.messages[0]?.evidence?.[0]?.source === 'https://example.test/own',
+    'validated history must preserve promoted evidence on its owning assistant');
   const hydratedChildren = chatWindow.children.slice(hydrateChildrenBefore);
   assert(hydrateCall, `reload hydration should fetch restored session detail once: ${JSON.stringify(fetchCalls)}`);
   assert(
@@ -6870,6 +6895,130 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     `Stop before token must skip ACK, retain control, then exact-cancel before abort: kept=${keptControlBeforeToken} body=${exactLateCancel?.body} order=${context.__cancelOrder.join('|')} calls=${fetchCalls.map((call) => call.url).join('|')}`
   );
 
+  fetchCalls.length = 0;
+  context.__streamMode = 'deferred-session-token';
+  context.__cancelOrder = [];
+  vm.runInContext('state.currentSessionId = 732; clearActiveRunIdentity();', context);
+  elements.get('messageInput').value = 'search Stop without arriving capability';
+  const neverTokenSend = vm.runInContext('sendMessage()', context);
+  await new Promise((resolve) => setImmediate(resolve));
+  const neverTokenHeartbeat = vm.runInContext('activeStreamHeartbeatTimer', context);
+  elements.get('stopBtn').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert(intervalCallbacks.has(neverTokenHeartbeat),
+    'Stop awaiting capability must retain the only bounded transport deadline');
+  context.__nowMs = (context.__nowMs || 0) + 5001;
+  intervalCallbacks.get(neverTokenHeartbeat)?.();
+  let neverTokenSettled = false;
+  neverTokenSend.then(() => { neverTokenSettled = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert(neverTokenSettled && !elements.get('messageInput').disabled &&
+    !vm.runInContext('sendMessageInFlight', context) &&
+    !fetchCalls.some(call => call.url === '/api/chat/cancel' || call.url === '/api/chat/ack'),
+    'token-never transport deadline must settle without fabricating a server cancellation or ACK');
+  await neverTokenSend;
+  assert(vm.runInContext('pendingStopBeforeToken?.unresolved === true', context) && elements.get('sendBtn').disabled,
+    `an unknown original request must fence a new same-session generation: pending=${vm.runInContext('Boolean(pendingStopBeforeToken)', context)} unresolved=${vm.runInContext('pendingStopBeforeToken?.unresolved', context)} sendDisabled=${elements.get('sendBtn').disabled}`);
+  const unknownDispatchCount = fetchCalls.filter(call => call.url.includes('/api/chat/stream')).length;
+  assert(vm.runInContext('sessionSelectionBusy()', context) &&
+    vm.runInContext('startNewChatSession()', context) === false &&
+    vm.runInContext('state.currentSessionId', context) === 732,
+    'an unresolved original receipt must retain its session until terminal reconciliation');
+  elements.get('messageInput').value = 'must remain fenced';
+  await vm.runInContext('sendMessage()', context);
+  assert(fetchCalls.filter(call => call.url.includes('/api/chat/stream')).length === unknownDispatchCount,
+    'receipt lookup miss must not issue a new key or generation');
+  const originalReceiptKey = fetchHeader(fetchCalls.find(call => call.url.includes('/api/chat/stream')), 'idempotency-key');
+  context.__runStateResponse = { runToken: 'run-732-original', runStatus: 'cancelling', terminal: false, running: false };
+  elements.get('stopBtn').click();
+  for (let tick = 0; tick < 6; tick += 1) await new Promise(resolve => setImmediate(resolve));
+  assert(vm.runInContext('pendingStopBeforeToken?.unresolved === true', context),
+    'accepted cancel with unobserved terminal must retain the fence');
+  context.__cancelResponse = { cancelled: false, reason: 'already_terminal' };
+  context.__runStateResponse = { runToken: 'run-732-original', runStatus: 'cancelled', terminal: true, running: false };
+  elements.get('stopBtn').click();
+  for (let tick = 0; tick < 6; tick += 1) await new Promise(resolve => setImmediate(resolve));
+  const receiptLookup = fetchCalls.find(call => call.url === '/api/chat/state?sessionId=732' && fetchHeader(call, 'idempotency-key'));
+  const receiptCancel = fetchCalls.find(call => call.url === '/api/chat/cancel');
+  assert(receiptLookup && fetchHeader(receiptLookup, 'idempotency-key') === originalReceiptKey &&
+    JSON.parse(receiptCancel?.body || '{}').runToken === 'run-732-original' &&
+    vm.runInContext('pendingStopBeforeToken === null', context),
+    'a late registered request must recover only its original receipt, exact-cancel, and observe terminal');
+  context.__runStateResponse = null;
+  context.__cancelResponse = null;
+  context.__streamMode = 'fallback';
+  const beforeCancelWaitMessages = chatWindow.children.length;
+  elements.get('messageInput').value = 'draft waiting for cancellation';
+  vm.runInContext(`
+    pendingStopBeforeToken = { unresolved: false };
+    streamCancelInFlight = new Promise(resolve => { globalThis.__resolveCancelWait = resolve; });
+  `, context);
+  const cancelWaitSend = vm.runInContext('sendMessage()', context);
+  await new Promise(resolve => setImmediate(resolve));
+  vm.runInContext('pendingStopBeforeToken.unresolved = true; globalThis.__resolveCancelWait(false);', context);
+  await cancelWaitSend;
+  assert(fetchCalls.filter(call => call.url.includes('/api/chat/stream')).length === unknownDispatchCount &&
+    chatWindow.children.length === beforeCancelWaitMessages &&
+    elements.get('messageInput').value === 'draft waiting for cancellation',
+    'Send awaiting cancellation must recheck the original receipt before dispatch or transcript mutation');
+  vm.runInContext('pendingStopBeforeToken = null; streamCancelInFlight = null;', context);
+  elements.get('messageInput').value = 'R2 after confirmed original terminal';
+  await vm.runInContext('sendMessage()', context);
+  assert(fetchCalls.filter(call => call.url.includes('/api/chat/stream')).length === unknownDispatchCount + 1,
+    'confirmed R1 terminal must allow exactly one R2 without reload');
+
+  fetchCalls.length = 0;
+  context.__streamMode = 'keepalive-before-token';
+  vm.runInContext('clearActiveRunIdentity(); state.currentSessionId = 733;', context);
+  elements.get('messageInput').value = 'search keepalive without capability';
+  const keepaliveSend = vm.runInContext('sendMessage()', context);
+  await new Promise(resolve => setImmediate(resolve));
+  elements.get('stopBtn').click();
+  await new Promise(resolve => setImmediate(resolve));
+  const keepaliveHeartbeat = vm.runInContext('activeStreamHeartbeatTimer', context);
+  const elapsedBudget = vm.runInContext('streamClientDeadlineMs({})', context);
+  for (let tick = 0; tick < 4; tick += 1) {
+    context.__nowMs += Math.ceil(elapsedBudget / 4) + 1;
+    context.__releaseKeepalive?.();
+    await new Promise(resolve => setImmediate(resolve));
+    intervalCallbacks.get(keepaliveHeartbeat)?.();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  let keepaliveSettled = false;
+  keepaliveSend.then(() => { keepaliveSettled = true; });
+  await new Promise(resolve => setImmediate(resolve));
+  assert(keepaliveSettled, 'keepalive bytes must not extend the elapsed request budget after Stop');
+  await keepaliveSend;
+  assert(vm.runInContext('pendingStopBeforeToken?.unresolved === true', context),
+    'elapsed deadline alone is not backend-terminal proof');
+  // Isolate subsequent existing scenarios; no product path clears an unknown receipt.
+  vm.runInContext('pendingStopBeforeToken = null; clearActiveRunIdentity(); syncSendButtonState();', context);
+
+  for (const oldType of ['error', 'final']) {
+    context.__streamMode = 'deferred-terminal';
+    context.__oldTerminalType = oldType;
+    const oldAssistant = fakeElement(`old-terminal-${oldType}`);
+    const newAssistant = fakeElement(`new-terminal-${oldType}`);
+    elements.set(oldAssistant.id, oldAssistant);
+    elements.set(newAssistant.id, newAssistant);
+    vm.runInContext('activeStreamAssistant = null; streamController = null; clearActiveRunIdentity();', context);
+    const oldStream = vm.runInContext(`streamChat({ message: 'R1' }, '${oldAssistant.id}')`, context)
+      .catch(error => error);
+    await new Promise(resolve => setImmediate(resolve));
+    vm.runInContext(`activeStreamAssistant = document.getElementById('${newAssistant.id}');
+      streamController = new AbortController(); rememberActiveRunIdentity(735, 'run-735-new');`, context);
+    const acknowledgementsBeforeOldEvent = fetchCalls.filter(call => call.url === '/api/chat/ack').length;
+    context.__releaseOldTerminal();
+    await oldStream;
+    assert(vm.runInContext(`activeRunToken === 'run-735-new' && activeSessionId === 735 &&
+      activeStreamAssistant === document.getElementById('${newAssistant.id}') && !streamController.signal.aborted`, context) &&
+      fetchCalls.filter(call => call.url === '/api/chat/ack').length === acknowledgementsBeforeOldEvent &&
+      !nodeText(newAssistant).includes('old terminal'),
+      `late R1 ${oldType} must not clear, ACK, abort or render into R2`);
+  }
+  vm.runInContext('activeStreamAssistant = null; streamController = null; clearActiveRunIdentity();', context);
+
   const originalChatWindowQuerySelector = chatWindow.querySelector;
   chatWindow.querySelector = (selector) => {
     if (selector === '[data-role="transformer-core-rail"]') {
@@ -7075,6 +7224,10 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     !fetchCalls.some((call) => String(call.url).endsWith('/api/chat')),
     `non-Abort stream failure after stop should not start sync fallback: ${fetchCalls.map((call) => call.url).join('|')}`
   );
+  assert(vm.runInContext('pendingStopBeforeToken?.unresolved === true', context),
+    'transport failure after tokenless Stop must retain the original request fence');
+  // The following failure-classification test is an independent fresh scenario.
+  vm.runInContext('pendingStopBeforeToken = null; clearActiveRunIdentity(); syncSendButtonState();', context);
 
   fetchCalls.length = 0;
   context.__streamMode = 'fallback';
@@ -8778,7 +8931,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
         messages: [
           { role: 'user', content: 'restored user' },
           { role: 'system', content: 'must be filtered' },
-          { role: 'assistant', content: 'restored assistant' },
+          { role: 'assistant', turnId: 205, content: 'restored assistant',
+            evidence: [{ marker: 'W1', title: 'Selected own source', source: 'https://example.test/selected' }] },
           { role: 'assistant', content: 7 }
         ],
         modelUsed: 'gemma3:4b',
@@ -8808,6 +8962,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       selectedRows.length === 1 && selectedRows[0].getAttribute('aria-pressed') === 'true' &&
       selectedModeRows.length === 1 && selectedModeRows[0].dataset.sessionModeSessionId === '202';
 
+    assert(restoredMessages[1].querySelector('[data-role="evidence"]')?.dataset.count === '1',
+      'saved-session selection must restore its own promoted evidence rail');
     const rejectedSelectionCard = installSelectionEntropyCard(restoredMessages[1]);
     assert(rejectedSelectionCard, 'rejected session-selection precondition must install a selection card');
     const atomicBaseline = w3VisibleSnapshot();

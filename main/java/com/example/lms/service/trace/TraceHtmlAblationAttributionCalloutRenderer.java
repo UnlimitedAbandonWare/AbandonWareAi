@@ -10,6 +10,25 @@ final class TraceHtmlAblationAttributionCalloutRenderer {
     private TraceHtmlAblationAttributionCalloutRenderer() {
     }
 
+    static String renderSummary(java.util.Map<String, Object> summary) {
+        if (!(summary.get("taa.version") instanceof String version)
+                || !(summary.get("taa.outcome") instanceof String outcome)
+                || !(summary.get("taa.outcome.risk") instanceof Number risk)
+                || !Double.isFinite(risk.doubleValue()) || risk.doubleValue() < 0 || risk.doubleValue() > 1) {
+            return "<div class=\"trace-ablation-summary\"><strong>Trace-Ablation Attribution</strong>"
+                    + "<p>저장된 TAA 요약 없음 / NOT_OBSERVED: 누락된 최종 맥락으로 위험도를 재계산하지 않습니다.</p></div>";
+        }
+        return "<div class=\"trace-ablation-summary\"><strong>Trace-Ablation Attribution</strong>"
+                + "<div>outcome=" + escape(safeDisplay(outcome, 160))
+                + " / risk=" + String.format(java.util.Locale.ROOT, "%.3f", risk.doubleValue())
+                + " / v=" + escape(safeDisplay(version, 120)) + "</div>"
+                + "<p>상세 trace 만료/요약만 복원: 저장된 관측 근거의 휴리스틱 위험·기여도입니다. "
+                + "원인 확률이나 실제 재실행으로 측정한 품질 향상률이 아닙니다.</p>"
+                + "<div>top=" + escape(safeDisplay(String.valueOf(summary.getOrDefault("taa.topContributor.id", "NOT_OBSERVED")), 80))
+                + " / group=" + escape(safeDisplay(String.valueOf(summary.getOrDefault("taa.topContributor.group", "NOT_OBSERVED")), 80))
+                + "</div></div>";
+    }
+
     static String render(TraceAblationAttributionResult result) {
         if (result == null || result.contributors() == null || result.contributors().isEmpty()) {
             return "";

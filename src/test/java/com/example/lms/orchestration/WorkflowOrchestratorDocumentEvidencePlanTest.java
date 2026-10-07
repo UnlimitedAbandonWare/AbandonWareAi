@@ -19,6 +19,73 @@ class WorkflowOrchestratorDocumentEvidencePlanTest {
         TraceStore.clear();
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "GAME,원신에서 베스나가 뭐냐?",
+            "SUBCULTURE,애니 캐릭터 팬픽은 어디서 찾지?",
+            "GENERAL,원신에서 베스나가 뭐냐?",
+            "GENERAL,애니 캐릭터 팬픽은 어디서 찾지?"
+    })
+    void untouchedHttpDefaultSelectsExistingCommunityPlan(QueryDomain domain, String query) {
+        WorkflowOrchestrator orchestrator = orchestrator();
+        GuardContext context = GuardContext.defaultContext();
+        PlanHintApplier applier = (PlanHintApplier)
+                ReflectionTestUtils.getField(orchestrator, "planHintApplier");
+
+        String selected = orchestrator.ensurePlanSelected(
+                context, AnswerMode.BALANCED, domain, query, false);
+        var hints = applier.load(selected);
+        applier.applyToGuardContext(hints, context);
+
+        assertEquals("brave.v1", selected);
+        assertEquals("brave.v1", context.getPlanId());
+        org.junit.jupiter.api.Assertions.assertNull(hints.officialSourcesOnly());
+        org.junit.jupiter.api.Assertions.assertNull(hints.whitelistProfile());
+        org.junit.jupiter.api.Assertions.assertFalse(context.isOfficialOnly());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"safe", "S1", "document_evidence.v1"})
+    void explicitlySelectedPlanStillWinsForCommunityQuery(String explicitPlan) {
+        GuardContext context = GuardContext.defaultContext();
+        context.setHeaderMode(explicitPlan);
+        context.setMode(explicitPlan);
+        context.setPlanId(explicitPlan);
+
+        assertEquals(explicitPlan, orchestrator().ensurePlanSelected(
+                context, AnswerMode.BALANCED, QueryDomain.GAME,
+                "원신에서 베스나가 뭐냐?", false));
+    }
+
+    @Test
+    void defaultSeedIsRetainedForHardPolicySensitiveOrdinaryAndDisabledRequests() {
+        WorkflowOrchestrator orchestrator = orchestrator();
+        GuardContext official = GuardContext.defaultContext();
+        official.setOfficialOnly(true);
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                official, AnswerMode.BALANCED, QueryDomain.GAME, "원신 캐릭터", false));
+
+        GuardContext scoped = GuardContext.defaultContext();
+        scoped.setDomainProfile("official");
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                scoped, AnswerMode.BALANCED, QueryDomain.GAME, "원신 캐릭터", false));
+
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                GuardContext.defaultContext(), AnswerMode.BALANCED,
+                QueryDomain.SENSITIVE, "원신 계정 거래", false));
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                GuardContext.defaultContext(), AnswerMode.BALANCED,
+                QueryDomain.GENERAL, "원신 계정 거래", false));
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                GuardContext.defaultContext(), AnswerMode.BALANCED,
+                QueryDomain.GENERAL, "물은 왜 얼어?", false));
+
+        ReflectionTestUtils.setField(orchestrator, "enabled", false);
+        assertEquals("safe", orchestrator.ensurePlanSelected(
+                GuardContext.defaultContext(), AnswerMode.BALANCED,
+                QueryDomain.GAME, "원신 캐릭터", false));
+    }
+
     @Test
     void uploadedDocumentQuestionSelectsDocumentEvidencePlanByDefault() {
         WorkflowOrchestrator orchestrator = orchestrator();

@@ -446,6 +446,7 @@ public final class JevEvaluationRuntime implements AutoCloseable {
         return new ChoiceResult(observations,result.httpStatus(),result.reasonCode(),result.completedNanos(),result.billedUsd());
     }
     private OptionalDouble threshold(String surface,String id,String choice) {
+        if("factMeta".equals(id))return factMetaThreshold(choice);
         String suffix="routeDecision".equals(id)&&"focus".equals(surface)?"focus":"default";
         if("webNeed".equals(id))suffix=switch(choice){case "NONE"->"web-disable";case "LIGHT"->"web-light";case "DEEP"->"web-deep";default->"default";};
         if("complexity".equals(id)&&"SIMPLE".equals(choice))suffix="complexity-simple";
@@ -457,4 +458,14 @@ public final class JevEvaluationRuntime implements AutoCloseable {
         }catch(RuntimeException malformed){return OptionalDouble.empty();}
     }
     void discard(EvaluationHandle handle){if(handle!=null&&handle.owner==this)handle.discarded.set(true);}
+    long nowNanos(){return nanos.getAsLong();}
+    OptionalDouble factMetaThreshold(String label) {
+        if(!JevChoiceAdvisor.FACT_META.criteria().containsKey(label))return OptionalDouble.empty();
+        try {
+            String raw=env.getProperty("demo.jev.fact-meta.probability-threshold."+label.toLowerCase(Locale.ROOT));
+            if(raw==null)return OptionalDouble.empty();
+            double value=Double.parseDouble(raw);
+            return Double.isFinite(value)&&value>=0&&value<=1?OptionalDouble.of(value):OptionalDouble.empty();
+        }catch(RuntimeException malformed){return OptionalDouble.empty();}
+    }
 }

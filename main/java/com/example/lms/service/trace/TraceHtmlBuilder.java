@@ -61,10 +61,27 @@ public class TraceHtmlBuilder {
             List<Content> vectorTopK,
             Map<String, Object> extraMeta,
             Boolean webSearchAttempted) {
+        return buildSplitPanelWithMetadata(rawTrace, rawSnippets, webTopK, vectorTopK,
+                extraMeta, webSearchAttempted).html();
+    }
+
+    /** HTML and the captured request metadata, including only this render's typed TAA summary. */
+    public record RenderedPanel(String html, Map<String, Object> metadata) {
+        public RenderedPanel {
+            metadata = Collections.unmodifiableMap(new java.util.LinkedHashMap<>(metadata));
+        }
+    }
+
+    public RenderedPanel buildSplitPanelWithMetadata(
+            NaverSearchService.SearchTrace rawTrace, List<String> rawSnippets,
+            List<Content> webTopK, List<Content> vectorTopK,
+            Map<String, Object> extraMeta, Boolean webSearchAttempted) {
+        Map<String, Object> snapshotMeta = new java.util.LinkedHashMap<>(extraMeta == null ? Map.of() : extraMeta);
+        Map<String, Object> attributionMeta = new java.util.LinkedHashMap<>();
         if (rawTrace == null && (rawSnippets == null || rawSnippets.isEmpty())
                 && webTopK == null && vectorTopK == null
                 && (extraMeta == null || extraMeta.isEmpty())) {
-            return "";
+            return new RenderedPanel("", snapshotMeta);
         }
 
         int rawCount = (rawSnippets == null) ? 0 : rawSnippets.size();
@@ -97,11 +114,12 @@ public class TraceHtmlBuilder {
                 webEnabled ? webTopK : null,
                 vectorEnabled ? vectorTopK : null));
         sb.append(TraceHtmlCitableEvidenceRenderer.render(safeExtraMeta));
-        sb.append(renderOrchestrationPanel(safeExtraMeta, webTopK, vectorTopK, risk, true));
+        sb.append(renderOrchestrationPanel(safeExtraMeta, webTopK, vectorTopK, risk, true, attributionMeta));
 
         sb.append("</div>");
         sb.append("</details>");
-        return sb.toString();
+        snapshotMeta.putAll(attributionMeta);
+        return new RenderedPanel(sb.toString(), snapshotMeta);
     }
 
     /**
@@ -184,7 +202,7 @@ public class TraceHtmlBuilder {
 
         // Reuse the existing orchestration panel to show grouped breadcrumbs.
         // Snapshots preserve diagnostics, not the live context-list OFF signal.
-        sb.append(renderOrchestrationPanel(extraMeta, null, null, risk, false));
+        sb.append(renderOrchestrationPanel(extraMeta, null, null, risk, false, null));
 
         // Raw dump for completeness.
         sb.append("<details class='trace-fold'>");
@@ -686,7 +704,8 @@ public class TraceHtmlBuilder {
     }
 
     private String renderOrchestrationPanel(Map<String, Object> extraMeta, List<Content> webTopK,
-            List<Content> vectorTopK, RiskLevel risk, boolean finalContextObserved) {
+            List<Content> vectorTopK, RiskLevel risk, boolean finalContextObserved,
+            Map<String, Object> attributionMeta) {
         if (extraMeta == null || extraMeta.isEmpty())
             return "";
         String summary = buildOrchestrationSummary(extraMeta, webTopK, vectorTopK, finalContextObserved);
@@ -705,7 +724,8 @@ public class TraceHtmlBuilder {
         sb.append(TraceHtmlOrchestrationModeCalloutRenderer.render(extraMeta));
         sb.append(TraceHtmlWebFailSoftRiskCalloutRenderer.render(extraMeta));
         sb.append(TraceHtmlSoakWebKpiCopyCalloutRenderer.render(extraMeta));
-        sb.append(renderTraceAblationAttributionCallout(extraMeta, webTopK, vectorTopK));
+        sb.append(renderTraceAblationAttributionCallout(extraMeta, webTopK, vectorTopK,
+                finalContextObserved, attributionMeta));
         sb.append(TraceHtmlRelationThumbnailCallouts.renderBudget(extraMeta));
         sb.append(TraceHtmlRelationThumbnailCallouts.renderContextLayers(extraMeta));
         sb.append(TraceHtmlRelationThumbnailCallouts.renderSliceMap(extraMeta));
@@ -875,6 +895,9 @@ public class TraceHtmlBuilder {
             List<Content> vectorTopK, boolean finalContextObserved) {
         java.util.List<String> parts = new java.util.ArrayList<>();
 
+        String z = TraceHtmlOrchestrationModeCalloutRenderer.extremeZSummary(extraMeta);
+        if (!z.isEmpty()) parts.add(z);
+
         // Bubble up STRIKE/BYPASS/... to the collapsed summary so it's visible without
         // scrolling.
         String orchMode = firstNonBlank(getString(extraMeta, "orch.mode"), getString(extraMeta, "orch.modeLabel"));
@@ -904,10 +927,25 @@ public class TraceHtmlBuilder {
     private String renderTraceAblationAttributionCallout(
             Map<String, Object> extraMeta,
             List<Content> webTopK,
-            List<Content> vectorTopK) {
+            List<Content> vectorTopK, boolean finalContextObserved,
+            Map<String, Object> attributionMeta) {
         try {
+            if (!finalContextObserved) {
+                return TraceHtmlAblationAttributionCalloutRenderer.renderSummary(extraMeta);
+            }
             TraceAblationAttributionResult res = traceAblationAttributionService.analyze(extraMeta, webTopK,
                     vectorTopK);
+            if (attributionMeta != null && res != null && res.contributors() != null && !res.contributors().isEmpty()) {
+                attributionMeta.put("taa.version", res.version());
+                attributionMeta.put("taa.outcome", res.outcome());
+                attributionMeta.put("taa.outcome.risk", res.outcomeRisk());
+                attributionMeta.put("taa.topContributor.id", res.contributors().get(0).id());
+                attributionMeta.put("taa.topContributor.group", res.contributors().get(0).group());
+                if (res.debug() != null) {
+                    attributionMeta.put("taa.candidate.count", res.debug().get("candidateCount"));
+                    attributionMeta.put("taa.beam.count", res.debug().get("beamCount"));
+                }
+            }
             return TraceHtmlAblationAttributionCalloutRenderer.render(res);
         } catch (Exception e) {
             String errorType = errorType(e);

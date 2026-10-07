@@ -153,6 +153,7 @@ def main() -> int:
     try:
         code, out, _ = run_tool("packet", "--question",
                                 "is x wired?", "--paths", "a/b.java",
+                                "--task", "compact-evidence-test",
                                 "--out", td)
         pkt_dir = Path(out.get("packetDir", ""))
         cases.append(("packet-files", code == 0 and pkt_dir.is_dir()
@@ -163,6 +164,16 @@ def main() -> int:
                       and "task_received=" + out.get("marker", "?")
                           in (pkt_dir / "definer.prompt.md").read_text(
                               encoding="utf-8"), out))
+        # Bind the existing task flag and one timestamp to every branch;
+        # delivery metadata must survive real CLI packet generation.
+        prompts = [(pkt_dir / f"{role}.prompt.md").read_text(encoding="utf-8")
+                   for role in ("definer", "aliaser", "challenger")]
+        cases.append(("packet-task-time-binding",
+                      out.get("taskId") == "compact-evidence-test"
+                      and all("taskId: compact-evidence-test" in p
+                              and "packetGeneratedAtUtc: "
+                                  + out.get("generatedAtUtc", "MISSING") in p
+                              and "- a/b.java" in p for p in prompts), out))
     finally:
         shutil.rmtree(td, ignore_errors=True)
 

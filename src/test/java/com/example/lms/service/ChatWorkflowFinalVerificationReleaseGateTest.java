@@ -1572,6 +1572,65 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {"failed", "cancelled", "empty", "success", "disabled"})
+    void typedSupplierOutcomeDistinguishesLookupFailureEmptyAndSkippedWithoutRetry(String variant) {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 2);
+        for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
+            ReflectionTestUtils.setField(fixture.workflow(), field, 2);
+        var plate = mock(com.example.lms.artplate.ArtPlateSpec.class);
+        when(plate.webTopK()).thenReturn(2);
+        when(plate.webBudgetMs()).thenReturn(2_000);
+        var plateGate = mock(com.example.lms.artplate.NineArtPlateGate.class);
+        when(plateGate.decide(any())).thenReturn(plate);
+        ReflectionTestUtils.setField(fixture.workflow(), "nineArtPlateGate", plateGate);
+        ReflectionTestUtils.setField(fixture.workflow(), "rescueCount", new java.util.concurrent.atomic.AtomicLong());
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService",
+                mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class));
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        var hybrid = mock(com.example.lms.service.rag.HybridRetriever.class);
+        var web = mock(com.example.lms.service.rag.WebSearchRetriever.class);
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridRetriever", hybrid);
+        ReflectionTestUtils.setField(fixture.workflow(), "webSearchRetriever", web);
+        ReflectionTestUtils.setField(fixture.workflow(), "emptyTopDocsCount", new java.util.concurrent.atomic.AtomicLong());
+        var calls = new java.util.concurrent.atomic.AtomicInteger();
+        boolean enabled = !"disabled".equals(variant);
+        clearWorkflowState();
+        try {
+            var request = ChatRequestDto.builder().message("Describe the current synthetic Aster weapon evidence.")
+                    .model("release-gate-recording-fake").maxTokens(256).mode("FACT").memoryMode("OFF").polish(false)
+                    .executionMode(com.example.lms.domain.enums.ExecutionMode.AUTO)
+                    .searchMode(enabled ? SearchMode.AUTO : SearchMode.OFF).useWebSearch(enabled).useRag(false)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(enabled, false))
+                    .useVerification(true).build();
+            var result = fixture.workflow().continueChat(request, (ChatWorkflow.WebEvidenceSupplier) ignored -> {
+                calls.incrementAndGet();
+                if ("failed".equals(variant)) throw new IllegalStateException();
+                if ("cancelled".equals(variant)) throw new java.util.concurrent.CancellationException();
+                if (!"success".equals(variant)) return List.of();
+                return List.of(dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(
+                        "Synthetic Aster uses Glacier foil; this is an unofficial test claim.",
+                        dev.langchain4j.data.document.Metadata.from(Map.of("url", "https://example.test/supplier", "kind", "WEB")))));
+            });
+            assertEquals(enabled ? 1 : 0, calls.get());
+            verify(fixture.model(), times(1)).chat(anyList());
+            verifyNoInteractions(hybrid, web);
+            assertFalse(result.content().isBlank());
+            assertEquals(true, TraceStore.get("web.evidenceSupplier.present"));
+            assertEquals(enabled, TraceStore.get("web.evidenceSupplier.webEnabled"));
+            assertEquals(enabled, TraceStore.get("web.evidenceSupplier.invoked"));
+            boolean failed = "failed".equals(variant) || "cancelled".equals(variant);
+            assertEquals(failed, TraceStore.get("web.evidenceSupplier.failed"));
+            assertEquals(enabled && !failed, TraceStore.get("web.evidenceSupplier.completed"));
+            assertEquals("success".equals(variant) ? 1 : 0, TraceStore.get("web.evidenceSupplier.resultCount"));
+            assertEquals("cancelled".equals(variant), TraceStore.get("web.evidenceSupplier.cancellationObserved"));
+            assertEquals(true, TraceStore.get("finalAnswer.releaseAllowed"));
+            assertEquals(false, TraceStore.get("finalAnswer.memorySaveAllowed"));
+        } finally { clearWorkflowState(); }
+    }
+
     private static MemoryHoldFixture memoryHoldFixture() {
         ChatModel model = mock(ChatModel.class);
         when(model.chat(anyList())).thenReturn(ChatResponse.builder()

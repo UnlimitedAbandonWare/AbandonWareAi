@@ -91,8 +91,57 @@ final class TraceHtmlOrchestrationModeCalloutRenderer {
             sb.append("</div>");
         }
 
+        String z = extremeZSummary(extraMeta);
+        if (!z.isEmpty()) {
+            sb.append("<div class='trace-extremez'><b>ExtremeZ observations</b>: ")
+                    .append(escape(z));
+            for (String[] field : new String[][] {
+                    {"Z declared", "extremeZ.activated"},
+                    {"trigger plan", "extremez.trigger.plan.primaryMode"},
+                    {"handler skipped", "extremez.execute.skipped"},
+                    {"handler reason", "extremez.execute.reason"},
+                    {"handler raw", "extremez.execute.rawCount"},
+                    {"handler output", "extremez.execute.refinedCount"},
+                    {"handler returned", "extremeZ.outCount"},
+                    {"AOP document growth", "extremez.activated"},
+                    {"AOP skip", "extremez.skipReason"},
+                    {"AOP reason", "extremez.activation.reason"},
+                    {"AOP base", "extremez.base.count"},
+                    {"AOP extra", "extremez.extra.count"},
+                    {"AOP merged", "extremez.merged.count"}}) {
+                sb.append("<div>").append(field[0]).append('=').append(escape(observed(extraMeta, field[1])))
+                        .append("</div>");
+            }
+            sb.append("<p>계획·trigger·handler 완료·AOP 문서 증가는 별도 관측입니다. ")
+                    .append("서로 다른 producer의 값으로 실행 여부나 마지막 호출 순서를 추정하지 않습니다.</p></div>");
+        }
         sb.append("</div>");
         return sb.toString();
+    }
+
+    static String extremeZSummary(Map<String, Object> meta) {
+        if (meta == null || (!"EXTREMEZ".equals(meta.get("routing.executionPlan.primaryMode"))
+                && meta.keySet().stream().noneMatch(k -> k != null && (k.startsWith("extremez.") || k.startsWith("extremeZ."))))) {
+            return "";
+        }
+        String lower = observed(meta, "extremez.trigger.activate");
+        String camel = observed(meta, "extremeZ.trigger.activated");
+        String trigger = !"NOT_OBSERVED".equals(lower) && !"NOT_OBSERVED".equals(camel) && !lower.equals(camel)
+                ? "UNKNOWN(alias_conflict)" : "NOT_OBSERVED".equals(lower) ? camel : lower;
+        return "Z plan=" + observed(meta, "routing.executionPlan.primaryMode")
+                + " / trigger=" + trigger + " / execute=" + observed(meta, "extremez.execute.activated");
+    }
+
+    private static String observed(Map<String, Object> meta, String key) {
+        Object value = meta.get(key);
+        if (value instanceof Boolean b) return b.toString();
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            long count = ((Number) value).longValue();
+            if (count >= 0 && count <= 1_000_000) return Long.toString(count);
+        }
+        if (value instanceof String label && label.matches("[A-Za-z0-9_.:-]{1,80}")
+                && label.equals(SafeRedactor.traceLabel(label))) return label;
+        return "NOT_OBSERVED";
     }
 
     private static boolean truthy(Object v) {

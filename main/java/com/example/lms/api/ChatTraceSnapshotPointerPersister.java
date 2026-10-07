@@ -39,12 +39,22 @@ final class ChatTraceSnapshotPointerPersister {
             Long sessionId, Long assistantMessageId, String reason, String method, String path,
             Map<String, Object> traceMeta, String traceHtml, TraceSnapshotStore traceSnapshotStore,
             ChatHistoryService historyService, Logger log, boolean renderHtml) {
+        return persist(sessionId, assistantMessageId, reason, method, path, traceMeta, traceHtml,
+                traceSnapshotStore, historyService, log, renderHtml, java.util.List.of());
+    }
+
+    static Long persist(
+            Long sessionId, Long assistantMessageId, String reason, String method, String path,
+            Map<String, Object> traceMeta, String traceHtml, TraceSnapshotStore traceSnapshotStore,
+            ChatHistoryService historyService, Logger log, boolean renderHtml,
+            java.util.List<com.example.lms.dto.RagEvidenceMetadata> evidence) {
         if (sessionId == null || assistantMessageId == null || assistantMessageId <= 0L
                 || traceSnapshotStore == null) {
             return null;
         }
         boolean missingTraceHtml = traceHtml == null || traceHtml.isBlank();
-        boolean durableProjection = !renderHtml && traceMeta != null && !traceMeta.isEmpty();
+        boolean durableProjection = (!renderHtml && traceMeta != null && !traceMeta.isEmpty())
+                || (missingTraceHtml && evidence != null && !evidence.isEmpty());
         boolean metadataOnlyTraceMemory = renderHtml && isTraceMemorySnapshot(traceMeta) && missingTraceHtml;
         boolean metadataOnlyHarmony = renderHtml && isAgentVisibleHarmony(traceMeta) && missingTraceHtml;
         String snapshotHtml = metadataOnlyTraceMemory
@@ -74,7 +84,7 @@ final class ChatTraceSnapshotPointerPersister {
             return historyService.appendMessageReturningId(
                     sessionId,
                     "system",
-                    durablePointer(snapshotId, assistantMessageId, reason, method, path, snapMeta));
+                    durablePointer(snapshotId, assistantMessageId, reason, method, path, snapMeta, evidence));
         } catch (Exception e) {
             String safeErrorType = errorType(e);
             TraceStore.put("chat.traceSnapshotPointer.suppressed.stage", "persist");
@@ -100,7 +110,8 @@ final class ChatTraceSnapshotPointerPersister {
             String reason,
             String method,
             String path,
-            Map<String, Object> traceMeta) {
+            Map<String, Object> traceMeta,
+            java.util.List<com.example.lms.dto.RagEvidenceMetadata> evidence) {
         StringBuilder projection = new StringBuilder(512);
         appendProjection(projection, "storageMode", "durable_fallback");
         if (assistantMessageId != null && assistantMessageId > 0L) {
@@ -125,10 +136,17 @@ final class ChatTraceSnapshotPointerPersister {
                 "traceMemory.trigger.reason");
 
         Map<String, String> diagnostics = ChatTraceMetaMessageRestorer.projectDiagnostics(traceMeta);
-        String version = diagnostics.isEmpty() ? DURABLE_ENVELOPE_VERSION : "v3";
-        diagnostics.forEach((key, value) -> appendProjection(projection, key, value));
+        String publicEvidence = ChatTraceMetaMessageRestorer.encodePublicEvidence(evidence);
+        boolean detail = !diagnostics.isEmpty() || publicEvidence != null;
+        String version = detail ? "v3" : DURABLE_ENVELOPE_VERSION;
+        if (publicEvidence != null) appendProjection(projection, "publicEvidence", publicEvidence);
+        diagnostics.forEach((key, value) -> {
+            String field = key + "=" + value + "\n";
+            if (publicEvidence == null || (projection.toString() + field).getBytes(StandardCharsets.UTF_8).length
+                    <= ChatTraceMetaMessageRestorer.MAX_DETAIL_BYTES) projection.append(field);
+        });
         byte[] bytes = projection.toString().getBytes(StandardCharsets.UTF_8);
-        if (bytes.length > (diagnostics.isEmpty() ? MAX_DURABLE_PROJECTION_BYTES
+        if (bytes.length > (!detail ? MAX_DURABLE_PROJECTION_BYTES
                 : ChatTraceMetaMessageRestorer.MAX_DETAIL_BYTES)) {
             version = DURABLE_ENVELOPE_VERSION;
             String minimal = "storageMode=durable_fallback\n"

@@ -71,7 +71,7 @@
     if (typeof assistant.after === "function") assistant.after(slot);
     else assistant.parentElement.insertBefore(slot, assistant.nextSibling);
     const state = { assistant, slot, panel, overview, metadata, signals, body, snapshotId: null,
-      diagnosticNodes: new Map(), scoreKeys: [],
+      diagnosticNodes: new Map(), scoreKeys: [], summaryFields: {},
       controller: null, loading: false, loaded: false, version: 0, live: false };
     byAssistant.set(assistant, state);
     byPanel.set(panel, state);
@@ -83,17 +83,27 @@
   }
 
   function showOverview(state, fields) {
-    const model = typeof fields?.observedModel === "string" &&
+    const summary = state.summaryFields;
+    if (typeof fields?.observedModel === "string" &&
       /^[A-Za-z0-9][A-Za-z0-9._/:+\-]{0,199}$/.test(fields.observedModel)
-      && !/^(sk-|AIza|eyJ)/.test(fields.observedModel) ? fields.observedModel : "NOT_OBSERVED";
+      && !/^(sk-|AIza|eyJ)/.test(fields.observedModel)) summary.observedModel = fields.observedModel;
     const count = String(fields?.['prompt.citableEvidenceCount'] ?? "");
-    const evidence = /^(0|[1-9][0-9]{0,6})$/.test(count) && Number(count) <= 1000000
-      ? count : "NOT_OBSERVED";
-    const mode = ["NORMAL", "STRIKE", "BYPASS", "COMPRESSION"].includes(fields?.['orch.mode'])
-      ? fields['orch.mode'] : "NOT_OBSERVED";
+    if (["string", "number"].includes(typeof fields?.['prompt.citableEvidenceCount']) &&
+        /^(0|[1-9][0-9]{0,6})$/.test(count) && Number(count) <= 1000000)
+      summary['prompt.citableEvidenceCount'] = count;
+    if (["NORMAL", "STRIKE", "BYPASS", "COMPRESSION"].includes(fields?.['orch.mode']))
+      summary['orch.mode'] = fields['orch.mode'];
+    if (typeof fields?.observedProvider === "string" &&
+        /^[A-Za-z0-9_.:-]{1,80}$/.test(fields.observedProvider) &&
+        !/^(sk-|AIza|eyJ)/.test(fields.observedProvider)) summary.observedProvider = fields.observedProvider;
+    const model = summary.observedModel ?? "NOT_OBSERVED";
+    const provider = summary.observedProvider ?? "NOT_OBSERVED";
+    const evidence = summary['prompt.citableEvidenceCount'] ?? "NOT_OBSERVED";
+    const mode = summary['orch.mode'] ?? "NOT_OBSERVED";
     // The aggregate search signal cannot identify either provider's outcome.
     state.overview.textContent = "이 답변 추적 · 모델: " + model +
-      " · Brave: NOT_OBSERVED · Naver: NOT_OBSERVED · 인용 근거: " + evidence + " · 모드: " + mode;
+      " · 응답 제공자: " + provider + " · Brave: NOT_OBSERVED · Naver: NOT_OBSERVED" +
+      " · 인용 가능한 근거: " + evidence + " · 모드: " + mode;
     state.slot.hidden = !enabled();
     state.summaryAvailable = true;
   }
@@ -505,6 +515,9 @@
     if (!state) return null;
     state.panel.hidden = !enabled();
     if (state.snapshotId !== snapshotId || state.sessionId !== sessionId) {
+      // First binding belongs to this assistant; a later identity change must
+      // never carry observations from a previous answer or session.
+      if (state.snapshotId !== null) state.summaryFields = {};
       abortSnapshot(state);
       state.snapshotId = snapshotId;
       state.sessionId = sessionId;

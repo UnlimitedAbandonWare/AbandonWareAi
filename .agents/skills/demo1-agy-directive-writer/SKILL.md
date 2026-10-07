@@ -69,9 +69,14 @@ Grok Bot 앱 규격 차이(2026-10-02 인계 팩, `references/grokbot-current/HA
 - 섹션 순서 고정: 0 한 줄 목표 → 사실(KST 시각 포함) → 공통 규칙 → 항목(DV/WP) →
   HOLD → ASK_ONCE(기본값 포함) → 절대 금지 → Acceptance(미실행은 NOT_RUN+사유) → 보고 형식.
 - **Devin 지시서**:
-  - 첫 줄은 사용자의 **표준 18개 스킬 태그 프리셋**(17개 스킬 + `@SKILL.md`)을 **누락 없이 반드시 자동 포함/배치**한다:
-    `@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md`
-  - 사용자가 다른 특정 스킬만 명시하지 않는 한 이 올라운더 표준 프리셋이 상시 기본값이다. `objective-executor`가 주 실행 역할을 맡으므로 임의 5개+ 태그 산포(SKILL_SCATTER) 제한의 예외로 자동 승인되며, brief_lint/brief_save에서도 정상 PASS된다.
+  - 첫 줄 `@skill` 줄은 **주제별로 고른 2~5개**만 쓴다. 맨 앞이 primary(이번 일을 실제로 하는 스킬), 나머지는 안전·기록용. `.agents\skills\<이름>\SKILL.md`가 실제로 있는 것만(Test-Path), `@SKILL.md` 같은 가짜 태그 금지. (2026-10-07 교체: 예전 "표준 18개 고정 헤더"는 정리·설정 작업에도 Meta Display·RAG 스킬 11개를 붙여 primary가 흐려졌다 — 이 문서 아래 SKILL_SCATTER 규칙과도 모순이었음.)
+  - 고르는 예: 정리/삭제 → `@demo1-copy-residue-cleanup` · 앱/도구 설정 → `@demo-1-agent-config-repair-brief` · Codex 옆 조수 → `@demo1-devin-source-orchestrator` · Display → `@meta-rayban-display` · RAG/검색 → `@rag-search-diagnosis`. 공통으로 붙여도 되는 것: `@objective-executor`, `@safe-source-edit`. 이름은 쓰기 전에 Test-Path로 확인.
+  - ### DEVIN_MISREAD_GUARD (2026-10-07, Devin 세션 요약에서 확인된 오독)
+    1. 실행자 줄 필수: 제목 바로 아래 `실행자: DEVIN (이 지시서를 직접 수행)`. 다른 에이전트 몫(Codex 구현, Devin 감시 등)이 섞이면 그 절 제목에 `[DEVIN은 하지 않음: CODEX 몫]`을 붙인다. 근거: buttery-saxophone(10-07 09:41) — Codex 구현 지시서 안의 "Devin 판정" 절 때문에 Devin이 구현 대신 감시만 하고 NOT_STARTED로 끝남.
+    2. 정리·삭제 WP는 저장소 자체 도구의 분류를 먼저 돌려 그대로 인용한다(`scripts\copy_residue_cleanup.py plan`, `Safe-Cleanup.bat` WhatIf, `scripts\prune_build_artifacts.ps1` dry-run). 72h 규칙·보호 목록을 건너뛰는 "즉시 삭제"를 쓰지 않는다. 근거: PASTE_DEVIN_extra-gradle-cleanup(10-07) — 72h 안 폴더를 Remove-Item으로 바로 지우라고 씀, 경로 출처(%USERPROFILE% 사본 여부)도 미확인.
+    3. 공통 규칙은 포인터(`COMMON_RULES: … 참조`)만 두지 말고 이번 일에 걸리는 금지 3~6줄을 본문에 직접 쓴다(Devin이 포인터 파일을 안 열고 지나간 사례 대비).
+    4. Acceptance에 "diff 0 / 해시 동일"을 쓰지 않는다. "이 세션이 보호 대상에 쓴 횟수 = 0, 다른 세션 변경은 EXTERNAL_DRIFT"로 쓴다(공유 트리라 거짓 FAIL).
+    5. 숫자·원인은 직접 잰 것만 사실 절에 쓰고, 추측은 "확인 필요"로 표시한다.
   - 첫 명령 `Set-Location C:\AbandonWare\demo-1\demo-1\src`, 보고는 `외부 API:` 줄로 시작.
 - **Codex 지시서**: 첫 줄은 `$skill` 줄 — resolved primary 하나(+ 독립 필요 시 보조 ≤1),
   고정 세트 나열 금지. Codex는 목표 파일만 읽고 멈추는 버릇이 있어 [ANTI-STOP]이 필수.

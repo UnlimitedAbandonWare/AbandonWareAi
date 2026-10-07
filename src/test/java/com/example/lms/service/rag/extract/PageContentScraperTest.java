@@ -30,6 +30,22 @@ import static org.mockito.Mockito.when;
 class PageContentScraperTest {
 
     @Test
+    void fetchTextPreservesMiddleTableColumnsAsSeparateQualifiedPassages() throws Exception {
+        String html = "<body><main><article><p>" + "소개 자료 ".repeat(150) + "</p>"
+                + "<table><tr><th>무기</th><td>은빛 서약의 활</td><td>청동 나침의 창</td></tr>"
+                + "<tr><th>소유자</th><td>카렐로바 전용 무기</td><td>밀로슈 전용 무기</td></tr>"
+                + "<tr><th>상태</th><td>비공식 추정</td><td>공식 확정 아님</td></tr></table>"
+                + "<p>" + "기타 안내 ".repeat(150) + "</p></article></main></body>";
+        String text = fetchHtml(html);
+        assertTrue(text.lines().anyMatch(line -> line.contains("은빛 서약의 활")
+                && line.contains("카렐로바 전용 무기") && line.contains("비공식 추정")
+                && !line.contains("밀로슈") && !line.contains("청동 나침의 창")),
+                "same-column relation and qualifier must stay together without another subject");
+        assertTrue(text.lines().anyMatch(line -> line.contains("밀로슈 전용 무기")
+                && line.contains("청동 나침의 창") && !line.contains("카렐로바")));
+    }
+
+    @Test
     void fetchTextDoesNotPromoteAnArticleInsideComplementaryOrHiddenContent() throws Exception {
         for (String wrapper : List.of("aside", "nav", "div hidden", "div aria-hidden='true'", "div role='complementary'")) {
             String closingTag = wrapper.split(" ")[0];

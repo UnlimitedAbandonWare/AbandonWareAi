@@ -14,6 +14,7 @@ public final class JevDecisionScope implements AutoCloseable {
     EvaluationHandle handle;
     private ChoiceResult result;
     private boolean candidateBatchClaimed;
+    private boolean factMetaClaimed;
     private volatile boolean closed;
     private JevDecisionScope(String surface,QuestionKey key,DecisionAdmission admission,JevDecisionScope explicitOwner) {
         this.previous=CURRENT.get();
@@ -41,6 +42,10 @@ public final class JevDecisionScope implements AutoCloseable {
         return true;
     }
     synchronized void remember(ChoiceResult observed){result=observed;}
+    synchronized boolean claimFactMeta() {
+        if(!isOpen()||factMetaClaimed)return false;
+        factMetaClaimed=true;return true;
+    }
     public synchronized java.util.Optional<ChoiceResult> result(){return java.util.Optional.ofNullable(owner.result);}
     @Override public void close() {
         if(closed)return;

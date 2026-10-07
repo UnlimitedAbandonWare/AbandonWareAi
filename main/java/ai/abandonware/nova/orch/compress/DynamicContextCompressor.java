@@ -2054,22 +2054,16 @@ public class DynamicContextCompressor {
         }
 
         if (t.length() > bodyBudget) {
-            if (bodyBudget <= 1) {
-                t = "";
+            if (bodyBudget <= 3) {
+                t = t.substring(0, bodyBudget);
             } else {
-                // [PATCH] Keep a small tail window to preserve sparse evidence near the end of the doc.
+                // Reserve all three separator characters so the final clamp cannot erase tail qualifiers.
                 int tail = Math.min(260, Math.max(120, bodyBudget / 3));
-                if (tail >= bodyBudget) {
-                    tail = Math.max(0, bodyBudget - 1);
-                }
-                int head = bodyBudget - tail - 1;
-                if (head <= 0 || tail <= 0) {
-                    t = t.substring(0, bodyBudget - 1) + "...";
-                } else {
-                    String h = t.substring(0, Math.min(head, t.length()));
-                    String tl = t.substring(Math.max(0, t.length() - tail));
-                    t = h + "..." + tl;
-                }
+                tail = Math.min(tail, bodyBudget - 4);
+                int head = bodyBudget - tail - 3;
+                String h = t.substring(0, head);
+                String tl = tail > 0 ? t.substring(t.length() - tail) : "";
+                t = h + "..." + tl;
             }
         }
 

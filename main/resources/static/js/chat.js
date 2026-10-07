@@ -1022,7 +1022,7 @@ function syncSelectedSessionRow(sessionId = state.currentSessionId) {
 }
 
 function sessionSelectionBusy() {
-  return Boolean(activeRunIdentitySnapshot() || activeStreamAssistant);
+  return Boolean(activeRunIdentitySnapshot() || activeStreamAssistant || pendingStopBeforeToken?.unresolved);
 }
 
 function syncSessionSelectionCapability() {
@@ -1172,7 +1172,7 @@ const TURN_TRACE_SNAPSHOT_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
 const TURN_TRACE_FIELD_KEY = /^[A-Za-z0-9_.:-]{1,80}$/;
 const TURN_TRACE_FIELD_VALUE = /^[\x20-\x7E]{0,160}$/;
 const TURN_TRACE_MAX_ENTRIES = 64;
-const TURN_TRACE_MAX_FIELDS = 19; // Existing 16 fields plus three observed overview scalars.
+const TURN_TRACE_MAX_FIELDS = 20; // Existing 16 fields plus four observed overview scalars.
 
 function normalizeMessageTurnId(raw) {
   const numeric = Number(raw);
@@ -1248,7 +1248,9 @@ function validateSessionDetail(candidateId, detail) {
       role: String(message.role).toLowerCase(),
       content: message.content,
       turnId: normalizeMessageTurnId(message.turnId ?? message.id),
-      executionMode: String(message.role).toLowerCase() === "assistant" ? message.executionMode : undefined
+      executionMode: String(message.role).toLowerCase() === "assistant" ? message.executionMode : undefined,
+      evidence: String(message.role).toLowerCase() === "assistant" && Array.isArray(message.evidence)
+        ? message.evidence : undefined
     }));
   const turnTraces = validateTurnTraces(detail.turnTraces);
   return { ...detail, id: expectedId, messages, turnTraces, settings: detail.settings || {} };
@@ -1345,7 +1347,14 @@ async function selectSessionCandidate(candidateId) {
       if (message.turnId != null) node.dataset.turnId = String(message.turnId);
       if (message.role === "assistant") {
         renderExecutionModeReceipt({ executionMode: message.executionMode }, node);
-        try { window.ChatEvidenceGraph?.restore(node); } catch { /* Optional answer view. */ }
+        node.dataset.sessionId = String(id);
+        if (Array.isArray(message.evidence) && message.evidence.length) {
+          renderEvidenceRail(message.evidence, node, { answerText: message.content });
+        }
+        try {
+          window.ChatEvidenceGraph?.restore(node, { sessionId: id, turnId: message.turnId,
+            evidence: message.evidence, answerText: message.content });
+        } catch { /* Optional answer view. */ }
       }
       const turnTrace = restoredTurnTraces.get(message.turnId);
       if (turnTrace) renderRestoredTurnTrace(node, turnTrace);
@@ -1523,7 +1532,7 @@ function clearOrphanedSessionlessTranscript() {
 }
 
 function startNewChatSession() {
-  if (dom.messageInput?.disabled) {
+  if (dom.messageInput?.disabled || pendingStopBeforeToken?.unresolved) {
     setStatusRailValue(dom.traceStatus, "stop response first");
     return false;
   }
@@ -1734,7 +1743,14 @@ async function hydrateRestoredSessionTranscript() {
         if (message.turnId != null) node.dataset.turnId = String(message.turnId);
         if (message.role === "assistant") {
           renderExecutionModeReceipt({ executionMode: message.executionMode }, node);
-          try { window.ChatEvidenceGraph?.restore(node); } catch { /* Optional answer view. */ }
+          node.dataset.sessionId = String(sid);
+          if (Array.isArray(message.evidence) && message.evidence.length) {
+            renderEvidenceRail(message.evidence, node, { answerText: message.content });
+          }
+          try {
+            window.ChatEvidenceGraph?.restore(node, { sessionId: sid, turnId: message.turnId,
+              evidence: message.evidence, answerText: message.content });
+          } catch { /* Optional answer view. */ }
         }
         const turnTrace = restoredTurnTraces.get(message.turnId);
         if (turnTrace) renderRestoredTurnTrace(node, turnTrace);
@@ -2834,7 +2850,7 @@ function syncSendButtonState(options = {}) {
   if (!dom.sendBtn) return;
   const busy = options.busy ?? dom.messageInput?.disabled === true;
   const hasDraft = Boolean(dom.messageInput?.value?.trim());
-  dom.sendBtn.disabled = busy || !hasDraft || !chatModelCatalogReady || chatAccessState === "login_required" || chatAccessState === "forbidden";
+  dom.sendBtn.disabled = busy || pendingStopBeforeToken?.unresolved === true || !hasDraft || !chatModelCatalogReady || chatAccessState === "login_required" || chatAccessState === "forbidden";
 }
 
 function hasComposerDraftRailToRefresh() {
@@ -6172,8 +6188,10 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
       .some(key => Object.prototype.hasOwnProperty.call(payload, key));
     const observedModel = [payload.observedModel, payload.observed_model]
       .find(value => typeof value === "string" && value.trim())?.trim() || null;
+    const observedProvider = [payload.observedProvider, payload.observed_provider]
+      .find(value => typeof value === "string" && value.trim())?.trim() || null;
     const reportedModel = hasObservation ? observedModel : legacyReportedModel;
-    window.AwxChatTraceUi?.upsertSummary(assistant, { observedModel });
+    window.AwxChatTraceUi?.upsertSummary(assistant, { observedModel, observedProvider });
     const model = hasObservation ? observedModel || "UNKNOWN" : legacyModel;
     const finalSessionId = sessionIdFromPayload(payload);
     const sid = finalSessionId || state.currentSessionId;
@@ -6541,6 +6559,7 @@ function applySuccessfulStreamCancel(expectedRun, options = {}) {
   setCoreStatus("stopped", options.coreReason || "server cancel");
   pendingStopBeforeToken = null;
   controller?.abort();
+  syncSendButtonState();
   if (expectedRun) clearActiveRunIdentityIfMatch(expectedRun);
   if (dom.stopBtn) dom.stopBtn.disabled = true;
   return true;
@@ -6553,16 +6572,60 @@ async function completePendingStopBeforeToken(sessionId, runToken, pending) {
       expectedRun.runToken !== normalizeRunToken(runToken)) return false;
   const cancelResult = await requestServerCancelWithTimeout(expectedRun.sessionId, expectedRun.runToken);
   if (pendingStopBeforeToken !== pending || !sameActiveRunIdentity(expectedRun)) return false;
+  if (pending.requireTerminal) {
+    const runState = await exactRunStateForCancel(expectedRun);
+    if (pendingStopBeforeToken !== pending || !sameActiveRunIdentity(expectedRun)) return false;
+    if (runState?.terminal === true && runState?.runStatus === "cancelled") {
+      return applySuccessfulStreamCancel(expectedRun, {
+        ...pending.options, assistant: pending.assistant, controller: pending.controller
+      });
+    }
+    if (runState?.terminal !== true || runState?.runStatus !== "cancelled") {
+      pending.unresolved = true;
+      showRetryableCancelOutcome("cancel terminal not observed");
+      return false;
+    }
+  }
   if (cancelResult.outcome === "cancelled") return applySuccessfulStreamCancel(expectedRun, {
     ...pending.options,
     assistant: pending.assistant,
     controller: pending.controller
   });
-  pendingStopBeforeToken = null;
+  if (pending.requireTerminal) pending.unresolved = true;
+  else pendingStopBeforeToken = null;
   showRetryableCancelOutcome(cancelResult.outcome === "timeout"
     ? "cancel outcome unknown"
     : "cancel not acknowledged");
   return false;
+}
+
+async function reconcilePendingStopRequest(pending) {
+  const receipt = pending?.receipt;
+  if (!receipt?.sessionId || !receipt?.key || pendingStopBeforeToken !== pending) return false;
+  let timeoutId;
+  try {
+    const stateTask = (async () => {
+      const response = await apiCall(chatTraceRequestUrl(`/api/chat/state?sessionId=${receipt.sessionId}`), {
+        headers: withChatCorrelationHeaders({ "Idempotency-Key": receipt.key }, { sessionId: receipt.sessionId })
+      });
+      return response.json();
+    })();
+    const runState = await Promise.race([stateTask, new Promise(resolve => {
+      timeoutId = window.setTimeout(() => resolve(null), SERVER_CANCEL_TIMEOUT_MS);
+    })]);
+    if (pendingStopBeforeToken !== pending || normalizeSessionIdValue(state.currentSessionId) !== receipt.sessionId) return false;
+    const token = normalizeRunToken(runState?.runToken);
+    if (!token) return false; // Lookup miss is unknown; the original request may register later.
+    const active = activeRunIdentitySnapshot();
+    if (active && (active.sessionId !== receipt.sessionId || active.runToken !== token)) return false;
+    if (!active) rememberActiveRunIdentity(receipt.sessionId, token);
+    pending.requireTerminal = true;
+    return completePendingStopBeforeToken(receipt.sessionId, token, pending);
+  } catch {
+    return false;
+  } finally {
+    if (timeoutId != null) window.clearTimeout(timeoutId);
+  }
 }
 
 async function cancelActiveStream(options = {}) {
@@ -6571,20 +6634,24 @@ async function cancelActiveStream(options = {}) {
     const sessionId = activeSessionId;
     const runToken = activeRunToken;
     const hasExactRun = Boolean(sessionId && runToken);
-    clearActiveStreamHeartbeat();
     if (!hasExactRun) {
-      pendingStopBeforeToken = {
+      const pending = pendingStopBeforeToken?.unresolved ? pendingStopBeforeToken : {
         assistant: activeStreamAssistant,
         controller: streamController,
+        receipt: streamController?.requestReceipt,
         options
       };
+      pendingStopBeforeToken = pending;
       updateOrchestrationSignalBar({
         streamStatus: "stopping",
         streamContext: "waiting-for-run-identity"
       });
       setCoreStatus("streaming", "stop pending run identity");
       if (dom.stopBtn) dom.stopBtn.disabled = true;
-      return false;
+      return reconcilePendingStopRequest(pending);
+    }
+    if (pendingStopBeforeToken?.unresolved) {
+      return reconcilePendingStopRequest(pendingStopBeforeToken);
     }
     const expectedRun = activeRunIdentitySnapshot();
     const exactCancelOptions = {
@@ -6918,7 +6985,7 @@ async function sendMessage() {
     setStatusRailValue(dom.traceStatus, "첨부 업로드 완료 후 전송");
     return;
   }
-  if (sendMessageInFlight || restoredRunResumeInFlight) return;
+  if (sendMessageInFlight || restoredRunResumeInFlight || pendingStopBeforeToken?.unresolved) return;
   sendMessageInFlight = true;
   try {
     return await sendMessageUnlocked(text);
@@ -6954,6 +7021,7 @@ async function sendMessageUnlocked(text) {
   payload.attachmentGraphConsent = attachmentIds.length > 0 && $("attachmentGraphConsent")?.checked === true;
   payload.contextPreparationRequested = attachmentIds.length > 0 && $("contextPreparationRequested")?.checked === true;
   await waitForPendingStreamCancel();
+  if (pendingStopBeforeToken?.unresolved) return;
   clearSelectionEntropyTrace(dom.chatMessages);
   clearDirectLiteralDiagnosticsSuppression();
   state.latestVisibleTurnEvidence = null;
@@ -7006,6 +7074,11 @@ async function sendMessageUnlocked(text) {
     }
     clearDraft = true;
   } catch (error) {
+    const pendingStop = pendingStopBeforeToken;
+    if (pendingStop?.assistant === assistant && !streamCancelRequested) {
+      pendingStop.unresolved = true;
+      await cancelActiveStream();
+    }
     if (error?.name === "AbortError" || streamCancelRequested) {
       clearSelectionEntropyTrace(assistant);
       markAssistantStreamStopped(assistant);
@@ -7088,6 +7161,7 @@ async function sendMessageUnlocked(text) {
     if (activeStreamAssistant === assistant) activeStreamAssistant = null;
     syncSessionSelectionCapability();
     syncSendButtonState();
+    if (pendingStopBeforeToken?.unresolved) showRetryableCancelOutcome("request outcome unknown; retry Stop");
   }
 }
 
@@ -7141,6 +7215,10 @@ async function streamChat(payload, loaderId, options = {}) {
   syncSessionSelectionCapability();
   streamController = new AbortController();
   const currentStreamController = streamController;
+  const admissionHeaders = generationIdempotencyHeaders(payload);
+  currentStreamController.requestReceipt = payload?.attach === true ? null : {
+    sessionId: normalizeSessionIdValue(payload.sessionId), key: admissionHeaders["Idempotency-Key"]
+  };
   const streamAbortRequested = () => currentStreamController?.signal?.aborted;
   const previousStartedAt = Number(assistant?.dataset?.streamStartedAt);
   const streamStartedAt = payload?.attach === true && Number.isFinite(previousStartedAt)
@@ -7212,7 +7290,8 @@ async function streamChat(payload, loaderId, options = {}) {
     // Each transport keeps a positive header wait and a byte-idle limit.
     const effectiveDeadlineMs = transportHeadersSeen
       ? clientDeadlineMs : Math.min(5000, clientDeadlineMs);
-    if (clientDeadlineMs != null && transportIdleMs() >= effectiveDeadlineMs) {
+    if (clientDeadlineMs != null && (elapsedMs >= clientDeadlineMs
+      || transportIdleMs() >= effectiveDeadlineMs)) {
       triggerStreamClientDeadline(elapsedMs);
     }
   }, 250);
@@ -7226,7 +7305,7 @@ async function streamChat(payload, loaderId, options = {}) {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
         "X-Chat-Run-Ack-Required": "1",
-        ...generationIdempotencyHeaders(payload),
+        ...admissionHeaders,
         ...streamServerBudgetHeaders(payload)
       }, { sessionId: payload.sessionId, runToken: payload.runToken }),
       body: JSON.stringify(payload),
@@ -7279,6 +7358,11 @@ async function streamChat(payload, loaderId, options = {}) {
         const decoded = decodeSseEvent(event);
         const effectiveType = decoded.effectiveType || "message";
         const eventPayload = decoded.payload;
+        if (!isActiveStreamRenderTarget(assistant, currentStreamController)) {
+          recordChatTransitionDebug({ kind: "late-event", to: "blocked",
+            reasonCode: "inactive-stream-target", lateEventBlocked: true });
+          return true;
+        }
         const statusSignal = eventPayload?.statusSignal || eventPayload?.status_signal || eventPayload?.signal || eventPayload;
         const cancelledStatus = effectiveType === "status" &&
           (statusSignal?.cancelled === true || String(statusSignal?.code || "").toLowerCase() === "cancelled");
@@ -7680,7 +7764,6 @@ dom.micBtn?.addEventListener("click", () => {
 if (dom.micBtn && !micSupported()) dom.micBtn.hidden = true;
 
 dom.stopBtn?.addEventListener("click", () => {
-  clearActiveStreamHeartbeat();
   void cancelActiveStream();
 });
 

@@ -146,7 +146,63 @@ public class PageContentScraper {
             return doc.text();
         }
         // Article headers retain title/date/qualifiers; the fetched document stays untouched.
-        return selected.text();
+        if (selected.select("table").isEmpty()) {
+            return selected.text();
+        }
+        // Keep table passages bounded by DOM structure, rather than flattening
+        // a middle relation into the surrounding unpunctuated article.
+        StringBuilder text = new StringBuilder();
+        org.jsoup.select.NodeTraversor.filter(new org.jsoup.select.NodeFilter() {
+            @Override
+            public FilterResult head(org.jsoup.nodes.Node node, int depth) {
+                if (node instanceof org.jsoup.nodes.Element element) {
+                    if (element.tagName().equals("table")) {
+                        text.append('\n').append(tablePassages(element)).append('\n');
+                        return FilterResult.SKIP_CHILDREN;
+                    }
+                    if (element.isBlock()) text.append('\n');
+                } else if (node instanceof org.jsoup.nodes.TextNode nodeText) {
+                    text.append(nodeText.text()).append(' ');
+                }
+                return FilterResult.CONTINUE;
+            }
+
+            @Override
+            public FilterResult tail(org.jsoup.nodes.Node node, int depth) {
+                if (node instanceof org.jsoup.nodes.Element element && element.isBlock()) text.append('\n');
+                return FilterResult.CONTINUE;
+            }
+        }, selected);
+        return text.toString().replaceAll("[\\t\\x0B\\f ]+", " ")
+                .replaceAll(" *\\n+ *", "\n").strip();
+    }
+
+    private static String tablePassages(org.jsoup.nodes.Element table) {
+        var rows = table.select("tr");
+        // Only transpose an unambiguous row-header table. Spans and nested
+        // tables retain row text; inferring their grid would invent relations.
+        int width = rows.isEmpty() ? 0 : rows.first().childrenSize();
+        boolean rowHeaders = width > 1 && table.select("table").size() == 1
+                && table.select("[rowspan], [colspan]").isEmpty()
+                && rows.stream().allMatch(row -> row.childrenSize() == width
+                        && row.child(0).tagName().equals("th")
+                        && row.children().stream().skip(1).allMatch(cell -> cell.tagName().equals("td")));
+        java.util.List<String> passages = new java.util.ArrayList<>();
+        if (rowHeaders) {
+            for (int column = 1; column < width; column++) {
+                java.util.List<String> cells = new java.util.ArrayList<>();
+                for (var row : rows) cells.add(row.child(0).text() + ": " + row.child(column).text());
+                passages.add(String.join("; ", cells));
+            }
+        } else {
+            for (var row : rows) passages.add(row.text());
+        }
+        var caption = table.selectFirst(":root > caption");
+        if (caption != null && !caption.text().isBlank()) {
+            String qualifier = caption.text();
+            passages.replaceAll(passage -> qualifier + "; " + passage);
+        }
+        return String.join("\n", passages);
     }
 
     /**

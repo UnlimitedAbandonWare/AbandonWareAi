@@ -227,6 +227,29 @@ class ChatApiControllerAutoSearchDecisionTest {
     }
 
     @Test
+    void autoModeAllowsKoreanSearchCommandWithoutWebNoun() {
+        String query = "원신에서 베스나 전용 무기에 관한 비공식 주장을 검색해서 근거와 한계를 알려줘.";
+        assertTrue(ChatApiController.shouldUseWebForSearchMode(
+                query, SearchMode.AUTO, true, false, decisions, 5));
+        assertFalse(ChatApiController.shouldUseWebForSearchMode(
+                query, SearchMode.AUTO, false, false, decisions, 5));
+        assertFalse(ChatApiController.shouldUseWebForSearchMode(
+                query, SearchMode.OFF, true, false, decisions, 5));
+    }
+
+    @Test
+    void autoModeRecognizesKoreanLookupImperativesWithoutIncidentalSearchMentions() {
+        for (String query : List.of("공개 자료를 검색해줘.", "공개 자료를 검색해 주세요.", "공개 자료를 검색하여 근거를 알려줘.")) {
+            assertTrue(ChatApiController.shouldUseWebForSearchMode(
+                    query, SearchMode.AUTO, true, false, decisions, 5), query);
+        }
+        for (String query : List.of("검색하는 방법을 로컬에서 설명해줘.", "검색해줘라는 문장의 뜻을 설명해줘.", "자료를 검색하지 마.", "자료를 검색해서 답하지 말고 제공한 내용만 요약해줘.")) {
+            assertFalse(ChatApiController.shouldUseWebForSearchMode(
+                    query, SearchMode.AUTO, true, false, decisions, 5), query);
+        }
+    }
+
+    @Test
     void autoModeAllowsExplicitDomainEvidenceProbeWhenWebIsOn() {
         assertTrue(ChatApiController.shouldUseWebForSearchMode(
                 "Browser UI RAG web search final probe: confirm openai.com official docs evidence in one line.",

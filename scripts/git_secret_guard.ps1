@@ -282,6 +282,7 @@ function Read-CommittedTextOrNull {
     $header = New-Object Text.StringBuilder
     do {
         $b = $reader.ReadByte()
+        if ($b -lt 0) { throw 'push-blob-unavailable' }
         if ($b -ne 10) { [void]$header.Append([char]$b) }
     } while ($b -ne 10)
     $parts = $header.ToString().Split(' ')
@@ -334,7 +335,22 @@ function Find-SecretGuardFindings {
         }
 
         if ($null -ne $BlobProcess) {
-            $text = Read-CommittedTextOrNull $BlobProcess $BlobMap[$rel]
+            try {
+                $text = Read-CommittedTextOrNull $BlobProcess $BlobMap[$rel]
+            } catch {
+                if ($_.Exception.Message -ne 'push-blob-unavailable') { throw }
+                # 장시간 살아 있는 batch 프로세스는 시작 시점의 pack 목록만 본다.
+                # 스캔 도중 자동 gc가 느슨 객체를 새 pack으로 옮겨 지우면 missing이
+                # 나오므로 새 프로세스(최신 pack 뷰)로 한 번만 재시도한다.
+                $retryProcess = Start-GitReader $Root 'cat-file --batch'
+                try {
+                    $text = Read-CommittedTextOrNull $retryProcess $BlobMap[$rel]
+                } finally {
+                    $retryProcess.StandardInput.Close()
+                    $retryProcess.WaitForExit()
+                    $retryProcess.Dispose()
+                }
+            }
         } else {
             if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
                 continue

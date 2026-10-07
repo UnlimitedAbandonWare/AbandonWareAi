@@ -325,7 +325,8 @@ public class TraceSnapshotStore {
                 }
             }
             if (html != null && html.length() > Math.max(1024, htmlMaxLen)) {
-                html = html.substring(0, Math.max(1024, htmlMaxLen)) + "\n<!-- truncated -->";
+                String marker = "\n<!-- truncated -->";
+                html = html.substring(0, Math.max(1024, htmlMaxLen) - marker.length()) + marker;
                 htmlTruncated = true;
             }
 

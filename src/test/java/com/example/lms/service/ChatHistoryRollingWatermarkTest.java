@@ -9,6 +9,8 @@ import com.example.lms.web.ClientOwnerKeyResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -109,6 +111,89 @@ class ChatHistoryRollingWatermarkTest {
         f.service.updateRollingSummary(42L,5L);
         assertTrue(f.saved.isEmpty());
         assertEquals(10,watermark(f.current.getContent()));
+    }
+
+    @Test
+    void overflowingSummaryCannotTurnAnUnconfirmedClaimIntoAnUnqualifiedFragment() {
+        Fixture f=new Fixture();
+        String old="Assistant: 확인되지 않은 주장입니다: 오늘 실제 개관했다.";
+        String question="User: 확인된 사실과 제안을 구분해줘.";
+        String answer="Assistant: 관람 동선은 제안입니다.";
+        String expected=question+"\n"+answer;
+        ReflectionTestUtils.setField(f.service,"rollingSummaryMaxChars",
+                expected.length()+"오늘 실제 개관했다.".length()+1);
+        f.add(12L,"assistant",old.substring("Assistant: ".length()));
+        f.add(13L,"user",question.substring("User: ".length()));
+        f.add(14L,"assistant",answer.substring("Assistant: ".length()));
+        f.service.updateRollingSummary(42L,14L);
+        String body=f.saved.get(0).split("\n",2)[1];
+        assertEquals(expected,body,"omit an older whole message rather than strip its uncertainty qualifier");
+        assertTrue(f.rows.stream().anyMatch(row->old.substring("Assistant: ".length()).equals(row.getContent())),
+                "prompt summary trimming must leave the original conversation intact");
+    }
+
+    @Test
+    void pinnedAssignmentOverflowKeepsTheLatestCompleteCorrection() {
+        Fixture f=new Fixture();
+        ReflectionTestUtils.setField(f.service,"rollingSummaryMaxChars",180);
+        f.add(12L,"user","이전 설명의 확인되지 않은 조건 "+"가".repeat(100)+"를 기억해줘.");
+        String correction="확인되지 않은 운영 여부는 미확인으로 정정해줘.";
+        f.add(13L,"user",correction);
+        f.add(14L,"assistant","제안과 확인된 안내를 구분합니다.");
+        f.service.updateRollingSummary(42L,14L);
+        String body=f.saved.get(0).split("\n",2)[1];
+        assertEquals("User: "+correction+"\nPrior fact.\nAssistant: 제안과 확인된 안내를 구분합니다.",body);
+        assertTrue(body.length()<=180);
+    }
+
+    @Test
+    void oversizedLatestMessageFallsBackToCompleteEarlierSummaryLines() {
+        Fixture f=new Fixture();
+        ReflectionTestUtils.setField(f.service,"rollingSummaryMaxChars",50);
+        f.add(12L,"user","확인된 사실만 말해줘.");
+        f.add(13L,"assistant","확인되지 않은 긴 설명 "+"가".repeat(100));
+        f.service.updateRollingSummary(42L,13L);
+        String body=f.saved.get(0).split("\n",2)[1];
+        assertEquals("Prior fact.\nUser: 확인된 사실만 말해줘.",body);
+        assertTrue(body.length()<=50);
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints={180,100})
+    void newestLongCorrectionCannotBeReplacedByAnOlderSupersededAssignment(int cap) {
+        Fixture f=new Fixture();
+        ReflectionTestUtils.setField(f.service,"rollingSummaryMaxChars",cap);
+        String old="오늘 실제 개관했다고 기억해줘.";
+        String correction="오늘 실제 개관 여부는 미확인입니다. "
+                +"공식 안내와 오늘 현장 운영을 구분하며 확인되지 않은 상태를 단정하지 말고 ".repeat(2)
+                +"미확인으로 정정해줘.";
+        assertTrue(("User: "+correction).length()>90 && ("User: "+correction).length()<=180);
+        f.add(12L,"user",old);
+        f.add(13L,"user",correction);
+        f.add(14L,"assistant","현재 개관 여부는 미확인입니다.");
+        f.service.updateRollingSummary(42L,14L);
+        String body=f.saved.get(0).split("\n",2)[1];
+        assertFalse(body.contains(old),"a newest correction that does not fit the pin allocation must never restore the superseded value");
+        if (cap==180) assertTrue(body.contains("User: "+correction),"use the existing overall cap for the complete latest correction");
+        assertTrue(body.length()<=cap);
+    }
+
+    @Test
+    void rejectingAnOversizedCorrectionInvalidatesAnOtherwiseEmptySupersededSummary() throws Exception {
+        Fixture f=new Fixture();
+        String old="운영 중으로 기억해줘.";
+        f.current.setContent(PREFIX+"{\"lastMessageId\":10,\"turns\":5}\nUser: "+old);
+        ReflectionTestUtils.setField(f.service,"rollingSummaryMaxChars",40);
+        ReflectionTestUtils.setField(f.service,"rollingSummaryPromoteMinTurns",1);
+        String correction="오늘 개관 여부는 미확인입니다. 확인되지 않은 운영 상태를 단정하지 말고 미확인으로 정정해줘.";
+        f.add(12L,"user",correction);
+        f.service.updateRollingSummary(42L,12L);
+        assertEquals(1,f.saved.size(),"persist invalidation instead of leaving the superseded summary active");
+        assertEquals(12,watermark(f.current.getContent()));
+        var snapshot=f.service.getConversationMemorySnapshot(42L);
+        assertTrue(snapshot.summary().isBlank());
+        assertFalse(snapshot.promoted(),"empty summary invalidation cannot be promoted as knowledge");
+        assertTrue(f.rows.stream().anyMatch(row->correction.equals(row.getContent())));
     }
 
     private static long watermark(String content) throws Exception { return number(content,"lastMessageId"); }

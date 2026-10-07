@@ -37,6 +37,43 @@ class ProviderRateLimitBackoffAspectTest {
     }
 
     @Test
+    void braveLocalPermitFailureDoesNotSkipAnotherRequest() throws Throwable {
+        RateLimitBackoffCoordinator backoff = new RateLimitBackoffCoordinator(new MockEnvironment());
+        ProviderRateLimitBackoffAspect aspect = new ProviderRateLimitBackoffAspect(backoff, null);
+        ProceedingJoinPoint first = mock(ProceedingJoinPoint.class);
+        BraveSearchResult local = new BraveSearchResult(List.of(),
+                BraveSearchResult.Status.RATE_LIMIT_LOCAL, null, 1000L, "local rate limit hit", 0L);
+        when(first.proceed()).thenReturn(local);
+
+        assertEquals(local, aspect.aroundBraveSearchWithMeta(first));
+        assertFalse(backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE).shouldSkip(),
+                "request-local permit rejection must not become shared provider cooldown");
+        assertNull(TraceStore.get("web.brave.cooldown.startedNow"));
+        TraceStore.clear();
+
+        ProceedingJoinPoint second = mock(ProceedingJoinPoint.class);
+        BraveSearchResult healthy = new BraveSearchResult(List.of(),
+                BraveSearchResult.Status.OK, 200, 0L, "ok", 1L);
+        when(second.proceed()).thenReturn(healthy);
+        assertEquals(healthy, aspect.aroundBraveSearchWithMeta(second));
+        assertNull(TraceStore.get("web.brave.skipped"));
+    }
+
+    @Test
+    void braveWireRateLimitStillStartsSharedCooldown() throws Throwable {
+        RateLimitBackoffCoordinator backoff = new RateLimitBackoffCoordinator(new MockEnvironment());
+        ProviderRateLimitBackoffAspect aspect = new ProviderRateLimitBackoffAspect(backoff, null);
+        ProceedingJoinPoint pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenReturn(new BraveSearchResult(List.of(),
+                BraveSearchResult.Status.HTTP_429, 429, 1000L, "rate-limit", 1L));
+
+        aspect.aroundBraveSearchWithMeta(pjp);
+
+        assertTrue(backoff.shouldSkip(RateLimitBackoffCoordinator.PROVIDER_BRAVE).shouldSkip());
+        assertEquals(Boolean.TRUE, TraceStore.get("web.brave.cooldown.startedNow"));
+    }
+
+    @Test
     void naverCancellationReturnsEmptyWithoutBreakerBackoff() throws Throwable {
         RateLimitBackoffCoordinator backoff = new RateLimitBackoffCoordinator(new MockEnvironment());
         ProviderRateLimitBackoffAspect aspect = new ProviderRateLimitBackoffAspect(backoff, null);

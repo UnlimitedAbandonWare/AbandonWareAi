@@ -27,6 +27,12 @@ public class SearchDecisionService {
                     + "(?:숫자\\s*(?:한\\s*개)?\\s*(?:로)?\\s*(?:만)?\\s*)?"
                     + "(?:(?:알려|답해|계산해)\\s*줘|(?:얼마|몇)(?:야|이야|인가요)?|=)?\\s*[?!.]*$");
 
+    private static final Pattern KOREAN_SEARCH_COMMAND = Pattern.compile(
+            "(?:^|\\s)검색(?:해서(?=\\s)|해\\s*(?:줘|주세요)(?=\\s|[.!?]|$)|하라(?=\\s|[.!?]|$)|하여(?=\\s))");
+
+    private static final Pattern KOREAN_SEARCH_PROHIBITION = Pattern.compile(
+            "(?:^|\\s)검색(?:해서|하여)[^.!?\\n]*하지\\s*(?:마|말)");
+
     private static final Pattern ENGLISH_RECENCY_INTENT = Pattern.compile(
             "(?<![\\p{L}\\p{N}\\p{M}\\p{Pc}])"
                     + "(?:latest|recent|update|release|news|current|today)"
@@ -163,7 +169,9 @@ public class SearchDecisionService {
         String q = query == null ? "" : query;
         boolean koreanWebLookup = q.contains("웹") && containsAny(q,
                 "찾아", "찾아보", "검색해", "검색하", "가져오", "확인해", "확인하");
-        return koreanWebLookup || containsAny(q,
+        boolean koreanSearchCommand = KOREAN_SEARCH_COMMAND.matcher(q).find()
+                && !KOREAN_SEARCH_PROHIBITION.matcher(q).find();
+        return koreanWebLookup || koreanSearchCommand || containsAny(q,
                 "search the web", "browse the web", "look up online", "lookup online",
                 "find online", "web lookup");
     }

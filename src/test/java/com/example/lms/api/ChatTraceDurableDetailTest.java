@@ -15,6 +15,132 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatTraceDurableDetailTest {
+    @Test void snapshotWithoutSavedAttributionNeverRecalculatesMissingContext() {
+        var analyzer = mock(com.example.lms.trace.attribution.TraceAblationAttributionService.class);
+        String html = new TraceHtmlBuilder(analyzer).buildSnapshotHtml("legacy-snapshot", null, null, null,
+                null, "chat.trace_html.final", "SSE", "none", null, null,
+                Map.of("web.failsoft.starvationFallback.used", true), Map.of());
+        verifyNoInteractions(analyzer);
+        assertTrue(html.contains("저장된 TAA 요약 없음"));
+        assertFalse(html.contains("risk="));
+    }
+
+    @Test void denseDiagnosticsRetainAttributionAndObservedExecutionWithinExistingCap() throws Exception {
+        Map<String, Object> source = new LinkedHashMap<>();
+        for (String field : java.util.List.of("DETAIL_FLAGS", "DETAIL_COUNTS", "DETAIL_NUMBERS", "DETAIL_LABELS")) {
+            var declared = ChatTraceMetaMessageRestorer.class.getDeclaredField(field);
+            declared.setAccessible(true);
+            for (String key : (java.util.Set<String>) declared.get(null)) {
+                source.put(key, switch (field) {
+                    case "DETAIL_FLAGS" -> false;
+                    case "DETAIL_COUNTS" -> 0;
+                    case "DETAIL_NUMBERS" -> 0.5d;
+                    default -> "safe";
+                });
+            }
+        }
+        source.put("taa.version", "taa-1.0");
+        source.put("taa.outcome", "STARVATION");
+        source.put("routing.executionPlan.primaryMode", "EXTREMEZ");
+        source.put("observedModel", "synthetic/model");
+        var projected = ChatTraceMetaMessageRestorer.projectDiagnostics(source);
+        assertTrue(projected.size() <= 80);
+        for (String key : java.util.List.of("taa.version", "taa.outcome", "taa.outcome.risk",
+                "taa.topContributor.id", "taa.topContributor.group", "taa.candidate.count", "taa.beam.count",
+                "routing.executionPlan.primaryMode", "extremez.execute.activated", "observedModel",
+                "finalAnswer.releaseAllowed", "finalAnswer.releaseReason")) {
+            assertTrue(projected.containsKey("diag." + key), key);
+        }
+        StringBuilder encoded = new StringBuilder(CORE);
+        projected.forEach((key, value) -> encoded.append(key).append('=').append(value).append('\n'));
+        var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(envelope(encoded.toString(), "v3"), 77L).orElseThrow();
+        assertEquals("taa-1.0", pointer.diagnostics().get("taa.version"));
+    }
+
+    @Test void oneRenderedResultTravelsToSnapshotAndDurableSummaryWithoutThreadLocalMerge() {
+        var analyzer = spy(new com.example.lms.trace.attribution.TraceAblationAttributionService());
+        var builder = new TraceHtmlBuilder(analyzer);
+        Map<String, Object> captured = Map.of("web.failsoft.starvationFallback.used", true);
+        com.example.lms.search.TraceStore.clear();
+        com.example.lms.search.TraceStore.put("unrelated.request.field", "must-not-merge");
+        try {
+            var rendered = builder.buildSplitPanelWithMetadata(null, java.util.List.of(), java.util.List.of(),
+                    null, captured, true);
+            assertTrue(rendered.html().contains("Trace-Ablation Attribution"));
+            assertEquals("taa-1.0", rendered.metadata().get("taa.version"));
+            assertFalse(captured.containsKey("taa.version"));
+            assertFalse(rendered.metadata().containsKey("unrelated.request.field"));
+            assertThrows(UnsupportedOperationException.class, () -> rendered.metadata().put("bad", true));
+            TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+            ChatHistoryService history = mock(ChatHistoryService.class);
+            when(store.captureCustom(any(), any(), any(), any(), any(), any(), any())).thenReturn("owned-snapshot");
+            when(history.appendMessageReturningId(eq(7L), eq("system"), any())).thenReturn(77L);
+            ChatTraceSnapshotPointerPersister.persist(7L, 66L, "chat.trace_html.final", "SSE", "/api/chat",
+                    rendered.metadata(), rendered.html(), store, history, LoggerFactory.getLogger(getClass()));
+            ArgumentCaptor<Map<String, Object>> snap = ArgumentCaptor.forClass(Map.class);
+            verify(store).captureCustom(any(), any(), any(), any(), any(), snap.capture(), eq(rendered.html()));
+            assertEquals(rendered.metadata().get("taa.outcome.risk"), snap.getValue().get("taa.outcome.risk"));
+            ArgumentCaptor<String> saved = ArgumentCaptor.forClass(String.class);
+            verify(history).appendMessageReturningId(eq(7L), eq("system"), saved.capture());
+            var restored = ChatTraceMetaMessageRestorer.parseSnapshotPointer(saved.getValue(), 77L).orElseThrow();
+            assertEquals(rendered.metadata().get("taa.outcome.risk"), restored.diagnostics().get("taa.outcome.risk"));
+            String restoredHtml = builder.buildSnapshotHtml("owned-snapshot", null, null, null, null,
+                    "chat.trace_html.final", "SSE", "none", null, null, restored.diagnostics(), Map.of());
+            assertTrue(restoredHtml.contains("risk=" + String.format(java.util.Locale.ROOT, "%.3f",
+                    rendered.metadata().get("taa.outcome.risk"))));
+            verify(analyzer, times(1)).analyze(anyMap(), anyList(), isNull());
+        } finally { com.example.lms.search.TraceStore.clear(); }
+    }
+
+    @Test void extremeZProducerFieldsSurviveTypedDurableRoundtrip() {
+        Map<String, Object> observed = Map.of(
+                "routing.executionPlan.primaryMode", "EXTREMEZ", "orch.mode", "NORMAL",
+                "extremez.execute.activated", true, "extremez.execute.refinedCount", 0,
+                "extremez.activated", false, "extremez.skipReason", "burst_handler_already_ran");
+        var projection = ChatTraceMetaMessageRestorer.projectDiagnostics(observed);
+        StringBuilder encoded = new StringBuilder(CORE);
+        projection.forEach((key, value) -> encoded.append(key).append('=').append(value).append('\n'));
+        var restored = ChatTraceMetaMessageRestorer.parseSnapshotPointer(envelope(encoded.toString(), "v3"), 77L).orElseThrow();
+        assertEquals("EXTREMEZ", restored.diagnostics().get("routing.executionPlan.primaryMode"));
+        assertEquals(Boolean.TRUE, restored.diagnostics().get("extremez.execute.activated"));
+        String html = new TraceHtmlBuilder(null).buildSnapshotHtml("owned-snapshot", null, null, null, null,
+                "chat.trace_html.final", "SSE", "none", null, null, restored.diagnostics(), Map.of());
+        assertTrue(html.contains("execute=true"));
+        assertTrue(html.contains("handler output=0"));
+        assertTrue(html.contains("AOP document growth=false"));
+    }
+
+    @Test void storedAttributionSummarySurvivesRingMissWithoutRecalculatingRisk() {
+        Map<String, Object> observed = new LinkedHashMap<>();
+        observed.put("taa.version", "taa-1.0");
+        observed.put("taa.outcome", "STARVATION");
+        observed.put("taa.outcome.risk", 0.798d);
+        observed.put("taa.topContributor.id", "starvation");
+        observed.put("taa.topContributor.group", "retrieval");
+        observed.put("taa.candidate.count", 1);
+        observed.put("taa.beam.count", 1);
+        observed.put("ablation.finalized", true);
+        observed.put("ablation.score.final", 0.75d);
+        observed.put("taa.rawEvidence", "synthetic private evidence");
+        Map<String, String> projected = ChatTraceMetaMessageRestorer.projectDiagnostics(observed);
+        assertEquals("s:taa-1.0", projected.get("diag.taa.version"));
+        StringBuilder encoded = new StringBuilder(CORE);
+        projected.forEach((key, value) -> encoded.append(key).append('=').append(value).append('\n'));
+        var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(envelope(encoded.toString(), "v3"), 77L).orElseThrow();
+        assertEquals(0.798d, pointer.diagnostics().get("taa.outcome.risk"));
+        assertEquals(Boolean.TRUE, pointer.diagnostics().get("ablation.finalized"));
+        var analyzer = mock(com.example.lms.trace.attribution.TraceAblationAttributionService.class);
+        String html = new TraceHtmlBuilder(analyzer).buildSnapshotHtml("owned-snapshot", null, null, null,
+                null, "chat.trace_html.final", "SSE", "none", null, null, pointer.diagnostics(), Map.of());
+        assertTrue(html.contains("Trace-Ablation Attribution"));
+        assertTrue(html.contains("risk=0.798"));
+        assertTrue(html.contains("taa-1.0"));
+        assertTrue(html.contains("요약만 복원"));
+        assertTrue(html.contains("휴리스틱"));
+        assertFalse(html.contains("synthetic private evidence"));
+        verifyNoInteractions(analyzer);
+    }
+
     private static final String CORE = "storageMode=durable_fallback\nassistantMessageId=66\n"
             + "reason=chat.trace_html.final\nmethod=SSE\npathHash=hash:111111111111\n";
     private static String envelope(String text, String version) {

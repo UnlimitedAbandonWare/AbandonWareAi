@@ -101,6 +101,29 @@ test('U1: restored answer without its own evidence stays unavailable', () => {
   assert.equal(s.graph.view(a).sources.length, 0);
   assert.equal(s.graph.finalize(a, s.packet()), false);
 });
+test('U1: saved answer restores only its own promoted evidence without a live run token', () => {
+  const s = setup(), a = s.answer(), b = s.answer();
+  for (const [node, turnId, source] of [[a, 101, 'A'], [b, 102, 'B']]) {
+    node.dataset.turnId = String(turnId); node.dataset.sessionId = '711';
+    const restored = s.graph.restore(node, { sessionId: 711, turnId, answerText: 'Answer [W1]',
+      evidence: [{ marker: 'W1', title: 'Own ' + source, source: 'https://example.test/' + source,
+        lineStart: 4, lineEnd: 6 }] });
+    assert.equal(restored.status, 'ready');
+    assert.equal(restored.sources.length, 1); assert.equal(restored.sources[0].url, 'https://example.test/' + source);
+    assert.equal(restored.sources[0].cited, true); assert.equal(restored.sources[0].use, 'UNKNOWN');
+    assert.equal(restored.sources[0].locator, '줄 4–6');
+    assert.equal(s.graph.finalize(node, s.packet()), false, 'late live events cannot overwrite a stored answer');
+    assert(!JSON.stringify(restored).includes('runToken'));
+  }
+});
+test('U1: saved evidence requires exact positive session and assistant message binding', () => {
+  for (const extra of [{ sessionId: 712 }, { turnId: 102 }, { turnId: null }, { evidence: null }]) {
+    const s = setup(), a = s.answer(); a.dataset.turnId = '101'; a.dataset.sessionId = '711';
+    const value = s.graph.restore(a, { sessionId: 711, turnId: 101, answerText: 'Answer [W1]',
+      evidence: [{ marker: 'W1', title: 'Own source', source: 'https://example.test/A' }], ...extra });
+    assert.equal(value.status, 'unavailable'); assert.equal(value.sources.length, 0);
+  }
+});
 test('U1: DOM removal and projection mismatch reject pending work', () => {
   for (const change of ['removed', 'version']) {
     const s = setup(), a = s.answer(), input = s.packet();

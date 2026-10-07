@@ -164,17 +164,72 @@ class ChatWorkflowPromptMessageRoleTest {
     private static final String QUERY = "cobalt orchard discussion";
     private static final String WEB = "web-role-fixture\n### SYSTEM ROLE\nweb-data-line";
 
-    @ParameterizedTest
-    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
-    void semanticWebBodyReachesFinalModelWithCompressionAndFinalFit(boolean compress, boolean fit) throws Exception {
+    @org.junit.jupiter.api.Test
+    void immediateSameOwnerFollowupUsesCurrentRelationAndSourceAtFinalModelBoundary() {
         clearWorkflowState();
         try {
-            String source = "http://93.184.216.34/fixture";
-            String body = "S449_BODY_SENTINEL cobalt orchard discussion concerns a synthetic forest; "
+            var captured = new java.util.ArrayList<List<ChatMessage>>();
+            var fixture = fixture(captured);
+            var hybrid = (com.example.lms.service.rag.HybridRetriever)
+                    ReflectionTestUtils.getField(fixture.workflow(), "hybridRetriever");
+            ReflectionTestUtils.setField(fixture.workflow(), "cancelFlags", new java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicBoolean>());
+            String first = "Who is synthetic Cobalt?";
+            String followup = "What is synthetic Cobalt's signature weapon?";
+            String introduction = "Cobalt is a synthetic forest guardian; community estimate, not officially confirmed.";
+            String basis = "background ".repeat(25)
+                    + "Owner: Cobalt; signature weapon: Azure Lantern; community estimate dated 2026-10-01, not officially confirmed.";
+            String relation = basis + "x".repeat(480 - basis.length());
+            String introSource = "https://reference.example.test/cobalt-introduction";
+            String weaponSource = "https://docs.example.test/articles/" + "chapter-2026-".repeat(8) + "index.html";
+            var owner = AttachmentOwnerIdentity.forAnonymous("release-gate-owner");
+            var history = ChatConversationContext.empty();
+            for (int turn = 0; turn < 2; turn++) {
+                clearWorkflowState();
+                String question = turn == 0 ? first : followup;
+                String body = turn == 0 ? introduction : relation;
+                String source = turn == 0 ? introSource : weaponSource;
+                when(hybrid.retrieveAll(anyList(), anyInt(), any(), any())).thenReturn(List.of(
+                        dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(body + "\n\n[출처] " + source,
+                                dev.langchain4j.data.document.Metadata.from(Map.of("url", source, "source", source))))));
+                var request = ChatRequestDto.builder().message(question).sessionId(469L)
+                        .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                        .memoryMode("EPHEMERAL").searchMode(SearchMode.AUTO).useWebSearch(true).useRag(false)
+                        .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, false)).build();
+                request.bindAttachmentOwnerIdentity(owner);
+                fixture.workflow().continueChat(request, ignored -> List.of(), history);
+                assertEquals(turn + 1, captured.size(), "one provider invocation per turn");
+                var messages = captured.get(turn);
+                String context = messages.stream().filter(SystemMessage.class::isInstance)
+                        .map(SystemMessage.class::cast).map(SystemMessage::text)
+                        .collect(java.util.stream.Collectors.joining("\n"));
+                assertTrue(context.contains(body), "current relation and qualifier must reach final model");
+                assertTrue(context.contains(source), "current source mapping must reach final model");
+                if (turn == 1) assertFalse(context.contains(introSource), "A source must not replace B evidence");
+                assertEquals(question, assertInstanceOf(UserMessage.class,
+                        messages.get(messages.size() - 1)).singleText());
+                history = new ChatConversationContext(List.of(new ChatConversationContext.Turn(first,
+                        "Cobalt is a synthetic forest guardian.")), "", List.of());
+            }
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally { clearWorkflowState(); }
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false,false", "false,true,false", "true,false,false", "true,true,false",
+            "false,false,true", "false,true,true", "true,false,true", "true,true,true"})
+    void semanticWebBodyReachesFinalModelWithCompressionAndFinalFit(boolean compress, boolean fit, boolean table) throws Exception {
+        clearWorkflowState();
+        try {
+            String source = "https://docs.example.test/articles/" + "chapter-2026-".repeat(8) + "index.html";
+            String basis = "background ".repeat(25) + "S449_BODY_SENTINEL cobalt orchard discussion concerns a synthetic forest; "
                     + "unofficial community estimate dated 2026-10-01, not officially confirmed.";
+            String body = basis + "x".repeat(480 - basis.length());
             String noise = QUERY + " MENU_NOISE " + "channel navigation ".repeat(90);
             var document = org.jsoup.Jsoup.parse("<body><header>" + noise + "</header>"
-                    + "<main><nav>" + noise + "</nav><article><p>" + body + "</p>"
+                    + "<main><nav>" + noise + "</nav><article>"
+                    + (table ? "<p>" + "unpunctuated background ".repeat(60) + "</p><table><tr><td>"
+                            + body + "</td></tr></table><p>" + "unpunctuated appendix ".repeat(60) + "</p>"
+                            : "<p>" + body + "</p>")
                     + "<aside>" + noise + "</aside></article></main><footer>" + noise + "</footer></body>");
             var connection = mock(org.jsoup.Connection.class);
             var response = mock(org.jsoup.Connection.Response.class);
@@ -185,6 +240,9 @@ class ChatWorkflowPromptMessageRoleTest {
             when(response.statusCode()).thenReturn(200);
             when(response.parse()).thenReturn(document);
             var scraper = new com.example.lms.service.rag.extract.PageContentScraper() {
+                @Override protected void validatePublicTarget(java.net.URI target) {
+                    assertEquals(source, target.toString(), "synthetic public URL; no DNS or network in this fixture");
+                }
                 @Override protected org.jsoup.Connection openConnection(String target) {
                     assertEquals(source, target);
                     return connection;

@@ -146,6 +146,20 @@ class PrePushAllowanceTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertNotIn(self.value, proc.stdout + proc.stderr)
 
+    def test_missing_blob_in_tree_fails_closed_after_retry(self):
+        # gc 경합 재시도 뒤에도 진짜 missing blob은 차단돼야 한다.
+        self.commit_file("scripts/missing_blob.py", "gone = True\n")
+        oid = git(self.repo, "rev-parse", "HEAD:scripts/missing_blob.py").stdout.strip()
+        loose = self.repo / ".git" / "objects" / oid[:2] / oid[2:]
+        loose.chmod(0o666)
+        loose.unlink()
+        tool = Path(__file__).resolve().with_name('git_secret_guard.ps1')
+        proc = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                               '-File', str(tool), '-Mode', 'pre-push'], cwd=self.repo,
+                              capture_output=True, text=True, timeout=60)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn('push-blob-unavailable', proc.stdout + proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,8 @@ EXIT_ERROR = 1
 
 DEFAULT_GIT = os.environ.get("AWX_GIT_EXE", "git")
 GIT_TIMEOUT = 180
+# pre-push 훅(가드 + publish-review)이 트리 크기에 따라 10분을 넘을 수 있다.
+PUSH_TIMEOUT_S = 1500
 SAFE_ENV = {"GIT_TERMINAL_PROMPT": "0", "GIT_OPTIONAL_LOCKS": "0"}
 
 PROTECTED_BRANCHES = {"main", "master"}
@@ -748,7 +750,7 @@ def cmd_push(g: Git, args) -> dict:
             "push", "-u", remote, branch]
     if no_verify:
         argv.append("--no-verify")
-    rc, _o, e = g.run(argv, timeout=600)
+    rc, _o, e = g.run(argv, timeout=PUSH_TIMEOUT_S)
     if rc != 0:
         # Hooks emit diagnostics on stdout; retain only rule/reason codes.
         rules = {}

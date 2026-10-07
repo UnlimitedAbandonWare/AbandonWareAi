@@ -2016,6 +2016,16 @@ public class ChatWorkflow {
         List<dev.langchain4j.rag.content.Content> fused = priorWebEvidence;
         // Ownership survives a skipped/failed tool call: later search must not bypass its budget.
         List<Content> approvedToolWebEvidence = externalCtxProvider instanceof WebEvidenceSupplier ? List.of() : null;
+        TraceStore.put("web.evidenceSupplier.present", externalCtxProvider instanceof WebEvidenceSupplier);
+        TraceStore.put("web.evidenceSupplier.webEnabled", useWeb);
+        TraceStore.put("web.evidenceSupplier.priorEvidenceReused", reusePriorWebEvidence);
+        TraceStore.put("web.evidenceSupplier.budgetAllowed", false);
+        TraceStore.put("web.evidenceSupplier.planAllowed", false);
+        TraceStore.put("web.evidenceSupplier.invoked", false);
+        TraceStore.put("web.evidenceSupplier.completed", false);
+        TraceStore.put("web.evidenceSupplier.failed", false);
+        TraceStore.put("web.evidenceSupplier.resultCount", 0);
+        TraceStore.put("web.evidenceSupplier.cancellationObserved", false);
         // Needle probe (2-pass) state (used for trace + outcome reward)
         EvidenceSignals needleBeforeSignals = EvidenceSignals.empty();
         EvidenceSignals needleAfterSignals = EvidenceSignals.empty();
@@ -2441,6 +2451,8 @@ public class ChatWorkflow {
             metaHints.put("enableSelfAsk", String.valueOf(hints.isEnableSelfAsk()));
             metaHints.put("enableAnalyze", String.valueOf(hints.isEnableAnalyze()));
 
+            TraceStore.put("web.evidenceSupplier.budgetAllowed", !preLlmRetrievalBudgetLow);
+            TraceStore.put("web.evidenceSupplier.planAllowed", hints.isAllowWeb() || forceLightSearchMode);
             if (!preLlmRetrievalBudgetLow && (hints.isAllowWeb() || forceLightSearchMode) && externalCtxProvider != null) {
                 try {
                     String q0 = (planned != null && !planned.isEmpty()) ? planned.get(0) : finalQuery;
@@ -2448,8 +2460,11 @@ public class ChatWorkflow {
                     if (externalCtxProvider instanceof WebEvidenceSupplier supplier) {
                         // Keep Content metadata request-local; never round-trip provenance through text.
                         approvedToolWebEvidence = List.of();
+                        TraceStore.put("web.evidenceSupplier.invoked", true);
                         List<Content> supplied = supplier.evidence(q0);
                         approvedToolWebEvidence = supplied == null ? List.of() : List.copyOf(supplied);
+                        TraceStore.put("web.evidenceSupplier.completed", true);
+                        TraceStore.put("web.evidenceSupplier.resultCount", approvedToolWebEvidence.size());
                         prefetched = List.of();
                     } else {
                         prefetched = externalCtxProvider.apply(q0);
@@ -2460,6 +2475,10 @@ public class ChatWorkflow {
                         addPrefetchDiagnostics(metaHints, q0, prefetched);
                     }
                 } catch (Exception e) {
+                    if (externalCtxProvider instanceof WebEvidenceSupplier) {
+                        TraceStore.put("web.evidenceSupplier.failed", true);
+                        TraceStore.put("web.evidenceSupplier.cancellationObserved", e instanceof CancellationException);
+                    }
                     log.debug("[WebPrefetch] externalCtxProvider failed: {}", String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length()));
                 }
             }

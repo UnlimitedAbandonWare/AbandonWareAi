@@ -245,8 +245,17 @@
       sources: project(packet.evidence, packet.answerText) });
     return render(answer, record);
   }
-  function restore(answer) {
-    begin(answer, null, null); return view(answer);
+  function restore(answer, packet = {}) {
+    if (!answer || typeof answer !== 'object') return null;
+    if (answers.has(answer)) return view(answer);
+    const bound = attached(answer) && Number.isSafeInteger(packet.sessionId) && packet.sessionId > 0
+      && Number.isSafeInteger(packet.turnId) && packet.turnId > 0
+      && answer.dataset?.sessionId === String(packet.sessionId)
+      && answer.dataset?.turnId === String(packet.turnId) && Array.isArray(packet.evidence);
+    const record = { identity: null, isCurrent: null, panel: null, view: bound
+      ? Object.freeze({ status: 'ready', graphKind: 'source-only', projectionVersion: VERSION,
+          sources: project(packet.evidence, packet.answerText) }) : unavailable('identity') };
+    answers.set(answer, record); render(answer, record); return view(answer);
   }
   function view(answer) { return answer && typeof answer === 'object' ? answers.get(answer)?.view || null : null; }
   return { begin, finalize, invalidate, restore, view };

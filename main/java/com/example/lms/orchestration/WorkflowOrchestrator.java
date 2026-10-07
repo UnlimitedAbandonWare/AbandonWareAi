@@ -2,6 +2,7 @@ package com.example.lms.orchestration;
 
 import com.example.lms.api.ChatAttachmentQuestionDetector;
 import com.example.lms.domain.enums.AnswerMode;
+import com.example.lms.nlp.QueryDomainClassifier;
 import com.example.lms.plan.PlanHintApplier;
 import com.example.lms.rag.model.QueryDomain;
 import com.example.lms.search.TraceStore;
@@ -25,6 +26,7 @@ public class WorkflowOrchestrator {
     private static final System.Logger LOG = System.getLogger(WorkflowOrchestrator.class.getName());
 
     private final PlanHintApplier planHintApplier;
+    private final QueryDomainClassifier queryDomainClassifier = new QueryDomainClassifier();
 
     @Value("${plans.auto-select.enabled:true}")
     private boolean enabled;
@@ -56,12 +58,27 @@ public class WorkflowOrchestrator {
                                     QueryDomain domain, String userQuery,
                                     boolean hasAttachments) {
         if (ctx == null) return null;
-        if (ctx.getPlanId() != null && !ctx.getPlanId().isBlank()) {
+        // HTTP prefetch and budget projection pass GENERAL before ChatWorkflow classifies
+        // the query. Resolve only the existing community route at this early boundary.
+        QueryDomain routedDomain = domain;
+        if (domain == QueryDomain.GENERAL) {
+            QueryDomain classified = queryDomainClassifier.classify(userQuery);
+            if (classified == QueryDomain.GAME || classified == QueryDomain.SUBCULTURE) {
+                routedDomain = classified;
+            }
+        }
+        boolean communityDefault = enabled
+                && (routedDomain == QueryDomain.GAME || routedDomain == QueryDomain.SUBCULTURE)
+                && "safe".equals(ctx.getPlanId()) && "safe".equals(ctx.getMode())
+                && "S1".equals(ctx.getHeaderMode()) && !ctx.isOfficialOnly()
+                && !ctx.isSensitiveTopic()
+                && (ctx.getDomainProfile() == null || ctx.getDomainProfile().isBlank());
+        if (ctx.getPlanId() != null && !ctx.getPlanId().isBlank() && !communityDefault) {
             return ctx.getPlanId();
         }
 
         String selected = enabled
-                ? selectPlan(ctx, answerMode, domain, userQuery, hasAttachments)
+                ? selectPlan(ctx, answerMode, routedDomain, userQuery, hasAttachments)
                 : defaultPlanId;
 
         if (selected == null || selected.isBlank()) {

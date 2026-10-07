@@ -18,7 +18,7 @@ class ChatFrontendStreamCancellationFocusedTest {
         assertTrue(js.contains("function isActiveStreamRenderTarget(assistant, controller)"));
         assertTrue(js.contains("return assistant === activeStreamAssistant && controller === streamController"));
         String normalizedJs = js.replaceAll("\\s+", " ");
-        assertTrue(normalizedJs.contains("if (isActiveStreamRenderTarget(assistant, currentStreamController)) { renderChatEvent(eventPayload, assistant, effectiveType); }"));
+        assertTrue(normalizedJs.contains("if (isActiveStreamRenderTarget(assistant, currentStreamController)) { renderChatEvent(eventPayload, assistant, effectiveType, exactFinalRun);"));
     }
 
     @Test
@@ -40,7 +40,7 @@ class ChatFrontendStreamCancellationFocusedTest {
         assertTrue(js.contains("return null;"));
         assertTrue(js.contains("const clientDeadlineMs = streamClientDeadlineMs(payload);"));
         assertTrue(js.contains("const clientDeadlinePromise = clientDeadlineMs == null ? null : new Promise"));
-        assertTrue(js.contains("if (clientDeadlineMs != null && elapsedMs >= clientDeadlineMs)"));
+        assertTrue(js.contains("if (clientDeadlineMs != null && (elapsedMs >= clientDeadlineMs"));
         assertTrue(js.contains("const next = clientDeadlinePromise == null"));
         assertTrue(js.contains("? await reader.read()"));
     }

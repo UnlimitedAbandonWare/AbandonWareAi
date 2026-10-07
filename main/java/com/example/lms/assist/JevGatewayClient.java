@@ -108,8 +108,9 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
             if(status!=200)return wireFail(status,"http_"+status);
             boolean candidateBatch=questions!=null&&!questions.isEmpty()
                     &&questions.stream().allMatch(JevChoiceAdvisor.RELEVANCE::contains);
+            boolean strictChoices=candidateBatch||List.of(JevChoiceAdvisor.FACT_META).equals(questions);
             JsonNode node;
-            try{node=candidateBatch
+            try{node=strictChoices
                     ?JSON.readerFor(JsonNode.class).with(JsonParser.Feature.STRICT_DUPLICATE_DETECTION).readTree(data)
                     :JSON.readTree(data);}catch(Exception bad){return wireFail(status,"invalid_response");}
             if(node==null||!node.isObject())return wireFail(status,"invalid_response");
@@ -120,7 +121,7 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
             if(!reported.equalsIgnoreCase(requested)&&!reported.equalsIgnoreCase(alias))return wireFail(status,"wrong_model");
             var answers=node.path("answers");
             if(!answers.isObject())return wireFail(status,"invalid_response");
-            if(candidateBatch){
+            if(strictChoices){
                 Set<String> expected=new HashSet<>();
                 for(var question:questions)expected.add(question.id());
                 Set<String> actual=new HashSet<>();
@@ -152,7 +153,13 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
         var response=exchange(req,questions);
         if(response.failure()!=null)return choiceFail(response.httpStatus(),response.failure(),response.retryAfterMs());
         var answers=new LinkedHashMap<String,JevChoiceAdvisor.ChoiceObservation>();
-        for(var q:questions)answers.put(q.id(),observation(response.node().path("answers").path(q.id()),q.criteria().keySet()));
+        for(var q:questions){
+            var node=response.node().path("answers").path(q.id());
+            var observed=observation(node,q.criteria().keySet());
+            if(q.equals(JevChoiceAdvisor.FACT_META)&&!validMetaDistribution(node,q.criteria().keySet()))
+                observed=new JevChoiceAdvisor.ChoiceObservation("",OptionalDouble.empty(),false,false);
+            answers.put(q.id(),observed);
+        }
         return new JevEvaluationRuntime.ChoiceResponse(new JevChoiceAdvisor.ChoiceResult(
                 answers,response.httpStatus(),"ok",0,cost(response.node())),null);
     }
@@ -187,8 +194,20 @@ public class JevGatewayClient implements JevDecisionAdvisor.Transport {
         double value=node.asDouble();
         return Double.isFinite(value)&&value>=0&&value<=1?OptionalDouble.of(value):OptionalDouble.empty();
     }
+    private static boolean validMetaDistribution(JsonNode answer,Set<String> labels){
+        var values=answer.path("probabilities");
+        if(!values.isObject()||values.size()!=labels.size())return false;
+        double sum=0,chosen=values.path(answer.path("choice").asText()).asDouble(-1);
+        for(String label:labels){
+            var p=probability(values.path(label));
+            if(p.isEmpty()||p.getAsDouble()>chosen)return false;
+            sum+=p.getAsDouble();
+        }
+        return Math.abs(sum-1)<=0.000001;
+    }
     private static Optional<java.math.BigDecimal> cost(JsonNode node){
-        var value=node.path("gateway").path("cost");
+        var gateway=node.path("providerMetadata").path("gateway");
+        var value=gateway.has("cost")?gateway.path("cost"):node.path("gateway").path("cost");
         if(!value.isTextual())return Optional.empty();
         try{
             var parsed=new java.math.BigDecimal(value.asText());

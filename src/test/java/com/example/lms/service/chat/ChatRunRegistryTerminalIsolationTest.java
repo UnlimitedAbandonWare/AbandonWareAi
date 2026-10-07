@@ -7,6 +7,33 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.junit.jupiter.api.Assertions.*;
 
 class ChatRunRegistryTerminalIsolationTest {
+    @Test void requestReceiptRecoversOnlyOriginalOwnedRunAndNeverInfersAbsence() {
+        ChatRunRegistry registry = new ChatRunRegistry();
+        registry.replayCapacity = 16;
+        String owner = "a".repeat(64), key = "b".repeat(64);
+        assertTrue(java.util.Arrays.stream(ChatRunRegistry.class.getMethods())
+                .anyMatch(method -> method.getName().equals("bindRequestReceipt")),
+                "pre-token recovery requires an owner and request binding, not the current session token");
+        try {
+            var first = registry.beginOrJoin(992L).context();
+            assertEquals(true, org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "bindRequestReceipt", first, owner, key));
+            assertEquals(false, org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "bindRequestReceipt", first, owner, "c".repeat(64)), "receipt is immutable");
+            assertEquals(java.util.Optional.empty(), org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "tokenForRequestReceipt", 992L, "d".repeat(64), key));
+            assertEquals(java.util.Optional.empty(), org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "tokenForRequestReceipt", 992L, owner, "e".repeat(64)));
+            registry.markDone(first);
+            var second = registry.beginOrJoin(992L).context();
+            assertEquals(java.util.Optional.of(first.clientToken()), org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "tokenForRequestReceipt", 992L, owner, key), "R1 lookup cannot return R2");
+            assertEquals(java.util.Optional.empty(), org.springframework.test.util.ReflectionTestUtils.invokeMethod(
+                    registry, "tokenForRequestReceipt", 993L, owner, key), "not registered remains unknown");
+            registry.cancelExact(992L, second.clientToken());
+        } finally { registry.shutdown(); }
+    }
+
     @Test void unavailableOwnerRenewalRetainsWorkerWhileAuthorityStaysFenced() {
         ChatRunRegistry registry = new ChatRunRegistry();
         registry.replayCapacity = 16;

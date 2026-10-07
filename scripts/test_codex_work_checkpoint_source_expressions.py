@@ -11,6 +11,18 @@ from scripts.test_codex_work_checkpoint import CP, decision
 class SourceExpressionCheckpointTest(unittest.TestCase):
     setting = "api" + "Key"
 
+    def test_js_call_with_optional_runtime_member_is_not_a_literal_secret(self):
+        name = "to" + "ken"
+        expression = "const " + name + " = normalizeRunToken(runState?.runToken);"
+        CP.secret_free(expression.encode(), "main/resources/static/js/chat.js")
+        for value in ('"opaque-credential-value"', 'runState?.runToken || "opaque-credential-value"'):
+            with self.subTest(value=value), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(("const " + name + " = normalizeRunToken(" + value + ");").encode(),
+                               "main/resources/static/js/chat.js")
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free((expression + '\n' + name + ' = "opaque-credential-value";').encode(),
+                           "main/resources/static/js/chat.js")
+
     def test_java_empty_query_label_can_precede_more_runtime_concatenation(self):
         label = "api" + "_key="
         body = ('String body = "' + label + '" + value + " Author' + 'ization: "'

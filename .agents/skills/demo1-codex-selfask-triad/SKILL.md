@@ -31,6 +31,15 @@ those SKILL.md files for the rules; do not copy them here.
 Never attach: 오타·문구 수정, 이음매가 명확한 단일 수정, 사용자가 토큰 절약·
 중단을 지시한 경우. 한 작업당 triad 최대 3회.
 
+## Compact development evidence handoff
+
+For delegated development findings, use [context-handoff.md](references/context-handoff.md).
+`packet --task <taskId>` binds task/scope/delivery marker and packet generation time;
+unknown source identity stays unknown. Return the core summary and metadata in
+existing four sections. The parent samples source support and risk branches;
+the helper remains structural advice. This contract also fits an existing
+read-only explorer; it does not activate triad for simple low-risk work.
+
 ## Delegate
 
 ```

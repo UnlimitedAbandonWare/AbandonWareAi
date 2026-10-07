@@ -54,6 +54,230 @@ class SearchProviderHttpContractTest {
         com.example.lms.service.guard.GuardContextHolder.clear();
     }
 
+    @Test void braveLocalPermitFailureLeavesNextOwnerAbleToReachWire() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            BraveSearchService service = brave(wire);
+            var limiter = mock(com.google.common.util.concurrent.RateLimiter.class);
+            when(limiter.tryAcquire(anyLong(), eq(TimeUnit.MILLISECONDS))).thenReturn(false, true);
+            ReflectionTestUtils.setField(service, "rateLimiter", limiter);
+
+            BraveSearchResult first = service.searchWithMeta("synthetic owner A", 3);
+            assertEquals(BraveSearchResult.Status.RATE_LIMIT_LOCAL, first.status());
+            assertEquals(0, wire.requests.size(), "queue rejection must consume no wire attempt");
+            TraceStore.clear();
+
+            BraveSearchResult second = service.searchWithMeta("synthetic owner B", 3);
+            assertEquals(BraveSearchResult.Status.OK, second.status(),
+                    "available shared permit must allow B after A's local rejection");
+            assertEquals(1, wire.requests.size());
+        }
+    }
+
+    @Test void naverAsyncWireRespectsSaturatedProviderPermits() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            var permits = (java.util.concurrent.Semaphore) ReflectionTestUtils.getField(service, "REQUEST_SEMAPHORE");
+            int withheld = permits.drainPermits();
+            try {
+                @SuppressWarnings("unchecked")
+                var pending = (reactor.core.publisher.Mono<List<String>>) ReflectionTestUtils.invokeMethod(
+                        service, "callNaverApiMono", "synthetic saturated owner",
+                        ReflectionTestUtils.invokeMethod(service, "defaultPolicy"), 3);
+                assertTrue(pending.onErrorReturn(List.of()).block(Duration.ofSeconds(2)).isEmpty());
+                assertEquals(0, wire.requests.size(), "queued/deadline-expired work must never reach wire");
+                assertEquals(0, permits.availablePermits(), "unacquired permits must never be released");
+            } finally {
+                permits.release(withheld);
+            }
+        }
+    }
+
+    @Test void naverConsumerCancelRetainsRunningPermitUntilTransportCompletes() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            var permits = (java.util.concurrent.Semaphore) ReflectionTestUtils.getField(service, "REQUEST_SEMAPHORE");
+            var arrived = new java.util.concurrent.CountDownLatch(1);
+            var release = new java.util.concurrent.CountDownLatch(1);
+            wire.beforeResponse = () -> {
+                arrived.countDown();
+                try { release.await(3, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            };
+            @SuppressWarnings("unchecked")
+            var wireMono = (reactor.core.publisher.Mono<List<String>>) ReflectionTestUtils.invokeMethod(
+                    service, "callNaverApiMono", "synthetic running owner",
+                    ReflectionTestUtils.invokeMethod(service, "defaultPolicy"), 3);
+            var consumer = wireMono.subscribe(ignored -> { }, ignored -> { });
+            try {
+                assertTrue(arrived.await(3, TimeUnit.SECONDS));
+                assertEquals(9, permits.availablePermits(), "active wire must own one concurrency permit");
+                consumer.dispose();
+                assertEquals(9, permits.availablePermits(), "consumer cancellation is not transport completion");
+                release.countDown();
+                long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+                while (permits.availablePermits() != 10 && System.nanoTime() < until) Thread.sleep(10);
+                assertEquals(10, permits.availablePermits(), "completed wire must return its permit once");
+            } finally {
+                consumer.dispose(); release.countDown();
+            }
+        }
+    }
+
+    @Test void naverSharedWireSurvivesFirstLoadersShortDeadline() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            var arrived = new java.util.concurrent.CountDownLatch(1);
+            var release = new java.util.concurrent.CountDownLatch(1);
+            wire.beforeResponse = () -> {
+                arrived.countDown();
+                try { release.await(3, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            };
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            var callers = Executors.newFixedThreadPool(2);
+            try {
+                // B's provider-stage wait must outlive A's deadline, independently of facade wait.
+                ReflectionTestUtils.setField(service, "adaptivePerCallFloorMs", 1500L);
+                var first = callers.submit(() -> {
+                    TimeBudgetContext.set(new TimeBudget(500));
+                    try { return service.searchSnippetsSync("합성 공유 문서", 3, Duration.ofMillis(150)); }
+                    finally { TimeBudgetContext.clear(); TraceStore.clear(); }
+                });
+                assertTrue(arrived.await(3, TimeUnit.SECONDS));
+                assertTrue(first.get(3, TimeUnit.SECONDS).isEmpty());
+                var second = callers.submit(() -> service.searchSnippetsSync(
+                        "합성 공유 문서", 3, Duration.ofSeconds(3)));
+                Thread.sleep(600); // Deliberately cross the first loader's deadline, within wire timeout.
+                release.countDown();
+                String result = String.join(" ", second.get(3, TimeUnit.SECONDS));
+                assertTrue(result.contains("Naver fixture") && result.contains("synthetic document"), result);
+                assertEquals(1, wire.requests.size(), "B must keep the existing shared running transport");
+            } finally {
+                release.countDown(); callers.shutdownNow();
+                assertTrue(callers.awaitTermination(5, TimeUnit.SECONDS));
+            }
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {2, 3, 5})
+    void naverSmallOwnerBurstUsesBoundedFifoWirePermits(int owners) throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            ReflectionTestUtils.setField(service, "admissionQueueWaitMs", 2000L);
+            var permits = (java.util.concurrent.Semaphore) ReflectionTestUtils.getField(service, "REQUEST_SEMAPHORE");
+            permits.acquire(9); // Restrict this synthetic fixture to one active wire.
+            var responses = new java.util.concurrent.Semaphore(0);
+            wire.beforeResponse = () -> {
+                try { responses.tryAcquire(3, TimeUnit.SECONDS); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            };
+            var results = new java.util.ArrayList<java.util.concurrent.CompletableFuture<List<String>>>();
+            try {
+                for (int owner = 0; owner < owners; owner++) {
+                    results.add(naverWire(service, "synthetic fifo owner " + owner).toFuture());
+                    int expected = owner;
+                    awaitFixture(() -> expected == 0 ? wire.requests.size() == 1
+                            : permits.getQueueLength() == expected);
+                }
+                assertEquals(1, wire.requests.size(), "queued owners must not consume outbound attempts");
+                assertEquals(0, permits.availablePermits());
+                responses.release(owners);
+                for (var result : results) assertFalse(result.get(3, TimeUnit.SECONDS).isEmpty());
+                assertEquals(owners, wire.requests.size());
+                for (int owner = 0; owner < owners; owner++) {
+                    assertEquals("synthetic fifo owner " + owner, query(wire.requests.get(owner).uri, "query"));
+                }
+                awaitFixture(() -> permits.availablePermits() == 1);
+                assertEquals(0, permits.getQueueLength());
+            } finally {
+                responses.release(owners); permits.release(9);
+            }
+        }
+    }
+
+    @Test void naverQueuedCancelAndQueueFullNeverReachWireOrLeakPermits() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            ReflectionTestUtils.setField(service, "admissionQueueCapacity", 1);
+            ReflectionTestUtils.setField(service, "admissionQueueWaitMs", 1500L);
+            var permits = (java.util.concurrent.Semaphore) ReflectionTestUtils.getField(service, "REQUEST_SEMAPHORE");
+            int withheld = permits.drainPermits();
+            var queued = naverWire(service, "synthetic queued cancel").subscribe(ignored -> { }, ignored -> { });
+            try {
+                awaitFixture(() -> permits.getQueueLength() == 1);
+                assertTrue(naverWire(service, "synthetic full queue").onErrorReturn(List.of())
+                        .block(Duration.ofSeconds(1)).isEmpty());
+                assertTrue(wire.requests.isEmpty());
+                queued.dispose();
+                permits.release(withheld); withheld = 0;
+                awaitFixture(() -> permits.availablePermits() == 10 && permits.getQueueLength() == 0);
+                assertTrue(wire.requests.isEmpty(), "cancelled queued consumer must never start I/O");
+                var waiters = (java.util.concurrent.atomic.AtomicInteger) ReflectionTestUtils.getField(service, "admissionWaiters");
+                assertEquals(0, waiters.get());
+            } finally {
+                queued.dispose(); if (withheld > 0) permits.release(withheld);
+            }
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {200, 429, 503})
+    void naverWireTerminalReturnsPermitExactlyOnce(int status) throws Exception {
+        try (Fixture wire = new Fixture(status, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret");
+            var permits = (java.util.concurrent.Semaphore) ReflectionTestUtils.getField(service, "REQUEST_SEMAPHORE");
+            naverWire(service, "synthetic terminal status " + status).onErrorReturn(List.of()).block(Duration.ofSeconds(3));
+            awaitFixture(() -> permits.availablePermits() == 10);
+            assertEquals(1, wire.requests.size());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static reactor.core.publisher.Mono<List<String>> naverWire(NaverSearchService service, String query) {
+        return (reactor.core.publisher.Mono<List<String>>) ReflectionTestUtils.invokeMethod(service,
+                "callNaverApiMono", query, ReflectionTestUtils.invokeMethod(service, "defaultPolicy"), 3);
+    }
+
+    @Test void naverProviderRateWaitIsNotShortenedToTwoHundredMilliseconds() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            RateLimitPolicy policy = mock(RateLimitPolicy.class);
+            when(policy.allowedExpansions()).thenReturn(1);
+            when(policy.currentDelayMs()).thenReturn(800L);
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret", policy);
+            var arrivedNs = new java.util.concurrent.atomic.AtomicLong();
+            long startedNs = System.nanoTime();
+            wire.onRequest = () -> arrivedNs.set(System.nanoTime());
+
+            assertFalse(naverWire(service, "synthetic rate wait").block(Duration.ofSeconds(3)).isEmpty());
+
+            assertEquals(1, wire.requests.size());
+            assertTrue(TimeUnit.NANOSECONDS.toMillis(arrivedNs.get() - startedNs) >= 750L,
+                    "a provider wait of 800ms must not be truncated to 200ms");
+        }
+    }
+
+    @Test void naverRateWaitBeyondDeadlineConsumesNoHttpAttempt() throws Exception {
+        try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
+            RateLimitPolicy policy = mock(RateLimitPolicy.class);
+            when(policy.currentDelayMs()).thenReturn(800L);
+            NaverSearchService service = naver(wire, "fixtureid:fixturesecret", policy);
+            TimeBudgetContext.set(new TimeBudget(500));
+
+            assertTrue(naverWire(service, "synthetic rate deadline").onErrorReturn(List.of())
+                    .block(Duration.ofSeconds(2)).isEmpty());
+
+            assertTrue(wire.requests.isEmpty());
+            assertEquals(10, ((java.util.concurrent.Semaphore) ReflectionTestUtils.getField(
+                    service, "REQUEST_SEMAPHORE")).availablePermits());
+        }
+    }
+
+    private static void awaitFixture(java.util.function.BooleanSupplier condition) throws InterruptedException {
+        long until = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!condition.getAsBoolean() && System.nanoTime() < until) Thread.sleep(5);
+        assertTrue(condition.getAsBoolean(), "fixture condition did not become true within its finite wait");
+    }
+
     @Test void requestQuerySlotsAndSixAttemptsReachBothActualHttpClients() throws Exception {
         try (Fixture wire = new Fixture(200, BRAVE_BODY, NAVER_BODY, Map.of())) {
             var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(com.example.lms.domain.enums.ExecutionMode.SELF_ASK);

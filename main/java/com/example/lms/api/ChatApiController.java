@@ -1251,6 +1251,19 @@ public class ChatApiController {
         if (session == null || !(canAccessSession(session, authentication) || isRealAdmin(authentication))) {
             return neutralChatRunState(debug);
         }
+        String recoveredToken = null;
+        var attributes = org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+        String receiptKeyHash = attributes instanceof org.springframework.web.context.request.ServletRequestAttributes servlet
+                ? requestReceiptKeyHash(servlet.getRequest()) : null;
+        if ((runToken == null || runToken.isBlank()) && receiptKeyHash != null) {
+            String actor = authentication != null && authentication.getPrincipal() instanceof UserDetails details
+                    ? details.getUsername() : "anonymousUser";
+            String ownerHash = AttachmentOwnerIdentity.forActor(actor, ownerKeyResolver.ownerKey()).hash();
+            recoveredToken = runRegistry == null ? null
+                    : runRegistry.tokenForRequestReceipt(sessionId, ownerHash, receiptKeyHash).orElse(null);
+            if (recoveredToken == null) return neutralChatRunState(debug);
+            runToken = recoveredToken;
+        }
         Optional<ChatRunRegistry.RunView> exactRun = Optional.empty();
         try {
             if (runRegistry != null && runToken != null && !runToken.isBlank()) {
@@ -1327,8 +1340,15 @@ public class ChatApiController {
         out.put("attachable", exactRun.isPresent() && (outcome == null || !outcome.persisted()));
         out.put("terminal", exactRun.map(ChatRunRegistry.RunView::terminal).orElse(false));
         out.put("currentRun", exactRun.map(ChatRunRegistry.RunView::current).orElse(false));
+        if (recoveredToken != null) out.put("runToken", recoveredToken);
         putRunOutcome(out, outcome);
         return ResponseEntity.ok(out);
+    }
+
+    private static String requestReceiptKeyHash(HttpServletRequest request) {
+        String key = request == null ? null : request.getHeader("Idempotency-Key");
+        return key != null && key.matches("[A-Za-z0-9._:-]{1,128}")
+                ? org.apache.commons.codec.digest.DigestUtils.sha256Hex(key) : null;
     }
 
     private ResponseEntity<java.util.Map<String, Object>> neutralChatRunState(boolean debug) {
@@ -1705,12 +1725,15 @@ public class ChatApiController {
         final AtomicBoolean admissionTransferredToWorker = new AtomicBoolean(false);
         try {
         bindAttachmentOwnerIfPresent(req, username, preResolvedOwnerKey);
+        final String receiptKeyHash = requestReceiptKeyHash(request);
+        final String receiptOwnerHash = AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey).hash();
         final AtomicReference<ChatRunRegistry.BeginResult> initialRun = new AtomicReference<>();
         if (req.getSessionId() != null && runRegistry != null) {
             ChatRunRegistry.BeginResult started = runRegistry.beginOrJoin(req.getSessionId());
             if (!started.owner()) {
                 return Flux.just(sse(ChatStreamEvent.error("run_active")));
             }
+            if (receiptKeyHash != null) runRegistry.bindRequestReceipt(started.context(), receiptOwnerHash, receiptKeyHash);
             initialRun.set(started);
         }
         final var priorWebEvidence = initialRun.get() == null ? java.util.List.<dev.langchain4j.rag.content.Content>of()
@@ -2058,6 +2081,7 @@ public class ChatApiController {
                     }
                     ChatRunExecutionContext runContext = started.context();
                     runRegistry.priorWebEvidence(runContext, AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey).hash());
+                    if (receiptKeyHash != null) runRegistry.bindRequestReceipt(runContext, receiptOwnerHash, receiptKeyHash);
                     runContextRef.set(runContext);
                     Disposable workerHandle = runWorkerRef.get();
                     if (workerHandle != null) {
@@ -2676,11 +2700,12 @@ public class ChatApiController {
 
                     if ((debug || exposeTrace) && (rawTrace != null || finalWebTopK != null || finalVectorTopK != null
                             || (extraMeta != null && !extraMeta.isEmpty()))) {
-                        String finalTraceHtml = traceHtmlBuilder.buildSplitPanel(rawTrace, rawSnips,
+                        var renderedTrace = traceHtmlBuilder.buildSplitPanelWithMetadata(rawTrace, rawSnips,
                                 finalWebTopK,
                                 finalVectorTopK,
                                 extraMeta,
                                 allowWeb);
+                        String finalTraceHtml = renderedTrace.html();
                         if (finalTraceHtml != null && !finalTraceHtml.isBlank()) {
                             traceHtml = finalTraceHtml;
                             // Emit again: streaming UI will replace the existing panel.
@@ -2690,7 +2715,7 @@ public class ChatApiController {
                             }
 
                             java.util.Map<String, Object> snapMeta = new java.util.LinkedHashMap<>(
-                                    extraMeta == null ? java.util.Map.of() : extraMeta);
+                                    renderedTrace.metadata());
                             snapMeta.put("ui.traceHtml.kind", "splitPanel");
                             snapMeta.put("ui.traceHtml.length", finalTraceHtml.length());
                             traceMetaForSnapshot = snapMeta;
@@ -2785,7 +2810,7 @@ public class ChatApiController {
                             persistenceTraceHtml,
                             traceSnapshotStore,
                             historyService,
-                            log, debug || exposeTrace);
+                            log, debug || exposeTrace, result.evidenceMetadata());
                     traceTurnIdRef.set(persistedTraceTurnId);
                     persistedPipelineSnapshotRef.set(ChatStreamSignalBuilder.withTraceTurnId(
                             pipelineSnapshotBeforePersistence,
@@ -4777,8 +4802,10 @@ public class ChatApiController {
                 java.util.List<String> rawSnips = (__srFinal.snippets() == null)
                         ? java.util.Collections.emptyList()
                         : __srFinal.snippets();
-                traceHtml = traceHtmlBuilder.buildSplitPanel(__srFinal.trace(), rawSnips,
+                var renderedTrace = traceHtmlBuilder.buildSplitPanelWithMetadata(__srFinal.trace(), rawSnips,
                         finalWebTopK, finalVectorTopK, extraMeta, performSearch);
+                traceHtml = renderedTrace.html();
+                extraMeta = renderedTrace.metadata();
             } catch (Exception ignore) {
                 traceHtml = "";
                 logSuppressed("sync.traceHtml.final");
@@ -4798,7 +4825,7 @@ public class ChatApiController {
                 traceHtmlForSnapshot,
                 traceSnapshotStore,
                 historyService,
-                log, exposeTrace);
+                log, exposeTrace, result.evidenceMetadata());
 
         // Persist answer.mode + traceTurnId snapshot for cross-device badges and deterministic trace open.
         try {
@@ -5442,13 +5469,21 @@ public class ChatApiController {
     // ===== DTO records =====
     public record MessageDto(Long turnId, String role, String content, LocalDateTime timestamp,
             @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
-            ChatStreamEvent.ExecutionModeSnapshot executionMode) {
+            ChatStreamEvent.ExecutionModeSnapshot executionMode,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY)
+            List<com.example.lms.dto.RagEvidenceMetadata> evidence) {
         public MessageDto(Long turnId, String role, String content, LocalDateTime timestamp) {
-            this(turnId, role, content, timestamp, null);
+            this(turnId, role, content, timestamp, null, null);
+        }
+        public MessageDto(Long turnId, String role, String content, LocalDateTime timestamp,
+                          ChatStreamEvent.ExecutionModeSnapshot executionMode) {
+            this(turnId, role, content, timestamp, executionMode, null);
         }
         public MessageDto {
             if (!"assistant".equals(role) || turnId == null || turnId <= 0L
                     || executionMode == null || executionMode.requested() == null) executionMode = null;
+            evidence = "assistant".equals(role) && turnId != null && turnId > 0L && evidence != null
+                    ? List.copyOf(evidence) : null;
         }
     }
 

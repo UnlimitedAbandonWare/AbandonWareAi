@@ -125,7 +125,7 @@ test('requested model, candidate totals and execution mode never become observat
   } });
   const overview = panel.parentElement.querySelector('.awx-trace-overview');
   assert.ok(overview);
-  assert.equal((overview.textContent.match(/NOT_OBSERVED/g) || []).length, 5);
+  assert.equal((overview.textContent.match(/NOT_OBSERVED/g) || []).length, 6);
   assert.equal(h.fetchCalls.length, 0);
 });
 
@@ -140,16 +140,138 @@ test('live summary survives OFF then ON without a snapshot or an eager fetch', (
   assert.equal(h.fetchCalls.length, 0);
 });
 
-test('restored validation accepts the three observed fields in addition to the existing bounded projection', () => {
+test('model-only final preserves the same answer evidence count and mode', () => {
+  const h = harness();
+  const assistant = h.assistant();
+  const panel = h.ui.restore(assistant, { snapshotId: 'same-answer', fields: {
+    'prompt.citableEvidenceCount': '0', 'orch.mode': 'STRIKE'
+  } });
+  h.ui.upsertSummary(assistant, { observedModel: 'synthetic-model' });
+  const overview = panel.parentElement.querySelector('.awx-trace-overview');
+  assert.match(overview.textContent, /synthetic-model/);
+  assert.match(overview.textContent, /근거: 0/);
+  assert.match(overview.textContent, /STRIKE/);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('first restore preserves observations already received for that assistant', () => {
+  const h = harness();
+  const assistant = h.assistant();
+  h.ui.upsertSummary(assistant, { observedModel: 'synthetic-model' });
+  const panel = h.ui.restore(assistant, { snapshotId: 'same-answer', fields: {
+    'prompt.citableEvidenceCount': '3', 'orch.mode': 'NORMAL'
+  } });
+  assert.match(panel.parentElement.querySelector('.awx-trace-overview').textContent, /synthetic-model/);
+});
+
+test('missing or invalid partial observations do not erase validated observations', () => {
+  const h = harness();
+  const assistant = h.assistant();
+  const panel = h.ui.upsertSummary(assistant, {
+    observedModel: 'synthetic-model', 'prompt.citableEvidenceCount': '0', 'orch.mode': 'NORMAL'
+  });
+  h.ui.upsertSummary(assistant, { observedModel: null, 'prompt.citableEvidenceCount': -1, 'orch.mode': 'AUTO' });
+  assert.match(panel.parentElement.querySelector('.awx-trace-overview').textContent,
+    /synthetic-model.*근거: 0.*NORMAL/);
+});
+
+test('another assistant or a changed session never inherits prior summary observations', () => {
+  const h = harness();
+  const first = h.assistant();
+  h.ui.restore(first, { snapshotId: 'first', fields: {
+    sessionId: '42', observedModel: 'first-model', 'prompt.citableEvidenceCount': '7', 'orch.mode': 'STRIKE'
+  } });
+  const second = h.ui.upsertSummary(h.assistant(), { observedModel: 'second-model' });
+  assert.doesNotMatch(second.parentElement.querySelector('.awx-trace-overview').textContent, /first-model|STRIKE|근거: 7/);
+  const rebound = h.ui.restore(first, { snapshotId: 'second', fields: {sessionId: '43', observedModel: 'second-model'} });
+  assert.doesNotMatch(rebound.parentElement.querySelector('.awx-trace-overview').textContent, /first-model|STRIKE|근거: 7/);
+});
+
+test('session-only rebinding clears observations even when the snapshot id is unchanged', () => {
+  const h = harness();
+  const assistant = h.assistant();
+  h.ui.restore(assistant, {snapshotId:'same-id', fields: {sessionId:'42', observedModel:'first-model',
+    observedProvider:'first_provider', 'prompt.citableEvidenceCount':'7', 'orch.mode':'STRIKE'}});
+  const panel = h.ui.restore(assistant, {snapshotId:'same-id', fields: {sessionId:'43', observedModel:'second-model'}});
+  const overview = panel.parentElement.querySelector('.awx-trace-overview');
+  assert.match(overview.textContent, /second-model/);
+  assert.doesNotMatch(overview.textContent, /first-model|first_provider|STRIKE|근거: 7/);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('partial final preserves a validated response provider until identity changes', () => {
+  const h = harness();
+  const assistant = h.assistant();
+  const panel = h.ui.upsertSummary(assistant, {observedProvider:'chatgpt_oauth'});
+  h.ui.upsertSummary(assistant, {observedModel:'synthetic-model', observedProvider:null});
+  assert.match(panel.parentElement.querySelector('.awx-trace-overview').textContent,
+    /응답 제공자: chatgpt_oauth/);
+});
+
+test('forbidden owned detail retains safe summary without reading the response body or falling back', async () => {
+  let bodyReads = 0;
+  const h = harness({fetchResponse:{ok:false, status:403, text:async()=>{bodyReads++; return 'PRIVATE_BODY';}}});
+  const panel = h.ui.restore(h.assistant(), {snapshotId:'forbidden', fields:{sessionId:'42', observedProvider:'chatgpt_oauth'}});
+  assert.equal(h.fetchCalls.length, 0);
+  panel.open = true;
+  panel.listeners.toggle();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(panel.dataset.traceError, 'unauthorized');
+  assert.match(panel.children[2].children[0].textContent, /권한 없음/);
+  assert.match(panel.parentElement.querySelector('.awx-trace-overview').textContent, /응답 제공자: chatgpt_oauth/);
+  assert.equal(bodyReads, 0);
+  assert.equal(h.fetchCalls.length, 1);
+  assert.equal(h.fetchCalls[0].url, '/api/chat/sessions/42/traces/forbidden/html');
+});
+
+test('restored validation accepts the four observed fields in addition to the existing bounded projection', () => {
   const chat = fs.readFileSync('main/resources/static/js/chat.js', 'utf8');
   const ctx = vm.createContext({});
   vm.runInContext(chat.slice(chat.indexOf('const TURN_TRACE_SNAPSHOT_ID'),
     chat.indexOf('function sessionListRowMetadata(')), ctx);
   const fields = Object.fromEntries(Array.from({length:16}, (_, i) => ['field'+i, 'safe']));
-  Object.assign(fields, {observedModel:'model-'+'x'.repeat(174), 'prompt.citableEvidenceCount':'0', 'orch.mode':'NORMAL'});
+  Object.assign(fields, {observedModel:'model-'+'x'.repeat(174), observedProvider:'chatgpt_oauth',
+    'prompt.citableEvidenceCount':'0', 'orch.mode':'NORMAL'});
   assert.equal(ctx.validateTurnTraces([{turnId:1,snapshotId:'owned',fields}]).length,1);
   fields.extra = 'overflow';
   assert.equal(ctx.validateTurnTraces([{turnId:1,snapshotId:'owned',fields}]).length,0);
+});
+
+test('observed response provider is shown without claiming a search provider outcome', () => {
+  const h = harness();
+  const panel = h.ui.restore(h.assistant(), {snapshotId:'provider', fields: {
+    observedProvider: 'chatgpt_oauth', observedModel: 'synthetic-model'
+  }});
+  const overview = panel.parentElement.querySelector('.awx-trace-overview');
+  assert.match(overview.textContent, /응답 제공자: chatgpt_oauth/);
+  assert.match(overview.textContent, /Brave: NOT_OBSERVED.*Naver: NOT_OBSERVED/);
+  assert.doesNotMatch(overview.textContent, /서버 처리/);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('final intake forwards observed provider aliases into the existing answer overview', () => {
+  const chat = fs.readFileSync('main/resources/static/js/chat.js', 'utf8');
+  const final = chat.indexOf('  } else if (type === "final") {');
+  const intake = chat.slice(chat.indexOf('    const legacyReportedModel', final),
+    chat.indexOf('    const model = hasObservation', final));
+  for (const key of ['observedProvider', 'observed_provider']) {
+    const h = harness();
+    const assistant = h.assistant();
+    vm.runInNewContext(intake, {payload:{[key]:'chatgpt_oauth', observedModel:'synthetic-model'},
+      state:{}, dom:{}, assistant, window:{AwxChatTraceUi:h.ui}});
+    assert.match(assistant.parentElement.querySelector('.awx-trace-overview').textContent,
+      /응답 제공자: chatgpt_oauth/);
+  }
+});
+
+test('invalid and requested providers are not promoted into response observations', () => {
+  for (const fields of [{requestedProvider:'synthetic-requested'}, {observedProvider:'sk-synthetic'},
+    {observedProvider:'<img>'}, {observedProvider:'eyJsynthetic'}, {observedProvider:'a'.repeat(81)}]) {
+    const h = harness();
+    const panel = h.ui.upsertSummary(h.assistant(), fields);
+    assert.match(panel.parentElement.querySelector('.awx-trace-overview').textContent,
+      /응답 제공자: NOT_OBSERVED/);
+  }
 });
 
 function harness(options = {}) {

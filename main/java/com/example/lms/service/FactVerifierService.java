@@ -58,6 +58,9 @@ public class FactVerifierService {
     @Autowired(required = false)
     private NamedEntityValidator namedEntityValidator;
 
+    @Autowired(required = false)
+    private com.example.lms.assist.JevChoiceAdvisor jevChoiceAdvisor;
+
     // ✅ 수정: 생성자에 @Qualifier("highModel") 추가
     public FactVerifierService(@Qualifier("highModel") ChatModel verifier,
                                FactStatusClassifier classifier,
@@ -288,8 +291,8 @@ public class FactVerifierService {
 
         try {
             state.terminalStage = "meta_check";
-            String metaPrompt = buildVerifierPrompt("FACT_META_CHECK", META_TEMPLATE, question, context);
-            String metaVerdict = callChatModel(metaPrompt, state);
+            String metaVerdict = optionalMetaVerdict(question, context).orElseGet(() ->
+                    callChatModel(buildVerifierPrompt("FACT_META_CHECK", META_TEMPLATE, question, context), state));
             MetaVerdict parsedMetaVerdict = parseMetaVerdict(metaVerdict);
             TraceStore.put("factVerifier.meta.status",
                     parsedMetaVerdict == null ? "malformed" : parsedMetaVerdict.name());
@@ -323,6 +326,7 @@ public class FactVerifierService {
             }
         } catch (Exception e) {
             TimedChatModelCaller.rethrowIfCancelledOrTerminal(e);
+            if (e instanceof com.example.lms.llm.ModelSelectionException terminal) throw terminal;
             state.markFailSoft();
             log.debug("[Verify] META-CHECK failed. errorHash={} errorLength={}",
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
@@ -439,6 +443,19 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             default:
                 state.reject("unknown");
                 return draft;
+        }
+    }
+
+    private Optional<String> optionalMetaVerdict(String question, String context) {
+        TimeBudget budget = TimeBudgetContext.get();
+        if (jevChoiceAdvisor == null || budget == null) return Optional.empty();
+        try {
+            return jevChoiceAdvisor.factMetaVerdict(question, context, budget.remainingMillis());
+        } catch (Exception failure) {
+            TimedChatModelCaller.rethrowIfCancelledOrTerminal(failure);
+            if (failure instanceof com.example.lms.llm.ModelSelectionException terminal) throw terminal;
+            // An optional candidate failure must not poison a successful baseline memory verdict.
+            return Optional.empty();
         }
     }
 

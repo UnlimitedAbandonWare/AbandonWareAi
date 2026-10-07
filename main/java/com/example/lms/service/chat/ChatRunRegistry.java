@@ -118,6 +118,7 @@ public class ChatRunRegistry {
         volatile boolean ownerLeaseConfirmed = true;
         volatile boolean clusterFinalized;
         String verifiedOwnerHash;
+        String requestReceiptKeyHash;
         String priorEvidenceOwnerHash;
         List<dev.langchain4j.rag.content.Content> finalWebEvidence = List.of();
         List<dev.langchain4j.rag.content.Content> priorWebEvidence = List.of();
@@ -421,6 +422,35 @@ public class ChatRunRegistry {
 
     private static boolean validOwnerHash(String hash) {
         return hash != null && hash.matches("[a-f0-9]{64}");
+    }
+
+    /** Bind only the execution owner; this receipt never identifies another run by session alone. */
+    public boolean bindRequestReceipt(ChatRunExecutionContext context, String ownerHash, String keyHash) {
+        Run run = exactRun(context);
+        if (!isOwner(run, context) || !validOwnerHash(ownerHash) || !validOwnerHash(keyHash)) return false;
+        synchronized (run.gate) {
+            if (runs.get(run.sessionId) != run || !isInFlight(run.status) || run.deletionFence || !leaseValid(run)
+                    || (run.verifiedOwnerHash != null && !ownerHash.equals(run.verifiedOwnerHash))) return false;
+            if (run.requestReceiptKeyHash != null) return keyHash.equals(run.requestReceiptKeyHash);
+            run.verifiedOwnerHash = ownerHash;
+            run.requestReceiptKeyHash = keyHash;
+            return true;
+        }
+    }
+
+    /** A miss (including eviction/restart/another node) is unknown, never a terminal receipt. */
+    public Optional<String> tokenForRequestReceipt(Long sessionId, String ownerHash, String keyHash) {
+        if (sessionId == null || !validOwnerHash(ownerHash) || !validOwnerHash(keyHash)) return Optional.empty();
+        String found = null;
+        for (Run run : runsByToken.values()) {
+            synchronized (run.gate) {
+                if (!sessionId.equals(run.sessionId) || !ownerHash.equals(run.verifiedOwnerHash)
+                        || !keyHash.equals(run.requestReceiptKeyHash)) continue;
+                if (found != null) return Optional.empty(); // Ambiguous receipts fail closed.
+                found = run.runId;
+            }
+        }
+        return Optional.ofNullable(found);
     }
 
     /** Private process-local carry; only the new exact execution owner can read it. */

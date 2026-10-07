@@ -194,6 +194,7 @@ def nonliteral_ui_expressions(text, source_path):
     if source_path.endswith((".js", ".cjs", ".mjs")):
         args = ident + r"(?:\s*,\s*" + ident + r")*"
         call = ident + r"\(" + args + r"\)"
+        member_call = ident + r"\(" + ident + r"(?:(?:\?\.|\.)" + ident + r")+\)"
         empty_string = r'''(?:""|'')'''
         string_call = r"String\(" + ident + r"\s*\?\?\s*" + empty_string + r"\)\.trim\(\)"
         patterns.extend([
@@ -210,7 +211,7 @@ def nonliteral_ui_expressions(text, source_path):
             # attribute is the only string allowed; arbitrary indexed RHS stays strict.
             r'(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*' + ident
             + r'\[Number\(' + ident + r'\.getAttribute\("data-chat-math"\)\)\];',
-            r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*(?:" + call + "|" + string_call + r");",
+            r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*(?:" + call + "|" + member_call + "|" + string_call + r");",
             # Exact optional DOM meta read contains no literal credential. Mask only
             # the declaration label; all neighbouring bytes remain scanned.
             r'''(?m)^\s*const\s+(token)\s*=\s*document\.querySelector\('meta\[name="_csrf"\]'\)\?\.content\s*;''',

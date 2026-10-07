@@ -53,6 +53,7 @@ final class ChatSessionDetailResponseBuilder {
         Map<Long, ChatApiController.TurnTraceDto> tracesByAssistant = new LinkedHashMap<>();
         Map<Long, String> snapshotIdsByAssistant = new LinkedHashMap<>();
         Map<Long, com.example.lms.dto.ChatStreamEvent.ExecutionModeSnapshot> executionModesByAssistant = new LinkedHashMap<>();
+        Map<Long, List<com.example.lms.dto.RagEvidenceMetadata>> evidenceByAssistant = new LinkedHashMap<>();
         Set<Long> ambiguousTraceOwners = new HashSet<>();
         Set<Long> assistantMessageIds = new HashSet<>();
         for (var message : raw) {
@@ -85,12 +86,15 @@ final class ChatSessionDetailResponseBuilder {
                             if (assistantId != null && assistantMessageIds.contains(assistantId)
                                     && !ambiguousTraceOwners.contains(assistantId)) {
                                 String existing = snapshotIdsByAssistant.get(assistantId);
-                                if (existing != null && !existing.equals(pointer.get().snapshotId())) {
+                                if (existing != null && (!existing.equals(pointer.get().snapshotId())
+                                        || !Objects.equals(evidenceByAssistant.get(assistantId), pointer.get().evidence()))) {
                                     tracesByAssistant.remove(assistantId);
                                     executionModesByAssistant.remove(assistantId);
+                                    evidenceByAssistant.remove(assistantId);
                                     ambiguousTraceOwners.add(assistantId);
                                 } else if (existing == null) {
                                     snapshotIdsByAssistant.put(assistantId, pointer.get().snapshotId());
+                                    evidenceByAssistant.put(assistantId, pointer.get().evidence());
                                     if (pointer.get().assistantMessageId() != null) {
                                         var mode = ChatStreamSignalBuilder.executionModeSnapshot(pointer.get().diagnostics());
                                         if (mode != null) executionModesByAssistant.put(assistantId, mode);
@@ -131,9 +135,10 @@ final class ChatSessionDetailResponseBuilder {
         }
 
         messages.replaceAll(message -> "assistant".equals(message.role())
-                && executionModesByAssistant.containsKey(message.turnId())
+                && (executionModesByAssistant.containsKey(message.turnId()) || evidenceByAssistant.containsKey(message.turnId()))
                 ? new ChatApiController.MessageDto(message.turnId(), message.role(), message.content(),
-                        message.timestamp(), executionModesByAssistant.get(message.turnId())) : message);
+                        message.timestamp(), executionModesByAssistant.get(message.turnId()),
+                        evidenceByAssistant.get(message.turnId())) : message);
 
         Map<String, Object> savedSettings = Collections.emptyMap();
         String meta = session.getSessionMeta();
@@ -190,7 +195,7 @@ final class ChatSessionDetailResponseBuilder {
                                                         String modelMeta, Long sessionId) {
         Map<String, String> merged = new LinkedHashMap<>(projection);
         // These scalars have already passed the durable diagnostic allowlist and are bound to this answer.
-        for (String key : List.of("observedModel", "prompt.citableEvidenceCount", "orch.mode")) {
+        for (String key : List.of("observedModel", "observedProvider", "prompt.citableEvidenceCount", "orch.mode")) {
             Object value = diagnostics.get(key);
             if (value != null) merged.put(key, String.valueOf(value));
         }

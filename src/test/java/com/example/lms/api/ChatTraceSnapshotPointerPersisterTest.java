@@ -30,6 +30,48 @@ import static org.mockito.Mockito.when;
 class ChatTraceSnapshotPointerPersisterTest {
 
     @Test
+    void persistsOnlyBoundedPublicEvidenceInsideTheExistingAssistantPointer() {
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        when(store.captureCustom(any(), any(), any(), eq(null), eq(null), any(), eq(null), eq(false)))
+                .thenReturn("evidence-owned");
+        when(history.appendMessageReturningId(eq(7L), eq("system"), any())).thenReturn(77L);
+        var evidence = java.util.List.of(new com.example.lms.dto.RagEvidenceMetadata("W1", "WEB",
+                "Synthetic unofficial claim", "https://example.test/B?view=2", null, 4, 6, 1, null, null));
+        Long id = ChatTraceSnapshotPointerPersister.persist(7L, 66L, "final", "SSE", "/api/chat/stream",
+                Map.of("rawSnippet", "SYNTHETIC_PRIVATE_BODY", "prompt.webCount", 1), null,
+                store, history, LoggerFactory.getLogger(getClass()), false, evidence);
+        assertEquals(77L, id);
+        ArgumentCaptor<String> saved = ArgumentCaptor.forClass(String.class);
+        verify(history).appendMessageReturningId(eq(7L), eq("system"), saved.capture());
+        var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(saved.getValue(), 77L).orElseThrow();
+        assertEquals(66L, pointer.assistantMessageId());
+        assertEquals(evidence, pointer.evidence());
+        assertEquals(1L, pointer.diagnostics().get("prompt.webCount"));
+        assertFalse(pointer.projection().containsKey("publicEvidence"), "source packet is not a diagnostic label");
+        assertFalse(saved.getValue().contains("SYNTHETIC_PRIVATE_BODY"));
+    }
+
+    @Test
+    void oversizedPublicEvidenceDoesNotReplaceOrCorruptTheExistingPointer() {
+        TraceSnapshotStore store = mock(TraceSnapshotStore.class);
+        ChatHistoryService history = mock(ChatHistoryService.class);
+        when(store.captureCustom(any(), any(), any(), eq(null), eq(null), any(), eq(null), eq(false)))
+                .thenReturn("evidence-bounded");
+        when(history.appendMessageReturningId(eq(7L), eq("system"), any())).thenReturn(77L);
+        var evidence = java.util.stream.IntStream.rangeClosed(1, 16).mapToObj(index ->
+                new com.example.lms.dto.RagEvidenceMetadata("W" + index, "WEB", "Long title ".repeat(50),
+                        "https://example.test/" + index, null, null, null, index, null, null)).toList();
+        ChatTraceSnapshotPointerPersister.persist(7L, 66L, "final", "SSE", "/api/chat/stream",
+                Map.of("prompt.webCount", 16), null, store, history, LoggerFactory.getLogger(getClass()), false, evidence);
+        ArgumentCaptor<String> saved = ArgumentCaptor.forClass(String.class);
+        verify(history).appendMessageReturningId(eq(7L), eq("system"), saved.capture());
+        var pointer = ChatTraceMetaMessageRestorer.parseSnapshotPointer(saved.getValue(), 77L).orElseThrow();
+        assertEquals(66L, pointer.assistantMessageId()); assertTrue(pointer.evidence().isEmpty());
+        assertEquals(16L, pointer.diagnostics().get("prompt.webCount"));
+    }
+
+    @Test
     void capturesTraceHtmlAndAppendsSafeSnapshotPointer() {
         TraceSnapshotStore store = mock(TraceSnapshotStore.class);
         ChatHistoryService history = mock(ChatHistoryService.class);

@@ -122,6 +122,21 @@ class JevChoiceContractTest {
             assertEquals(new java.math.BigDecimal("0.000012"),cost.orElseThrow());
         }
     }
+    @Test void officialGatewayCostHasPrecedenceWithoutTreatingUnknownAsFree()throws Exception{
+        try(var f=new Fixture()){
+            for(String cost:List.of("\"0.000012\"","\"0\"")){
+                f.response=GOOD.substring(0,GOOD.length()-1)
+                        +",\"providerMetadata\":{\"gateway\":{\"cost\":"+cost+"}},\"gateway\":{\"cost\":\"99\"}}";
+                assertEquals(new java.math.BigDecimal(cost.replace("\"","")),
+                        f.evaluate("synthetic",QUESTIONS,8192).result().billedUsd().orElseThrow());
+            }
+            for(String cost:List.of("null","0.01","\"NaN\"","\"-0.001\"")){
+                f.response=GOOD.substring(0,GOOD.length()-1)
+                        +",\"providerMetadata\":{\"gateway\":{\"cost\":"+cost+"}},\"gateway\":{\"cost\":\"99\"}}";
+                assertTrue(f.evaluate("synthetic",QUESTIONS,8192).result().billedUsd().isEmpty());
+            }
+        }
+    }
     @Test void choiceOffCreatesNoSecondRuntime(){
         var runner=new ApplicationContextRunner().withInitializer(ctx->{
             // The host may set CONVERSATE_ENABLED; default tests isolate it from explicit test properties.

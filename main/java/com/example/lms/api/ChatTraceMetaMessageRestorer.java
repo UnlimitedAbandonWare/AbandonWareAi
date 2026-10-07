@@ -8,6 +8,10 @@ import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.util.Base64;
 import java.util.LinkedHashMap;
+import java.util.List;
+import com.example.lms.dto.RagEvidenceMetadata;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -25,6 +29,34 @@ final class ChatTraceMetaMessageRestorer {
     private static final String DURABLE_ENVELOPE_VERSION_V3 = "v3";
     static final int MAX_DETAIL_BYTES = 8_192;
     private static final int MAX_DETAIL_FIELDS = 96;
+    private static final int MAX_PUBLIC_EVIDENCE_BYTES = 4_096;
+    private static final ObjectMapper EVIDENCE_MAPPER = new ObjectMapper();
+
+    static String encodePublicEvidence(List<RagEvidenceMetadata> evidence) {
+        if (evidence == null || evidence.isEmpty()) return null;
+        try {
+            byte[] bytes = EVIDENCE_MAPPER.writeValueAsBytes(evidence);
+            String encoded = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+            return decodePublicEvidence(encoded).isEmpty() ? null : encoded;
+        } catch (Exception invalid) { return null; }
+    }
+
+    private static List<RagEvidenceMetadata> decodePublicEvidence(String encoded) {
+        if (encoded == null || encoded.length() > 5_462 || !encoded.matches("[A-Za-z0-9_-]+")) return List.of();
+        try {
+            byte[] bytes = Base64.getUrlDecoder().decode(encoded);
+            if (bytes.length > MAX_PUBLIC_EVIDENCE_BYTES) return List.of();
+            List<RagEvidenceMetadata> evidence = EVIDENCE_MAPPER.readValue(bytes, new TypeReference<>() {});
+            if (evidence == null || evidence.isEmpty() || evidence.size() > 16) return List.of();
+            Set<String> markers = new java.util.HashSet<>();
+            for (var item : evidence) {
+                if (item == null || item.marker() == null || !item.marker().matches("[A-Z]\\d{1,6}")
+                        || !markers.add(item.marker()) || item.kind() == null
+                        || (item.source() == null && item.attachment() == null && item.filePath() == null)) return List.of();
+            }
+            return List.copyOf(evidence);
+        } catch (Exception invalid) { return List.of(); }
+    }
     private static final Set<String> DETAIL_FLAGS = Set.of(
             "queryTransformer.bypassed", "qtx.stagePolicy.enabled", "qtx.stagePolicy.clamped",
             "qtx.suppressed.minLiveBudget", "qtx.timeoutMs.cappedByMinLiveBudget",
@@ -39,7 +71,9 @@ final class ChatTraceMetaMessageRestorer {
             "prompt.context.refiner.activated", "prompt.context.refiner.failSoft", "prompt.learningDegraded",
             "llm.output.blank", "attachment.bind.attempted", "attachment.bind.applied",
             "rag.evidence.promotion.evidenceGatePassed", "rag.evidence.promotion.citationGateMinPassed",
-            "finalAnswer.releaseAllowed", "finalAnswer.evidenceScopeBound", "executionMode.expanded");
+            "finalAnswer.releaseAllowed", "finalAnswer.evidenceScopeBound", "executionMode.expanded",
+            "ablation.finalized", "extremeZ.activated", "extremez.trigger.activate", "extremeZ.trigger.activated",
+            "extremez.execute.activated", "extremez.execute.skipped", "extremez.activated");
     private static final Set<String> DETAIL_COUNTS = Set.of(
             "queryTransformer.bypassed.queryLength", "qtx.minLiveBudgetMs",
             "qtx.timeoutMs.before", "qtx.timeoutMs.after", "qtx.constraints.rejectedCount",
@@ -53,8 +87,11 @@ final class ChatTraceMetaMessageRestorer {
             "llm.output.contentLength", "memory.session.tokenEstimate", "fallbackCount",
             "attachment.bind.count", "attachment.sessionFilter.allowedCount",
             "rag.evidence.promotion.candidateCount", "rag.evidence.promotion.citableLocatorCount",
-            "rag.evidence.promotion.promotedCount", "executionMode.queryCount", "executionMode.httpAttempts");
-    private static final Set<String> DETAIL_NUMBERS = Set.of("prompt.context.refiner.phi", "orch.irregularity");
+            "rag.evidence.promotion.promotedCount", "executionMode.queryCount", "executionMode.httpAttempts",
+            "taa.candidate.count", "taa.beam.count", "extremez.execute.rawCount", "extremez.execute.refinedCount",
+            "extremeZ.outCount", "extremez.base.count", "extremez.extra.count", "extremez.merged.count");
+    private static final Set<String> DETAIL_NUMBERS = Set.of("prompt.context.refiner.phi", "orch.irregularity",
+            "taa.outcome.risk", "ablation.score.final");
     private static final Set<String> DETAIL_LABELS = Set.of(
             "queryTransformer.reason", "qtx.bypass.reason", "qtx.constraints.reason",
             "keywordSelection.mode", "keywordSelection.reason", "keywordSelection.cacheSeeded.reason",
@@ -64,8 +101,23 @@ final class ChatTraceMetaMessageRestorer {
             "observedProvider", "routeId", "fallbackReason", "observedReason",
             "attachment.bind.reason", "rag.evidence.promotion.disabledReason",
             "finalAnswer.releaseReason", "finalAnswer.evidenceReleaseState", "finalAnswer.retrievalExecution",
-            "executionMode.requested", "executionMode.effective", "executionMode.reason");
+            "executionMode.requested", "executionMode.effective", "executionMode.reason",
+            "taa.version", "taa.outcome", "taa.topContributor.id", "taa.topContributor.group",
+            "routing.executionPlan.primaryMode", "extremez.trigger.plan.primaryMode", "extremez.execute.reason",
+            "extremez.skipReason", "extremez.activation.reason");
     private static final int MAX_DURABLE_PROJECTION_BYTES = 2_048;
+    // Reserve the bounded summary before optional detail can exhaust the existing 80-field cap.
+    private static final Set<String> DETAIL_SUMMARY_PRIORITY = Set.of(
+            "taa.version", "taa.outcome", "taa.outcome.risk", "taa.topContributor.id", "taa.topContributor.group",
+            "taa.candidate.count", "taa.beam.count", "ablation.finalized", "ablation.score.final",
+            "routing.executionPlan.primaryMode", "extremeZ.activated", "extremez.trigger.activate",
+            "extremeZ.trigger.activated", "extremez.trigger.plan.primaryMode", "extremez.execute.activated",
+            "extremez.execute.skipped", "extremez.execute.reason", "extremez.execute.rawCount",
+            "extremez.execute.refinedCount", "extremeZ.outCount", "extremez.activated", "extremez.skipReason",
+            "extremez.activation.reason", "extremez.base.count", "extremez.extra.count", "extremez.merged.count",
+            "observedModel", "observedProvider", "observedReason", "routeId", "fallbackCount", "fallbackReason",
+            "finalAnswer.releaseAllowed", "finalAnswer.releaseReason", "finalAnswer.evidenceReleaseState",
+            "prompt.citableEvidenceCount", "orch.mode");
     private static final int MAX_DURABLE_PROJECTION_B64_CHARS = 2_732;
     private static final int MAX_DURABLE_PROJECTION_FIELDS = 16;
     private static final Pattern SAFE_LABEL = Pattern.compile("[A-Za-z0-9_.:-]{1,80}");
@@ -132,7 +184,11 @@ final class ChatTraceMetaMessageRestorer {
 
     record SnapshotPointer(String snapshotId, Map<String, String> projection,
                            Long assistantMessageId, boolean legacyFallbackAllowed,
-                           Map<String, Object> diagnostics) {
+                           Map<String, Object> diagnostics, List<RagEvidenceMetadata> evidence) {
+        SnapshotPointer(String snapshotId, Map<String, String> projection, Long assistantMessageId,
+                        boolean legacyFallbackAllowed, Map<String, Object> diagnostics) {
+            this(snapshotId, projection, assistantMessageId, legacyFallbackAllowed, diagnostics, List.of());
+        }
     }
 
     static Optional<SnapshotPointer> parseSnapshotPointer(String content, Long messageId) {
@@ -161,10 +217,10 @@ final class ChatTraceMetaMessageRestorer {
         Map<String, String> summary = new LinkedHashMap<>();
         projection.forEach((key, value) -> {
             if (key.startsWith("diag.")) diagnostics.put(key.substring(5), decodeDiagnostic(key.substring(5), value));
-            else summary.put(key, value);
+            else if (!"publicEvidence".equals(key)) summary.put(key, value);
         });
         return Optional.of(new SnapshotPointer(snapshotId, Map.copyOf(summary), assistantMessageId,
-                legacyFallbackAllowed, Map.copyOf(diagnostics)));
+                legacyFallbackAllowed, Map.copyOf(diagnostics), decodePublicEvidence(projection.get("publicEvidence"))));
     }
 
     static Map<String, String> projectDiagnostics(Map<String, Object> source) {
@@ -180,7 +236,9 @@ final class ChatTraceMetaMessageRestorer {
             if (mode.expanded() != null) out.put("diag.executionMode.expanded", "b:" + mode.expanded());
         }
         source.keySet().stream().filter(java.util.Objects::nonNull)
-                .filter(key -> !key.startsWith("executionMode.")).sorted().forEach(key -> {
+                .filter(key -> !key.startsWith("executionMode."))
+                .sorted(java.util.Comparator.<String, Boolean>comparing(key -> !DETAIL_SUMMARY_PRIORITY.contains(key))
+                        .thenComparing(java.util.Comparator.naturalOrder())).forEach(key -> {
             Object safe = SafeRedactor.diagnosticValue(key, source.get(key));
             String encoded = encodeDiagnostic(key, safe);
             if (encoded != null && out.size() < 80) out.put("diag." + key, encoded);
@@ -206,6 +264,8 @@ final class ChatTraceMetaMessageRestorer {
         }
         if (DETAIL_NUMBERS.contains(key) && (value instanceof Float || value instanceof Double)) {
             double number = ((Number) value).doubleValue();
+            if (("taa.outcome.risk".equals(key) || "ablation.score.final".equals(key))
+                    && (number < 0 || number > 1)) return null;
             return Double.isFinite(number) && Math.abs(number) <= 1_000_000 ? "f:" + number : null;
         }
         if (DETAIL_LABELS.contains(key) && value instanceof String s
@@ -319,6 +379,9 @@ final class ChatTraceMetaMessageRestorer {
     }
 
     private static boolean isValidDurableField(String key, String value, String version) {
+        if ("publicEvidence".equals(key)) {
+            return DURABLE_ENVELOPE_VERSION_V3.equals(version) && !decodePublicEvidence(value).isEmpty();
+        }
         if (key.startsWith("diag.")) {
             return DURABLE_ENVELOPE_VERSION_V3.equals(version) && decodeDiagnostic(key.substring(5), value) != null;
         }

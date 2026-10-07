@@ -193,7 +193,7 @@ public class StandardPromptBuilder implements PromptBuilder {
             List<Content> webList = ctx.web();
             if (webList != null) {
                 for (Content c : webList) {
-                    String snippet = safeSnippet(c);
+                    String snippet = safeWebSnippet(c, ctx, webIdx);
                     if (snippet.isEmpty()) {
                         continue;
                     }
@@ -1002,6 +1002,38 @@ public class StandardPromptBuilder implements PromptBuilder {
             traceSkipped("local_docs_probe", error);
         }
         return false;
+    }
+
+    private static String safeWebSnippet(Content content, PromptContext context, int webIndex) {
+        if (content == null || context == null || context.evidence() == null) {
+            return safeSnippet(content);
+        }
+        try {
+            var segment = content.textSegment();
+            if (segment == null || segment.text() == null || segment.metadata() == null) {
+                return safeSnippet(content);
+            }
+            String url = segment.metadata().getString("url");
+            String source = segment.metadata().getString("source");
+            if (url == null || url.isBlank() || !url.equals(safeLine(url, 300))
+                    || (source != null && !source.equals(url))) {
+                return safeSnippet(content);
+            }
+            boolean locatorRendered = context.evidence().stream().anyMatch(item -> item != null
+                    && "WEB".equals(item.kind()) && ("W" + webIndex).equals(item.marker())
+                    && url.equals(item.source()));
+            String text = segment.text().strip();
+            String trailer = "\n\n[출처] " + url;
+            if (locatorRendered && text.endsWith(trailer)) {
+                String body = text.substring(0, text.length() - trailer.length()).strip();
+                if (!body.isEmpty()) {
+                    return truncate(body, 512);
+                }
+            }
+        } catch (Exception error) {
+            traceSkipped("web_content_snippet", error);
+        }
+        return safeSnippet(content);
     }
 
     private static String safeSnippet(Content c) {

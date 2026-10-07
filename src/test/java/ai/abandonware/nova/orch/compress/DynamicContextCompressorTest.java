@@ -45,6 +45,31 @@ class DynamicContextCompressorTest {
     }
 
     @Test
+    void retainedTailNegationSurvivesFittingAndTheFinalPrompt() {
+        String claim = "오로라 등급은 공식 확정이 아님";
+        String body = "Unrelated background. ".repeat(10) + claim;
+        Map<String, Object> metadata = Map.of("url", "https://docs.example/status", "sourceId", "status-A",
+                "revision", "r2", "bodyHash", "synthetic-status-A");
+        Content original = Content.from(TextSegment.from(body, Metadata.from(metadata)));
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setMaxCharsPerContent(180);
+        props.getRagCompressor().setAnchorWindowChars(0);
+        props.getRagCompressor().setAblationPressureThreshold(0.0d);
+        DynamicContextCompressor bounded = new DynamicContextCompressor(props);
+
+        Content out = bounded.composeForPrompt("현재 상태를 알려줘.", List.of(original), List.of()).web().get(0);
+
+        assertTrue(out.textSegment().text().contains(claim), "retained tail must keep the complete negation");
+        assertTrue(out.textSegment().text().endsWith("아님"));
+        assertTrue(out.textSegment().text().length() <= 180);
+        metadata.forEach((key, value) -> assertEquals(value, out.textSegment().metadata().toMap().get(key)));
+        var context = com.example.lms.prompt.PromptContext.builder().userQuery("현재 상태를 알려줘.")
+                .web(List.of(out)).build();
+        String prompt = new com.example.lms.prompt.StandardPromptBuilder().build(context);
+        assertTrue(prompt.contains(claim), "final model context must preserve the original qualification");
+    }
+
+    @Test
     void preservesCompleteAnchorClaimWhenItFitsTheDocumentBudget() {
         String claim = "For version 7, anchor access is supported, but only if quota is below 2 requests per day; this is not guaranteed and remains uncertain.";
         String text = "Unrelated background. ".repeat(10) + claim + " Unrelated closing.".repeat(10);

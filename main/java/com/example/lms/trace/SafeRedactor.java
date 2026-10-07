@@ -63,6 +63,16 @@ public final class SafeRedactor {
 
     public static boolean isTypedDiagnostic(String key, Object value) {
         if (isLoadoutDiagnostic(key, value)) return true;
+        if (Set.of("taa.version", "taa.outcome", "taa.topContributor.id", "taa.topContributor.group")
+                .contains(key == null ? "" : key)) {
+            return value instanceof String s && s.matches("[A-Za-z0-9_.:-]{1,80}")
+                    && s.equals(traceLabel(s));
+        }
+        if (Set.of("taa.outcome.risk", "ablation.score.final").contains(key == null ? "" : key)) {
+            return (value instanceof Double || value instanceof Float)
+                    && Double.isFinite(((Number) value).doubleValue())
+                    && ((Number) value).doubleValue() >= 0 && ((Number) value).doubleValue() <= 1;
+        }
         if (DIAGNOSTIC_FLAGS.contains(key == null ? "" : key)) {
             return value instanceof Boolean;
         }

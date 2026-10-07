@@ -1173,10 +1173,9 @@ public class BraveSearchService implements WebSearchProvider {
             if (admissionBudget != null && admissionBudget.expired()) {
                 return requestBudgetExhaustedResult(safeQuery, topK, t0Ns);
             }
-            // IMPORTANT: cooldownMs must be >0 to avoid tight loops:
-            // "skip -> immediate retry -> rate_limit_local" in the same session.
+            // Advise this caller to back off without poisoning the singleton provider health.
+            // The shared QPS limiter still paces subsequent callers; no wire was attempted here.
             long cdMs = localCooldownMsFor(effectiveQpsLimit);
-            startCooldown(cdMs);
             try {
                 TraceStore.put("web.brave.rate_limit_local", true);
                 TraceStore.inc("web.brave.rate_limit_local.count");

@@ -128,6 +128,35 @@ routes:
       Not for DAT native UI, diagnostic-first overlays, or mixing Web App and
       custom relay stacks.
   - kind: 'skill'
+    canonicalId: 'demo1-uaw-source-reconciliation'
+    contractClass: 'decision-changing'
+    contractRefs:
+      - '.agents/skills/demo1-uaw-source-reconciliation/references/feature-record.md'
+      - '.agents/skills/demo1-uaw-source-reconciliation/references/rewrite-handoff.md'
+    loadPolicy: 'on-demand'
+    status: 'active'
+    source: '.agents/skills/demo1-uaw-source-reconciliation/SKILL.md'
+    pairedArtifact: '.agents/skills/demo1-uaw-source-reconciliation/agents/openai.yaml'
+    trigger: >-
+      Use for feature-level correction of canonical UAW.txt against current
+      source, equivalent implementations and separate wiring/test/runtime evidence.
+
+
+  - kind: 'skill'
+    canonicalId: 'demo1-search-recovery'
+    contractClass: 'decision-changing'
+    contractRefs:
+      - '.agents/skills/demo1-evidence-debugging/references/case-contract.md'
+      - '.agents/skills/demo1-search-recovery/references/lifecycle-contract.md'
+    loadPolicy: 'on-demand'
+    status: 'active'
+    source: '.agents/skills/demo1-search-recovery/SKILL.md'
+    pairedArtifact: '.agents/skills/demo1-search-recovery/agents/openai.yaml'
+    trigger: >-
+      Use when demo-1 main chat search errors recur after correction,
+      a follow-up search fails, or search cancellation recovery is unproved.
+
+  - kind: 'skill'
     canonicalId: 'demo1-evidence-debugging'
     contractClass: 'decision-changing'
     contractRefs:

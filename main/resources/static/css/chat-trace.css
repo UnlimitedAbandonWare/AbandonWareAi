@@ -6,6 +6,19 @@
   align-self: stretch;
 }
 
+.chat-app .awx-trace-overview {
+  box-sizing: border-box;
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #d5dedb;
+  border-radius: 6px;
+  color: #263b40;
+  background: #f8faf9;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
 .chat-app .awx-trace-panel {
   box-sizing: border-box;
   width: 100%;

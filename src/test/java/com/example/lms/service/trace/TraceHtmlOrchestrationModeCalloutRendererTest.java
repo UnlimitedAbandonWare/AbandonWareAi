@@ -12,6 +12,43 @@ import org.junit.jupiter.api.Test;
 import com.example.lms.trace.SafeRedactor;
 
 class TraceHtmlOrchestrationModeCalloutRendererTest {
+    @Test void extremeZPlanDoesNotClaimExecution() {
+        String html = new TraceHtmlBuilder(null).buildSplitPanel(null, null, null, null,
+                Map.of("routing.executionPlan.primaryMode", "EXTREMEZ", "orch.mode", "NORMAL"));
+        assertTrue(html.contains("Z plan=EXTREMEZ"));
+        assertTrue(html.contains("execute=NOT_OBSERVED"));
+        assertTrue(TraceHtmlOrchestrationModeCalloutRenderer.render(
+                Map.of("routing.executionPlan.primaryMode", "EXTREMEZ", "orch.mode", "NORMAL"))
+                .contains("<b>Mode</b>: NORMAL"));
+        assertFalse(html.contains("execute=true"));
+    }
+
+    @Test void completedEmptyHandlerAndAopDuplicateSkipRemainSeparate() {
+        String html = TraceHtmlOrchestrationModeCalloutRenderer.render(Map.of(
+                "routing.executionPlan.primaryMode", "EXTREMEZ",
+                "extremez.execute.activated", true, "extremez.execute.refinedCount", 0,
+                "extremez.execute.skipped", true, "extremez.execute.reason", "plan_OVERDRIVE",
+                "extremez.activated", false, "extremez.skipReason", "burst_handler_already_ran"));
+        assertTrue(html.contains("execute=true"));
+        assertTrue(html.contains("handler output=0"));
+        assertTrue(html.contains("handler skipped=true"));
+        assertTrue(html.contains("AOP document growth=false"));
+        assertTrue(html.contains("burst_handler_already_ran"));
+    }
+
+    @Test void missingFalseAndConflictingTriggerAliasesAreDistinguished() {
+        String absent = TraceHtmlOrchestrationModeCalloutRenderer.render(Map.of("extremeZ.activated", true));
+        assertTrue(absent.contains("execute=NOT_OBSERVED"));
+        String conflict = TraceHtmlOrchestrationModeCalloutRenderer.render(Map.of(
+                "extremez.execute.activated", false,
+                "extremez.trigger.activate", true, "extremeZ.trigger.activated", false));
+        assertTrue(conflict.contains("execute=false"));
+        assertTrue(conflict.contains("trigger=UNKNOWN(alias_conflict)"));
+        assertFalse(conflict.contains("execute=true"));
+        assertFalse(TraceHtmlOrchestrationModeCalloutRenderer.render(Map.of("orch.mode", "NORMAL"))
+                .contains("Z plan="));
+    }
+
 
     @Test
     void snapshotSummaryKeepsUnpreservedContextDistinctFromDisabledSearch() {

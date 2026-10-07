@@ -12,6 +12,9 @@ import com.example.lms.service.rag.filter.GenericDocClassifier;
 import dev.langchain4j.rag.content.Content;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.jsoup.Connection;
+import org.jsoup.Jsoup;
+import org.mockito.MockedStatic;
 
 import java.util.List;
 import java.util.Map;
@@ -37,6 +40,44 @@ class WebSearchRetrieverRelationEvidenceTest {
         Content result = retrieve(QUERY, "카렐로바 소개 자료", INTRO.repeat(35) + RELATION, false);
         assertTrue(result.textSegment().text().contains(RELATION), "complete subject-relation-value must survive");
         assertMetadata(result);
+    }
+
+    @Test
+    void retrieve_preservesQualifiedRelationFromMiddleAndEndOfHtmlTable() throws Exception {
+        String target = "http://93.184.216.34/fixture";
+        for (boolean atEnd : new boolean[]{false, true}) {
+            String html = "<body><main><nav>" + "카렐로바 무기 메뉴 ".repeat(100) + "</nav><article><p>"
+                    + INTRO.repeat(35) + "</p><table><tr><td>"
+                    + RELATION + " (비공식 추정)</td></tr></table>"
+                    + (atEnd ? "" : "<p>" + "다른 내용 ".repeat(150) + "</p>") + "</article></main></body>";
+            Connection connection = mock(Connection.class, RETURNS_SELF);
+            Connection.Response response = mock(Connection.Response.class);
+            when(connection.execute()).thenReturn(response);
+            when(response.statusCode()).thenReturn(200);
+            when(response.parse()).thenReturn(Jsoup.parse(html));
+            try (MockedStatic<Jsoup> jsoup = mockStatic(Jsoup.class)) {
+                jsoup.when(() -> Jsoup.connect(target)).thenReturn(connection);
+                String body = new PageContentScraper().fetchText(target, 1000);
+                Content result = retrieve(QUERY, "카렐로바 소개 자료", body, false);
+                assertTrue(result.textSegment().text().contains(RELATION + " (비공식 추정)"),
+                        "scraper to retriever must preserve the complete qualified relation");
+                assertFalse(result.textSegment().text().contains("메뉴"));
+                assertMetadata(result);
+            }
+        }
+    }
+
+    @Test
+    void retrieve_keepsTableCaptionQualifierWithMiddleRelation() throws Exception {
+        var extract = PageContentScraper.class.getDeclaredMethod("extractBodyText", org.jsoup.nodes.Document.class);
+        extract.setAccessible(true);
+        String html = "<body><main><p>" + INTRO.repeat(35) + "</p><table>"
+                + "<caption>비공식 추정 2026-10-01</caption><tr><td>" + RELATION + "</td></tr></table>"
+                + "<p>" + "후속 안내 ".repeat(150) + "</p></main></body>";
+        String body = (String) extract.invoke(null, Jsoup.parse(html));
+        String text = retrieve(QUERY, "카렐로바 소개", body, false).textSegment().text();
+        assertTrue(text.contains(RELATION) && text.contains("비공식 추정 2026-10-01"),
+                "a table-local qualifier must travel with the relation, including downstream window selection");
     }
 
     @Test
