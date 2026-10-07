@@ -305,6 +305,20 @@ intents:
     forbid_families: []
     notes: Codex 비서(점/dot)·Codex 채팅에 Grok Bot 대타 역할 부여 — 지시서 작성·보고서 판정·Top10; agy 세션은 형제 demo1-agy-grokbot-mode가 같은 팩을 씀(내용 복제 금지)
 
+  - intent: uaw-source-reconciliation
+    explicit: true
+    match:
+      - demo1-uaw-source-reconciliation
+      - uaw source reconciliation
+      - uaw 문서 교정
+      - uaw 기능별 대조
+      - 're:^(?=.*\buaw\b)(?=.*(?:문서|document))(?=.*(?:교정|reconcil|correct|대조)).*'
+    primary_skill: demo1-uaw-source-reconciliation
+    optional_skill: null
+    forbid_families: []
+    notes: Canonical UAW.txt feature records and document correction; separate minimal authorized repairs only.
+
+
   - intent: uaw-vibe-longrun
     match:
       - uaw
@@ -748,6 +762,17 @@ intents:
     optional_skill: demo1-local-llm-gpu-gateway
     forbid_families: []
     notes: 듀얼 GPU 역할->endpoint->PID->UUID->생성->보류사유 연결 검증; 진단 스크립트 scripts/ollama-*.ps1, 지시서 agent-prompts/gpu-lane-repair-20260924/
+
+  - intent: search-correction-recovery
+    match:
+      - demo1-search-recovery
+      - 're:^(?!.*(?:\bdisplay\b|ray.?ban|fold6|\binterview\b|web_search|search tool|\ub514\uc2a4\ud50c\ub808\uc774|\uc548\uacbd))(?=.*search\s+(?:query\s+|request\s+)?(?:errors?|fail\w*|cancel\w*))(?=.*(?:repeat|recur|correct|fix|follow-up|recover|failure loop)).*'
+      - 're:^(?!.*(?:\bdisplay\b|ray.?ban|fold6|\binterview\b|web_search|search tool|\ub514\uc2a4\ud50c\ub808\uc774|\uc548\uacbd)).*follow-up\s+search\s+(?:query\s+|request\s+)?(?:fails?|failed|failure).*'
+      - 're:^(?!.*(?:\bdisplay\b|ray.?ban|fold6|\binterview\b|web_search|search tool|\ub514\uc2a4\ud50c\ub808\uc774|\uc548\uacbd))(?=.*\uac80\uc0c9.{0,16}(?:\uc624\ub958|\uc5d0\ub7ec|\uc2e4\ud328|\uad50\uc815|\ucde8\uc18c))(?=.*(?:\ubc18\ubcf5|\uad50\uc815|\ud6c4\uc18d|\ucde8\uc18c.{0,20}\ubcf5\uad6c|\ud560\ub54c\ub9c8\ub2e4)).*'
+    primary_skill: demo1-search-recovery
+    optional_skill: null
+    forbid_families: []
+    notes: Narrow main-chat repeated correction/follow-up/cancel recovery; preserve other surface owners and existing tier escalation.
 
   - intent: debug-symptom
     match:

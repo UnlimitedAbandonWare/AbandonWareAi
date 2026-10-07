@@ -1,0 +1,71 @@
+# decision-combo eval configuration (offline tool; never wired into the server).
+# SSOT notes: Jev request shape mirrors JevGatewayClient.exchange (single
+# /v1/evaluate POST, gateway.only=[typesafe-ai], zeroDataRetention never sent).
+# Spend: every live Jev send passes scripts/apikit/jev_ledger.py gate() first.
+version: "2026-10-07"
+
+labels:
+  search: [NONE, RECENT_ONLY, SCOPED_RAG, WEB, HYBRID, CLARIFY]
+  hold: [ANSWER, ANSWER_HEDGED, HOLD]
+
+rules:
+  # "규칙 바닥선": only these two rule hits are treated as floor-confirmed;
+  # every other case passes through to Jev then (on need) the LLM judge.
+  floor_confirms:
+    - search_prohibition   # explicit "검색하지 마" / "no search" -> NONE
+    - self_contained_arithmetic  # pure arithmetic question -> NONE
+  # Mapping of the ported SearchDecisionService AUTO result to eval labels.
+  depth_map:
+    "false": NONE
+    LIGHT: WEB
+    DEEP: HYBRID
+  # Rules carry no release/hold opinion; modeled as unconditional release so
+  # the table shows what "rules alone" would do on the hold axis.
+  hold_default: ANSWER
+
+jev:
+  endpoint: "https://ai-gateway.vercel.sh/v1/evaluate"
+  model: "typesafe-ai/jev"
+  credential_env: AI_GATEWAY_API_KEY
+  connect_timeout_ms: 250
+  request_timeout_ms: 8000   # offline eval allows > the product 800ms budget
+  max_request_bytes: 8192
+  max_response_bytes: 65536
+  surface: "main"
+  live_call_cap: 80          # directive cap; ledger session cap is 150
+  cost_per_call_usd: 0.000019  # 2026-09-29 measured gateway.cost average
+
+llm:
+  # Cheapest existing env credential first (Groq free plan per
+  # docs/provider-limits/groq-limits.md). Model id resolved from the live
+  # /openai/v1/models list using model_preference order.
+  provider: groq
+  base_url: "https://api.groq.com/openai/v1"
+  credential_env: GROQ_API_KEY
+  # Live-verified against GET /models on 2026-10-07 (llama-3.1-8b-instant is
+  # retired): only these four chat models are on the free plan.
+  model_preference:
+    - "openai/gpt-oss-20b"
+    - "qwen/qwen3.8-27b"
+    - "openai/gpt-oss-120b"
+    - "allam-2-7b"
+  fallback_provider: gemini
+  fallback_base_url: "https://generativelanguage.googleapis.com/v1beta"
+  fallback_credential_env: GEMINI_API_KEY
+  fallback_model_preference: ["gemini-3.5-flash-lite", "gemini-2.5-flash-lite", "gemini-2.0-flash-lite"]
+  request_timeout_s: 15
+  max_output_tokens: 200
+  min_interval_s: 1.3        # stay under free-plan RPM; outside measured latency
+  live_call_cap: 40          # directive cap
+
+combo:
+  confidence_floor: 0.55     # LLM judge confidence below this -> default
+  default_on_low_confidence: {search: HYBRID, hold: ANSWER_HEDGED}
+  # HOLD is emitted only when the judge reports contradictory evidence.
+  hold_requires_contradiction: true
+
+evaluation:
+  cases_path: "data/eval/decision-combo/cases.jsonl"
+  recordings_dirname: "recorded"
+  report_filename: "comparison.json"
+  latency_percentile: 95

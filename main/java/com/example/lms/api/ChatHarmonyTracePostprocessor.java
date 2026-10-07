@@ -40,6 +40,8 @@ final class ChatHarmonyTracePostprocessor {
             "(\\b(?:do\\s+not|don't)\\b.{0,48}\\b(?:one|two|single)[-\\s]+(?:sentences?|lines?)\\b"
                     + "|\\b(?:one|single)[-\\s]+sentence\\s+(?:is\\s+(?:insufficient|not\\s+enough)|isn't\\s+enough)\\b"
                     + "|\\b(?:one|single)[-\\s]+line\\s+per\\s+(?:item|result)\\b"
+                    + "|(?:각각|(?:항목|결과|사례|오해)(?:마다|별로))(?:(?!(?:전체|최종|종합)\\s*(?:결론|답변?|요약))[^,，;；.!?]){0,48}한\\s*(?:문장|줄)\\s*씩"
+                    + "|한\\s*문단(?:으로)?\\s*(?:요약|정리|설명|작성)\\s*(?:해\\s*(?:줘|주세요)|하(?:라|세요))[^\\r\\n]{0,240}(?:마지막|끝)에[^.!?\\r\\n]{0,120}한\\s*줄"
                     + "|(?:각\\s*(?:항목|결과|사례)(?:에(?:는)?|마다|별로)|(?:항목|결과|사례)(?:마다|별로))(?:(?!(?:전체|최종|종합)\\s*(?:결론|답변?|요약))[^,，;；.!?]){0,48}한\\s*줄(?:로|씩)?"
                     + "|(?:한|두)\\s*문장(?:으로|만)?\\s*(?:답하지|말하지)\\s*말)",
             Pattern.CASE_INSENSITIVE);
@@ -986,7 +988,7 @@ final class ChatHarmonyTracePostprocessor {
         for (int i = 0; i < text.length(); i++) {
             char c = text.charAt(i);
             current.append(c);
-            if (isSentenceBoundary(c)) {
+            if (isSentenceBoundary(text, i)) {
                 addSentenceSegment(out, current);
             }
         }
@@ -1481,20 +1483,15 @@ final class ChatHarmonyTracePostprocessor {
     }
 
     private static int sentenceCount(String text) {
-        if (text == null || text.isBlank()) {
-            return 0;
-        }
-        int count = 0;
-        for (int i = 0; i < text.length(); i++) {
-            char c = text.charAt(i);
-            if (isSentenceBoundary(c)) {
-                count++;
-            }
-        }
-        return Math.max(1, count);
+        return sentenceSegments(text).size();
     }
 
-    private static boolean isSentenceBoundary(char c) {
+    private static boolean isSentenceBoundary(String text, int index) {
+        char c = text.charAt(index);
+        if (c == '.' && index > 0 && index + 1 < text.length()
+                && Character.isDigit(text.charAt(index - 1)) && Character.isDigit(text.charAt(index + 1))) {
+            return false;
+        }
         return c == '.' || c == '!' || c == '?' || c == '\n'
                 || c == '\u3002' || c == '\uff01' || c == '\uff1f';
     }

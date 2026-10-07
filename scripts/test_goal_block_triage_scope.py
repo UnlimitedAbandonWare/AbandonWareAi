@@ -8,6 +8,7 @@ interpretation rule resolves it) with a paste line naming the rule — never
 NEEDS_DIRECTIVE_FIX.
 """
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -85,6 +86,78 @@ class ScopeAmbiguityLabelTest(unittest.TestCase):
             row = GBT.audit_row(audits[0], [])
             self.assertIn("SCOPE_AMBIGUITY", row["labels"])
             self.assertEqual(row["verdict"], "RESUMABLE_NOW")
+
+
+# --- add-only: VIBE_OPEN admin/login-only blocker → DONE_WITH_DEFERRED
+# (2026-10-07 codex-interview-feature-ee02e904 BLOCKED_AUDIT.json 재현) ---
+
+sys.path.insert(0, str(HERE))
+import codex_question_classifier as _cqc  # noqa: E402
+
+VIBE_AUDIT_JSON = {
+    "schema": "awx.blocked-audit.v1",
+    "holdScope": "valid-login-and-protected-admin-access",
+    "sameBlockerConsecutiveGoalTurns": 3,
+    "meaningfulIndependentWorkRemaining": False,
+    "gateMode": "proto_open_observe",
+    "checks": {"validLogin": "NOT_RUN",
+               "invalidLoginRejected": "PASS",
+               "protectedAfterLogout": "HTTP 200"},
+}
+
+
+def _audit_entry(payload, text=""):
+    return {"path": "BLOCKED_AUDIT.json",
+            "text": text or json.dumps(payload, ensure_ascii=False),
+            "json": payload, "uuid": None}
+
+
+class DeferredSecurityTriageTest(unittest.TestCase):
+
+    def test_admin_only_blocker_is_done_with_deferred(self):
+        row = GBT.audit_row(_audit_entry(VIBE_AUDIT_JSON), [])
+        self.assertEqual("DONE_WITH_DEFERRED", row["verdict"])
+        self.assertIn("DEFERRED_SECURITY", row["labels"])
+        self.assertEqual(["valid-login-and-protected-admin-access"],
+                         row["deferred"])
+        self.assertIn("DEFERRED_SECURITY", row["paste_line"])
+
+    def test_vibe_disabled_keeps_normal_verdict(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False,
+                                         encoding="utf-8") as f:
+            f.write("enabled: false\n")
+            off = Path(f.name)
+        old = _cqc._VIBE_OPEN_CONFIG
+        try:
+            _cqc._VIBE_OPEN_CONFIG = off
+            row = GBT.audit_row(_audit_entry(VIBE_AUDIT_JSON), [])
+        finally:
+            _cqc._VIBE_OPEN_CONFIG = old
+            off.unlink(missing_ok=True)
+        self.assertNotEqual("DONE_WITH_DEFERRED", row["verdict"])
+
+    def test_non_admin_scope_not_deferred(self):
+        payload = dict(VIBE_AUDIT_JSON,
+                       holdScope="ui-summary-empty-regression")
+        row = GBT.audit_row(_audit_entry(payload), [])
+        self.assertNotEqual("DONE_WITH_DEFERRED", row["verdict"])
+
+    def test_independent_work_remaining_not_deferred(self):
+        payload = dict(VIBE_AUDIT_JSON,
+                       meaningfulIndependentWorkRemaining=True)
+        row = GBT.audit_row(_audit_entry(payload), [])
+        self.assertNotEqual("DONE_WITH_DEFERRED", row["verdict"])
+
+    def test_uppercase_underscore_audit_filename_loaded(self):
+        # 실측 파일명 BLOCKED_AUDIT.json은 기존 blocked-audit* glob에 안 잡힘.
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td)
+            (d / "BLOCKED_AUDIT.json").write_text(
+                json.dumps(VIBE_AUDIT_JSON), encoding="utf-8")
+            audits = GBT.load_audits([d])
+        self.assertEqual(1, len(audits))
+        row = GBT.audit_row(audits[0], [])
+        self.assertEqual("DONE_WITH_DEFERRED", row["verdict"])
 
 
 if __name__ == "__main__":

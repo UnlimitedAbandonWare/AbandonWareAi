@@ -21,6 +21,39 @@ import static org.mockito.Mockito.when;
 
 class MemoryHandlerTest {
 
+    @Test
+    void modelOnlyWindowBackfillStopsAt128() {
+        ChatHistoryService historyService = mock(ChatHistoryService.class);
+        when(historyService.getConversationMemorySnapshot(42L))
+                .thenReturn(ChatHistoryService.ConversationMemorySnapshot.empty());
+        when(historyService.getFormattedRecentHistory(org.mockito.ArgumentMatchers.eq(42L),
+                org.mockito.ArgumentMatchers.anyInt())).thenAnswer(call ->
+                java.util.Collections.nCopies(call.getArgument(1), "System: ?MODEL?synthetic-model"));
+        MemoryHandler handler = new MemoryHandler(historyService);
+        ReflectionTestUtils.setField(handler, "maxTurns", 4);
+
+        assertNull(handler.loadForSession(42L));
+        org.mockito.Mockito.verify(historyService).getFormattedRecentHistory(42L, 128);
+        org.mockito.ArgumentCaptor<Integer> limits = org.mockito.ArgumentCaptor.forClass(Integer.class);
+        org.mockito.Mockito.verify(historyService, org.mockito.Mockito.atMost(6))
+                .getFormattedRecentHistory(org.mockito.ArgumentMatchers.eq(42L), limits.capture());
+        assertTrue(limits.getAllValues().stream().allMatch(limit -> limit <= 128));
+    }
+
+    @Test
+    void modelMarkerQuotedByAUserRemainsConversationContent() {
+        ChatHistoryService historyService = mock(ChatHistoryService.class);
+        when(historyService.getConversationMemorySnapshot(42L))
+                .thenReturn(ChatHistoryService.ConversationMemorySnapshot.empty());
+        String userLine = "User: System: ?MODEL?synthetic-model 라는 메타 문구를 설명해줘.";
+        when(historyService.getFormattedRecentHistory(42L, 4)).thenReturn(List.of(userLine));
+        MemoryHandler handler = new MemoryHandler(historyService);
+        ReflectionTestUtils.setField(handler, "maxTurns", 4);
+
+        assertTrue(handler.loadForSession(42L).contains(userLine));
+        org.mockito.Mockito.verify(historyService).getFormattedRecentHistory(42L, 4);
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();

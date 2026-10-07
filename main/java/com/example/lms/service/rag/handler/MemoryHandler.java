@@ -47,19 +47,40 @@ public class MemoryHandler {
             ChatHistoryService.ConversationMemorySnapshot snapshot =
                     historyService.getConversationMemorySnapshot(sessionId);
             String summary = snapshot.summary();
-            List<String> hist = historyService.getFormattedRecentHistory(sessionId, Math.max(1, maxTurns));
+            int requestedTurns = Math.max(1, maxTurns);
+            int readLimit = requestedTurns;
+            List<String> hist = historyService.getFormattedRecentHistory(sessionId, readLimit);
+            // Saved model labels are UI metadata, not conversation turns. Backfill
+            // only when they displaced real turns, with a bounded read window.
+            while (hist != null && !hist.isEmpty()) {
+                long modelMetaCount = hist.stream().filter(MemoryHandler::isModelMetadataLine).count();
+                if (modelMetaCount == 0 || hist.size() < readLimit || readLimit >= Math.max(128, requestedTurns)) break;
+                long visibleCount = hist.stream().filter(line -> !isModelMetadataLine(line)
+                        && !isInjectedRollingSummaryLine(line)).count();
+                if (visibleCount >= requestedTurns) break;
+                readLimit = Math.min(Math.max(128, requestedTurns),
+                        Math.max(readLimit * 2, readLimit + (int) (requestedTurns - visibleCount)));
+                hist = historyService.getFormattedRecentHistory(sessionId, readLimit);
+            }
             traceMemoryCheckpoint("raw_snapshot", "memory_loader_raw", sessionId,
                     rawMemoryText(snapshot, hist), snapshot, hist, Map.of());
             int rawRecentCount = hist == null ? 0 : hist.size();
+            int droppedRollingSummaryCount = hist == null ? 0 : (int) hist.stream()
+                    .filter(MemoryHandler::isInjectedRollingSummaryLine).count();
+            int droppedModelMetadataCount = hist == null ? 0 : (int) hist.stream()
+                    .filter(MemoryHandler::isModelMetadataLine).count();
             if (hist != null && !hist.isEmpty()) {
                 hist = hist.stream()
-                        .filter(line -> !isInjectedRollingSummaryLine(line))
+                        .filter(line -> !isInjectedRollingSummaryLine(line) && !isModelMetadataLine(line))
                         .toList();
+                hist = hist.subList(Math.max(0, hist.size() - requestedTurns), hist.size());
             }
             int recentCount = hist == null ? 0 : hist.size();
             traceMemoryCheckpoint("first_refinement", "memory_loader_after_recent_filter", sessionId,
                     rawMemoryText(snapshot, hist), snapshot, hist,
-                    Map.of("droppedRollingSummaryCount", Math.max(0, rawRecentCount - recentCount)));
+                    Map.of("droppedRollingSummaryCount", droppedRollingSummaryCount,
+                            "droppedModelMetadataCount", droppedModelMetadataCount,
+                            "droppedRecentCount", Math.max(0, rawRecentCount - recentCount)));
             boolean summaryPresent = summary != null && !summary.isBlank();
             traceRehydrate(summaryPresent, recentCount, sessionId, null, snapshot);
             boolean anchorsPresent = snapshot.anchors() != null && !snapshot.anchors().isEmpty();
@@ -319,6 +340,10 @@ public class MemoryHandler {
 
     private static boolean isInjectedRollingSummaryLine(String line) {
         return line != null && line.stripLeading().startsWith("System: (Rolling Summary)");
+    }
+
+    private static boolean isModelMetadataLine(String line) {
+        return line != null && line.stripLeading().startsWith("System: ?MODEL?");
     }
 
 }

@@ -93,6 +93,9 @@ AUTO_DECISION: D2 | chat.js A2 → baseline SHA 동일로 판정 | evidence: git
 `python -B scripts/codex_question_classifier.py --text "질문 문장"`
 → JSON `verdict`(AUTO/ASK_ONCE/HOLD), `rule`, `default_answer`, `log_line`.
 종료코드 0/3/4.
+목표 본문·자유 문장·BLOCKED 기록 전에도 동일 분류: `--objective <본문|파일>`은
+상용구 admin/보안 줄을 TEMPLATE_BOILERPLATE → DEFERRED_SECURITY로 표시하고,
+그 줄만으로 URL·계정을 묻거나 BLOCKED를 쓰지 않는다.
 
 ## Anti-patterns / hard rules
 

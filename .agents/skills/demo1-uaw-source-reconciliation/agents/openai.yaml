@@ -1,0 +1,5 @@
+interface:
+  display_name: "UAW Source Reconciliation"
+  short_description: "Correct UAW claims against current source and evidence"
+  default_prompt: "Use $demo1-uaw-source-reconciliation to reconcile one UAW.txt feature against current implementation and evidence."
+

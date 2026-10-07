@@ -11615,7 +11615,7 @@ public class ChatWorkflow {
         // A read-only recall shortcut cannot fulfill a correction in the same
         // request; let the existing conversation/model path handle both intents.
         if (query != null && Pattern.compile(
-                "(?iu)(?:정정|수정|변경)\\s*해\\s*(?:줘|주세요)|바꿔\\s*(?:줘|주세요)")
+                "(?iu)(?:정정|수정|변경)\\s*(?:해\\s*(?:줘|주세요)|하고)|바꿔\\s*(?:줘|주세요)")
                 .matcher(query).find()) {
             return null;
         }
@@ -13794,7 +13794,7 @@ public class ChatWorkflow {
                 || containsEnglishWord(text, "rail")
                 || text.contains("\uBAA8\uB4DC")
                 || text.contains("\uD1A0\uAE00");
-        boolean mentionsUiSurface = text.contains("ui")
+        boolean mentionsUiSurface = containsEnglishWord(text, "ui")
                 || text.contains("screen")
                 || text.contains("control")
                 || text.contains("checkbox")

@@ -26,6 +26,7 @@ Exit codes: AUTO=0, ASK_ONCE=3, HOLD=4
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -378,6 +379,36 @@ VIBE_OPEN_ANSWER = (
     "VIBE_OPEN — 현재 개방 상태 유지, 보안 검증은 DEFERRED_SECURITY로 "
     "기록하고 계속 진행 (관측 HTTP status만 근거, PASS/FAIL 집계 제외; "
     "docs/security/VIBE_OPEN.md)")
+
+# ---------------------------------------------------------------------------
+# 부정형 비밀 언급 가드 (2026-10-07): 상용구 안의 "관리자 비밀번호는 채팅에
+# 보내지 말고 …" 같은 '공유·전송 금지' 지시는 비밀값 열람·기재 요구가 아니다.
+# 보안 검증 문맥에서만 D37_SECRET_GUARD를 중화해, 상용구 부정 문구가
+# DEFERRED_SECURITY 판정을 막지 않게 한다. 값 요구·노출 질문에는 이 가드가
+# 발동하지 않아 기존 판정이 그대로 유지된다.
+# ---------------------------------------------------------------------------
+_SECRET_WORD = (
+    r"(?:비밀\s*번호|패스워드|password|passwd|토큰|token|시크릿|secret|"
+    r"api\s*(?:key|키)|비밀\s*값|비밀값|credential|자격\s*증명)")
+_SECRET_DENY = (
+    r"(?:보내지|공유하지|알려주지|알려\s*주지|알리지|전달하지|넘기지|넘겨주지|"
+    r"노출하지|전송하지|붙여\s*넣지|붙여넣지|게시하지|올리지|기입하지|"
+    r"적어\s*두지|남기지)\s*(?:말|마|않|안)"
+    r"|(?:do\s+not|don't|never)\s+"
+    r"(?:send|share|paste|post|type|enter|give|reveal|commit)")
+D37_SECRET_NEGATION = (
+    _SECRET_WORD + r"[^.!?\n]{0,24}?" + _SECRET_DENY + r"|"
+    + _SECRET_DENY + r"[^.!?\n]{0,24}?" + _SECRET_WORD)
+_SECRET_NEG_CTX = (
+    r"admin|관리자|로그인|login|logout|로그아웃|차단|인증|auth|보안|검증|"
+    r"테스트|test|환경|url|페이지|세션|session|직접\s*입력|브라우저|browser")
+
+
+def _secret_negation(text):
+    """'비밀번호는 보내지 말고' 류 금지 지시 + 보안 문맥 → secret 가드 중화."""
+    return bool(
+        re.search(D37_SECRET_NEGATION, text, re.IGNORECASE)
+        and re.search(_SECRET_NEG_CTX, text, re.IGNORECASE))
 
 # ---------------------------------------------------------------------------
 # D39 (lease-patient, 2026-10-06): lease/잠금 때문에 멈춤·기다릴까·재개할까·
@@ -744,9 +775,14 @@ def classify(text, vibe_open_path=None):
     # 인증 계열 ASK 범주만 섞인 보안 검증 질문 + 비밀값 가드 통과 시에만 AUTO.
     # 자격 증명·직접 로그인·환경 URL 요청은 D40이 먼저 잡아 재질문 금지·격리
     # 검증 경로가 담긴 답을 준다 — "live request"/상용구 인용이 붙어도 동일.
+    # 부정형 비밀 언급("비밀번호는 보내지 말고")은 secret 가드를 중화 —
+    # 공유 금지 지시가 VIBE_OPEN DEFERRED 판정을 막지 않게 한다.
+    secret_blocked = bool(
+        re.search(D37_SECRET_GUARD, text, re.IGNORECASE)) \
+        and not _secret_negation(text)
     if _vibe_open_enabled(vibe_open_path) \
             and not any(r not in _VIBE_AUTH_CATS for r, _ in ask_hits) \
-            and not re.search(D37_SECRET_GUARD, text, re.IGNORECASE) \
+            and not secret_blocked \
             and not re.search(D37_WEAKEN_GUARD, text, re.IGNORECASE):
         if re.search(D40_ADMIN_CRED_ASK, text, re.IGNORECASE):
             return {
@@ -872,6 +908,89 @@ def classify_with_options(text, options, vibe_open_path=None):
     return result
 
 
+# ---------------------------------------------------------------------------
+# --objective 모드 (2026-10-07): goal-objective 본문을 줄 단위로 분류한다.
+# 플러그인 역할 상용구 블록(번호 붙은 역할 섹션 + 불릿 목록) 안의 admin
+# 로그인·계정·차단 검사 줄은 VIBE_OPEN enabled 시 TEMPLATE_BOILERPLATE →
+# DEFERRED_SECURITY로 표시돼 완료 조건·PASS/FAIL 집계에서 빠진다. 상용구
+# 밖의 사용자 직접 요구 줄(weaken/해제 포함)과 일반 검증 줄은 그대로 유지.
+# ---------------------------------------------------------------------------
+_OBJ_SECTION_HEAD = re.compile(r"(?m)^\s*\d+\.\s+\S")
+_OBJ_BULLET = re.compile(r"(?m)^\s*[-•·*]\s+\S")
+_OBJ_ADMIN_WORD = re.compile(
+    r"admin|관리자|로그인|log\s*in|logout|로그아웃|차단|계정|인증",
+    re.IGNORECASE)
+
+
+def is_boilerplate_objective(text):
+    """번호 섹션 ≥2 + 불릿 ≥2 + admin/로그인 어휘 → 플러그인 역할 상용구."""
+    body = text or ""
+    return (len(_OBJ_SECTION_HEAD.findall(body)) >= 2
+            and len(_OBJ_BULLET.findall(body)) >= 2
+            and bool(_OBJ_ADMIN_WORD.search(body)))
+
+
+def classify_objective(text, vibe_open_path=None):
+    """goal-objective 본문 -> 줄 단위 분류 JSON.
+
+    line = {n, text, boilerplate, rule, disposition}
+      - 상용구 안 보안 검사 줄: boilerplate=True, rule=TEMPLATE_BOILERPLATE,
+        disposition=DEFERRED_SECURITY (기록만, PASS/FAIL·완료 조건 제외)
+      - 그 외 줄: boilerplate=False, rule/disposition=classify() 판정 그대로
+    """
+    body = text or ""
+    vibe_on = _vibe_open_enabled(vibe_open_path)
+    boiler_doc = is_boilerplate_objective(body)
+    lines, deferred = [], []
+    for n, raw in enumerate(body.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        res = classify(line, vibe_open_path)
+        in_boiler = boiler_doc and bool(_OBJ_BULLET.match(raw))
+        if (in_boiler and vibe_on and res["verdict"] == "AUTO"
+                and res["rule"] in ("D37", "D40")):
+            entry = {"n": n, "text": line[:160], "boilerplate": True,
+                     "rule": "TEMPLATE_BOILERPLATE",
+                     "disposition": "DEFERRED_SECURITY"}
+            deferred.append({"n": n, "text": line[:160],
+                             "disposition": "DEFERRED_SECURITY"})
+        else:
+            entry = {"n": n, "text": line[:160], "boilerplate": False,
+                     "rule": res["rule"], "disposition": res["verdict"]}
+        lines.append(entry)
+    return {
+        "mode": "objective",
+        "verdict": "AUTO",
+        "vibe_open": vibe_on,
+        "boilerplate": boiler_doc,
+        "lines": lines,
+        "deferred": deferred,
+        "items": [e for e in lines if not e["boilerplate"]],
+        "summary": {
+            "lines": len(lines),
+            "deferred_security": len(deferred),
+            "non_boilerplate": sum(1 for e in lines if not e["boilerplate"]),
+        },
+    }
+
+
+def _objective_source(value):
+    """--objective 인자 해석: '-'=stdin, 'env'=VIBE_HOOK_PROMPT, 경로=파일,
+    그 외=리터럴 텍스트."""
+    if value == "-":
+        return sys.stdin.read()
+    if value == "env":
+        return os.environ.get("VIBE_HOOK_PROMPT", "")
+    try:
+        p = Path(value)
+        if p.is_file() and p.stat().st_size < 1024 * 1024:
+            return p.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError):
+        pass
+    return value
+
+
 def session_checkpoint_advisory(session_tokens):
     """누적 세션 토큰 → 체크포인트 권고 dict 또는 None(임계 미만)."""
     if session_tokens is None or \
@@ -898,12 +1017,23 @@ def main(argv=None):
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--text", help="question text")
     src.add_argument("--file", help="file containing the question (utf-8)")
+    src.add_argument("--objective",
+                     help="goal-objective mode: text | file path | "
+                          "'-'=stdin | 'env'=VIBE_HOOK_PROMPT — per-line "
+                          "classification (TEMPLATE_BOILERPLATE → "
+                          "DEFERRED_SECURITY)")
     parser.add_argument("--options",
                         help="card options joined by | (e.g. \"진행|보류\")")
     parser.add_argument("--session-tokens", type=int, default=None,
                         help="cumulative session tokens — emits "
                              "checkpoint_advisory at >=140k")
     args = parser.parse_args(argv)
+
+    if args.objective is not None:
+        print(json.dumps(
+            classify_objective(_objective_source(args.objective)),
+            ensure_ascii=False))
+        return 0
 
     text = args.text if args.text is not None else Path(args.file).read_text(
         encoding="utf-8")

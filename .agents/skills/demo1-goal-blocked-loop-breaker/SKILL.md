@@ -39,6 +39,7 @@ description: Use when a demo-1 Codex goal hits the same blocker twice, is marked
 ## 분류 → 붙여 넣을 말 (triage가 자동 생성)
 
 - RESUMABLE_NOW: 「막힘 원인 <X>가 풀렸어. 같은 감사 반복하지 말고 남은 항목부터 바로 이어서 해줘.」
+- DONE_WITH_DEFERRED(VIBE_OPEN 상용구 보안 항목만 남음): 「남은 막힘이 상용구 admin 로그인·차단·보호 URL뿐이야 — DEFERRED_SECURITY로 기록하고 완료로 보고해줘(docs/security/VIBE_OPEN.md).」
 - SCOPE_AMBIGUITY(보호·범위 해석이 모호해 멈춤): 「보호 범위 해석이 모호한 게 막힘 원인이야. `docs/agents-rules/DEMO1-AGENT-GUARD-COMMON.md`의 '보호 범위 해석' (1)~(5)를 적용해 바로 진행하고, 같은 질문으로 다시 감사하지 말아줘.」
 - 범위 밖 원인: 「<항목>은 범위 밖(<원인>)이라 HOLD로 빼고, 범위 안 항목이 전부 PASS면 완료로 보고해줘.」
 - 지시서 모순: 「<항목>은 지시서대로 PARTIAL이 정답이니 완료 조건에서 빼고 완료로 보고해줘.」

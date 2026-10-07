@@ -8,6 +8,18 @@ import org.junit.jupiter.api.Test;
 class ChatWorkflowRememberedValueTest {
 
     @Test
+    void compoundMisconceptionCorrectionDoesNotEchoThePreviousUserTurn() {
+        String query = "내가 방금 “검색 결과만 있으면 답변의 사실검증도 통과한 셈”이라고 이해했어. "
+                + "그 오해를 정정하고, 검색 성공과 주장 검증을 따로 볼 이유를 면접 답변처럼 두 문장으로 말해줘. "
+                + "추가 검색은 하지 마.";
+        String history = "User: 공식 문서에서 최소 Java 버전을 확인해줘.\nAssistant: 합성 문서 확인 응답";
+
+        assertNull(ChatWorkflow.composeRecentHistoryFallback(query, history));
+        assertEquals("직전 사용자 메시지: 공식 문서에서 최소 Java 버전을 확인해줘.\n\n출처: 세션 최근 기록",
+                ChatWorkflow.composeRecentHistoryFallback("내가 방금 뭐라고 했어?", history));
+    }
+
+    @Test
     void scopedCompoundAssignmentDoesNotCaptureStoragePolicyAsValue() {
         assertNull(ChatWorkflow.composeCurrentTurnMemoryFallback(
                 "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, "

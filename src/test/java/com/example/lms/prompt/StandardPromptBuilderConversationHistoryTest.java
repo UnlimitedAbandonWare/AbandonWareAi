@@ -29,7 +29,37 @@ class StandardPromptBuilderConversationHistoryTest {
         assertTrue(prompt.contains("### RECENT CONVERSATION"), prompt);
         assertTrue(prompt.contains("User: 세션 56 컨텍스트 실험 질문"), prompt);
         assertTrue(prompt.contains("Assistant: 세션 56 첫 답변"), prompt);
+        assertTrue(prompt.indexOf("Assistant: 세션 56 첫 답변")
+                == prompt.lastIndexOf("Assistant: 세션 56 첫 답변"), prompt);
         assertTrue(prompt.contains("### USER QUESTION"), prompt);
+    }
+
+    @Test
+    void latestAnswerQualificationsSurviveHistorySampling() {
+        String qualification = "오늘 운영 상태는 확인하지 못했습니다.";
+        String plan = "30분 면접 준비안(제안): 10분 구조 설명, 10분 장애 재현, 10분 요약.";
+        String question = "앞 답변의 한정 조건과 30분 준비안을 다시 말해줘.";
+        String lastAnswer = qualification + "\n" + plan + "\n" + "추가 설명 ".repeat(230);
+        String history = "User: " + "x".repeat(993)
+                + "\nAssistant: " + lastAnswer + "\nUser: " + question;
+        PromptContext ctx = PromptContext.builder()
+                .userQuery(question)
+                .history(history)
+                .lastAssistantAnswer(lastAnswer)
+                .build();
+
+        String prompt = builder.build(List.of(ctx), question);
+
+        assertTrue(prompt.contains(qualification), prompt);
+        assertTrue(prompt.contains(plan), prompt);
+        assertFalse(prompt.contains("User: " + question), prompt);
+        assertTrue(prompt.endsWith("### USER QUESTION\n" + question), prompt);
+        int conversationStart = prompt.indexOf("### RECENT CONVERSATION\n")
+                + "### RECENT CONVERSATION\n".length();
+        int conversationEnd = prompt.indexOf("### SEARCH RESULTS", conversationStart);
+        assertTrue(conversationEnd - conversationStart <= 2_500,
+                "history plus latest-answer fallback must stay bounded: " + prompt.length());
+        assertTrue(prompt.length() < 6_000, "prompt must stay bounded: " + prompt.length());
     }
 
     @Test

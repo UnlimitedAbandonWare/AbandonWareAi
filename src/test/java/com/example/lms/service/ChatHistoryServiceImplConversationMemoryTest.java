@@ -44,7 +44,7 @@ import static org.mockito.Mockito.when;
 class ChatHistoryServiceImplConversationMemoryTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"current", "legacy", "missing-summary", "current-small-importance", "legacy-small-importance", "missing-summary-small-importance", "current-long-correction", "legacy-long-correction", "missing-summary-long-correction", "current-repeated", "legacy-repeated", "missing-summary-repeated", "current-recall-overflow", "legacy-recall-overflow", "missing-summary-recall-overflow"})
+    @ValueSource(strings = {"current", "legacy", "missing-summary", "current-small-importance", "legacy-small-importance", "missing-summary-small-importance", "current-long-correction", "legacy-long-correction", "missing-summary-long-correction", "current-repeated", "legacy-repeated", "missing-summary-repeated", "current-recall-overflow", "legacy-recall-overflow", "missing-summary-recall-overflow", "current-pending-correction", "current-pending-correction-model-meta"})
     void sessionAssignmentsAndCorrectionsSurviveTenLaterExchangesWithinTheSummaryBudget(String snapshotKind) {
         boolean legacy = snapshotKind.startsWith("legacy");
         boolean missingSummary = snapshotKind.startsWith("missing-summary");
@@ -95,6 +95,50 @@ class ChatHistoryServiceImplConversationMemoryTest {
             ReflectionTestUtils.setField(history, "rollingSummaryImportantSentenceCount", 6);
         }
         try {
+            if (snapshotKind.startsWith("current-pending-correction")) {
+                Long first = history.appendMessageReturningId(41L, "user",
+                        "이 대화에서 프로젝트명은 루멘, 준비 시간은 30분, 역할은 Java 백엔드 개발자로 기억해줘.");
+                history.updateRollingSummary(41L, first);
+                String correction = "면접 조건을 길게 정정할게. 프로젝트명은 루멘이 아니라 세이지로 정정해줘. 준비 시간은 30분이 아니라 20분으로 바꿔줘. 역할은 앞에서 말한 Java 백엔드 개발자로 유지해. 이번 정정은 가상 면접 연습의 조건이고, 실제 배포나 운영 성과를 증명하는 내용은 아니야. 발표에서는 성공 사례를 부풀리기보다 재현 가능한 실패와 수정 전후의 검증을 설명할 거야. 면접관은 답변을 짧게 말해 달라고 요구하지만 한정 조건과 미확인 사항을 생략하라는 뜻은 아니야. 참고로 이전 이름과 시간은 이제 과거 조건이므로 마지막 요약에서 최신 값처럼 쓰지 마. 이 최신 조건 세 가지를 한 문장으로 확인해줘.";
+                history.appendMessageReturningId(41L, "user", correction);
+                history.appendMessageReturningId(41L, "assistant",
+                        "세이지, 20분, Java 백엔드 개발자로 정정된 가상 조건을 확인했습니다.");
+                if (snapshotKind.endsWith("-model-meta")) history.appendMessageReturningId(41L, "system", "?MODEL?synthetic-model");
+                String laterAnswer = "구조 설명, 실패 재현, 검증 설명은 연습 제안이며 일정 확정은 아닙니다. ".repeat(45);
+                for (int turn = 0; turn < 2; turn++) {
+                    history.appendMessageReturningId(41L, "user", "현재 대화의 설명을 점검해줘. 새 조건이나 검색은 추가하지 마. " + turn);
+                    history.appendMessageReturningId(41L, "assistant", laterAnswer + turn);
+                    if (snapshotKind.endsWith("-model-meta")) history.appendMessageReturningId(41L, "system", "?MODEL?synthetic-model");
+                }
+                String question = "최신으로 정정된 준비 시간에 맞춰 면접 연습 계획을 제안해줘. 구조 설명, 실패 재현, 검증 결과 설명을 모두 넣고 각 시간의 합계를 밝혀줘. 내일 실제 면접이 확정됐다고 단정하지 말고, 주어진 조건과 네 제안이라는 점을 구분해줘. 추가 검색은 하지 마.";
+                history.appendMessageReturningId(41L, "user", question);
+                // The first summary watermark remains old; recent history has already evicted T05.
+                List<String> recent = history.getFormattedRecentHistory(41L, 6);
+                assertEquals(6, recent.size());
+                assertFalse(String.join("\n", recent).contains("User: " + correction));
+                MemoryHandler loader = new MemoryHandler(history);
+                ReflectionTestUtils.setField(loader, "maxTurns", 8);
+                int storedRowCount = rows.get(41L).size();
+                String memory = loader.loadForSession(41L);
+                assertEquals(storedRowCount, rows.get(41L).size());
+                assertTrue(memory.contains("User: " + correction), "loader must retain the pending User correction");
+                NovaOrchestrationProperties properties = new NovaOrchestrationProperties();
+                properties.getRagCompressor().setMemoryMaxLines(12);
+                properties.getRagCompressor().setMemoryMaxChars(1400);
+                String compressed = new DynamicContextCompressor(properties).compressMemoryForPrompt(question, memory);
+                assertEquals(Boolean.TRUE, TraceStore.get("prompt.memory.compressor.activated"));
+                assertTrue(compressed.contains("세이지로 정정해줘"), "compressor must retain the User correction, not only an Assistant guess");
+                var ctx = com.example.lms.prompt.PromptContext.builder().userQuery(question).memory(compressed)
+                        .history(String.join("\n", recent)).lastAssistantAnswer(laterAnswer + 1).build();
+                String prompt = new StandardPromptBuilder().build(ctx);
+                for (String value : List.of("세이지", "20분", "Java 백엔드 개발자")) {
+                    assertTrue(memory.contains(value), "loader missing " + value);
+                    assertTrue(compressed.contains(value), "compressor missing " + value);
+                    assertTrue(prompt.contains(value), "final prompt missing " + value);
+                }
+                assertTrue(prompt.contains("실제 배포나 운영 성과를 증명하는 내용은 아니야"));
+                return;
+            }
             Long first = history.appendMessageReturningId(41L, "user",
                     "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, 비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. 계정의 장기 기억에 저장할 필요는 없어.");
             if (!legacy && !missingSummary) history.updateRollingSummary(41L, first);

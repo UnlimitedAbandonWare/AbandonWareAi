@@ -2,7 +2,7 @@
 <!-- BEGIN DEMO1-CORE-AUTO -->
 ## Core auto rules (read first — moved detail lives in `docs/agents-rules/`)
 - AUTO (Self-Ask) is the default for reversible local work — ASK_ONCE only for irreversible/cost/policy-owned asks, HOLD only for real blockers. 상세: `docs/agents-rules/DEMO1-VIBE-SELFASK-JUDGE-AUTO.md`
-- 선택 카드(request_user_input*) 전 `scripts/codex_question_classifier.py --options` 필수: AUTO면 묻지 말고 picked로 진행, ASK_ONCE도 기본값 표시 후 다음 작업 계속·무응답이면 안전 기본값으로 넥스트(상세 `$demo1-codex-auto-decide` NO-WAIT).
+- 선택 카드(request_user_input*)·자유 문장 질문·BLOCKED 기록 전 `scripts/codex_question_classifier.py --options`(목표 본문은 `--objective`) 필수: AUTO면 묻지 말고 picked로 진행, ASK_ONCE도 기본값 표시 후 다음 작업 계속·무응답이면 안전 기본값으로 넥스트(상세 `$demo1-codex-auto-decide` NO-WAIT).
 - Auth stays PROTO_OPEN: no extra role gates or login requirements; an admin-login-block check is never a completion condition. 상세: `docs/agents-rules/DEMO1-PROTOTYPE-AUTH-LIGHT.md`
 - Agent-work cost order: Codex credits → external paid API → free → local Ollama (last). Separate scope: product main chat is API/OAuth-first, Ollama last (user 2026-10-02); RAG·embed keep 3090-local. 상세: `docs/agents-rules/DEMO1-RTX3090-WATCH.md`
 - Several chats may share this tree: take the file/target lease before edits; intentional parallel chats need a lane plan + quota first. 상세: `docs/agents-rules/DEMO1-CODEX-PARALLEL-LANES.md`

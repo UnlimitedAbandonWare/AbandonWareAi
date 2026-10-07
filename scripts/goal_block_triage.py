@@ -205,7 +205,9 @@ def load_audits(dirs, limit=500, deep=False):
         if not d.is_dir():
             continue
         for pat in ("**/blocked-audit*.json", "**/blocked-audit*.md",
-                    "**/*blocked-audit*.json", "**/*blocked-audit*.md"):
+                    "**/*blocked-audit*.json", "**/*blocked-audit*.md",
+                    "**/blocked_audit*.json", "**/blocked_audit*.md",
+                    "**/*blocked_audit*.json", "**/*blocked_audit*.md"):
             for f in sorted(d.glob(pat)):
                 if seen >= limit:
                     return audits
@@ -312,6 +314,52 @@ RULES = {
 ALL_PASS_RE = re.compile(r"전부\s*PASS|모두\s*PASS|all\s+(acceptance\s+)?items?.{0,12}PASS|all.{0,4}PASS", re.I)
 PARTIAL_REPORT_RE = RULES["CONTRADICTORY_ACCEPTANCE"][0]
 ACCEPT_ID_RE = re.compile(r"\bA\d{1,2}\b")
+
+# ---------------------------------------------------------------------------
+# DEFERRED_SECURITY (2026-10-07): VIBE_OPEN enabled 상태에서 blocked-audit의
+# holdScope가 admin 로그인·인증·보호 URL 계열이고 meaningfulIndependentWork-
+# Remaining이 거짓이면 남은 막힘은 상용구 보안 항목뿐 — BLOCKED가 아니라
+# DONE_WITH_DEFERRED로 판정한다 (docs/security/VIBE_OPEN.md).
+# ---------------------------------------------------------------------------
+_ADMIN_SCOPE_RE = re.compile(
+    r"admin|관리자|login|log-?in|로그인|로그아웃|logout|auth|인증|계정|"
+    r"credential|protected|보호|차단|password|비밀", re.I)
+
+
+def _vibe_enabled():
+    """configs/vibe-open.yaml enabled — codex_question_classifier와 같은
+    파일·같은 판정을 쓰되, 분류기 import가 안 되면 직접 읽는다."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import codex_question_classifier as cqc
+        return bool(cqc._vibe_open_enabled())
+    except Exception:
+        pass
+    cfg = (Path(__file__).resolve().parent.parent
+           / "configs" / "vibe-open.yaml")
+    try:
+        body = cfg.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(re.search(r"(?im)^\s*enabled\s*:\s*(true|yes|on)\b", body))
+
+
+def _admin_only_blocker(audit):
+    """admin/login 계열 holdScope + 남은 독립 작업 없음 → 그 scope 문자열,
+    아니면 ''."""
+    j = audit.get("json") or {}
+    scope = str(j.get("holdScope") or j.get("hold_scope") or
+                j.get("blockingScope") or "")
+    if not scope:
+        m = re.search(r"holdScope[\"'\s:]+([A-Za-z0-9_가-힣-]+)",
+                      audit.get("text") or "")
+        scope = m.group(1) if m else ""
+    if not scope or not _ADMIN_SCOPE_RE.search(scope):
+        return ""
+    # '다른 남은 작업이 없다'는 명시적 증거가 있을 때만 — 필드 부재는 미입증.
+    if j.get("meaningfulIndependentWorkRemaining") is not False:
+        return ""
+    return scope
 
 
 def classify(evidence_text):
@@ -476,6 +524,10 @@ def suggest_message(labels, verdict, items):
         return ("「환경 일시 실패는 라이브 카운트 0 — 기존 런타임 부착 "
                 "또는 HTTP 관찰로 대체하고, 재빌드 ready 확인 뒤 "
                 "1회만 재시도해줘.」")
+    if "DEFERRED_SECURITY" in labels:
+        return ("「남은 막힘이 VIBE_OPEN 상용구 보안 항목(admin 로그인·차단·"
+                "보호 URL)뿐이야 — DEFERRED_SECURITY로 기록하고 이 항목만으로 "
+                "BLOCKED 금지, 완료로 보고해줘 (docs/security/VIBE_OPEN.md).」")
     if verdict == "RESUMABLE_NOW":
         causes = "+".join(sorted(labels - {"UNKNOWN"})) or "원인"
         return ("「막힘 원인 %s이 풀렸어. 같은 감사 반복하지 말고 "
@@ -562,8 +614,12 @@ def audit_row(audit, leases):
     j = audit["json"] or {}
     held, _m = lease_check(text, leases)
     items = acceptance_items_near(text)
+    deferred_scope = _admin_only_blocker(audit) if _vibe_enabled() else ""
+    if deferred_scope:
+        labels = (set(labels) - {"UNKNOWN"}) | {"DEFERRED_SECURITY"}
     verdict = ("NEEDS_DIRECTIVE_FIX" if "CONTRADICTORY_ACCEPTANCE" in labels
                else "STILL_HELD" if held else
+               "DONE_WITH_DEFERRED" if deferred_scope else
                "RESUMABLE_NOW" if "SCOPE_AMBIGUITY" in labels
                or not (labels & {"UNMEASURABLE_EVIDENCE"})
                else "BLOCKED_EXTERNAL")
@@ -571,6 +627,7 @@ def audit_row(audit, leases):
         "audit": audit["path"],
         "schema": j.get("schema") or j.get("status") or "unknown",
         "labels": sorted(labels),
+        "deferred": [deferred_scope] if deferred_scope else [],
         "leases_still_held": held,
         "verdict": verdict,
         "paste_line": suggest_message(labels, verdict, items),

@@ -159,10 +159,11 @@ public class StandardPromptBuilder implements PromptBuilder {
                     continue;
                 }
                 sb.append("### RECENT CONVERSATION\n");
+                String renderedHistory = hasHistory ? truncate(history.strip(), 2_000) : "";
                 if (hasHistory) {
-                    sb.append(truncate(history.strip(), 2_000)).append("\n");
+                    sb.append(renderedHistory).append("\n");
                 }
-                if (hasLastAnswer && !containsLine(history, lastAnswer)) {
+                if (hasLastAnswer && !containsLine(renderedHistory, lastAnswer)) {
                     sb.append("Assistant: ").append(truncate(lastAnswer.strip(), 480)).append("\n");
                 }
                 sb.append("\n");

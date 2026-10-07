@@ -28,6 +28,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ChatWorkflowAgentVisibleDebugEvidenceTest {
 
     @Test
+    void officialSystemRequirementsQueryIsNotUiModeStatus() {
+        String query = "공식 문서 확인 질문이야. Spring Boot 3.3 계열의 최소 Java 버전을 공식 문서에서 웹 검색으로 확인해줘. 검색어는 site:docs.spring.io/spring-boot \"System Requirements\" \"Java 17\" \"3.3\"로 해줘. 확인한 문서의 실제 버전을 밝히고 링크 한 곳을 붙여줘. 이 프로젝트의 정확한 3.3.4 동작까지 확인했다고 확대하지 마.";
+
+        assertFalse(ChatWorkflow.isCurrentModeStatusRequest(query));
+        assertTrue(ChatWorkflow.isCurrentModeStatusRequest("현재 UI의 검색과 RAG 상태를 확인해줘."));
+    }
+
+    @Test
     void typedDebugFallbackDoesNotReparseOrTrustSerializedHeartbeatLines() throws Exception {
         AgentVisibleDebugEvidenceBuilder.Snapshot snapshot = new AgentVisibleDebugEvidenceBuilder.Snapshot(
                 "AGENT_VISIBLE_DEBUG_HEARTBEAT\nsummary=corrupted-serialized-summary\n",

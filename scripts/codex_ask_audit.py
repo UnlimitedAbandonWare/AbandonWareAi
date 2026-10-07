@@ -154,6 +154,90 @@ def scan_rollout(path):
     return cards
 
 
+# ---------------------------------------------------------------------------
+# 자유 문장 질문 스캔 (2026-10-07): request_user_input 카드를 거치지 않은
+# 어시스턴트 메시지 속 URL·계정 요구도 분류기에 태운다 — AUTO면
+# AVOIDABLE_ASK_FREE_TEXT로 집계한다. 카드 제목과 동일 문장(에코)은 제외.
+# ---------------------------------------------------------------------------
+ASK_FREE_TEXT_RE = re.compile(
+    r"알려\s*주세요|알려주세요|있으면\s*알려|입력해\s*주세요|로그인해\s*주세요|"
+    r"공유해\s*주세요|제공해\s*주세요|보내\s*주세요|보내주세요|알려\s*주실|"
+    r"알려주실|답변해\s*주세요|선택해\s*주세요|알려\s*주시|주시겠"
+    r"|please\s+(?:tell|share|provide|enter|type|let\s+me\s+know)"
+    r"|could\s+you\s+(?:tell|share|provide|give)",
+    re.IGNORECASE)
+FREE_TEXT_MAX = 1200
+
+
+def _norm(text):
+    return re.sub(r"\s+", " ", (text or "").strip()).lower()
+
+
+def _assistant_texts(payload):
+    """response_item payload가 role=assistant 메시지면 본문 텍스트 리스트."""
+    if (payload.get("type") != "message"
+            or payload.get("role") != "assistant"):
+        return []
+    out = []
+    content = payload.get("content")
+    if isinstance(content, list):
+        for c in content:
+            if isinstance(c, dict) and c.get("text"):
+                out.append(str(c["text"]))
+    elif isinstance(content, str) and content:
+        out.append(content)
+    msg = payload.get("message")
+    if isinstance(msg, str) and msg:
+        out.append(msg)
+    return out
+
+
+def scan_free_text(path, card_texts=None):
+    """rollout jsonl -> 어시스턴트 자유 문장 질문 dict 리스트.
+
+    ask = {file, session, ts_kst, kind=FREE_TEXT, verdict, rule,
+           avoidable, preview} — 분류기 AUTO면 avoidable=True
+    (AVOIDABLE_ASK_FREE_TEXT)."""
+    card_norm = {_norm(t) for t in (card_texts or [])}
+    asks, seen_norm = [], set()
+    try:
+        fh = open(path, encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    with fh:
+        for line in fh:
+            if '"assistant"' not in line:
+                continue
+            try:
+                j = json.loads(line)
+            except Exception:
+                continue
+            if j.get("type") != "response_item":
+                continue
+            p = j.get("payload") or {}
+            ts = _parse_ts(j.get("timestamp"))
+            for text in _assistant_texts(p):
+                text = text.strip()
+                if not text or not ASK_FREE_TEXT_RE.search(text):
+                    continue
+                n = _norm(text)
+                if n in card_norm or n in seen_norm:
+                    continue
+                seen_norm.add(n)
+                verdict = classify(text[:FREE_TEXT_MAX])
+                asks.append({
+                    "file": os.path.basename(path),
+                    "session": _session_id(path),
+                    "ts_kst": _kst(ts) if ts else "?",
+                    "kind": "FREE_TEXT",
+                    "verdict": verdict["verdict"],
+                    "rule": verdict["rule"],
+                    "avoidable": verdict["verdict"] == "AUTO",
+                    "preview": redact(re.sub(r"\s+", " ", text))[:140],
+                })
+    return asks
+
+
 def find_rollouts(days, sessions_dir=None):
     root = sessions_dir or os.path.expanduser(r"~\.codex\sessions")
     cut = time.time() - days * 86400
@@ -172,6 +256,8 @@ def summarize(cards):
         "no_reply": sum(1 for c in cards if not c["replied"]),
         "avg_wait_min": round(sum(waits) / len(waits), 1) if waits else None,
         "replied": len(waits),
+        "free_text_asks": 0,
+        "avoidable_free_text": 0,
     }
 
 
@@ -181,7 +267,7 @@ def _title_of(card):
     return re.sub(r"\s+", " ", card["questions"][0]["title"])
 
 
-def render_table(cards, summary, window_desc):
+def render_table(cards, summary, window_desc, free_asks=None):
     lines = ["# codex ask audit — %s" % window_desc,
              "KST                  session  verdict   rule        wait_min  title"]
     for c in cards:
@@ -191,9 +277,16 @@ def render_table(cards, summary, window_desc):
         lines.append("%-20s %-8s %-9s %-11s %-9s %s" % (
             c["ts_kst"], c["session"], c["verdict"], rule[:11], wait,
             title[:70]))
+    for a in free_asks or []:
+        mark = "AVOIDABLE_ASK_FREE_TEXT" if a["avoidable"] else "free-text"
+        lines.append("%-20s %-8s %-9s %-11s %-9s %s" % (
+            a["ts_kst"], a["session"], mark, a["rule"][:11], "-",
+            a["preview"][:70]))
     lines.append(
         "SUMMARY cards={cards} AVOIDABLE={avoidable} ASK_ONCE={ask_once} "
-        "HOLD={hold} NO_REPLY={no_reply} avg_wait={avg}m replies={replied}".format(
+        "HOLD={hold} NO_REPLY={no_reply} avg_wait={avg}m replies={replied} "
+        "FREE_TEXT={free_text_asks} "
+        "AVOIDABLE_FREE_TEXT={avoidable_free_text}".format(
             avg=summary["avg_wait_min"], **summary))
     return "\n".join(lines)
 
@@ -218,13 +311,23 @@ def main(argv=None):
     for f in files:
         cards.extend(scan_rollout(f))
     cards.sort(key=lambda c: c["ts_utc"] or "")
+    # 카드 질문과 같은 문장은 에코 — 자유 문장 집계에서 제외한다.
+    card_texts = [q["title"] for c in cards for q in c["questions"]]
+    free_asks = []
+    for f in files:
+        free_asks.extend(scan_free_text(f, card_texts))
+    free_asks.sort(key=lambda a: a["ts_kst"])
     summary = summarize(cards)
+    summary["free_text_asks"] = len(free_asks)
+    summary["avoidable_free_text"] = sum(
+        1 for a in free_asks if a["avoidable"])
 
     if args.json:
         print(json.dumps({"window": window, "cards": cards,
+                          "free_text_asks": free_asks,
                           "summary": summary}, ensure_ascii=False, indent=1))
     else:
-        print(render_table(cards, summary, window))
+        print(render_table(cards, summary, window, free_asks))
     return 0
 
 

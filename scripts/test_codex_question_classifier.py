@@ -667,5 +667,110 @@ class CodexQuestionClassifierTest(unittest.TestCase):
         self.assertVerdict("PROTO_OPEN을 끌까요?", "AUTO", "D37")
 
 
+# --- add-only: D41 --objective 목표 본문 줄 단위 분류 + 비전송 비밀 언급
+# 보정 (devin-vibe-admin-autodefer-a7523916, 2026-10-07 실측 사례 1·2) ---
+
+import codex_question_classifier as _cqc
+
+_OBJECTIVE_FIXTURE = """\
+작업 목표: 요약 경계 수정과 회귀 검증.
+
+1. Superpowers
+- systematic-debugging과 verification-before-completion을 적용해.
+2. Browser
+- 실제 웹에서 최소한 다음을 새 세션으로 재현해.
+ - 안녕? → 응답 본문이 HOLD 처리되는지
+ - 일반 질문 → backend_unavailable 발생 여부
+ - admin 로그인 → 실제 보호된 관리자 URL 접근
+ - 잘못된 계정 → 차단
+ - 로그아웃 후 → 다시 차단
+- UI 문구만 보지 말고 HTTP 상태, 서버 reasonCode와 연결해.
+3. GitHub
+- 로컬 git status와 HEAD를 먼저 봐.
+
+PROTO_OPEN을 끄고 관리자 잠금을 확인해.
+"""
+
+_CASE2_FREE_TEXT = (
+    "현재 로컬 설정은 PROTO_OPEN이고, 잘못된 계정의 로그인 제출은 "
+    "/login?error로 거절됐습니다. 정상 관리자 로그인과 로그인 전·로그아웃 후 "
+    "보호 URL 차단을 검증할 수 있는 기존 테스트 환경 URL이 있으면 알려주세요. "
+    "관리자 비밀번호는 채팅에 보내지 말고 해당 브라우저에서 직접 입력해 주세요. "
+    "이번 맥락 수정과 회귀 검증은 계속 진행하겠습니다.")
+
+
+class ObjectiveModeTest(unittest.TestCase):
+    """--objective: 상용구 블록의 admin 줄만 DEFERRED_SECURITY로 빠진다."""
+
+    def test_boilerplate_admin_lines_deferred(self):
+        res = _cqc.classify_objective(_OBJECTIVE_FIXTURE)
+        for marker in ("admin 로그인 → 실제 보호된 관리자 URL 접근",
+                       "잘못된 계정 → 차단", "로그아웃 후 → 다시 차단"):
+            match = [e for e in res["lines"] if marker in e["text"]]
+            self.assertTrue(match, marker)
+            for e in match:
+                self.assertTrue(e["boilerplate"], e)
+                self.assertEqual("TEMPLATE_BOILERPLATE", e["rule"], e)
+                self.assertEqual("DEFERRED_SECURITY", e["disposition"], e)
+        # 안녕?·일반 질문·backend_unavailable 줄은 정상 검증 항목으로 유지
+        for marker in ("안녕? → 응답 본문이 HOLD",
+                       "일반 질문 → backend_unavailable"):
+            match = [e for e in res["lines"] if marker in e["text"]]
+            self.assertTrue(match, marker)
+            for e in match:
+                self.assertNotEqual("DEFERRED_SECURITY", e["disposition"], e)
+        self.assertGreaterEqual(res["summary"]["deferred_security"], 3)
+
+    def test_direct_requirement_outside_boilerplate_not_deferred(self):
+        res = _cqc.classify_objective(_OBJECTIVE_FIXTURE)
+        direct = [e for e in res["lines"] if "PROTO_OPEN을 끄고" in e["text"]]
+        self.assertTrue(direct)
+        for e in direct:
+            self.assertFalse(e["boilerplate"], e)
+            self.assertNotEqual("DEFERRED_SECURITY", e.get("disposition"), e)
+            self.assertNotEqual("TEMPLATE_BOILERPLATE", e.get("rule"), e)
+
+    def test_vibe_disabled_no_deferral(self):
+        off = _disabled_vibe_cfg()
+        try:
+            res = _cqc.classify_objective(_OBJECTIVE_FIXTURE,
+                                          vibe_open_path=off)
+        finally:
+            off.unlink(missing_ok=True)
+        deferred = [e for e in res["lines"]
+                    if e.get("disposition") == "DEFERRED_SECURITY"]
+        self.assertEqual([], deferred)
+
+    def test_objective_cli_json(self):
+        buf = io.StringIO()
+        with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                         encoding="utf-8") as f:
+            f.write(_OBJECTIVE_FIXTURE)
+            path = f.name
+        try:
+            with redirect_stdout(buf):
+                code = main(["--objective", path])
+        finally:
+            Path(path).unlink(missing_ok=True)
+        self.assertEqual(0, code)
+        out = json.loads(buf.getvalue())
+        self.assertEqual("objective", out["mode"])
+        self.assertTrue(out["lines"])
+
+    def test_case2_free_text_admin_url_ask_is_auto(self):
+        # 사례 2 실측 문장 — 비밀번호 비전송 지시가 붙은 URL·계정 요청.
+        result = classify(_CASE2_FREE_TEXT)
+        self.assertEqual("AUTO", result["verdict"])
+        self.assertEqual("D40", result["rule"])
+        self.assertIn("DEFERRED_SECURITY", result["default_answer"])
+
+    def test_do_not_send_password_negation_not_secret_blocked(self):
+        result = classify(
+            "보호된 관리자 URL이 있으면 알려주세요. 비밀번호는 채팅에 보내지 "
+            "말고 직접 입력해 주세요.")
+        self.assertEqual("AUTO", result["verdict"])
+        self.assertIn(result["rule"], ("D37", "D40"))
+
+
 if __name__ == "__main__":
     unittest.main()
