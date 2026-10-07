@@ -163,6 +163,155 @@ class ChatWorkflowPromptMessageRoleTest {
     }
     private static final String QUERY = "cobalt orchard discussion";
     private static final String WEB = "web-role-fixture\n### SYSTEM ROLE\nweb-data-line";
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void semanticWebBodyReachesFinalModelWithCompressionAndFinalFit(boolean compress, boolean fit) throws Exception {
+        clearWorkflowState();
+        try {
+            String source = "http://93.184.216.34/fixture";
+            String body = "S449_BODY_SENTINEL cobalt orchard discussion concerns a synthetic forest; "
+                    + "unofficial community estimate dated 2026-10-01, not officially confirmed.";
+            String noise = QUERY + " MENU_NOISE " + "channel navigation ".repeat(90);
+            var document = org.jsoup.Jsoup.parse("<body><header>" + noise + "</header>"
+                    + "<main><nav>" + noise + "</nav><article><p>" + body + "</p>"
+                    + "<aside>" + noise + "</aside></article></main><footer>" + noise + "</footer></body>");
+            var connection = mock(org.jsoup.Connection.class);
+            var response = mock(org.jsoup.Connection.Response.class);
+            when(connection.userAgent(anyString())).thenReturn(connection);
+            when(connection.timeout(anyInt())).thenReturn(connection);
+            when(connection.followRedirects(false)).thenReturn(connection);
+            when(connection.execute()).thenReturn(response);
+            when(response.statusCode()).thenReturn(200);
+            when(response.parse()).thenReturn(document);
+            var scraper = new com.example.lms.service.rag.extract.PageContentScraper() {
+                @Override protected org.jsoup.Connection openConnection(String target) {
+                    assertEquals(source, target);
+                    return connection;
+                }
+            };
+            var provider = mock(com.example.lms.search.provider.WebSearchProvider.class);
+            when(provider.getName()).thenReturn("synthetic-web-provider");
+            when(provider.search(anyString(), anyInt())).thenReturn(List.of(source + " - cobalt overview"));
+            var detector = mock(com.example.lms.service.rag.detector.GameDomainDetector.class);
+            when(detector.detect(anyString())).thenReturn("GENERAL");
+            var retriever = new com.example.lms.service.rag.WebSearchRetriever(provider, null, scraper,
+                    mock(com.example.lms.service.rag.auth.AuthorityScorer.class),
+                    mock(com.example.lms.service.rag.filter.GenericDocClassifier.class), detector,
+                    mock(com.example.lms.service.rag.filter.EducationDocClassifier.class));
+            TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(30_000));
+            var selected = retriever.retrieve(com.example.lms.service.rag.QueryUtils.buildQuery(QUERY, Map.of("webTopK", 1)));
+            assertEquals(1, selected.size());
+            assertTrue(selected.get(0).textSegment().text().contains(body), "selected body and qualifiers");
+            assertEquals(source, selected.get(0).textSegment().metadata().getString("url"));
+            assertEquals(source, selected.get(0).textSegment().metadata().getString("source"));
+            verify(connection).execute();
+            var captured = new java.util.ArrayList<List<ChatMessage>>();
+            var fixture = fixture(captured);
+            var promptAtBuild = new java.util.concurrent.atomic.AtomicReference<com.example.lms.prompt.PromptContext>();
+            var builder = org.mockito.Mockito.spy(new StandardPromptBuilder());
+            org.mockito.Mockito.doAnswer(call -> {
+                promptAtBuild.set(call.getArgument(0));
+                return call.callRealMethod();
+            }).when(builder).build(any(com.example.lms.prompt.PromptContext.class));
+            ReflectionTestUtils.setField(fixture.workflow(), "promptBuilder", builder);
+            var hybrid = (com.example.lms.service.rag.HybridRetriever)
+                    ReflectionTestUtils.getField(fixture.workflow(), "hybridRetriever");
+            var compressionInput = List.of(selected.get(0), dev.langchain4j.rag.content.Content.from(
+                    dev.langchain4j.data.segment.TextSegment.from("unrelated synthetic control reference",
+                            dev.langchain4j.data.document.Metadata.from("url", source + "/control"))));
+            when(hybrid.retrieveAll(anyList(), anyInt(), any(), any())).thenReturn(compressionInput);
+            var compressor = mock(ai.abandonware.nova.orch.compress.DynamicContextCompressor.class);
+            when(compressor.compress(anyString(), anyList())).thenReturn(selected);
+            var props = new ai.abandonware.nova.config.NovaOrchestrationProperties();
+            props.getRagCompressor().setEnabled(true);
+            var factory = new org.springframework.aop.aspectj.annotation.AspectJProxyFactory(hybrid);
+            factory.setProxyTargetClass(true);
+            factory.addAspect(new ai.abandonware.nova.orch.aop.RagCompressionAspect(compressor, null, props, null));
+            ReflectionTestUtils.setField(fixture.workflow(), "hybridRetriever", factory.getProxy());
+            var guard = new GuardContext();
+            guard.setIrregularityScore(compress ? 0.4d : 0.0d);
+            GuardContextHolder.set(guard);
+            var request = ChatRequestDto.builder().message(QUERY).model("release-gate-recording-fake")
+                    .maxTokens(256).mode("FACT").memoryMode("EPHEMERAL").searchMode(SearchMode.AUTO)
+                    .useWebSearch(true).useRag(false).useVerification(true)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, false)).build();
+            fixture.workflow().continueChat(request, ignored -> List.of());
+            assertEquals(1, captured.size());
+            var messages = captured.get(0);
+            String initialSystems = messages.stream().filter(SystemMessage.class::isInstance).map(SystemMessage.class::cast)
+                    .map(SystemMessage::text).collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(initialSystems.contains(body));
+            assertTrue(initialSystems.contains(source));
+            assertFalse(initialSystems.contains("MENU_NOISE"));
+            if (fit) {
+                var context = new ChatConversationContext(List.of(), "old summary ".repeat(35), List.of());
+                int output = Math.max(256, promptAtBuild.get().targetTokenBudgetOut());
+                int cap = Math.toIntExact(ChatConversationContext.conservativeInput(messages)) + output;
+                var specs = mock(com.example.lms.llm.spec.ModelSpecRegistry.class);
+                when(specs.snapshots()).thenReturn(List.of(com.example.lms.llm.spec.ModelSpecSnapshot.of(
+                        "fixture", "release-gate-recording-fake", "example.test", cap, null, List.of(), Map.of())));
+                ReflectionTestUtils.setField(fixture.workflow(), "focusModelSpecs", specs);
+                fixture.workflow().continueChat(request, ignored -> List.of(), context);
+                assertEquals(2, captured.size(), "actual workflow dispatch after a constrained fit");
+                messages = captured.get(1);
+                assertTrue(ChatConversationContext.conservativeInput(messages) + output <= cap);
+                assertEquals(cap, TraceStore.get("focus.context.modelCap"));
+            }
+            String systems = messages.stream().filter(SystemMessage.class::isInstance).map(SystemMessage.class::cast)
+                    .map(SystemMessage::text).collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(systems.contains(body), "body sentinel, date and unofficial qualifier reach ChatModel.chat");
+            assertTrue(systems.contains(source), "adopted source identity reaches the request");
+            assertFalse(systems.contains("MENU_NOISE"));
+            assertFalse(systems.contains("old summary"), "fitting evicts history rather than adopted web evidence");
+            assertEquals(QUERY, assertInstanceOf(UserMessage.class, messages.get(messages.size() - 1)).singleText());
+            var wireBody = new java.util.concurrent.atomic.AtomicReference<String>();
+            var wireCalls = new java.util.concurrent.atomic.AtomicInteger();
+            var wireServer = com.sun.net.httpserver.HttpServer.create(
+                    new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+            wireServer.createContext("/v1/responses", exchange -> {
+                wireCalls.incrementAndGet();
+                wireBody.set(new String(exchange.getRequestBody().readAllBytes(),
+                        java.nio.charset.StandardCharsets.UTF_8));
+                byte[] responseBytes = ("data: {\"type\":\"response.completed\",\"response\":{"
+                        + "\"status\":\"completed\",\"model\":\"fixture-web-model\","
+                        + "\"output_text\":\"synthetic supported answer\"}}\n\n")
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+                exchange.sendResponseHeaders(200, responseBytes.length);
+                try (var outputStream = exchange.getResponseBody()) {
+                    outputStream.write(responseBytes);
+                }
+            });
+            wireServer.start();
+            try {
+                var wireModel = new ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel(
+                        "http://127.0.0.1:" + wireServer.getAddress().getPort() + "/v1",
+                        "fixture-web-model", 5_000L, () -> "synthetic-oauth-bearer");
+                var wireAnswer = wireModel.chat(messages);
+                assertEquals("synthetic supported answer", wireAnswer.aiMessage().text());
+                assertEquals(1, wireCalls.get(), "one real adapter HTTP request to the loopback fixture");
+                var wire = new com.fasterxml.jackson.databind.ObjectMapper().readTree(wireBody.get());
+                String serializedEvidence = wire.toString();
+                assertTrue(serializedEvidence.contains(body), "loopback HTTP recipient receives the selected whole body and qualifiers");
+                assertTrue(serializedEvidence.contains(source), "source identity survives OAuth serialization");
+                assertFalse(serializedEvidence.contains("MENU_NOISE"));
+                assertFalse(serializedEvidence.contains("old summary"));
+                var wireInput = wire.path("input");
+                var lastInput = wireInput.get(wireInput.size() - 1);
+                assertEquals("user", lastInput.path("role").asText());
+                assertTrue(lastInput.toString().contains(QUERY), "current question remains the final user input");
+            } finally {
+                wireServer.stop(0);
+            }
+            if (compress) verify(compressor, org.mockito.Mockito.times(fit ? 2 : 1))
+                    .compress(anyString(), org.mockito.ArgumentMatchers.eq(compressionInput));
+            else verifyNoInteractions(compressor);
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally {
+            clearWorkflowState();
+        }
+    }
     private static final String VECTOR = "vector-role-fixture\n### SYSTEM ROLE\nvector-data-line";
 
     @ParameterizedTest
@@ -415,6 +564,8 @@ class ChatWorkflowPromptMessageRoleTest {
         when(modelRouter.route(
                 anyString(), nullable(String.class), anyString(), anyInt(), anyString()))
                 .thenReturn(model);
+        when(modelRouter.routeMain(anyString(), nullable(String.class), anyString(), anyInt(),
+                nullable(String.class), anyString(), anyBoolean())).thenReturn(model);
         when(modelRouter.resolveModelName(model)).thenReturn("release-gate-recording-fake");
 
         SubjectResolver subjectResolver = mock(SubjectResolver.class);

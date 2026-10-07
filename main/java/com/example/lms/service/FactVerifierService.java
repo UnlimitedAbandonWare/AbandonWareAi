@@ -165,6 +165,7 @@ public class FactVerifierService {
         String answer = verifyInternal(question, context, memory, draft, model, isFollowUp, 0, state);
         TraceStore.put("factVerifier.terminalStage", state.terminalStage);
         TraceStore.put("factVerifier.terminalReason", state.status);
+        TraceStore.put("factVerifier.judgeUnavailable", state.judgeUnavailable);
         return new DetailedVerificationResult(
                 answer,
                 state.status,
@@ -255,8 +256,8 @@ public class FactVerifierService {
 
         try {
             state.terminalStage = "source_credibility";
-            String mergedContext = mergeContext(context, memory);
-            SourceCredibility credibility = sourceAnalyzer.analyze(question, mergedContext);
+            // Historical disclaimers must not become contradictions in this turn's sources.
+            SourceCredibility credibility = sourceAnalyzer.analyze(question, context);
             // [FUTURE_TECH FIX] 미출시/세대형 제품은 루머/유출 기반 요약을 "차단"하지 않고, 라벨링하여 허용
             boolean futureTech = FutureTechDetector.isFutureTechQuery(question);
             RiskBand riskBand = QueryRiskClassifier.classify(question, null);
@@ -270,7 +271,10 @@ public class FactVerifierService {
                 state.reject("insufficient");
                 return out;
             }
-            if (credibility == SourceCredibility.FAN_MADE_SPECULATION || credibility == SourceCredibility.CONFLICTING) {
+            if (credibility == SourceCredibility.FAN_MADE_SPECULATION) {
+                state.sourceTrustUncertain = true;
+            }
+            if (credibility == SourceCredibility.CONFLICTING) {
                 log.warn("[Meta-Verify] 낮은 신뢰도({}) 탐지 -> 답변 차단", credibility);
                 state.reject("rejected");
                 return "웹에서 찾은 정보는 공식 발표가 아니거나, 커뮤니티의 추측일 가능성이 높습니다. 이에 기반한 답변은 부정확할 수 있어 제공하지 않습니다.";
@@ -559,6 +563,7 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
         private boolean failSoft;
         private boolean judgeUnavailable;
         private boolean partialReleaseBlocked;
+        private boolean sourceTrustUncertain;
 
         private void markFailSoft() {
             failSoft = true;
@@ -581,6 +586,10 @@ RiskBand risk = QueryRiskClassifier.classify(question, null);
             }
             if (failSoft) {
                 reject("unknown");
+                return;
+            }
+            if (sourceTrustUncertain) {
+                reject("insufficient");
                 return;
             }
             status = acceptedStatus;

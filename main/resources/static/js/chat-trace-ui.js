@@ -64,10 +64,13 @@
     // allocated row after opening. The block slot gives that row its real height.
     const slot = document.createElement("div");
     slot.className = "awx-trace-slot";
-    slot.appendChild(panel);
+    const overview = document.createElement("p");
+    overview.className = "awx-trace-overview";
+    overview.setAttribute("aria-live", "off");
+    slot.append(panel, overview);
     if (typeof assistant.after === "function") assistant.after(slot);
     else assistant.parentElement.insertBefore(slot, assistant.nextSibling);
-    const state = { assistant, slot, panel, metadata, signals, body, snapshotId: null,
+    const state = { assistant, slot, panel, overview, metadata, signals, body, snapshotId: null,
       diagnosticNodes: new Map(), scoreKeys: [],
       controller: null, loading: false, loaded: false, version: 0, live: false };
     byAssistant.set(assistant, state);
@@ -75,7 +78,34 @@
     panel.addEventListener("toggle", () => {
       if (panel.open && state.snapshotId) loadSnapshot(state);
     });
+    showOverview(state, {});
     return state;
+  }
+
+  function showOverview(state, fields) {
+    const model = typeof fields?.observedModel === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._/:+\-]{0,199}$/.test(fields.observedModel)
+      && !/^(sk-|AIza|eyJ)/.test(fields.observedModel) ? fields.observedModel : "NOT_OBSERVED";
+    const count = String(fields?.['prompt.citableEvidenceCount'] ?? "");
+    const evidence = /^(0|[1-9][0-9]{0,6})$/.test(count) && Number(count) <= 1000000
+      ? count : "NOT_OBSERVED";
+    const mode = ["NORMAL", "STRIKE", "BYPASS", "COMPRESSION"].includes(fields?.['orch.mode'])
+      ? fields['orch.mode'] : "NOT_OBSERVED";
+    // The aggregate search signal cannot identify either provider's outcome.
+    state.overview.textContent = "이 답변 추적 · 모델: " + model +
+      " · Brave: NOT_OBSERVED · Naver: NOT_OBSERVED · 인용 근거: " + evidence + " · 모드: " + mode;
+    state.slot.hidden = !enabled();
+    state.summaryAvailable = true;
+  }
+
+  function upsertSummary(assistant, fields) {
+    if (!enabled()) return null;
+    const state = ensurePanel(assistant);
+    if (!state) return null;
+    state.live = true;
+    state.panel.hidden = false;
+    showOverview(state, fields || {});
+    return state.panel;
   }
 
   function sanitizedTrace(html, snapshot) {
@@ -436,6 +466,7 @@
     if (!state) return null;
     state.live = true;
     state.panel.hidden = false;
+    state.slot.hidden = false;
     showHtml(state, view?.html, false);
     return state.panel;
   }
@@ -459,6 +490,7 @@
     state.diagnosticNodes.set(key, detail);
     state.live = true;
     state.panel.hidden = false;
+    state.slot.hidden = false;
     return detail;
   }
 
@@ -493,6 +525,7 @@
       list.append(term, description);
     }
     state.metadata.replaceChildren(list, state.signals);
+    showOverview(state, fields);
     if (sessionId) {
       const download = document.createElement("a");
       download.className = "awx-trace-download";
@@ -619,12 +652,16 @@
         state.body.replaceChildren();
         if (state.snapshotId) status(state, "저장된 요약입니다. 상세는 펼칠 때 조회합니다.");
         panel.hidden = true;
+        panel.open = false;
+        state.slot.hidden = true;
       } else {
-        panel.hidden = !state.snapshotId && !state.live;
+        panel.hidden = !state.snapshotId && !state.live && !state.summaryAvailable;
+        state.slot.hidden = panel.hidden;
         if (panel.open && state.snapshotId) loadSnapshot(state);
       }
     }
   });
 
-  window.AwxChatTraceUi = { enabled, withDebugQuery, upsert, upsertDiagnostic, restore, dispose };
+  window.addEventListener?.("pagehide", () => dispose(document));
+  window.AwxChatTraceUi = { enabled, withDebugQuery, upsert, upsertSummary, upsertDiagnostic, restore, dispose };
 })();

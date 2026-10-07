@@ -255,10 +255,8 @@
 ### Automatic completion and cleanup
 - 검증 완료 경계에서의 자동 정리 규칙과 증거 바인딩. — 상세: `docs/agents-rules/DEMO1-COMPLETION-CLEANUP.md`
 <!-- END DEMO1-COMPLETION-CLEANUP -->
-- Existing repo files and real command output beat prompt assumptions; official vendor docs beat memory for external API/CLI/library behavior. If evidence is insufficient, record `evidence_needed: <artifact> / verify with <command>` instead of inventing files, routes, keys, or results.
-- Report PASS only for the subset actually run (name suites + counts). A full `:test` run with failures is reported as counts plus per-failure classification — `pre-existing` requires a same-failure preimage/baseline run as evidence; never blanket-declare suite failures "all pre-existing", and never widen a scoped pass into whole-suite health.
+- 증거 우선순위·PASS 부분 보고·빌드 산출물/동시성 검증 세부 규칙. — 상세: `docs/agents-rules/SECTION-evidence-and-verification.md`
 - Keep a blocker lane-local and continue independent provable work; never expand a lane-local blocker into a repository-wide `HOLD`. Use Windows/PowerShell-first commands; prefer `gradlew.bat`; verify the narrowest changed surface first, then broaden only across module boundaries.
-- With `AWX_SPLIT_BUILD_OUTPUTS=1`/`AWX_BUILD_HOST_ID=desktop`, use `build\desktop\...` for boot proof; broad-test `NoClassDefFoundError` storms with classes present -> `scripts\verify_full_test_refresh.ps1`. Topology: `scripts\verify_control_plane_topology.ps1`. Do not parallelize `bootRun` smokes on the same host/cache dir.
 
 <!-- BEGIN DEMO1-REQUEST-DIAGNOSTIC-CORRELATION -->
 ### Same-request diagnostic evidence
@@ -275,13 +273,7 @@
 <!-- END DEMO1-GIT-LOCAL-FIRST -->
 <!-- BEGIN DEMO1-GIT-REMOTE-SOLE -->
 ## Git remote (sole valid)
-- Sole valid main remote: https://github.com/UnlimitedAbandonWare/AbandonWareAi
-- AbandonWare3 is fully discarded. Never treat as valid remote, temporary origin, migration keep, or backup upstream.
-- Do not add a second remote "for convenience." Dual remotes confuse vibe coding — prefer single-repo branch/tag.
-- Do not mutate remotes (`remote add/remove/set-url`) or push/merge until the user explicitly asks.
-- If local git still lists AbandonWare3: report it, never fetch/push to it, never prefer its SHA over C-root / AbandonWareAi.
-- Old docs/ZIP mentioning AbandonWare3 are historical only; C-root + AbandonWareAi win.
-- 작업 브랜치 = codex/owned-runtime-browser-restart(기준 @{u}), main = 역사가 끊긴 공개 스냅샷이라 비교·병합·기본 브랜치 변경 금지 → docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md
+- 단일 유효 원격·AbandonWare3 폐기·브랜치 위상 — 원격 변경 금지. — 상세: `docs/agents-rules/DEMO1-GIT-BRANCH-TOPOLOGY.md`
 <!-- END DEMO1-GIT-REMOTE-SOLE -->
 <!-- BEGIN DEMO1-VIBE-GIT-AUTO-CONTINUE -->
 ## Vibe Git auto-continue (agreed soft branches never ask)

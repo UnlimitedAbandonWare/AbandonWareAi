@@ -16,6 +16,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RagControlRuntimeAdapterTest {
 
     @Test
+    void insufficientLocalRecoveryKeepsItsVerdictAndBoundBodyWithoutModelSuccess() {
+        for (String reason : List.of("verification_insufficient_excerpt", "verification_insufficient_guidance")) {
+            TraceStore.clear();
+            try {
+                TraceStore.put(com.example.lms.llm.ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, "timeline");
+                TraceStore.put("finalAnswer.verificationStatus", "insufficient");
+                TraceStore.put("factVerifier.terminalReason", "insufficient");
+                String body = "Safe synthetic recovery without an invented claim.";
+                var input = new RagControlRuntimeAdapter.RuntimeInput(
+                        true, 2, 1, false, true, false, false, true, true).withNonModelRelease(reason, body);
+                var timeline = List.of(copyWith(completeTimeline().get(0), "timelineId", "timeline"),
+                        copyWith(completeTimeline().get(1), "timelineId", "timeline"),
+                        copyWith(completeTimeline().get(2), "timelineId", "timeline", "finalHash", input.nonModelBodyHash()));
+                var findings = adapter.collect(input, "timeline", timeline, List.of());
+                var plan = composer.compose(findings);
+                assertFalse(plan.shouldStop());
+                assertEquals(RagActionPlan.Action.DEGRADE, plan.action());
+                assertEquals(reason, stage(findings, RagControlFinding.Stage.VERIFICATION).reasonCode());
+                assertEquals("insufficient", TraceStore.get("factVerifier.terminalReason"));
+                assertTrue(input.matchesNonModelBody(body));
+                assertFalse(input.matchesNonModelBody("changed body"));
+                TraceStore.put("finalAnswer.verificationStatus", "rejected");
+                assertTrue(composer.compose(adapter.collect(input, "timeline", timeline, List.of())).shouldStop());
+            } finally { TraceStore.clear(); }
+        }
+    }
+
+    @Test
     void hardGuardFindingCarriesOnlyAllowlistedSameRequestReleaseReason() {
         TraceStore.clear();
         try {
@@ -509,5 +537,111 @@ class RagControlRuntimeAdapterTest {
                 .filter(finding -> finding.stage() == stage)
                 .findFirst()
                 .orElseThrow();
+    }
+
+    @Test
+    void rejectedVerificationCarriesSafeTerminalDiagnosticsWithoutUnlockingHardHold() {
+        TraceStore.clear();
+        try {
+            TraceStore.put("finalAnswer.releaseStatus", "REJECT");
+            TraceStore.put("finalAnswer.releaseReason", "verification_rejected");
+            TraceStore.put("factVerifier.terminalStage", "claim_verification");
+            TraceStore.put("factVerifier.terminalReason", "rejected");
+            TraceStore.put("factVerifier.judgeUnavailable", Boolean.FALSE);
+            var input = new RagControlRuntimeAdapter.RuntimeInput(
+                    true, 3, 2, false, true, false, true, true, true);
+
+            var findings = adapter.collect(input, "timeline", completeTimeline(), completeAttempts());
+            var verification = stage(findings, RagControlFinding.Stage.VERIFICATION);
+            assertEquals("verification_rejected", verification.reasonCode());
+            assertEquals("claim_verification", verification.evidence().get("terminalStage"));
+            assertEquals("rejected", verification.evidence().get("terminalReason"));
+            assertEquals(Boolean.FALSE, verification.evidence().get("judgeUnavailable"));
+            assertEquals(RagActionPlan.Action.HOLD, verification.proposedAction());
+            var plan = composer.compose(findings);
+            assertEquals(RagActionPlan.Action.HOLD, plan.action());
+            assertTrue(plan.hardGuardLocked());
+            assertTrue(plan.shouldStop());
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
+    void unknownReleaseCarriesObservedJudgeUnavailabilityWithoutChangingDegradeAction() {
+        TraceStore.clear();
+        try {
+            TraceStore.put("finalAnswer.releaseStatus", "UNVERIFIED");
+            TraceStore.put("finalAnswer.releaseReason", "verification_unknown_release");
+            TraceStore.put("factVerifier.terminalStage", "evidence_coverage");
+            TraceStore.put("factVerifier.terminalReason", "unknown");
+            TraceStore.put("factVerifier.judgeUnavailable", Boolean.TRUE);
+            var input = new RagControlRuntimeAdapter.RuntimeInput(
+                    true, 3, 2, false, false, false, false, true, true)
+                    .withVerificationUnknownRelease(true);
+
+            var findings = adapter.collect(input, "timeline", completeTimeline(), completeAttempts());
+            var verification = stage(findings, RagControlFinding.Stage.VERIFICATION);
+            assertEquals("verification_unknown_release", verification.reasonCode());
+            assertEquals("evidence_coverage", verification.evidence().get("terminalStage"));
+            assertEquals("unknown", verification.evidence().get("terminalReason"));
+            assertEquals(Boolean.TRUE, verification.evidence().get("judgeUnavailable"));
+            assertEquals(RagActionPlan.Action.DEGRADE, verification.proposedAction());
+            var plan = composer.compose(findings);
+            assertEquals(RagActionPlan.Action.DEGRADE, plan.action());
+            assertFalse(plan.shouldStop());
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
+    void acceptedVerificationCarriesSafeTerminalPassAndObservedFalseJudgeFlag() {
+        TraceStore.clear();
+        try {
+            TraceStore.put("finalAnswer.releaseStatus", "APPROVE");
+            TraceStore.put("finalAnswer.releaseReason", "verification_accepted");
+            TraceStore.put("factVerifier.terminalStage", "fact_classification");
+            TraceStore.put("factVerifier.terminalReason", "pass");
+            TraceStore.put("factVerifier.judgeUnavailable", Boolean.FALSE);
+
+            var findings = adapter.collect(healthyInput(), "timeline", completeTimeline(), completeAttempts());
+            var verification = stage(findings, RagControlFinding.Stage.VERIFICATION);
+            assertEquals("verification_accepted", verification.reasonCode());
+            assertEquals("fact_classification", verification.evidence().get("terminalStage"));
+            assertEquals("pass", verification.evidence().get("terminalReason"));
+            assertEquals(Boolean.FALSE, verification.evidence().get("judgeUnavailable"));
+            assertEquals(RagActionPlan.Action.CONTINUE, verification.proposedAction());
+            var plan = composer.compose(findings);
+            assertEquals(RagActionPlan.Action.CONTINUE, plan.action());
+            assertTrue(plan.lineageComplete());
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @Test
+    void missingOrPrivateTerminalMetadataIsAbsentAndNeverChangesAcceptedAction() {
+        for (Map<String, Object> meta : List.of(
+                Map.<String, Object>of(),
+                Map.<String, Object>of(
+                        "factVerifier.terminalStage", "PRIVATE_STAGE_SENTINEL",
+                        "factVerifier.terminalReason", "PRIVATE_RAW_REASON_SENTINEL",
+                        "factVerifier.judgeUnavailable", "false"))) {
+            TraceStore.clear();
+            try {
+                meta.forEach(TraceStore::put);
+                var findings = adapter.collect(healthyInput(), "timeline", completeTimeline(), completeAttempts());
+                var evidence = stage(findings, RagControlFinding.Stage.VERIFICATION).evidence();
+                assertFalse(evidence.containsKey("terminalStage"));
+                assertFalse(evidence.containsKey("terminalReason"));
+                assertFalse(evidence.containsKey("judgeUnavailable"));
+                assertFalse(evidence.toString().contains("PRIVATE_STAGE_SENTINEL"));
+                assertFalse(evidence.toString().contains("PRIVATE_RAW_REASON_SENTINEL"));
+                assertEquals(RagActionPlan.Action.CONTINUE, composer.compose(findings).action());
+            } finally {
+                TraceStore.clear();
+            }
+        }
     }
 }

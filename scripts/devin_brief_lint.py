@@ -15,6 +15,64 @@ PATH_RE = re.compile(
     r"|(?:scripts|main|frontend|\.windsurf|\.agents|\.grok)[/\\])"
 )
 STEP_RE = re.compile(r"(?m)^[ \t]*(?:#{1,3}[ \t]*)?(G|D|WP)(\d{1,2})\b")
+# lease 충돌에 HOLD만 적고 lease-wait 대기 명령이 없으면 WARN (차단 아님).
+LEASE_HOLD_RE = re.compile(
+    r"(lease|리스|잠금)[^\n]{0,80}(?<![0-9A-Za-z_])HOLD(?![0-9A-Za-z_])|"
+    r"(?<![0-9A-Za-z_])HOLD(?![0-9A-Za-z_])[^\n]{0,80}(lease|리스|잠금)",
+    re.I)
+LEASE_WAIT_RE = re.compile(r"lease[-_ ]?wait", re.I)
+# VIBE_OPEN 동안 admin 로그인·로그아웃 차단 검사는 Acceptance 완료 조건이
+# 아니다 — 브리프의 Acceptance 섹션에 그런 줄이 있으면 WARN (차단 아님).
+ADMIN_CHECK_WARN = "ADMIN_CHECK_UNDER_VIBE_OPEN"
+ADMIN_CHECK_SUGGEST = (
+    "관리자·로그인·로그아웃 검사는 VIBE_OPEN이므로 HTTP status만 기록하고 "
+    "DEFERRED_SECURITY, 계정·URL을 묻지 마.")
+ADMIN_CHECK_LINE = re.compile(
+    r"(관리자|admin).{0,20}(로그인|로그아웃|차단|login|logout|block)|"
+    r"(로그인|로그아웃).{0,16}(후|뒤)?.{0,8}차단|"
+    r"잘못된.{0,8}(계정|credential).{0,8}차단|"
+    r"invalid.{0,16}(account|credential|login)|"
+    r"logout.{0,20}(block|re-?block|deny)|"
+    r"저장.{0,8}(인증|로그인).{0,8}상태", re.I)
+ACCEPT_HEAD = re.compile(
+    r"(?im)^\s*#{0,4}\s*\**\s*\d{0,2}[.\)]?\s*"
+    r"(acceptance|수용\s*조건|수용\s*기준|완료\s*기준)\b")
+_NEXT_HEAD = re.compile(
+    r"(?m)^\s*#{1,4}\s|^\s*(HOLD|절대\s*금지|변경\s*금지|금지\s*목록|"
+    r"수정\s*허용|변경\s*허용|보고\s*형식|참고|공통\s*규칙|작업\s*단계|"
+    r"한\s*줄\s*목표|사실|ASK_ONCE)\s*[:：]?\s*$")
+# A1·수용 … 형식으로 시작하는 줄은 Acceptance 항목으로 본다(헤딩 없는 브리프).
+_ACCEPT_ITEM = re.compile(
+    r"^\s*[-*]?\s*(A\d{1,2}|수용|완료\s*조건|acceptance)\b", re.I)
+
+
+def _vibe_open_enabled(cfg_path=None):
+    """configs/vibe-open.yaml `enabled: true`일 때만 True — 없음/false면 False."""
+    cfg = (Path(cfg_path) if cfg_path
+           else Path(__file__).resolve().parent.parent / "configs" / "vibe-open.yaml")
+    try:
+        body = cfg.read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(re.search(r"(?im)^\s*enabled\s*:\s*(true|yes|on)\b", body))
+
+
+def _acceptance_region(text: str) -> str:
+    """Acceptance/수용 조건 헤딩부터 다음 섹션 헤더까지의 본문."""
+    head = ACCEPT_HEAD.search(text)
+    if not head:
+        return ""
+    tail = text[head.end():]
+    nxt = _NEXT_HEAD.search(tail)
+    return tail[:nxt.start()] if nxt else tail
+
+
+def admin_check_in_acceptance(text: str) -> bool:
+    """admin 로그인·로그아웃 차단 검사가 Acceptance 완료 조건으로 쓰였는지."""
+    if ADMIN_CHECK_LINE.search(_acceptance_region(text)):
+        return True
+    return any(_ACCEPT_ITEM.match(line) and ADMIN_CHECK_LINE.search(line)
+               for line in text.splitlines())
 COMMAND_RE = re.compile(
     r"^(Set-Location|python|powershell|git|gradle|\.\\gradlew|npm|pip)\b",
     re.I,
@@ -63,7 +121,7 @@ def _check(check_id: str, ok: bool, detail: str) -> dict:
     return {"id": check_id, "ok": bool(ok), "detail": detail}
 
 
-def lint_text(text: str) -> dict:
+def lint_text(text: str, vibe_open_path=None) -> dict:
     """Return FIT plus missing items. text is the brief body."""
     lines = text.splitlines()
     anti_indexes = [index for index, line in enumerate(lines) if "[ANTI-STOP]" in line]
@@ -124,6 +182,16 @@ def lint_text(text: str) -> dict:
             item["count"] = steps
     missing = [item["id"] for item in checks if not item["ok"]]
     suggestions = [SUGGEST[item] for item in missing]
+    warnings = []
+    if LEASE_HOLD_RE.search(text) and not LEASE_WAIT_RE.search(text):
+        warnings.append("LEASE_HOLD_WITHOUT_WAIT")
+        suggestions.append(
+            "lease 충돌 HOLD 대신 대기 명령을 적으세요: python -B scripts/"
+            "codex_auto_unblock.py lease-wait --paths <files> --max-min auto "
+            "--enqueue --task <task>")
+    if _vibe_open_enabled(vibe_open_path) and admin_check_in_acceptance(text):
+        warnings.append(ADMIN_CHECK_WARN)
+        suggestions.append(ADMIN_CHECK_SUGGEST)
     by_id = {item["id"]: item for item in checks}
     if not by_id["unbounded_scope"]["ok"]:
         fit = "HANDOFF"
@@ -139,6 +207,7 @@ def lint_text(text: str) -> dict:
         "stepCount": steps,
         "missing": missing,
         "suggestions": suggestions,
+        "warnings": warnings,
         "checks": checks,
     }
 
@@ -149,6 +218,7 @@ def render_console(result: dict, source: str) -> str:
         "file: %s" % source,
         "steps: %s" % result["stepCount"],
         "missing: %s" % (", ".join(result["missing"]) or "(none)"),
+        "warnings: %s" % (", ".join(result.get("warnings") or []) or "(none)"),
     ]
     for suggestion in result["suggestions"]:
         lines.append("suggest: %s" % suggestion)

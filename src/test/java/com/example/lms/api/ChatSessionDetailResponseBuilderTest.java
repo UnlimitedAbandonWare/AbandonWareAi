@@ -163,6 +163,26 @@ class ChatSessionDetailResponseBuilderTest {
     }
 
     @Test
+    void answerOverviewUsesOnlyValidatedObservedDiagnosticsAndPreservesZero() {
+        LocalDateTime now = LocalDateTime.of(2026, 10, 7, 10, 0);
+        String projection = "storageMode=durable_fallback\nassistantMessageId=11\nreason=scored\nmethod=rule\npathHash=none\n"
+                + "diag.observedModel=s:synthetic-model\ndiag.prompt.citableEvidenceCount=n:0\ndiag.orch.mode=s:STRIKE\n";
+        String durable = Base64.getUrlEncoder().withoutPadding().encodeToString(projection.getBytes(StandardCharsets.UTF_8));
+        ChatSession session = ChatSession.builder().id(101L).title("synthetic").createdAt(now)
+                .messages(List.of(message(11L, "assistant", "answer", now),
+                        message(12L, "system", "?TRACESNAP?snap-overview|v3|" + durable, now.plusSeconds(1)))).build();
+        var detail = ChatSessionDetailResponseBuilder.build(session, "guest", objectMapper, Map.of(), true,
+                LoggerFactory.getLogger(ChatSessionDetailResponseBuilderTest.class)).getBody();
+        assertNotNull(detail);
+        var fields = detail.turnTraces().get(0).fields();
+        assertEquals("synthetic-model", fields.get("observedModel"));
+        assertEquals("0", fields.get("prompt.citableEvidenceCount"));
+        assertEquals("STRIKE", fields.get("orch.mode"));
+        assertFalse(fields.containsKey("web.brave.failureReason"));
+        assertFalse(fields.containsKey("web.naver.failureReason"));
+    }
+
+    @Test
     void conflictingSnapshotsForOneAssistantDoNotChooseByPointerOrder() {
         LocalDateTime now = LocalDateTime.of(2026, 6, 12, 15, 14);
         String projection = Base64.getUrlEncoder().withoutPadding().encodeToString(

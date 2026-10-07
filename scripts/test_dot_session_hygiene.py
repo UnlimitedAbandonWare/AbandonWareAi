@@ -37,7 +37,11 @@ class HygieneCase(unittest.TestCase):
         self.docs = self.tmp / "CodexDocs"
         self.downloads = self.tmp / "Downloads"
         self.prompts = self.tmp / "agent-prompts"
-        for d in (self.sessions, self.docs, self.downloads, self.prompts):
+        self.skills = self.tmp / "skills"
+        self.scripts = self.tmp / "scripts"
+        self.handoff = self.tmp / "handoff"
+        for d in (self.sessions, self.docs, self.downloads, self.prompts,
+                  self.skills, self.scripts, self.handoff):
             d.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self):
@@ -50,6 +54,9 @@ class HygieneCase(unittest.TestCase):
         e["DOT_HYGIENE_CODEX_DOCS"] = str(self.docs)
         e["DOT_HYGIENE_DOWNLOADS"] = str(self.downloads)
         e["DOT_HYGIENE_AGENT_PROMPTS"] = str(self.prompts)
+        e["DOT_HYGIENE_SKILLS_ROOT"] = str(self.skills)
+        e["DOT_HYGIENE_SCRIPTS_ROOT"] = str(self.scripts)
+        e["DOT_HYGIENE_HANDOFF_ROOT"] = str(self.handoff)
         e["DOT_HYGIENE_LARGE_MB"] = large_mb
         return e
 
@@ -283,6 +290,74 @@ class TestSerialLaneHygiene(HygieneCase):
         res = self.payload(self.run_cli("--since-hours", "36", "--json"))
         self.assertIsNone(res["counts"].get("MULTI_GOAL_CONTAMINATION"))
         self.assertIsNone(res["counts"].get("ROLE_SWITCH_MID_SESSION"))
+
+
+class TestDatedSkillHygiene(HygieneCase):
+    """W5 (F5): -YYYYMMDD 스킬·*_assist.py 의 retire_after 수명 탐침.
+
+    읽기 전용 — 삭제·이동 없음. skills/scripts/handoff 루트는 tmp 격리."""
+
+    def skill(self, name: str, frontmatter: str) -> Path:
+        d = self.skills / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(frontmatter, encoding="utf-8")
+        return d
+
+    def ledger(self, task_id: str, status: str) -> Path:
+        j = self.handoff / "x" / task_id / "journal.json"
+        j.parent.mkdir(parents=True, exist_ok=True)
+        j.write_text(json.dumps({"taskId": task_id, "status": status}),
+                     encoding="utf-8")
+        return j
+
+    def test_d1_retire_after_present_no_warning(self):
+        self.skill("demo1-x-assist-20990101",
+                   "---\nname: demo1-x\nretire_after: 2099-01-04\n---\n")
+        res = self.payload(self.run_cli("--json"))
+        self.assertIsNone(res["counts"].get("DATED_SKILL_NO_EXPIRY"))
+        self.assertIsNone(res["counts"].get("DATED_SKILL_STALE"))
+
+    def test_d2_no_retire_after_warns(self):
+        self.skill("demo1-y-assist-20990101", "---\nname: demo1-y\n---\n")
+        res = self.payload(self.run_cli("--json"))
+        self.assertEqual(res["counts"].get("DATED_SKILL_NO_EXPIRY"), 1)
+        hit = [f for f in res["findings"]
+               if f["type"] == "DATED_SKILL_NO_EXPIRY"][0]
+        self.assertIn("demo1-y-assist-20990101", hit["path"])
+
+    def test_d3_stale_closed_ledger_archive_candidate(self):
+        self.skill("demo1-zthing-assist-20200101", "---\nname: z\n---\n")
+        self.ledger("zthing-1", "closed")
+        res = self.payload(self.run_cli("--json"))
+        self.assertEqual(res["counts"].get("DATED_SKILL_STALE"), 1)
+        hit = [f for f in res["findings"]
+               if f["type"] == "DATED_SKILL_STALE"][0]
+        self.assertTrue(hit["archiveCandidate"])
+        self.assertIn("zthing-1", hit["ledger"])
+
+    def test_d4_old_date_open_ledger_not_stale(self):
+        self.skill("demo1-wtask-assist-20200101", "---\nname: w\n---\n")
+        self.ledger("wtask", "in_progress")
+        res = self.payload(self.run_cli("--json"))
+        self.assertIsNone(res["counts"].get("DATED_SKILL_STALE"))
+        self.assertEqual(res["counts"].get("DATED_SKILL_NO_EXPIRY"), 1)
+
+    def test_d5_assist_py_no_expiry_warns(self):
+        write(self.scripts / "thing_assist.py", b"# one-off helper\n")
+        res = self.payload(self.run_cli("--json"))
+        self.assertEqual(res["counts"].get("DATED_SKILL_NO_EXPIRY"), 1)
+        hit = [f for f in res["findings"]
+               if f["type"] == "DATED_SKILL_NO_EXPIRY"][0]
+        self.assertIn("thing_assist.py", hit["path"])
+
+    def test_d6_read_only_no_delete_no_move(self):
+        self.skill("demo1-zthing-assist-20200101", "---\nname: z\n---\n")
+        self.ledger("zthing-1", "closed")
+        before = sorted(str(p) for p in self.tmp.rglob("*"))
+        proc = self.run_cli("--json")
+        after = sorted(str(p) for p in self.tmp.rglob("*"))
+        self.assertEqual(proc.returncode, 0)
+        self.assertEqual(before, after)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,11 @@ const vm = require('node:vm');
 
 const source = fs.readFileSync('main/resources/static/js/chat-trace-ui.js', 'utf8');
 
+test('new visitors receive the existing trace control checked by default', () => {
+  const template = fs.readFileSync('main/resources/templates/chat-ui.html', 'utf8');
+  assert.match(template, /<input[^>]*data-chat-trace-toggle[^>]*\bchecked\b/);
+});
+
 class Element {
   constructor(tag) {
     this.tagName = tag.toUpperCase();
@@ -95,6 +100,57 @@ class Fragment extends Element {
   constructor() { super('fragment'); }
   get nodeType() { return 11; }
 }
+
+test('answer overview is visible without opening details or fetching snapshots', () => {
+  const h = harness();
+  const panel = h.ui.restore(h.assistant(), { snapshotId: 'overview', fields: {
+    observedModel: 'synthetic-model', 'prompt.citableEvidenceCount': '0', 'orch.mode': 'STRIKE'
+  } });
+  const overview = panel.parentElement.querySelector('.awx-trace-overview');
+  assert.ok(overview);
+  assert.equal(overview.parentElement, panel.parentElement);
+  assert.match(overview.textContent, /synthetic-model/);
+  assert.match(overview.textContent, /Brave: NOT_OBSERVED/);
+  assert.match(overview.textContent, /Naver: NOT_OBSERVED/);
+  assert.match(overview.textContent, /근거: 0/);
+  assert.match(overview.textContent, /STRIKE/);
+  assert.equal(panel.open, false);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('requested model, candidate totals and execution mode never become observations', () => {
+  const h = harness();
+  const panel = h.ui.restore(h.assistant(), { snapshotId: 'unknown', fields: {
+    modelUsed: 'requested-model', finalContextCount: '12', executionMode: 'AUTO'
+  } });
+  const overview = panel.parentElement.querySelector('.awx-trace-overview');
+  assert.ok(overview);
+  assert.equal((overview.textContent.match(/NOT_OBSERVED/g) || []).length, 5);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('live summary survives OFF then ON without a snapshot or an eager fetch', () => {
+  const h = harness();
+  const panel = h.ui.upsertSummary(h.assistant(), { observedModel: 'synthetic-model' });
+  h.setEnabled(false);
+  assert.equal(panel.parentElement.hidden, true);
+  h.setEnabled(true);
+  assert.equal(panel.parentElement.hidden, false);
+  assert.equal(panel.open, false);
+  assert.equal(h.fetchCalls.length, 0);
+});
+
+test('restored validation accepts the three observed fields in addition to the existing bounded projection', () => {
+  const chat = fs.readFileSync('main/resources/static/js/chat.js', 'utf8');
+  const ctx = vm.createContext({});
+  vm.runInContext(chat.slice(chat.indexOf('const TURN_TRACE_SNAPSHOT_ID'),
+    chat.indexOf('function sessionListRowMetadata(')), ctx);
+  const fields = Object.fromEntries(Array.from({length:16}, (_, i) => ['field'+i, 'safe']));
+  Object.assign(fields, {observedModel:'model-'+'x'.repeat(174), 'prompt.citableEvidenceCount':'0', 'orch.mode':'NORMAL'});
+  assert.equal(ctx.validateTurnTraces([{turnId:1,snapshotId:'owned',fields}]).length,1);
+  fields.extra = 'overflow';
+  assert.equal(ctx.validateTurnTraces([{turnId:1,snapshotId:'owned',fields}]).length,0);
+});
 
 function harness(options = {}) {
   const root = new Element('div');

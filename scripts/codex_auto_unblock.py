@@ -15,10 +15,17 @@ Codex 목표 세션이 "되돌릴 수 있는 일"에서 멈추지 않게, 분류
       launcher 로그에서 requestHash별 phase/terminal/final-response(문자 수)
       -> JSON {window, files, requests:[{hash, firstTs, lastTs, phases,
           finalResponse}]}. sessionId·토큰류는 출력하지 않는다.
-  lease-wait --paths <p...> [--max-min 20] [--interval 60] [--dry-run]
-             [--locks-dir DIR]
-      겹침 lease가 풀릴 때까지 확인만 한다 -> JSON {result: free|stale|live,
-      free, live, stale, waitedSeconds}. 해제·reclaim은 절대 하지 않는다.
+  lease-wait --paths <p...> [--max-min auto|N] [--interval 60] [--dry-run]
+             [--enqueue] [--task ID] [--locks-dir DIR] [--root DIR]
+      겹침 lease가 풀릴 때까지 확인만 한다 -> JSON {result: free|stale|live|
+      free_wait_turn, free, live, stale, waitedSeconds, waitedSec, budgetSec,
+      budgetBasis, lastStatus, blockers}. 해제·reclaim은 절대 하지 않는다.
+      --max-min auto(기본값)는 막은 lease의 상태로 예산을 정한다:
+      finishing/releasePending+heartbeat 정상 → 상대 만료+5분, active → 20분,
+      stale/orphan → 기다리지 않음. 전체 상한 60분. --enqueue는
+      <locks-dir>/waiters/<대상sha12>/<UTC>-<task>.json 대기표로 같은 대상을
+      기다리는 세션의 순번을 정한다(내 것만 생성·삭제). --task는 대기 중
+      lease_conflict_autoflow.py heartbeat로 내 잠금을 갱신한다.
   superseded --ledger <dir>
       같은 첨부 접두어(예: codex-api3-stream-failed-*)의 더 새 ledger가
       완료를 남겼는지 -> JSON {superseded, by, byResult, passItems, checked}
@@ -27,8 +34,10 @@ Usage:
   python -B scripts/codex_auto_unblock.py <subcommand> ...
 """
 import argparse
+import hashlib
 import json
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -336,16 +345,227 @@ def lease_scan(locks_dir, paths):
     return {"result": result, "free": free, "live": live, "stale": stale}
 
 
-def lease_wait(paths, locks_dir, max_min=20, interval=60, dry_run=False):
-    waited = 0
-    deadline = time.time() + max_min * 60
-    while True:
-        rep = lease_scan(locks_dir, paths)
-        rep["waitedSeconds"] = waited
-        if dry_run or rep["result"] == "free" or time.time() >= deadline:
-            return rep
-        time.sleep(interval)
-        waited = int(time.time() - (deadline - max_min * 60))
+WAITERS_DIRNAME = "waiters"
+AUTO_BUDGET_ACTIVE_SEC = 20 * 60        # live+heartbeat 정상 기본 대기
+AUTO_BUDGET_FINISHING_PAD_SEC = 5 * 60  # finishing: 상대 만료 이후 버퍼
+AUTO_BUDGET_MAX_SEC = 60 * 60           # 전체 상한
+LEASE_WAIT_CMD = ("python -B scripts/codex_auto_unblock.py lease-wait "
+                  "--paths {paths} --max-min auto --enqueue --task {task}")
+
+
+def _parse_utc(value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _scan_authoritative(root, paths, task=None):
+    """lease_conflict_autoflow의 권위 분류 (heartbeat 연장·finishing·
+    releasePending 반영). 실패 시 None -> 호출자가 경량 lease_scan으로 폴백."""
+    try:
+        scripts_dir = str(Path(__file__).resolve().parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import lease_conflict_autoflow as autoflow
+    except ImportError:
+        return None
+    try:
+        targets = [autoflow.scope.canon(p) for p in paths]
+        rep = autoflow.scan_report(Path(root).resolve(), targets,
+                                   my_task=task)
+    except Exception:
+        return None
+    live, stale = [], []
+    for row in rep.get("overlappingLeases", []):
+        item = {"topic": row.get("topic"), "leaseId": row.get("leaseId"),
+                "ownerTaskId": row.get("ownerTaskId"),
+                "status": row.get("status"),
+                "lifecycle": row.get("lifecycle"),
+                "expiresAtUtc": row.get("expiresAtUtc"),
+                "heartbeatState": row.get("heartbeatState"),
+                "releasePending": row.get("releasePending")}
+        (live if row.get("lifecycle") == "live" else stale).append(item)
+    result = "live" if live else ("stale" if stale else "free")
+    return {"result": result, "free": rep.get("freeTargets", []),
+            "live": live, "stale": stale}
+
+
+def _row_budget(row, now):
+    """막은 lease 한 줄의 대기 예산(초, 근거)."""
+    if row.get("lifecycle") != "live":
+        return 0, "stale_skip"
+    finishing = (row.get("status") == "finishing"
+                 or bool(row.get("releasePending")))
+    if finishing and row.get("heartbeatState") == "valid":
+        exp = _parse_utc(row.get("expiresAtUtc"))
+        if exp is not None:
+            return (min(AUTO_BUDGET_MAX_SEC,
+                        max(0, int((exp - now).total_seconds()))
+                        + AUTO_BUDGET_FINISHING_PAD_SEC),
+                    "finishing_ttl")
+    return AUTO_BUDGET_ACTIVE_SEC, "active_default"
+
+
+def _auto_budget(live_rows, now):
+    """여러 lease가 막으면 가장 긴 예산. 전체 상한 AUTO_BUDGET_MAX_SEC."""
+    best_sec, best_basis = 0, "stale_skip"
+    for row in live_rows:
+        sec, basis = _row_budget(row, now)
+        row["budgetSec"], row["budgetBasis"] = sec, basis
+        if sec > best_sec:
+            best_sec, best_basis = sec, basis
+    return min(best_sec, AUTO_BUDGET_MAX_SEC), best_basis
+
+
+def _waiter_dir(locks_dir, paths):
+    key = hashlib.sha256("\n".join(sorted(_norm(p) for p in paths))
+                         .encode("utf-8")).hexdigest()[:12]
+    return Path(locks_dir) / WAITERS_DIRNAME / key
+
+
+def _waiter_ticket(locks_dir, paths, task, budget_sec):
+    """내 대기표만 생성. 반환: Path(실패 시 None)."""
+    now = datetime.now(timezone.utc)
+    safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task or "anon")
+    d = _waiter_dir(locks_dir, paths)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        ticket = d / (now.strftime("%Y%m%dT%H%M%SZ") + "-" + safe_task
+                      + ".json")
+        payload = {"schemaVersion": "awx.lease-wait-waiter.v1",
+                   "task": task or "anon",
+                   "targets": sorted(_norm(p) for p in paths),
+                   "createdAtUtc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                   "expiresAtUtc": (now + timedelta(seconds=budget_sec))
+                   .strftime("%Y-%m-%dT%H:%M:%SZ")}
+        ticket.write_text(json.dumps(payload, ensure_ascii=False,
+                                     indent=2), encoding="utf-8")
+        return ticket
+    except OSError:
+        return None
+
+
+def _waiter_turn_mine(my_ticket, now=None):
+    """가장 이른 만료 안 된 대기표가 내 것이면 True."""
+    now = now or datetime.now(timezone.utc)
+    d = my_ticket.parent
+    try:
+        tickets = sorted(d.glob("*.json"))
+    except OSError:
+        return True
+    my_created = None
+    try:
+        my_created = json.loads(my_ticket.read_text(
+            encoding="utf-8", errors="replace")).get("createdAtUtc")
+    except (OSError, ValueError):
+        pass
+    earliest, earliest_name = None, None
+    for t in tickets:
+        try:
+            d2 = json.loads(t.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        exp = _parse_utc(d2.get("expiresAtUtc"))
+        if exp is not None and exp <= now:
+            continue  # 만료된 대기표는 건너뜀
+        created = _parse_utc(d2.get("createdAtUtc"))
+        if created is None:
+            continue
+        if earliest is None or (created, t.name) < (earliest, earliest_name):
+            earliest, earliest_name = created, t.name
+    if earliest is None:
+        return True  # 유효 대기표가 내 것밖에 없음
+    if my_created is None:
+        return False
+    return (earliest_name == my_ticket.name)
+
+
+def _default_heartbeat(task, root):
+    """대기 중 내 lease 만료 방지: autoflow heartbeat 1회 호출."""
+    if not task:
+        return None
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-B",
+             str(Path(root) / "scripts" / "lease_conflict_autoflow.py"),
+             "heartbeat", "--task", task],
+            cwd=str(root), capture_output=True, text=True, timeout=30)
+        return proc.returncode
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def lease_wait(paths, locks_dir, max_min="auto", interval=60, dry_run=False,
+               enqueue=False, task=None, root=None, now_fn=None, sleep_fn=None,
+               heartbeat_fn=None, scanner=None, authoritative=True,
+               wall_now_fn=None):
+    """겹침 lease가 풀릴 때까지 기다린다. 읽기 전용(+--enqueue 시 내 대기표만).
+    max_min: "auto"면 막은 lease 상태로 예산 계산, 숫자면 기존 고정값.
+    authoritative+root면 heartbeat·finishing을 반영하는 권위 분류로 스캔하고
+    실패 시 경량 lease_scan으로 폴백한다."""
+    now_fn = now_fn or time.time
+    sleep_fn = sleep_fn or time.sleep
+    wall_now_fn = wall_now_fn or (lambda: datetime.now(timezone.utc))
+    if heartbeat_fn is None and task and not dry_run:
+        hb_root = Path(root or ".").resolve()
+        heartbeat_fn = lambda: _default_heartbeat(task, hb_root)
+    if scanner is None:
+        if root is not None and authoritative:
+            def scanner(p):
+                return (_scan_authoritative(root, p, task=task)
+                        or lease_scan(locks_dir, p))
+        else:
+            scanner = lambda p: lease_scan(locks_dir, p)
+
+    started = now_fn()
+    ticket = None
+    if enqueue and not dry_run:
+        # 예산은 첫 스캔 뒤 알지만, 순번은 대기 시작 시점부터 잡아야 하므로
+        # 잠정 예산(상한)으로 만들고 실제 만료는 첫 스캔 뒤 갱신하지 않는다.
+        ticket = _waiter_ticket(locks_dir, paths, task, AUTO_BUDGET_MAX_SEC)
+    try:
+        budget_sec, basis = None, None
+        while True:
+            rep = scanner(paths)
+            if budget_sec is None:
+                if isinstance(max_min, str) and max_min.strip().lower() == "auto":
+                    budget_sec, basis = _auto_budget(
+                        rep.get("live", []), wall_now_fn())
+                else:
+                    budget_sec = int(float(max_min) * 60)
+                    basis = "fixed"
+                budget_sec = min(budget_sec, AUTO_BUDGET_MAX_SEC)
+            waited = int(now_fn() - started)
+            rep.update({"waitedSec": waited, "waitedSeconds": waited,
+                        "budgetSec": budget_sec, "budgetBasis": basis,
+                        "lastStatus": rep["result"],
+                        "blockers": rep.get("live") or rep.get("stale", [])})
+            if dry_run or rep["result"] == "stale":
+                return rep
+            if rep["result"] == "free":
+                if enqueue and ticket is not None \
+                        and not _waiter_turn_mine(ticket, now=wall_now_fn()):
+                    rep["result"] = rep["lastStatus"] = "free_wait_turn"
+                else:
+                    rep["result"] = rep["lastStatus"] = "free"
+                    return rep
+            if now_fn() >= started + budget_sec:
+                return rep
+            if heartbeat_fn is not None:
+                heartbeat_fn()
+            sleep_fn(interval)
+    finally:
+        if ticket is not None:
+            try:
+                ticket.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -448,11 +668,19 @@ def main(argv=None):
     lw = sub.add_parser("lease-wait",
                         help="D32 겹침 lease 대기 (읽기 전용)")
     lw.add_argument("--paths", nargs="+", required=True)
-    lw.add_argument("--max-min", type=int, default=20)
+    lw.add_argument("--max-min", default="auto",
+                    help="auto(기본, 상대 상태로 예산) 또는 숫자 분")
     lw.add_argument("--interval", type=int, default=60)
     lw.add_argument("--dry-run", action="store_true")
-    lw.add_argument("--locks-dir",
-                    default="__patch_drop__/source-edit-locks")
+    lw.add_argument("--enqueue", action="store_true",
+                    help="대기표를 만들어 같은 대상 대기 세션과 순번 조정")
+    lw.add_argument("--task", default=None,
+                    help="내 taskId — 대기 중 heartbeat 갱신·대기표 기록")
+    lw.add_argument("--locks-dir", default=None,
+                    help="기본 <root>/__patch_drop__/source-edit-locks; "
+                         "명시하면 그 폴더만 경량 스캔")
+    lw.add_argument("--root", default=".",
+                    help="repo root — 권위 lease 분류(heartbeat 반영)용")
 
     sp = sub.add_parser("superseded",
                         help="D33 더 새 ledger 완료 여부")
@@ -465,8 +693,12 @@ def main(argv=None):
         out = log_evidence(args.log_dir, args.model, args.since,
                            args.until, args.log_glob)
     elif args.cmd == "lease-wait":
-        out = lease_wait(args.paths, args.locks_dir, args.max_min,
-                         args.interval, args.dry_run)
+        locks_dir = args.locks_dir or str(
+            Path(args.root) / "__patch_drop__" / "source-edit-locks")
+        out = lease_wait(args.paths, locks_dir, args.max_min,
+                         args.interval, args.dry_run, enqueue=args.enqueue,
+                         task=args.task, root=args.root,
+                         authoritative=args.locks_dir is None)
     else:
         out = superseded_eval(args.ledger)
     print(json.dumps(out, ensure_ascii=False, indent=2))

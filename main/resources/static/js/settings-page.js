@@ -89,7 +89,7 @@
   }
 
   function fieldValue(key,value) {
-    if (['useRag','useWebSearch'].includes(key)) return value === 'true';
+    if (['useRag','useWebSearch','googleSearchRescueEnabled'].includes(key)) return value === 'true';
     if (['temperature','topP','frequencyPenalty','presencePenalty','maxTokens'].includes(key)) return Number(value);
     return value;
   }

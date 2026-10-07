@@ -1,0 +1,154 @@
+[depth L2: live 재현 run + 영상 프레임 + file:line 검증 기반 수정 지시서]
+[ANTI-STOP] 이 지시서는 읽고 멈추는 문서가 아니다. 아래 WP를 끝까지 수행하고 지정된 검증을 통과한 뒤 §10 표로 회신한다.
+$demo1-evidence-debugging (+ 보조 $demo1-rag-platform, $demo1-work-ledger)
+
+[CODEX 지시서] 라이브 재현 v3: provider 슬롯 굶주림(Brave request_budget_exhausted 오분류) + failSoft 하 rejected known 승격 잔재 + 보류 run의 관측 공백 — 2026-10-06 19:40 KST
+파일 ID: PASTE_CODEX_SEARCH_STARVE_VERIFY_REJECT_20261006
+선행 계약: PASTE_CODEX_verifier-failsoft-release_20261005 → PASTE_CODEX_verify-hold-live-evidence_20261006 → PASTE_CODEX_VERIFIER_REJECTED_HOLD_20261006. 이 지시서는 중복 지시가 아니라 같은 사슬의 세 번째 라이브 재현 증거다. 선행 착륙분(unknown_release, 사유별 문구)은 유지하고 미착륙 잔재 + 신규 확정 원인만 고친다.
+금지 (이 작업 전체): push/pull/fetch/merge/rebase/reset/clean 0 · add -A/add ./commit -a/--no-verify 0 · remote 조작 0 · 비밀값 출력 0 · 공개 kro.kr write 0 · 무관 파일 수정 0 · PROTO_OPEN 임의 변경 0 · 전체 :test 스위프 0 · 서버/cloudflared/터널 설정 변경 0
+
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'
+ledger: data\agent-handoff\codex-search-starve-verify-reject-20261006\
+
+### 0. 한 줄 목표
+후속 질의("그럼 그녀석 전무 뭐쓰면 좋냐?")에서 (1) admit 슬롯 한도가 두 번째 provider를 `request_budget_exhausted`로 죽여 근거가 1건뿐이 되고, (2) 초안이 [W1] 미인용으로 escalation된 뒤 verifier `rejected`로 본문 전량 보류되는 사슬을 끊는다. failSoft/judge 인프라 실패가 있는 run에서 judge-의존 reject가 `outcomeKnown=true`로 승격되는 잔재를 닫고, 보류된 run이 세션 레코드에서 completed/none으로 보이는 관측 공백을 메운다.
+
+### 1. 사실 (읽기 전용 확인, 2026-10-06 19:14~19:40 KST)
+- 입력 영상 `F:\CAM\2026-10-06 19-14-31.mkv` (58,624,170 B, 187초): 질의1 "원신에서 보디냐챠가 뭐냐?" → "검색 중 대기 13초→53초" 표시 후 ~93초 만에 본문 릴리스(W1 namu.wiki 인용). 질의2 "그럼 그녀석 전무 뭐쓰면 좋냐?" → ~47초 후 본문이 "검증 단계가 답변을 기각해 본문을 보류했습니다." 한 줄로 대체(영상 말미 사용자가 해당 문구를 선택 강조). 모델 chatgpt-oauth:gpt-5.6-sol, RAG ON, session:392.
+- run2 트레이스 `logs/debug-events.ndjson` (traceId `hash:7d9f2fe3df20`, sid `hash:fe5bf2759b14`):
+  - 10:17:03Z `promoteForPrompt` candidateCount=1→promotedCount=1, citableLocatorCount=1 / `promptBuild` webCount=1·citableEvidenceCount=1.
+  - 10:17:27Z MODEL_GUARD `Force escalation over degrade` + `Evidence guard requested model escalation` (quality=0.4, coverage=0, evidenceCount=1, weakDraft=true).
+  - 10:17:27Z control signals: PROMPT_EVIDENCE HELD `existing_release_guard_hold`(POLICY_DENIED/HARD_GUARD) · LLM HELD `runtime_lineage_missing`(OBSERVABILITY_GAP) · VERIFICATION HELD `verification_rejected`(CITATION_MISS, evidenceStatus=VERIFIED, hardGuard=true).
+  - stage-boundary breadcrumbs: search `zero_result`, llm `catch reactiveexception`.
+- UI debug 덤프(사용자 붙여넣기) — run2 상세:
+  - Brave `web.provider.events` 2회 모두 `status=EXCEPTION, tookMs=0, out=0`, `web.brave.requestBudgetExhausted=true`, `web.brave.requestedCount=12`, `web.provider.resultCount=0`. Search trace `Hybrid(Brave+Naver):BOUNDED` elapsedMs=982 raw=1 — Naver만 1건(namu.wiki) 기여.
+  - `web.failsoft.runs=2 outZero=2`, `stageCountsRaw={OFFICIAL:0,DOCS:0,DEV_COMMUNITY:0,PROFILEBOOST:0,NOFILTER_SAFE:0,NOFILTER:0}`, `poolSafeEmpty=true`, `starved=true`.
+  - `plan.officialOnly=true`, `plan.minCitations=2` — 게임 잡담 엔티티 질의에 공식-전용 풀+근거 2건 요구가 걸림.
+  - `aux.llm.down=true` (reason=exception), `aux.keywordSelection.degraded.reason=exception`+`fallback.seedSource`, `llm.ollamaNative.route=true`·`llm.client.failed=true`·`llm.ollamaNative.call.suppressed=true` (127.0.0.1, reactiveexception) — 죽은 Ollama로 aux/judge 호출이 나감.
+  - `guard.final.action=ALLOW_PARTIAL_CITATIONS`, `guard.minCitations.required=2 actual=1`, `guard.escalation.weakDraft=true`.
+- 소스 현재 상태 (sha12 표는 §3):
+  - `probe_verifier_failsoft_release.py` → exit 0 NEW-CONTRACT (gateLine 8334) — unknown-release 계약 착륙됨.
+  - `RagControlProjectionRenderer.java:34` — "검증 단계가 답변을 기각해 본문을 보류했습니다." 사유별 문구 착륙(11:40 지시서 WP2 반영 증명).
+  - `FactVerifierService.VerificationState.reject()` `FactVerifierService.java:591-606` — failSoft 상태에서도 `rejected`/`insufficient`는 `outcomeKnown=true`로 승격하는 carve-out 잔재 :595-596 (`!"rejected".equals(safeStatus) && !"insufficient".equals(safeStatus)` 조건이 두 상태를 unknown 보호에서 제외). 11:40 지시서 WP1의 핵심 결함이 그대로.
+  - `factVerifier.terminalStage/terminalReason` TraceStore 기록은 존재(`FactVerifierService.java:166-167`)하나 `var/debug/chat-session-traces` 레코드·debug-events 어느 쪽에도 노출되지 않음 — export(`scripts/chat_session_debug_export.py` → `var/debug/chat-session-traces/export/export-f352653fba68ceb3`)에 factVerifier.* 키 0건. 어느 reject 호출부가 발화했는지 내구 기록으로 판독 불가.
+  - `RagControlRuntimeAdapter.java:340-349` — `verification_rejected` finding이 failureClass=CITATION_MISS로 단일 라벨링되어 실제 verdict 성격(entity_mismatch/source_credibility/meta_mismatch/claim_not_accepted)이 구분되지 않음.
+  - `SelfAskSearchBudget`(`service/rag/SelfAskSearchBudget.java:61-71`): expansion 미허용 AUTO에서 admit limit=1. `tryQueryAlias`(:76-86)는 `logical` 해시로 admit 판정 — Naver(`NaverSearchService.java:1670`, `logicalQuery`)와 Brave(`BraveSearchService.java:1069`, `query`)가 서로 다른 logical 문자열을 넘기면 먼저 admit된 쪽이 슬롯을 차지하고 두 번째 provider는 deny → Brave는 이를 `requestBudgetExhaustedResult`(`BraveSearchService.java:621-630`)로 오분류. `beginRequest`는 요청 단위(`ChatApiController.java:1882,4284,5003`, `ChatWorkflow.java:1359`) → 동일 요청 내 provider 간 슬롯 굶주림.
+  - `ChatWorkflow.java:8410-` rejected 분기 → REJECT(계약상 정상). verifier `verifier` 필드 = `@Qualifier("highModel")`(`FactVerifierService.java:62`) → `LlmConfig.java:408-453` `llm.high.*` 로컬 OpenAI-compat 엔드포인트 + `resolveLocalApiKeyStrict` — Ollama 다운 상태에서 judge 호출 실패 → `judgeUnavailable=true`(:536) → 여러 단계 `markFailSoft`.
+  - `FactVerifierService` reject("rejected") 호출부: :228(entity_validation, deterministic), :275(source_credibility, `sourceAnalyzer.analyze`의 판정 근거 확인 필요), :314(meta_check MISMATCH, judge-의존), 그리고 accept() :579→reject("rejected") 경유(claim verifier `known && !accepted`, :380/:422 — claimOutcomeKnown 가드 :195-198로 judge disabled 시 known 불가).
+  - 세션 레코드 `var/debug/chat-session-traces/20261006/s-6ea2fdb3399f.json` — run1(runId 37a2ecd9b654)·run2(runId cd0187fcc673) 모두 `outcome=completed, errorClass=none` — 본문 보류 run이 정상 완료로 집계됨(07:30 지시서 WP5 미착륙 확인).
+  - `runtime_lineage_missing` HELD finding이 run2에도 발행 — 10-05 지시서 WP3(진단 격하) 미착륙. 이번 보류 주체는 release gate라 영향은 이차지만 잔재로 기록.
+- 리스 상태 (19:35 KST `agent_scope_lease.py who`): 활성 7건. 충돌 유의 — `chat-browser10-followup` 리스가 `ChatWorkflow.java`·`NoEvidenceChatFallback.java`·`ChatWorkflowFinalVerificationReleaseGateTest.java` 등을 점유(만료 10:27 UTC=19:27 KST 부근, heartbeatState=absent, ownerState=unknown → stale 후보, 자동회수 절차 대상). 활성 저널 `chat-browser10-followup-20261006-9c840e21`(08:25 UTC 갱신). 대상 파일별 `agent_scope_lease.py check` 후 live면 BLOCKED_LEASE로 해당 파일만 보고, 우회 금지.
+- stale-test 잔재(probe WARN): `ChatWorkflowFinalVerificationReleaseGateTest.java:305`(구 unknown→HOLD 주장), `FinalAnswerPostProcessorTest.java:117,140,143`(`verification_outcome_unknown` 잔존).
+
+### 2. 기존 인식 수정
+| 주장 | 판정 | 근거 |
+|---|---|---|
+| "Brave가 죽어서 검색이 망했다" | WRONG(기제) | Brave는 와이어에 나가지도 않음(tookMs=0). `tryQueryAlias` admit 슬롯 deny → `request_budget_exhausted` 오분류. Naver는 1건 반환 |
+| "11:40 지시서 WP1이 landed" | 부분 WRONG | 문구 분기(WP2)와 unknown-release는 착륙. `reject()`의 failSoft carve-out(:595-601)은 잔재 — judge-의존 rejected/insufficient가 여전히 known 승격 가능 |
+| "이번 보류도 판정불능(fail-soft)이다" | 표면상 WRONG | VERIFICATION finding은 verificationKnown=true·rejected. 단 judge 인프라 실패 후 judge-의존 경로가 rejected로 승격됐다면 실질 fail-soft 오분류 — terminalStage 미노출로 현재 구분 불가 → WP1(c)가 판독성을 복구 |
+| "검색이 53초 걸렸다" | WRONG(라벨) | Search trace elapsedMs=982. 53초는 전체 대기 라벨 — 정체는 초안 생성(~17s)+escalation+verification(죽은 judge 엔드포인트 직렬 타임아웃, run1 ~66s) |
+| "사용자에게 아무 정보도 안 줬다" | RIGHT | promoted 1건+초안 존재에도 본문 전량 보류 → 안내 문구 한 줄만 표시 |
+| "보류된 run이 실패로 기록된다" | WRONG | 두 run 모두 outcome=completed·errorClass=none — 관측 공백 |
+| "plan.officialOnly가 이 질의에 적합하다" | WRONG | 게임 커뮤니티 지식 질의 — OFFICIAL/DOCS/DEV_COMMUNITY 전부 0, namu.wiki만 존재. officialOnly+minCitations=2는 달성 불가 조합 |
+
+### 3. 기준 해시 표 + 수정 허용 목록 (2026-10-06 19:38 KST 측정)
+수정 허용: 아래 표에서 `수정` 권한으로 표시된 파일만 고친다. `읽기`는 판정·분류 참조용이며 수정 금지.
+| 경로 | sha12 | 권한 |
+|---|---|---|
+| main/java/com/example/lms/service/ChatWorkflow.java | 189251AC8EEF | 수정 (lease 주의) |
+| main/java/com/example/lms/service/FactVerifierService.java | 6E5FBF51F5CD | 수정 |
+| main/java/com/example/lms/service/rag/SelfAskSearchBudget.java | 98ED3A487256 | 수정 |
+| main/java/com/example/lms/service/web/BraveSearchService.java | 68093E77510F | 수정 |
+| main/java/com/example/lms/service/NaverSearchService.java | C73425FC2A53 | 수정 |
+| main/java/com/example/lms/service/rag/SelfAskWebSearchRetriever.java | 4AA45D1144EC | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java | B227DCB74DC7 | 수정 |
+| main/java/com/example/lms/orchestration/control/RagControlFinding.java | 95EDC2056AE8 | 읽기(필요 시 enum 최소 추가) |
+| main/java/com/example/lms/service/verification/ClaimVerifierService.java | 0CB88861F9AD | 읽기 |
+| main/java/com/example/lms/service/verification/FactStatusClassifier.java | 97DC56C28E0F | 읽기 |
+| main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java | 3904F62122C6 | 수정(plan officialOnly/minCitations 결정부) |
+| main/java/com/example/lms/debug/ChatSessionTraceRecorder.java | 2F0E77C689CF | 수정 |
+| src/test/java/com/example/lms/service/ChatWorkflowFinalVerificationReleaseGateTest.java | 35E6F36D6F0C | 수정 (lease 주의) |
+| src/test/java/com/example/lms/service/FactVerifierDetailedOutcomeTest.java | D1D7F9954048 | 수정 |
+| src/test/java/com/example/lms/orchestration/control/RagControlRuntimeAdapterTest.java | CE548FA2766F | 수정 |
+| docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md | - | 읽기(정책 근거, 수정 금지) |
+
+### 4. 공통 규칙
+- 최소 diff. 무관 코드·테스트·문서 건드리지 않는다. 비밀값 출력/커밋 금지(env 이름만).
+- 파일 쓰기 전 `python -B scripts/agent_scope_lease.py check --path <대상>` → claim → done. live lease 충돌 파일은 BLOCKED_LEASE로 보고하고 우회하지 않는다. `chat-browser10-followup` 리스는 heartbeatState=absent의 stale 후보 — reclaim은 `demo1-lease-conflict-autoflow` 절차(lease_autoflow/agent_scope_lease)로만.
+- journal: `python -B scripts/work_journal.py open …` → 변경마다 `scripts/codex_work_checkpoint.py` → 검증 후 note/close.
+- 컴파일·테스트는 `AWX_SPLIT_BUILD_OUTPUTS=1` + `AWX_BUILD_HOST_ID=<host>` 환경에서 WP별 지정 focused 명령만. clean 금지.
+- Java 변경 후 라이브 반영은 DevWatch/ForceRestart + Verify-RAG 엔트리 1회(DEMO1-SPRING-VIBE-RELOAD). 라이브 재현은 로컬 `http://127.0.0.1:18180/chat`에 `[devin-test]` 프리픽스 합성 문장 ≤3회 — 공개 kro.kr·유료 API 호출 금지.
+
+### 5. 항목 (WP ≤ 4)
+
+### WP1 (핵심): failSoft 하 judge-의존 reject의 known 승격 차단 + verdict 판독성 복구 — `FactVerifierService.java` / `RagControlRuntimeAdapter.java`
+- 증거: `FactVerifierService.java:591-606` reject()의 `:595-596` 조건이 failSoft 상태에서 `rejected`/`insufficient`를 outcomeKnown=true로 승격. `aux.llm.down`·`judge_call_failed`가 있는 run2에서도 최종은 verification_rejected(known) — judge-의존 경로가 승격됐는지 판독 불가 상태.
+- 내용 A(승격 차단): `markFailSoft()` 또는 `judgeUnavailable=true`가 세팅된 뒤 호출되는 reject에서, verdict가 judge-의존(meta_check :314, accept() 경유 claim 판정 :380/:422 등 LLM 호출 결과 기반)이면 outcomeKnown=true로 승격하지 못하게 한다. deterministic 분기(entity_validation :228, [검색 결과 없음] :252 등 코드가 LLM 없이 계산하는 판정)는 기존대로 known 유지. 구현은 11:40 지시서 권장안과 동일: (a)`rejectDeterministic(String)` 분리 또는 (b)`reject(String, boolean judgeDependent)` 인자 — 더 작은 diff를 택하고 호출부별 judge-의존/deterministic 분류 근거를 보고서에 남긴다. `sourceAnalyzer.analyze`(:259)가 LLM 기반인지 여부도 분류에 포함.
+- 내용 B(판독성): `factVerifier.terminalStage`/`terminalReason`(:166-167)을 VERIFICATION finding evidence(`RagControlRuntimeAdapter.java:340-349` 분기의 evidence map)와 durable session record에 노출 — 다음 재현에서 reject 발화 단계가 즉시 판독되어야 한다. `verification_rejected` finding의 failureClass=CITATION_MISS 고정 라벨(:343)은 실제 verdict 성격과 무관 — evidence map에 `terminalStage`/`terminalReason`/`judgeUnavailable` 키를 실어 라벨 오독을 보정한다(failureClass enum 자체를 바꾸는 것보다 작은 diff).
+- RED: `FactVerifierDetailedOutcomeTest` 신규 케이스 — (a) markFailSoft 후 judge-의존 reject("rejected") → outcomeKnown=false·status=unknown; (b) deterministic reject(:228 계열 entity mismatch) → outcomeKnown=true 유지; (c) judge 정상 rejected → known 유지(회귀 없음). `RagControlRuntimeAdapterTest`에 VERIFICATION finding evidence의 terminalStage/terminalReason 노출 주장 추가.
+- GREEN: §6 명령 A1 exit=0 + `python -B scripts/probe_verifier_failsoft_release.py` exit 0 유지.
+
+### WP2 (조건부 — ASK U-2 승인 시): rejected + 승격 근거 존재 → UNVERIFIED 부분 릴리스
+- 증거: run2에서 promoted citable=1·초안 존재·scopeBound 아님에도 `verification_rejected`가 본문 전량을 generic 안내로 대체. 11:40 지시서 WP3는 insufficient만 대상이었고 U-2 미승인으로 미구현 — 이번 run은 rejected라 어차피 그 범위 밖이었음.
+- 내용: `ChatWorkflow.java:8410-` rejected 분기에서 `promotionConfirmed && citableEvidence≥1 && !scopeBound && !evidenceRequired`이면 전량 보류 대신 `UNVERIFIED` 부분 릴리스 — supported excerpt(`EvidenceAnswerComposer` 경로) 또는 초안 본문 + 미검증 표기 + `knowledgeWriteAllowed=false` + 신규 reasonCode(예 `verification_rejected_partial_release`). deterministic 안전 차단(entity_mismatch :228 반환 "정보 없음" 같은 실제 부정 내용 판정·scopeBound·명시 evidence_required·contradiction)은 전량 보류 유지 — 릴리스 대상은 "근거는 있는데 verdict가 미인용/커버리지 부족 계열"뿐.
+- RED(승인 시): `ChatWorkflowFinalVerificationReleaseGateTest`에 rejected+promoted=1+candidate 존재 → releaseAllowed=true·UNVERIFIED·knowledgeWriteAllowed=false 케이스; evidence 0이면 기존 REJECT 유지.
+- GREEN: §6 명령 A1 exit=0. 미승인 시 이 WP는 건너뛰고 보고서에 NOT_RUN_APPROVAL로 표기.
+
+### WP3: provider 슬롯 굶주림 + 실패 라벨 오분류 수정 — `SelfAskSearchBudget.java` / `BraveSearchService.java` / `NaverSearchService.java` (+ 필요 시 `SelfAskWebSearchRetriever.java`)
+- 증거: `tryQueryAlias`(:76-86)가 logical 해시로 admit 판정하는데 Naver는 `logicalQuery`·Brave는 `query`를 넘겨 동일 사용자 질의가 서로 다른 해시로 들어감. limit=1(AUTO, expansion 미허용)에서 먼저 admit된 provider가 슬롯을 차지하고 두 번째는 deny. Brave deny는 `requestBudgetExhaustedResult`(:621-630)로 `request_budget_exhausted` 오분류 → provider events `status=EXCEPTION tookMs=0` + stage-boundary `timeout` 계열로도 기록되어 원인 판독을 막음.
+- 내용 A(슬롯 굶주림): 동일 retrieval leg의 provider 호출은 같은 canonical logical id로 admit되게 한다. 택1: (a) `tryQueryAlias` 호출부에서 canonical logical(예: leg의 원본 사용자 질의 또는 plan-issued query id)을 공통 주입 — Naver/Brave가 각각 다른 문자열을 넘기는 현재 구조를 정정; (b) admit 판정을 `requestId+canonicalQueryHash`로 묶어 provider별 정규화 차이를 alias로 흡수. 더 작은 diff를 택하고 선택 근거를 보고서에 기록. `tryReserveHttp`의 httpAttempts=6 상한은 유지.
+- 내용 B(라벨): alias 슬롯 deny를 `request_budget_exhausted`와 구분 — `requestBudgetExhaustedResult` 호출 사유를 인자로 받거나 신규 사유(예 `query_alias_denied`)로 traceBraveFailure·provider events에 기록. stage-boundary/부가 분류에서 tookMs=0 alias deny가 timeout으로 기록되지 않게 분리(관련 분류 위치는 `StageBoundaryBreadcrumbs`/`ChatStreamSignalBuilder.java:1351` 허용 목록 확인).
+- 내용 C(plan 스타브 완화): `plan.officialOnly=true`+`minCitations=2`가 OFFICIAL 풀이 0인 도메인(게임/커뮤니티 지식)에서 달성 불가 조합을 만듦. `UnifiedRagOrchestrator`의 plan 결정부에서 officialOnly 적용 전 OFFICIAL 후보 유무를 확인해 풀이 0이면 community 허용으로 완화하거나, failsoft starved 시 minCitations 요구량을 관측 결과로 낮춰 escalation·verifier 압력을 줄인다. 계획 필드 적용 위치는 `plan.fields.applied`/`plan.retrievalOrder` 결정 지점 기준 최소 diff.
+- RED: `SelfAskSearchBudget` 관련 기존 테스트 클래스(없으면 신규 `SelfAskSearchBudgetTest` 최소 생성 — 생성 허용)에 "동일 leg 서로 다른 정규화 문자열의 provider alias admit" 케이스. `BraveSearchService`/`UnifiedRagOrchestrator` 각각 focused 테스트에 라벨 분리·officialOnly 완화 케이스 추가.
+- GREEN: §6 명령 A2 exit=0.
+
+### WP4: 죽은 Ollama로 나가는 aux/judge 라우팅 정리 + 보류 run 관측성 — 호출부(분석 후 최소 수정) + `ChatSessionTraceRecorder.java`
+- 증거: run2 `llm.ollamaNative.route=true`·`llm.client.failed=true`(reactiveexception, 127.0.0.1) — `aux.keywordSelection.degraded.reason=exception`으로 aux 호출 주체 하나는 확인됨. verifier judge(highModel=`llm.high.*` 로컬 OpenAI-compat)도 동일 죽은 엔드포인트 계열로 추정 — 호출부를 코드로 확정하는 것이 이 WP의 첫 산출. run1은 guard escalation+verification 구간이 ~66s — 죽은 엔드포인트 직렬 타임아웃이 정체 주범.
+- 내용 A(라우팅): `llm.ollamaNative.route` 호출 주체 전수를 코드로 확정(keywordSelection·factVerifier meta/classifier/claims·기타 aux)하고, 로컬 엔드포인트 down 시 aux/judge 계열이 api-routing.yaml의 API-first 순서로 폴백하거나 최소 즉시 degraded 스킵되게 최소 수정. Ollama 재시도는 ≤1 — 이미 정책($demo1-gpu-power-fallback)과 동일. aux 호출이 죽은 엔드포인트에 30s급 타임아웃을 직렬 소비하지 않게 half-open/health 체크를 재사용(기존 ModelRuntimeHealthTracker·localEndpoint.halfOpenPermit 신호 활용, 새 브레이커 발명 금지).
+- 내용 B(관측성): `ChatSessionTraceRecorder`에 `releaseStatus`/`releaseReasonCode`(또는 held 여부) 필드 추가 — 본문 보류 run이 `outcome=completed, errorClass=none`으로만 남는 공백 해소. 스키마 변경은 `awx.chat-session-trace.v1` 필드 추가(하위호환, 마이너).
+- 내용 C(잔재 정리): `runtime_lineage_missing` HOLD finding을 본문 stop 대상에서 진단(DEGRADE)으로 격하(10-05 지시서 WP3 잔재, `RagControlRuntimeAdapter.java:287-289` 결정부 — 이번 run은 release gate가 주 원인이라 영향은 이차). stale-test 5곳(`ChatWorkflowFinalVerificationReleaseGateTest.java:305`, `FinalAnswerPostProcessorTest.java:117,140,143`)을 신 계약으로 갱신 — 해당 파일 live lease 시 이 항목만 BLOCKED_LEASE.
+- RED: aux 호출부 확정 목록(파일:라인) + `ChatSessionTraceRecorderTest`에 held run의 releaseStatus/releaseReasonCode 기록 주장 + lineage-missing 단독 finding이 본문 stop을 유발하지 않음 주장(`RagControlRuntimeAdapterTest`).
+- GREEN: §6 명령 A3 exit=0 + 세션 레코드에 releaseStatus/releaseReasonCode가 실제 기록되는 focused 테스트.
+
+### 6. 검증 명령 블록 (각 명령 exit 기록)
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+$env:AWX_SPLIT_BUILD_OUTPUTS='1'; $env:AWX_BUILD_HOST_ID='codex-starve-reject'
+A1: .\gradlew.bat :test --tests com.example.lms.service.FactVerifierDetailedOutcomeTest --tests com.example.lms.service.ChatWorkflowFinalVerificationReleaseGateTest --tests com.example.lms.orchestration.control.RagControlRuntimeAdapterTest --no-daemon --console=plain; "exit=$LASTEXITCODE"
+A2: .\gradlew.bat :test --tests *SelfAskSearchBudget* --tests *BraveSearchService* --tests *UnifiedRagOrchestrator* --no-daemon --console=plain; "exit=$LASTEXITCODE" (존재하는 클래스만)
+A3: .\gradlew.bat :test --tests *ChatSessionTraceRecorder* --no-daemon --console=plain; "exit=$LASTEXITCODE"
+A4: python -B scripts/probe_verifier_failsoft_release.py; "exit=$LASTEXITCODE" (0 유지)
+A5 (가능 시): 로컬 18180 `[devin-test]` 합성 후속 질의 1회 — 본문/부분본문 또는 사유별 문구 관측 + 세션 레코드 releaseReasonCode 확인. judge/라이브 재현 불가 시 NOT_RUN+사유.
+
+### 7. HOLD 조건
+- 대상 파일에 타인 live lease → 무한정 HOLD 대신 대기 명령: `python -B scripts/codex_auto_unblock.py lease-wait --paths <files> --max-min auto --enqueue --task <task>`. 예산 초과 시 해당 파일만 BLOCKED_LEASE 보고, 나머지 진행. `chat-browser10-followup` 리스는 stale 후보 — reclaim은 autoflow 절차로만, 수동 강제 해제 금지.
+- WP1에서 judge-의존/deterministic 분류가 코드상 판별 불가한 호출부 발견 → 그 호출부만 HOLD+질의(전체 중단 아님).
+- 명시 must-cite/evidence-required 요청, scopeBound, 안전 차단의 HOLD/REJECT 유지 — 지시 범위는 "판정 인프라 불능 승격"·"근거 존재 시 부분 릴리스"·"검색 굶주림"뿐.
+- 라이브 재현에서 judge 실패 유도 불가 → 단위테스트 증거로 대체, A5 NOT_RUN 표기.
+
+### 8. ASK_ONCE (기본값 포함 — 무응답이면 권장값으로 진행)
+- U-1 WP1 강도: (a)권장 — judge-의존 reject만 unknown 격리, deterministic reject는 known 유지 (b) failSoft 후 모든 reject → unknown(보수적이나 정당한 deterministic 판정도 덮을 수 있음).
+- U-2 WP2 승인: (a)권장 승인 — promoted 근거≥1+초안 존재 시 rejected도 UNVERIFIED 부분 릴리스 (b) 거절 — 보류 유지, WP2 전체 NOT_RUN_APPROVAL.
+- U-3 WP3(a) 구현 택일: (a)권장 — canonical logical id 공통 주입 (b) requestId+canonicalQueryHash alias 묶음 — 실행자가 더 작은 diff로 결정·보고.
+- U-4 WP4(a) aux 라우팅: (a)권장 — 죽은 로컬 엔드포인트 감지 시 API 폴백 또는 즉시 degraded 스킵 (b) 보고서 기록만(수정 보류).
+
+### 9. 절대 금지
+- `chat.js`·근거 카드 라벨을 사실과 다르게 바꾸는 표면 패치 금지(미인용을 인용으로 위장 등).
+- `runtime_lineage_missing`·lineage 계측 자체를 끄거나 삭제해 보류를 우회 금지 — 격하는 finding action 변경이지 계측 제거가 아님.
+- `verification_unknown_release`·unknown-release 계약 회귀 금지. insufficient/rejected/inconsistent의 deterministic known-판정 의미 파괴 금지(격리 대상은 judge-의존 승격과 근거 존재 시 부분 릴리스뿐).
+- SelfAskSearchBudget의 admit 상한 자체를 무제한으로 풀거나 expansionAllowed를 무조건 true로 바꾸는 예산 우회 금지.
+- 서버·cloudflared·배포 설정 변경, 공개 사이트 전송, 유료/외부 API 호출, git push/pull/fetch/merge/rebase/reset/clean·remote 추가·commit -a·add -A·add .·--no-verify(이 작업은 로컬 커밋도 하지 않음), 비밀값 출력·열람·로그 노출, 전체 :test 스위프·clean·전체 빌드, FactVerifierService deterministic 판정의 근거 없는 재작성.
+
+### 10. Acceptance (미실행은 NOT_RUN+사유, PASS 수에 넣지 않음)
+- A1: §6 명령의 focused 테스트 exit=0 — 신규 케이스 전부 PASS(failSoft 후 judge-의존 reject → unknown·verification_unknown_release; deterministic reject → known 유지; finding evidence에 terminalStage/terminalReason 노출).
+- A2: provider alias admit 케이스 + `query_alias_denied`(또는 채택 라벨) 분리 + officialOnly 완화 케이스 PASS.
+- A3: 세션 레코드 releaseStatus/releaseReasonCode 기록 + lineage-missing 격하 + stale-test 5곳 갱신 PASS(해당 파일 lease 충돌 시 BLOCKED_LEASE로 제외 표기).
+- A4: `probe_verifier_failsoft_release.py` exit 0 유지(회귀 없음).
+- A5: 로컬 18180 합성 후속 질의 — 전량 보류 대신 본문/부분본문 또는 사유별 문구 관측. 불가 시 NOT_RUN+사유.
+- 종료 상태 하나: DONE_LIVE | DONE_OFFLINE | ALREADY_COVERED | BLOCKED_LEASE | NOT_RUN_ENV | APPROVAL_REQUIRED
+
+### 11. 보고 형식
+- 첫 줄 `외부 API: 사용 0` → WP별 결과(수정 파일+sha12 before/after) → A1~A5 각 명령+exit → U-1~U-4 채택값 → WP1 호출부별 judge-의존/deterministic 분류표 → WP4 aux 호출 주체 확정 목록 → 잔여 관측(NOT_RUN·BLOCKED_LEASE·미완료) → `한 줄:` 요약.
+
+근거 SSOT: docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md · logs/debug-events.ndjson(trace hash:7d9f2fe3df20, sid hash:fe5bf2759b14) · var/debug/chat-session-traces/20261006/s-6ea2fdb3399f.json · F:\CAM\2026-10-06 19-14-31.mkv · agent-prompts/codex-verifier-rejected-hold-20261006/BRIEF.txt(선행)
+[ANTI-STOP] 여기까지 읽었으면 §5 WP1 RED부터 바로 시작한다. 계획만 쓰고 멈추지 않는다.

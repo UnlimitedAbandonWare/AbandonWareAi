@@ -1,0 +1,67 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+[ANTI-STOP] 이 지시서는 읽고 멈추는 것이 아니라, 지시서 린터의 사전 경로·명령 정적 검증 기능과 Windows 콘솔 유니코드 출력 내성을 실제로 구현하고 테스트하는 실행 지시서입니다.
+Set-Location C:\AbandonWare\demo-1\demo-1\src
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+# DEVIN — 지시서 인용 경로·명령 사전검증 린트 강화 및 CLI 콘솔 유니코드 인코딩 내성 개선 지시서 (20261006)
+첫 명령: Set-Location C:\AbandonWare\demo-1\demo-1\src; $env:PYTHONIOENCODING='utf-8'
+환경: Windows PowerShell 5.1, python = C:\Users\nninn\AppData\Local\hermes\hermes-agent\venv\Scripts\python.exe, git = F:\git\cmd\git.exe
+역할: 도구·스크립트·린터·단위테스트만 (제품 Java/JS 및 운영 코드 변경 0)
+
+## 0. 한 줄 목표
+지시서 내 존재하지 않는 스크립트 경로 인용과 파이썬 CLI 서브커맨드/인자 누락을 devin_brief_lint에서 사전에 잡아내고, Windows CP949 콘솔에서 CLI --help 실행 시 발생하는 UnicodeEncodeError를 원천 차단한다.
+
+## 1. 사실 (2026-10-06 23:05 KST 관찰 확인)
+- [사실 1] 경로 드리프트 에러: 최근 세션(devin-skill-probe)에서 지시서가 존재하지 않는 `scripts/demo1_agent_machine_context.py`를 인용하여 Devin이 파일 부재를 확인하고 SSOT인 `scripts/agent_machine_context.py`로 수동 우회해야 했음.
+- [사실 2] 무효한 인자 및 명령 드리프트: 최근 세션(aloud-stay)에서 지시서가 `test_model_policy.py --fixture-only --timeout 30`을 요구했으나 실제 test_model_policy.py에는 해당 플래그가 없어 exit 2 오류가 발생하고 대안 검증을 찾아야 했음. 또한 `demo1_vibe_skill_router.py`에 필수 액션인 `resolve` 없이 질의만 인용되어 exit 2가 발생한 전례가 있음.
+- [사실 3] 콘솔 CP949 인코딩 크래시: Windows 기본 코드페이지(CP949) 환경에서 `python -B scripts/test_model_policy.py --help` 실행 시 argparse 설명문 내 em-dash(`—`, U+2014)로 인해 `UnicodeEncodeError: 'cp949' codec can't encode character '\u2014'` 크래시가 발생함 ($env:PYTHONIOENCODING='utf-8' 또는 stdout 인코딩 안전화 필요).
+- [사실 4] 린터 공백: 현재 `scripts/devin_brief_lint.py`는 [ANTI-STOP], 단계 수, allow/deny 리스트 등 형식은 검사하지만, 본문에 인용된 `scripts/*.py` 경로의 실재 여부와 필수 환경 선언을 검사하지 않음.
+
+## 2. 공통 규칙
+- COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+- 수정 허용: scripts/devin_brief_lint.py, scripts/test_devin_brief_lint.py, scripts/test_model_policy.py.
+- 변경 금지: main/java/**, main/resources/**, src/test/java/**, chat.js, .secrets, remote 추가.
+- 비용 및 호출: 외부 유료 API 실호출 0회, 서버 재기동 0회.
+
+## 3. 작업 항목 (WP1~WP4)
+WP1 [린터] devin_brief_lint.py에 인용 경로 및 환경 검사 추가:
+인용 스크립트 경로 실재성 검사 (`CITED_PATH_MISSING` WARN): 지시서 본문에서 `scripts/[\w.-]+\.py` 패턴으로 언급된 파일 중 현재 저장소에 존재하지 않는 파일이 있으면 경고하고, 유사한 이름이 있으면 suggest로 제안 (예: `scripts/demo1_agent_machine_context.py` 언급 시 `scripts/agent_machine_context.py` 제안).
+콘솔 UTF-8 환경 선언 권고 (`MISSING_UTF8_ENV` WARN): 첫 명령 또는 환경 선언에 `$env:PYTHONIOENCODING='utf-8'` 또는 `PYTHONIOENCODING` 설정이 누락되어 있으면 경고 및 추가 제안.
+
+WP2 [내성] test_model_policy.py 콘솔 인코딩 크래시 방지:
+`scripts/test_model_policy.py`의 argparse description에서 cp949 인코딩 불가 문자인 em-dash(`—`)를 일반 하이픈(`-`)으로 변경하거나, 스크립트 시작 부분에서 `sys.stdout.reconfigure(encoding='utf-8', errors='replace')`를 적용하여 CP949 환경에서도 `--help`가 절대 에러를 내지 않도록 방어.
+
+WP3 [테스트] test_devin_brief_lint.py 및 test_model_policy.py 검증:
+`scripts/test_devin_brief_lint.py`에 새 경고(존재하지 않는 스크립트 경로 탐지, UTF-8 환경 권고)에 대한 단위 테스트 추가.
+`$env:PYTHONIOENCODING=''` 상태(CP949 기본 환경 모의)에서도 `python -B scripts/test_model_policy.py --help`가 exit 0으로 정상 출력되는지 검증.
+
+WP4 [정리] 회귀 검증 및 무결성 종료:
+`python -B scripts/test_devin_brief_lint.py` (전체 테스트 PASS 확인).
+작업 저널 및 own lease 0 확인, 최종 보고서 작성: data/agent-handoff/devin-brief-lint-preflight/REPORT.md.
+
+## 4. HOLD
+- 다른 에이전트 소유 active lease 발견 시 해당 파일 수정 금지 및 HOLD. 충돌 발생 시 force-release 금지하고 `python -B scripts/codex_auto_unblock.py lease-wait --paths <files> --max-min auto --enqueue --task devin-brief-lint-preflight` 대기 명령으로 처리.
+- 단위 테스트 실패 2회 이상 연속 발생 시 원인 분석 후 해당 단계만 HOLD.
+
+## 5. ASK_ONCE
+- 없음 (순수 도구/스크립트 내성 강화 및 린트 경고 추가 작업).
+
+## 6. 절대 금지
+push · add -A · commit -a · 비밀값 출력 · remote 추가 · PROTO_OPEN 약화 · chat.js 수정 · 제품 Java/JS 추가 수정 · 다른 세션의 lease/journal 침범.
+
+## 7. Acceptance (미실행은 NOT_RUN)
+- A1 WP1: devin_brief_lint.py에 존재하지 않는 스크립트 경로 검사 및 UTF-8 환경 권고가 추가되고, 린트 결과에 적절한 warnings/suggestions가 출력된다.
+- A2 WP2: CP949 환경에서 `test_model_policy.py --help` 실행 시 UnicodeEncodeError 없이 exit 0으로 사용법이 출력된다.
+- A3 WP3: `python -B scripts/test_devin_brief_lint.py` 실행 시 신규 테스트 포함 전원 PASS (exit 0).
+- A4 WP4: 종료 시 own lease 0개, own journal 0개, 외부 API 0회.
+- A5 공통: 제품 Java/JS diff 0건, 비밀값 노출 0건.
+
+## 8. 보고 형식
+외부 API: 0회
+상태: DONE | PARTIAL | HOLD
+A1~A5: PASS/FAIL/NOT_RUN + 근거 (명령, exit, 출력 요약)
+수정된 파일: scripts/devin_brief_lint.py, scripts/test_devin_brief_lint.py, scripts/test_model_policy.py
+종료 시점 own lease 잔존 수: 0
+종료 시점 own journal 잔존 수: 0
+
+[ANTI-STOP] 모든 작업과 단위 테스트 확인이 완료되기 전까지 세션을 임의로 중단하지 마세요.

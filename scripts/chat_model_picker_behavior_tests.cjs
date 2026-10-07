@@ -195,8 +195,9 @@ function choiceButtons(list) {
   return list.querySelectorAll("button.model-choice-select").filter(button => button.getAttribute("data-model-more") !== "1");
 }
 
-const firstSessionModel = fs.readFileSync(require.resolve("../main/resources/templates/chat-ui.html"), "utf8")
-  .match(/data-first-session-model="([^"]+)"/)?.[1]?.split(",")[0].trim() || "first-session-candidate";
+const firstSessionCandidates = fs.readFileSync(require.resolve("../main/resources/templates/chat-ui.html"), "utf8")
+  .match(/data-first-session-model="([^"]+)"/)?.[1] || "first-session-candidate";
+const firstSessionModel = firstSessionCandidates.split(",")[0].trim();
 const chatSource = fs.readFileSync(require.resolve("../main/resources/static/js/chat.js"), "utf8");
 
 function firstSessionHarness(settings = { source: "factory" }) {
@@ -237,6 +238,25 @@ test("first-session model applies once when only factory init settings exist", a
   assert.equal(ui.context.localControlOverrideActive, false);
   await picker.refresh(false);
   assert.equal(ui.select.value, firstSessionModel);
+});
+
+test("first-session defaults to exact registered Luna and preserves fallback when unavailable", async () => {
+  for (const lunaState of ["selectable", "disabled", "absent"]) {
+    const ui = firstSessionHarness();
+    ui.select.dataset.firstSessionModel = firstSessionCandidates;
+    const rows = [row(1, { id: "chatgpt-oauth:gpt-5.6-sol" }), row(2),
+      row(3, { defaultChoice: true }), row(4, { id: "gpt-5.6-luna" })];
+    if (lunaState !== "absent") rows.push(row(5, {
+      id: "chatgpt-oauth:gpt-5.6-luna", selectable: lunaState === "selectable"
+    }));
+    const picker = createPicker(ui.doc, { fetch: async () => jsonResponse(rows),
+      storage: ui.storage, sessionStorage: ui.session, autostart: false });
+    await picker.refresh(false);
+    assert.equal(ui.select.value, lunaState === "selectable"
+      ? "chatgpt-oauth:gpt-5.6-luna" : "chatgpt-oauth:gpt-5.6-sol", lunaState);
+    assert.equal(ui.mode.value, "preferred");
+    assert.equal(JSON.parse(ui.session.getItem("chat.controlSettings")).source, "catalog-default");
+  }
 });
 
 test("first-session list picks the first selectable candidate", async () => {
@@ -290,9 +310,12 @@ test("first-session list survives factory preferences arriving before catalog", 
   Object.defineProperty(ui.select, "options", { get: () => walk(ui.select).filter(node => node.tag === "option") });
   ui.mode.options = ["auto", "strict", "preferred"].map(value => ({ value }));
   const search = ui.doc.createElement("select"); search.setAttribute("id", "searchModeSelect"); search.options = [{ value: "OFF" }];
+  const execution = ui.doc.createElement("select"); execution.setAttribute("id", "executionModeSelect");
+  execution.options = [{ value: "AUTO" }];
   const rag = ui.doc.createElement("input"); rag.setAttribute("id", "useRagToggle");
+  rag.type = "checkbox"; rag.checked = false;
   rag.addEventListener("change", ui.context.handleControlChange);
-  ui.doc.append(search, rag);
+  ui.doc.append(search, execution, rag);
   const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([
     row(1, { id: "chatgpt-oauth:gpt-5.5" }), row(2), row(3, { id: "chatgpt-oauth:gpt-5.6-sol" })
   ]), storage: ui.storage, sessionStorage: ui.session, autostart: false });
@@ -392,6 +415,34 @@ test("new chat keeps explicit selection through server preference reapplication"
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(ui.select.value, "id-2");
   assert.equal(ui.mode.value, "strict");
+});
+
+test("stored user search OFF and RAG false survive late server defaults", async () => {
+  const stored = { model: "id-2", modelSelectionMode: "strict", executionMode: "AUTO",
+    searchMode: "OFF", useRag: false, source: "user" };
+  const ui = firstSessionHarness(stored);
+  Object.defineProperty(ui.select, "options", { get: () => walk(ui.select).filter(node => node.tag === "option") });
+  ui.mode.options = ["auto", "strict", "preferred"].map(value => ({ value }));
+  ui.select.value = stored.model;
+  const search = ui.doc.createElement("select"); search.setAttribute("id", "searchModeSelect");
+  search.options = ["OFF", "AUTO"].map(value => ({ value })); search.value = "OFF";
+  const execution = ui.doc.createElement("select"); execution.setAttribute("id", "executionModeSelect");
+  execution.options = [{ value: "AUTO" }]; execution.value = "AUTO";
+  const rag = ui.doc.createElement("input"); rag.setAttribute("id", "useRagToggle"); rag.type = "checkbox"; rag.checked = false;
+  ui.doc.append(search, execution, rag);
+  const picker = createPicker(ui.doc, { fetch: async () => jsonResponse([row(1), row(2)]),
+    storage: ui.storage, sessionStorage: ui.session, autostart: false });
+  await picker.refresh(false);
+  installBridge({ document: ui.doc, sessionStorage: ui.session, localStorage: ui.storage,
+    Event, CustomEvent, addEventListener() {}, fetch: async () => ({ ok: true, redirected: false,
+      json: async () => ({ revision: 0, hash: null, defaultsVersion: "test", overrides: {},
+        effective: { model: "id-1", modelSelectionMode: "preferred", executionMode: "AUTO", searchMode: "AUTO", useRag: true },
+        factoryDefaults: {}, sources: {} }) }) });
+  ui.doc.dispatchEvent({ type: "chat:model-catalog", detail: { ready: true } });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(ui.select.value, "id-2"); assert.equal(ui.mode.value, "strict");
+  assert.equal(search.value, "OFF"); assert.equal(rag.checked, false);
+  assert.equal(ui.select.dataset.awxSettingsReady, "ready");
 });
 
 test("server cloud default applies once to an untouched fresh chat", async () => {

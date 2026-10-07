@@ -16,6 +16,19 @@ and audits Downloads for files the old deliver machinery would have piled up.
                                             user actually clicked
                                OTHER         any other new file
                              Prints one line per file + an AUDIT summary.
+  --sub-report <file> [--json] SUB_REPORT_V1 — 하위 에이전트 1회 완결 보고의
+                             필수 6칸 검사(F2·F4, 2026-10-06). 칸 누락 시 칸
+                             이름별 FAIL. exit 0 PASS / 2 칸 누락 / 3 IO 오류.
+                             칸: field1_overall_status(상태 DONE|PARTIAL +
+                             산출물 sha12) field2_item_status(항목별
+                             PASS/PARTIAL 표) field3_input_source(입력 원본
+                             파일명·sha12·INPUT_FALLBACK 여부)
+                             field4_write_ledger(단계 support/brief × 위치
+                             repo/Downloads/scratch 쓰기 장부)
+                             field5_own_leases(own lease 잔존 수)
+                             field6_not_run(NOT_RUN 목록). 계약 상세:
+                             .agents/skills/demo1-dot-control-tower/
+                             references/sub-report-contract.md
 
 Stdlib only, no network, exits are stable for scripting. Values printed are
 truncated (libfile first 12 chars); no secrets ever emitted.
@@ -37,6 +50,27 @@ EXIT_OK = 0
 EXIT_MISSING = 2
 EXIT_USAGE = 3
 EXIT_HOOK_FOUND = 4
+
+# SUB_REPORT_V1 (W4, 2026-10-06): 각 칸은 모든 패턴이 본문에 있어야 충족.
+SUB_REPORT_FIELDS = (
+    ("field1_overall_status",
+     (r"(?:상태|overall|status)\s*[:：]\s*(?:DONE|PARTIAL|HOLD)",
+      r"sha12\s*[:=]?\s*[0-9a-fA-F]{6,}")),
+    ("field2_item_status",
+     (r"\b(?:W|WP|A|DV)\d+\s*[:：]\s*(?:PASS|PARTIAL|FAIL|NOT_RUN|DONE)\b",)),
+    ("field3_input_source",
+     (r"(?:입력|input)[^\n]{0,40}(?:원본|source|파일|file)",
+      r"sha12\s*[:=]?\s*[0-9a-fA-F]{6,}",
+      r"INPUT_FALLBACK")),
+    ("field4_write_ledger",
+     (r"(?:쓰기|write)[^\n]{0,12}(?:장부|ledger)",
+      r"support", r"brief",
+      r"repo|저장소", r"Downloads", r"scratch")),
+    ("field5_own_leases",
+     (r"leases?[^\n]{0,12}(?:잔존|remaining|left)[^\n]{0,10}\d|"
+      r"(?:own|자기|남은)[^\n]{0,12}leases?[^\n]{0,10}\d",)),
+    ("field6_not_run", (r"NOT_RUN",)),
+)
 
 
 def deliverable_name(name: str) -> bool:
@@ -112,6 +146,31 @@ def cmd_audit(downloads: Path, since_minutes: int) -> int:
     return EXIT_HOOK_FOUND if suspects else EXIT_OK
 
 
+def cmd_sub_report(path_str: str, as_json: bool) -> int:
+    try:
+        text = Path(path_str).read_text(encoding="utf-8-sig", errors="replace")
+    except OSError as exc:
+        print(f"SUB_REPORT_ERROR {type(exc).__name__}")
+        return EXIT_USAGE
+    results = {}
+    missing = []
+    for name, pats in SUB_REPORT_FIELDS:
+        ok = all(re.search(p, text, re.IGNORECASE | re.M) for p in pats)
+        results[name] = ok
+        if not ok:
+            missing.append(name)
+    verdict = "PASS" if not missing else "FAIL"
+    if as_json:
+        print(json.dumps({"schema": "sub_report_v1", "verdict": verdict,
+                          "missing": missing, "fields": results},
+                         ensure_ascii=False))
+    else:
+        print(f"SUB_REPORT_V1 {verdict} fields={len(results) - len(missing)}"
+              f"/{len(results)}"
+              + ("" if not missing else " missing=" + ",".join(missing)))
+    return EXIT_OK if not missing else EXIT_MISSING
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -122,7 +181,12 @@ def main(argv=None) -> int:
     ap.add_argument("--since-minutes", type=int, default=60)
     ap.add_argument("--downloads", default=None,
                     help="Downloads dir override (default: AWX_DOWNLOADS_DIR or USERPROFILE)")
+    ap.add_argument("--sub-report", metavar="FILE",
+                    help="하위 에이전트 완결 보고 파일 — SUB_REPORT_V1 6칸 검사")
+    ap.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
+    if args.sub_report:
+        return cmd_sub_report(args.sub_report, args.json)
     if args.identity:
         return cmd_identity(args.identity)
     if args.downloads_audit:

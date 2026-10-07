@@ -68,3 +68,24 @@ test('page disposal preserves the pending keepalive stop while cancelling ordina
     assert.equal(pending.get('stop').options.signal.aborted,false,'Page disposal must not abort provider cancellation');
   } finally {pending.get('stop').resolve();await stopping.catch(()=>{});await chunk;}
 });
+
+
+test('pagehide and bfcache restore never restart capture before an explicit start',async()=>{
+  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+  const source=fs.readFileSync(path.resolve(__dirname,'../../../main/resources/static/assets/display/app.js'),'utf8');
+  const begin=source.indexOf("  window.addEventListener('online',");
+  const end=source.indexOf("  $('caption-card').focus();client.start();",begin);
+  assert.ok(begin>=0&&end>begin,'Use the actual app lifecycle listeners');
+  const handlers=new Map(),counts={stop:0,start:0,dispose:0,connectionStart:0};
+  let active=true;
+  const voice={isActive:()=>active,stop(){counts.stop++;active=false;return Promise.resolve();},start(){counts.start++;active=true;return Promise.resolve();},reconnect(){return Promise.resolve();}};
+  const client={dispose(){counts.dispose++;},start(){counts.connectionStart++;}};
+  vm.runInNewContext(source.slice(begin,end),{window:{addEventListener:(name,fn)=>handlers.set(name,fn)},voice,client,clearTimeout(){},codeTimer:null,lensRestoreTimer:null});
+  handlers.get('pagehide')();await flush();
+  assert.equal(counts.stop,1);assert.equal(counts.dispose,1);assert.equal(active,false);
+  handlers.get('pageshow')({persisted:true});await flush();
+  assert.equal(counts.connectionStart,1,'The connection may be restored');
+  assert.equal(counts.start,0,'Page exit must require a new explicit microphone start');
+  assert.equal(active,false);
+  await voice.start();assert.equal(counts.start,1);assert.equal(active,true);
+});

@@ -124,6 +124,19 @@ c. **하위 에이전트 연동** — 공식 기능 우선(Codex 내장 서브�
 - 사용자가 파일 카드/지시서 파일을 받아 Downloads에 두면 그것으로 완료다
   (`DEMO1-DOT-FILE-CARD`와 같은 계약 — 완료 기준은 Downloads sha12 MATCH).
 
+## 5-B. 하위 에이전트 완결 보고와 일회용 스킬 수명 (2026-10-06)
+
+- 하위 에이전트 보고는 `SUB_REPORT_V1` 6칸을 갖춘다 — 계약·검사기:
+  `.agents/skills/demo1-dot-control-tower/references/sub-report-contract.md`,
+  `python -B scripts/dot_card_check.py --sub-report <파일>`. 칸 누락 보고는
+  dot이 되묻지 않고 검사 결과로 되돌려 보낸다.
+- SKIP 근거 조회는 `python -B scripts/brief_save.py cover --topic <주제>
+  --terms "t1|t2"` — Downloads의 PASTE_* 파일:줄 증거를 낸다.
+- 공통 규칙: 새 일회용 assist 스킬(이름이 `-YYYYMMDD`로 끝나는 스킬·
+  `*_assist.py`)은 frontmatter에 `retire_after: <날짜+3일>`을 넣는다.
+  `dot_session_hygiene.py`가 누락·만료를 읽기 전용으로 표시한다 — 삭제·
+  이동은 사용자 결정이다.
+
 ## 6. 금지
 
 - 다른 에이전트 창·방·DM에 자동 게시·자동 발송(dot의 ChatGPT 내 발송은

@@ -20,7 +20,9 @@ public final class ChatRequestSettingsMerger {
             Map<String, Object> admin, com.example.lms.config.ChatDefaultsProperties factory, Logger log) {
         Map<String, Object> input = requestValues(ui);
         Map<String, Object> original = ui.getChatSettingsSnapshot() == null ? input : ui.getChatSettingsSnapshot().request();
-        Map<String, Object> values = new java.util.LinkedHashMap<>(factory.values());
+        var snapshot = ui.getChatSettingsSnapshot();
+        Map<String, Object> values = new java.util.LinkedHashMap<>(
+                snapshot == null || snapshot.factory() == null ? factory.values() : snapshot.factory());
         Map<String, String> sources = new java.util.LinkedHashMap<>();
         values.keySet().forEach(key -> sources.put(key, "FACTORY"));
         for (var tier : java.util.List.of(admin, user)) {
@@ -56,6 +58,7 @@ public final class ChatRequestSettingsMerger {
                 .presencePenalty(((Number) valid.get("presencePenalty")).doubleValue())
                 .maxTokens(((Number) valid.get("maxTokens")).intValue())
                 .useRag((Boolean) valid.get("useRag")).useWebSearch((Boolean) valid.get("useWebSearch"))
+                .googleSearchRescueEnabled((Boolean) valid.get("googleSearchRescueEnabled"))
                 .searchMode(com.example.lms.gptsearch.dto.SearchMode.valueOf((String) valid.get("searchMode")))
                 .ragAnswerPolicy((String) valid.get("ragAnswerPolicy"))
                 .customInstructions((String) valid.get("customInstructions"))
@@ -105,6 +108,7 @@ public final class ChatRequestSettingsMerger {
         put(values, "frequencyPenalty", ui.getFrequencyPenalty()); put(values, "presencePenalty", ui.getPresencePenalty());
         put(values, "maxTokens", ui.getMaxTokens()); put(values, "useRag", ui.getUseRag());
         put(values, "useWebSearch", ui.getUseWebSearch());
+        put(values, "googleSearchRescueEnabled", ui.getGoogleSearchRescueEnabled());
         if (ui.isSearchModeExplicit()) values.put("searchMode", ui.getSearchMode().name());
         put(values, "ragAnswerPolicy", ui.getRagAnswerPolicy());
         // An explicit empty instruction clears the session value rather than inheriting it.

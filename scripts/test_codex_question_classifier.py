@@ -519,6 +519,37 @@ class CodexQuestionClassifierTest(unittest.TestCase):
         self.assertEqual(missing["verdict"], "ASK_ONCE")
         self.assertEqual(missing["rule"], "ask-auth-policy")
 
+    # --- add-only: D39 lease/잠금 멈춤·재개 질문 (2026-10-06) ---
+
+    def test_d39_lease_lock_resume_is_auto_not_d37(self):
+        # 실측 오분류 재현: 잠금이 D37 VIBE_OPEN 패턴에 걸리던 문장
+        result = self.assertVerdict(
+            "다른 세션의 잠금 때문에 막혔는데 재개할까요?", "AUTO", "D39")
+        self.assertIn("lease-wait", result["default_answer"])
+        self.assertIn("--max-min auto", result["default_answer"])
+
+    def test_d39_lease_stop_or_wait_is_auto(self):
+        # 'lease' 단어 없이 잠금만 있는 문장은 D32가 못 잡으므로 D39가 잡는다
+        self.assertVerdict(
+            "잠금에 막혀 멈췄는데 이어서 할까요?", "AUTO", "D39")
+
+    def test_d39_force_release_keeps_refusal(self):
+        # 기존 결과 유지: 강제 해제는 거부 (D32 경유 — 답에 금지가 남아야 한다)
+        result = classify("남의 live lease를 강제 해제해도 돼?")
+        self.assertEqual("AUTO", result["verdict"])
+        self.assertIn(result["rule"], ("D32", "D39"))
+        self.assertIn("강제 해제", result["default_answer"])
+        self.assertIn("금지", result["default_answer"])
+
+    def test_d39_skipped_when_ask_category_present(self):
+        # lease+ASK_ONCE 범주 혼합은 기존 ask 경로를 탄다 (D39 무발동)
+        result = classify("데이터셋을 삭제하고 잠금을 해제할까요?")
+        self.assertNotEqual("D39", result["rule"])
+
+    def test_d39_no_lease_keyword_no_match(self):
+        result = classify("이 순서대로 진행할까요?")
+        self.assertNotEqual("D39", result["rule"])
+
     def test_vibe_secret_value_question_not_d37(self):
         enabled = classify("API 키 값을 출력해도 될까요?")
         off = _disabled_vibe_cfg()
@@ -539,6 +570,101 @@ class CodexQuestionClassifierTest(unittest.TestCase):
         self.assertVerdict(
             "로그아웃 차단 여부를 확인하고 데이터셋을 삭제할까요?",
             "ASK_ONCE", "ask-delete-data")
+
+    # --- add-only: D38 Library "입력" materialization 실패 → Downloads 폴백 ---
+
+    def test_f1_library_input_fallback_is_auto_d38(self):
+        result = self.assertVerdict(
+            "Library materialization이 Windows의 os.setxattr 미지원으로 "
+            "막혔습니다. Downloads\\DX_A.txt를 입력 원본으로 써도 될까요?",
+            "AUTO", "D38")
+        self.assertIn("INPUT_FALLBACK_DOWNLOADS", result["default_answer"])
+
+    def test_env_input_question_not_d38(self):
+        result = self.assertVerdict("입력 파일로 .env를 써도 되나요?", "AUTO")
+        self.assertNotEqual("D38", result["rule"])
+
+    def test_secret_file_fallback_not_d38(self):
+        result = classify(
+            "Library 파일 읽기가 실패해서 Downloads의 .env를 입력으로 쓸까요?")
+        self.assertNotEqual("D38", result["rule"])
+
+    def test_library_card_upload_retry_not_d38(self):
+        result = classify("Library 카드 업로드에 실패했는데 재시도할까요?")
+        self.assertNotEqual("D38", result["rule"])
+
+    # --- add-only: D40 자격 증명·로그인 요청은 VIBE_OPEN에서 묻지 않음 ---
+    # 상용구(플러그인 역할 블록) 속 admin 검사 줄과 "live request" 인용은
+    # 사용자 직접 요구가 아니다 (devin-admin-login-no-ask-c08ade43).
+
+    _F1 = ("관리자 로그인 성공과 로그아웃 후 차단을 검증하려면 유효 계정이 "
+           "필요합니다. 새 로컬 검증 창에서 직접 로그인할 수 있나요?")
+
+    def test_d40_f1_direct_login_request_is_auto(self):
+        result = self.assertVerdict(self._F1, "AUTO", "D40")
+        self.assertIn("DEFERRED_SECURITY", result["default_answer"])
+        self.assertIn("묻지 않는다", result["default_answer"])
+        self.assertIn("agent_isolated_auth_verify", result["default_answer"])
+
+    def test_d40_f5_test_account_injection_is_auto(self):
+        self.assertVerdict("테스트 계정 주입 경로를 알려 주세요", "AUTO", "D40")
+
+    def test_d40_f5_protected_env_url_is_auto(self):
+        self.assertVerdict("보호형 테스트 환경 URL만 알려 주세요", "AUTO", "D40")
+
+    def test_d40_plain_login_please_is_auto(self):
+        self.assertVerdict("관리자 로그인해 주세요", "AUTO", "D40")
+
+    def test_d40_live_request_citation_stays_auto(self):
+        result = self.assertVerdict(
+            self._F1 + " — 상용구가 요구한 live request입니다.",
+            "AUTO", "D40")
+        self.assertIn("DEFERRED_SECURITY", result["default_answer"])
+
+    def test_d40_boilerplate_role_block_stays_auto(self):
+        result = self.assertVerdict(
+            "2. Browser: admin 로그인 → 보호된 관리자 URL 접근 / 잘못된 계정 → "
+            "차단 / 로그아웃 후 → 다시 차단. 상용구가 요구한 live request라 "
+            "유효 계정이 필요합니다. 로그인해 주세요", "AUTO", "D40")
+        self.assertIn("묻지 않는다", result["default_answer"])
+
+    def test_d40_admin_scope_ask_inside_boilerplate_is_auto(self):
+        # 상용구 속 "관리자 인증 권한" 어구가 ask-admin-scope를 쳐도 인증 계열
+        # 범주만이므로 VIBE_OPEN(D40)이 이긴다.
+        result = self.assertVerdict(
+            "상용구에 live request로 적힌 관리자 인증 권한 검토를 위해 "
+            "관리자 로그인해 주세요", "AUTO", "D40")
+        self.assertIn("DEFERRED_SECURITY", result["default_answer"])
+
+    def test_d40_disabled_config_not_d40(self):
+        off = _disabled_vibe_cfg()
+        try:
+            result = classify(self._F1, vibe_open_path=off)
+        finally:
+            off.unlink(missing_ok=True)
+        self.assertNotEqual("D40", result["rule"])
+        self.assertNotEqual("D37", result["rule"])
+
+    def test_d40_options_card_excludes_user_login(self):
+        result = classify_with_options(
+            self._F1,
+            ["사용자가 새 로컬 검증 창에서 직접 로그인",
+             "관측한 HTTP status만 기록하고 계속"])
+        self.assertEqual("D40", result["rule"])
+        self.assertEqual("관측한 HTTP status만 기록하고 계속",
+                         result["picked_option"])
+
+    # 음성 — 기존 판정 유지 (D40/D37이 가로채지 않음)
+
+    def test_d40_negative_password_share_unchanged(self):
+        result = classify("비밀번호를 채팅에 보내줄까요?")
+        self.assertNotIn(result["rule"], ("D37", "D40"))
+
+    def test_d40_negative_admin_lock_on_unchanged(self):
+        self.assertVerdict("admin 잠금을 켤까요?", "AUTO", "D37")
+
+    def test_d40_negative_proto_open_off_unchanged(self):
+        self.assertVerdict("PROTO_OPEN을 끌까요?", "AUTO", "D37")
 
 
 if __name__ == "__main__":

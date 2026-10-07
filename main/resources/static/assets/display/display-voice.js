@@ -1,7 +1,7 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory();else root.DisplayVoice=factory();})(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
-  function createCapture({client,env=globalThis,onChange=()=>{},setTimer=setTimeout,clearTimer=clearTimeout,continuous=false,now=()=>performance.now(),deviceId=()=>'',segmentSeconds=()=>0,sttPolicy=()=>null}){
-    const state={phase:'OFF',message:'음성 시작을 누른 동안만 서버로 전송합니다.',frames:0,bytes:0,level:0,reconnects:0,segments:0,events:[],sttPausedReason:null,droppedAudioMs:0,deviceLabel:'',permission:'not_requested',inputRate:null,audioContext:null,errorCode:null,lastFrameAt:null,lastSendAt:null};let current=null,completing=null,wanted=false,run=0,recoveryTimer=null;
+  function createCapture({client,env=globalThis,onChange=()=>{},setTimer=setTimeout,clearTimer=clearTimeout,continuous=false,now=()=>performance.now(),deviceId=()=>'',onDeviceFallback=()=>{},segmentSeconds=()=>0,sttPolicy=()=>null}){
+    const state={phase:'OFF',message:'음성 시작을 누른 동안만 서버로 전송합니다.',frames:0,bytes:0,level:0,reconnects:0,segments:0,events:[],sttPausedReason:null,droppedAudioMs:0,deviceLabel:'',permission:'not_requested',inputRate:null,audioContext:null,errorCode:null,errorStage:null,lastFrameAt:null,lastSendAt:null};let current=null,completing=null,wanted=false,run=0,recoveryTimer=null;
     const standalone=()=>client.state.role==='STANDALONE';
     const supported=()=>!!(env.isSecureContext&&env.navigator?.mediaDevices?.getUserMedia&&env.AudioContext&&env.AudioWorkletNode);
     function report(phase,message){state.phase=phase;state.message=message;onChange(state);}
@@ -61,7 +61,7 @@
     function renewalMs(){const seconds=Number(segmentSeconds());return standalone()&&seconds>=5&&seconds<=60?seconds*1000:Math.max(5000,Math.min(540000,Number(client.state.audioRenewAfterMs||client.state.testStatus?.asr?.renewAfterMs)||540000));}
     async function stop(message='마이크를 중지했습니다. 진행 중인 답변도 취소됩니다.',failed=false,drain=false,rolling=false){
       if(!rolling){wanted=false;run++;clearTimer(recoveryTimer);}
-      const m=current||completing;if(!m||drain&&m.finishing)return;current=null;completing=m;event('MIC_SESSION_STOP',{reason:failed?(state.errorCode||'fatal_capture_error'):'user_stop'});m.closed=!drain;clearTimer(m.timer);clearTimer(m.watch);clearTimer(m.roll);clearTimer(m.permission);clearTimer(m.retry);if(!drain){wakePump(m);discard(m,'capture_stopped');}m.permissionStatus?.removeEventListener?.('change',m.permissionChanged);
+      const m=current||completing;if(!m||drain&&m.finishing)return;current=null;completing=m;event('MIC_SESSION_STOP',{reason:failed?(state.errorCode||'fatal_capture_error'):'user_stop',...(state.errorStage?{stage:state.errorStage}:{})});m.closed=!drain;clearTimer(m.timer);clearTimer(m.watch);clearTimer(m.roll);clearTimer(m.permission);clearTimer(m.retry);if(!drain){wakePump(m);discard(m,'capture_stopped');}m.permissionStatus?.removeEventListener?.('change',m.permissionChanged);
       m.wake?.release().catch(()=>{});
       if(m.media&&!m.tracksStopped){m.tracksStopped=true;m.media.getTracks().forEach(t=>{t.onended=t.onmute=t.onunmute=null;t.stop();});}
       // Page suspension can delay AudioContext.close(). Stop the server without
@@ -137,16 +137,26 @@
     async function start(continuation=false,resuming=false){
       if(current||completing)return false;
       if(!resuming){wanted=true;run++;state.segments=0;state.reconnects=0;}else if(!wanted)return false;
-      if(!supported()||!client.state.audioAvailable||(continuous&&!standalone()&&(client.state.role!=='PHONE'||!client.state.linked))){report('ERROR','휴대폰 연결, 마이크 지원과 전사 서버 설정을 확인해 주세요.');return false;}
-      const m={queue:[],queuedBytes:0,sequence:0,closed:false,busy:false,serverReady:false,starting:true,lastFrame:now()};current=m;state.frames=state.bytes=state.level=0;state.errorCode=null;state.permission='requesting';report('STARTING',resuming?'다음 전사 구간을 시작합니다.':'마이크 권한을 확인하고 있습니다.');
+      if(!supported()||!client.state.audioAvailable||(continuous&&!standalone()&&(client.state.role!=='PHONE'||!client.state.linked))){state.errorCode=null;state.errorStage='precheck';report('ERROR','휴대폰 연결, 마이크 지원과 전사 서버 설정을 확인해 주세요.');return false;}
+      const m={queue:[],queuedBytes:0,sequence:0,closed:false,busy:false,serverReady:false,starting:true,lastFrame:now()};current=m;state.frames=state.bytes=state.level=0;state.errorCode=null;state.errorStage=null;state.permission='requesting';report('STARTING',resuming?'다음 전사 구간을 시작합니다.':'마이크 권한을 확인하고 있습니다.');
       try{
         const selected=sttPolicy();m.sttPolicy=selected?Object.freeze({...selected,allowedFallbacks:Object.freeze([...(selected.allowedFallbacks||[])])}):null;
         // Permission can remain unanswered. Late permission resolution must release tracks.
         m.permission=setTimer(()=>{state.errorCode='microphone_permission_timeout';stop('마이크 권한 응답을 기다리다 중지했습니다. 권한을 확인하고 다시 시작해 주세요.',true);},15000);
         const requested=deviceId();m.requestedDevice=requested;
-        m.media=await env.navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,...(requested?{deviceId:{exact:requested}}:{})},video:false});clearTimer(m.permission);
+        state.errorStage='mic_open';
+        try{m.media=await env.navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,...(requested?{deviceId:{exact:requested}}:{})},video:false});}
+        catch(error){
+          // 저장된 장치가 사라진 경우에만 기본 입력으로 1회 재시도 — 그 외 오류는 원래 경로로.
+          if(!requested||!['NotFoundError','OverconstrainedError'].includes(error?.name))throw error;
+          event('MIC_DEVICE_FALLBACK',{reason:'saved_input_missing'});m.requestedDevice='';m.deviceFallback=true;
+          m.media=await env.navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true},video:false});
+        }
+        clearTimer(m.permission);
+        if(m.deviceFallback){try{onDeviceFallback();}catch{}}
         if(m.closed){m.media.getTracks().forEach(t=>t.stop());return false;}
         state.permission='granted';state.deviceLabel=m.media.getAudioTracks()[0]?.label||'장치명 미제공';
+        state.errorStage='audio_graph';
         m.context=new env.AudioContext();state.audioContext=m.context.state;m.context.onstatechange=()=>{if(m.closed)return;state.audioContext=m.context.state;if(m.context.state==='suspended')event('audio_context_suspended');};state.inputRate=m.context.sampleRate||null;await m.context.resume();await m.context.audioWorklet.addModule('/assets/display/pcm-worklet.js');if(m.closed)return false;
         m.node=new env.AudioWorkletNode(m.context,'conversate-pcm');m.node.onprocessorerror=()=>stop('음성 입력이 중단됐습니다.',true);
         m.node.port.onmessage=e=>{if(e.data?.stopped){m.flushed?.();return;}if(m.closed||!(e.data?.pcm instanceof ArrayBuffer)||!e.data.pcm.byteLength)return;
@@ -158,13 +168,19 @@
           m.queue.push({pcm:e.data.pcm,at:now()});m.queuedBytes+=e.data.pcm.byteLength;trim(m);void pump(m).catch(()=>{});};
         bindTracks(m);void permissionStatus(m);
         m.source=m.context.createMediaStreamSource(m.media);const mute=m.context.createGain();mute.gain.value=0;m.source.connect(m.node).connect(mute).connect(m.context.destination);
+        state.errorStage='server_begin';
         m.serverAttempted=true;try{await client.beginVoice({continuation,sttPolicy:m.sttPolicy});m.serverReady=true;m.paceAt=now();m.paceCredit=0;}
-        catch(error){if(continuous&&apiLimit(error))await pauseApi(m,error);else if(continuous&&recoverable(error))waitForAudio(m,error);else throw error;}
+        catch(error){if(continuous&&apiLimit(error))await pauseApi(m,error);
+          else if(error?.message==='assist_not_found'&&!m.beginRetried&&typeof client.reconnect==='function'){m.beginRetried=true;event('audio_waiting',{reason:'assist_rebind'});report('RECONNECTING','서버 세션을 다시 연결하고 수음을 다시 시작합니다.');
+            try{await client.reconnect({preserveSession:true});if(m.closed)return false;await client.beginVoice({continuation:false,sttPolicy:m.sttPolicy});m.serverReady=true;m.paceAt=now();m.paceCredit=0;}
+            catch(again){if(continuous&&apiLimit(again))await pauseApi(m,again);else if(continuous&&recoverable(again))waitForAudio(m,again);else throw again;}}
+          else if(continuous&&recoverable(error))waitForAudio(m,error);else throw error;}
         if(m.closed)return false;m.starting=false;void pump(m).catch(()=>{});
         state.segments++;
         const seconds=Number(segmentSeconds());
         if(continuous){m.lastFrame=now();m.watch=setTimer(()=>watchdog(m),1000);if(!m.apiPaused&&!m.waiting&&client.state.testStatus?.asr?.provider!=='whisper')m.roll=setTimer(()=>renew(m,true),renewalMs());
           if(env.navigator.wakeLock)env.navigator.wakeLock.request('screen').then(lock=>{if(m.closed)lock.release();else m.wake=lock;}).catch(()=>{});}
+        state.errorStage=null;
         event('MIC_SESSION_START');report(m.waiting?'WAITING':'LISTENING',m.waiting?'전사 연결 대기 · 마이크와 마지막 글자를 유지합니다.':m.apiPaused?apiMessage:continuous?'수음 중 · 전사를 유지하며 필요한 때만 힌트를 표시합니다.':'듣고 있습니다 · 질문이 확정되면 답변합니다.');return true;
       }catch(error){if(error?.name==='NotAllowedError')state.permission='denied';state.errorCode=({NotAllowedError:'microphone_permission_denied',NotFoundError:'microphone_device_missing',NotReadableError:'microphone_device_busy',OverconstrainedError:'microphone_device_changed'})[error?.name]||(/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'microphone_start_failed');if(current===m)await stop(error?.name==='NotAllowedError'?'마이크 권한이 허용되지 않았습니다. 휴대폰 사이트 권한을 확인해 주세요.':'음성 입력을 준비하지 못했습니다. 오류 코드를 확인해 주세요.',true);return false;}
     }

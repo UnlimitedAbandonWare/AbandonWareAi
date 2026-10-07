@@ -17,7 +17,14 @@ public record ChatResult(
         Set<String> evidence,
         List<RagEvidenceMetadata> evidenceMetadata,
         @com.fasterxml.jackson.annotation.JsonIgnore com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,
-        @com.fasterxml.jackson.annotation.JsonIgnore com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue) {
+        @com.fasterxml.jackson.annotation.JsonIgnore com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult googleSearchRescue,
+        @com.fasterxml.jackson.annotation.JsonIgnore List<dev.langchain4j.rag.content.Content> retainedWebEvidence) {
+
+    public ChatResult(String content,String modelUsed,boolean ragUsed,Set<String> evidence,List<RagEvidenceMetadata> metadata,
+            com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,
+            com.example.lms.learning.gemini.GeminiGateway.SearchRescueResult rescue) {
+        this(content,modelUsed,ragUsed,evidence,metadata,grounding,rescue,List.of());
+    }
 
     public ChatResult(String content,String modelUsed,boolean ragUsed,Set<String> evidence,List<RagEvidenceMetadata> metadata,
             com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){this(content,modelUsed,ragUsed,evidence,metadata,grounding,null);}
@@ -25,6 +32,7 @@ public record ChatResult(
     public ChatResult(String content,String modelUsed,boolean ragUsed,Set<String> evidence,List<RagEvidenceMetadata> metadata){this(content,modelUsed,ragUsed,evidence,metadata,null);}
 
     public ChatResult {
+        retainedWebEvidence = retainedWebEvidence == null ? List.of() : List.copyOf(retainedWebEvidence);
         evidence = evidence == null ? Set.of() : evidence;
         evidenceMetadata = evidenceMetadata == null ? List.of() : List.copyOf(evidenceMetadata);
     }

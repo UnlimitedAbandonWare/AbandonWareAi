@@ -1,6 +1,6 @@
 ---
 name: demo1-staged-method
-description: Use when starting any new PASTE/directive on demo-1 or when work looks wild/random (스킬 없이·단계 없이·감으로 휘두르기) — enforces the STAGED_METHOD 6-gate order (지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음). SSOT: docs/agents-rules/DEMO1-STAGED-METHOD.md
+description: 'Use when starting any new PASTE/directive on demo-1 or when work looks wild/random (스킬 없이·단계 없이·감으로 휘두르기) — enforces the STAGED_METHOD 6-gate order (지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음). SSOT: docs/agents-rules/DEMO1-STAGED-METHOD.md'
 ---
 
 # demo1-staged-method

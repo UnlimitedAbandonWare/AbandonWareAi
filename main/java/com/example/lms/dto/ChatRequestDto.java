@@ -76,7 +76,16 @@ public class ChatRequestDto {
         @JsonIgnore @Setter(AccessLevel.NONE)
         private transient ChatSettingsSnapshot chatSettingsSnapshot;
         public record ChatSettingsSnapshot(java.util.Map<String, Object> user,
-                java.util.Map<String, Object> admin, java.util.Map<String, Object> request) {}
+                java.util.Map<String, Object> admin, java.util.Map<String, Object> request,
+                java.util.Map<String, Object> factory) {
+                public ChatSettingsSnapshot(java.util.Map<String, Object> user,
+                        java.util.Map<String, Object> admin, java.util.Map<String, Object> request) {
+                        this(user, admin, request, null);
+                }
+                public ChatSettingsSnapshot {
+                        factory = factory == null ? null : java.util.Map.copyOf(factory);
+                }
+        }
         public void bindChatSettingsSnapshot(ChatSettingsSnapshot snapshot) {
                 if (chatSettingsSnapshot != null) throw new IllegalStateException("settings_already_bound");
                 chatSettingsSnapshot = java.util.Objects.requireNonNull(snapshot);
@@ -168,9 +177,14 @@ public class ChatRequestDto {
         @Builder.Default
         private java.lang.Boolean useWebSearch = null;
 
-        /** Main-only request opt-in, independent of Display settings and main-model selection. */
+        /** Main-only opt-in; null inherits session/user defaults, false is explicit OFF. */
         @Builder.Default
-        private boolean googleSearchRescueEnabled = false;
+        private Boolean googleSearchRescueEnabled = null;
+
+        /** Preserve the existing Workflow's primitive guard without losing nullable wire intent. */
+        public boolean isGoogleSearchRescueEnabled() {
+                return Boolean.TRUE.equals(googleSearchRescueEnabled);
+        }
 
         /** true → RAG 단독 실행 / false → 컨텍스트 주입 */
         private Boolean ragStandalone;

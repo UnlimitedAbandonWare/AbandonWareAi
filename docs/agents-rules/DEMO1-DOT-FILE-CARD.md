@@ -36,6 +36,22 @@
 1회만 다시 시도한다. 그래도 실패하면 답변에 `카드 첨부 실패: <이유 한 줄>`과
 작업 폴더 경로만 남긴다 — Downloads MATCH는 그대로 유효하다(카드 없이도 완료).
 
+## 입력 쪽: Library 첨부 읽기 실패 → Downloads 폴백 (2026-10-06)
+
+위는 출력(카드 업로드) 쪽 규칙이다. **입력**(사용자가 첨부한 Library 파일을
+읽는 것)의 materialization이 실패하면 — Windows `os.setxattr` AttributeError
+포함 — 재시도·우회 스크립트 없이 `C:\Users\nninn\Downloads`에서 **같은
+파일명 → 같은 stem의 최신 mtime 순**으로 찾아 그 파일을 입력 원본으로 쓴다.
+
+- 기록: `INPUT_FALLBACK_DOWNLOADS` + 이름·크기·sha12·mtime(KST)·후보 수.
+- 후보가 0개면 그때만 `입력 파일 없음: <파일명>`으로 HOLD — 사용자 질문
+  카드는 띄우지 않는다.
+- 비밀 파일(.env·.secrets·토큰·키·자격 증명 파일)을 입력으로 쓰는 질문에는
+  이 폴백을 적용하지 않는다(기존 판정 유지).
+- 저장소 밖에 새 helper 사본·우회 스크립트를 만들지 않는다.
+- 분류기: `codex_question_classifier.py` D38 — 이 형태의 질문은 AUTO로
+  picked=Downloads 파일 사용.
+
 ## 관련
 
 - 완료 판정 도구: `python -B scripts/dot_card_check.py --identity <identity.json>`

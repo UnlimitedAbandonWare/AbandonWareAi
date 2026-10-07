@@ -45,6 +45,93 @@ class DynamicContextCompressorTest {
     }
 
     @Test
+    void preservesCompleteAnchorClaimWhenItFitsTheDocumentBudget() {
+        String claim = "For version 7, anchor access is supported, but only if quota is below 2 requests per day; this is not guaranteed and remains uncertain.";
+        String text = "Unrelated background. ".repeat(10) + claim + " Unrelated closing.".repeat(10);
+        Content original = content("https://docs.example/policy", text);
+
+        Content out = compressor.compress("anchor", List.of(original), 1, 180, 80).get(0);
+
+        assertTrue(out.textSegment().text().contains(claim), out.textSegment().text());
+        assertTrue(out.textSegment().text().length() <= 180);
+        assertEquals(original.textSegment().metadata().getString("url"),
+                out.textSegment().metadata().getString("url"));
+        assertEquals(text.length(), out.textSegment().metadata().toMap().get("_nova.origLen"));
+    }
+
+    @Test
+    void preservesQualifiedCurrentEntityEvidenceThroughThePromptBoundary() {
+        String claim = "2026-10-07 기준 anchor 전용 무기는 공격력 12.5%가 아니며, 2 kg 미만일 때만 사용 가능하고 효과는 미확인이다.";
+        String header = "Source: https://docs.example/weapon\n";
+        String text = header + "무관한 배경 설명이다. ".repeat(20) + claim + " 추가 배경이다.".repeat(20);
+        Map<String, Object> metadata = Map.of("url", "https://docs.example/weapon", "sourceId", "weapon-B",
+                "revision", "r2", "bodyHash", "synthetic-body-B", "retrievedAt", "2026-10-07T00:00:00Z");
+        Content original = Content.from(TextSegment.from(text, Metadata.from(metadata)));
+        NovaOrchestrationProperties props = new NovaOrchestrationProperties();
+        props.getRagCompressor().setMaxCharsPerContent(180);
+        props.getRagCompressor().setAnchorWindowChars(40);
+        props.getRagCompressor().setAblationPressureThreshold(0.0d);
+        DynamicContextCompressor bounded = new DynamicContextCompressor(props);
+
+        Content out = bounded.composeForPrompt("anchor", List.of(original), List.of()).web().get(0);
+
+        assertTrue(out.textSegment().text().contains(claim), out.textSegment().text());
+        assertTrue(out.textSegment().text().startsWith(header));
+        assertTrue(out.textSegment().text().length() <= 180);
+        metadata.forEach((key, value) -> assertEquals(value, out.textSegment().metadata().toMap().get(key)));
+        String origHash = out.textSegment().metadata().getString("_nova.origHash");
+        assertNotNull(origHash);
+        Content recomposed = bounded.composeForPrompt("anchor", List.of(out), List.of()).web().get(0);
+        assertEquals(origHash, recomposed.textSegment().metadata().getString("_nova.origHash"));
+        assertEquals(text.length(), recomposed.textSegment().metadata().toMap().get("_nova.origLen"));
+        var evidence = new com.example.lms.dto.RagEvidenceMetadata("W1", "WEB", "Weapon B",
+                "https://docs.example/weapon", null, 1, null, 1, 0.9d, "score");
+        var ctx = com.example.lms.prompt.PromptContext.builder().web(List.of(recomposed))
+                .memory("Previous entity A: a different character; no weapon evidence.")
+                .evidence(List.of(evidence)).build();
+        String prompt = new com.example.lms.prompt.StandardPromptBuilder().build(List.of(ctx), "anchor 전용 무기?");
+        assertTrue(prompt.contains(claim), prompt);
+        assertTrue(prompt.contains("[W1] kind=WEB"));
+        assertTrue(prompt.contains("https://docs.example/weapon"));
+    }
+
+    @Test
+    void keepsDifferentConclusionsAfterTheSameLongIntroduction() {
+        String intro = "Shared unrelated introduction. ".repeat(10);
+        Content allowed = content("https://docs.example/policy", intro
+                + "Anchor access is allowed only below 2 requests per day.");
+        Content denied = content("https://docs.example/policy", intro
+                + "Anchor access is not allowed; the limit remains uncertain.");
+
+        List<Content> out = compressor.compress("anchor", List.of(allowed, allowed, denied));
+
+        assertEquals(2, out.size());
+        assertTrue(out.get(0).textSegment().text().contains("allowed only below 2"));
+        assertTrue(out.get(1).textSegment().text().contains("not allowed"));
+    }
+
+    @Test
+    void deduplicatesOnlyTheSameBodyAndProvenance() {
+        String body = "Anchor access is uncertain and allowed only below 2 requests per day.";
+        Content original = Content.from(TextSegment.from(body, Metadata.from(Map.of(
+                "url", "https://docs.example/policy", "doc_id", "doc-A", "revision", "r1",
+                "bodyHash", "body-A", "retrievedAt", "2026-10-06T00:00:00Z"))));
+        Content revised = Content.from(TextSegment.from(body, Metadata.from(Map.of(
+                "url", "https://docs.example/policy", "doc_id", "doc-A", "revision", "r2",
+                "bodyHash", "body-A", "retrievedAt", "2026-10-07T00:00:00Z"))));
+        Content otherSource = content("https://other.example/policy", body);
+        Content unidentified = Content.from(TextSegment.from(body));
+
+        List<Content> out = compressor.compress("anchor", List.of(original, original, revised, otherSource,
+                unidentified, unidentified), 6, 180, 80);
+
+        assertEquals(5, out.size());
+        assertEquals("r1", out.get(0).textSegment().metadata().getString("revision"));
+        assertEquals("r2", out.get(1).textSegment().metadata().getString("revision"));
+        assertEquals("https://other.example/policy", out.get(2).textSegment().metadata().getString("url"));
+    }
+
+    @Test
     void prioritizesAnchorCapsHostDedupesAndKeepsMetadata() {
         List<Content> docs = List.of(
                 content("https://same.example/a", "alpha anchor evidence body " + "x".repeat(260)),
@@ -56,13 +143,15 @@ class DynamicContextCompressorTest {
 
         List<Content> out = compressor.compress("anchor", docs);
 
-        assertEquals(3, out.size(),
+        assertEquals(4, out.size(),
                 () -> "reason=" + TraceStore.get("compress.reason")
                         + ", failSoft=" + TraceStore.get("compress.failSoft")
                         + ", exception=" + TraceStore.get("compress.exception"));
         assertTrue(out.get(0).textSegment().text().contains("anchor"));
         assertEquals("true", out.get(0).textSegment().metadata().getString("_nova.compressed"));
         assertEquals("https://same.example/a", out.get(0).textSegment().metadata().getString("url"));
+        assertTrue(out.stream().anyMatch(c -> "https://dup.example/e".equals(c.textSegment().metadata().getString("url"))));
+        assertFalse(out.stream().anyMatch(c -> "https://same.example/c".equals(c.textSegment().metadata().getString("url"))));
         assertFalse(out.get(0).textSegment().metadata().toMap().containsKey("_nova.anchor"));
         assertNotNull(out.get(0).textSegment().metadata().getString("_nova.anchorHash"));
         assertNotNull(out.get(0).textSegment().metadata().toMap().get("_nova.anchorLen"));
@@ -71,10 +160,10 @@ class DynamicContextCompressorTest {
         assertEquals(docs.get(0).textSegment().text().length(),
                 out.get(0).textSegment().metadata().toMap().get("_nova.origLen"));
         assertEquals(5, TraceStore.get("compress.input.count"));
-        assertEquals(3, TraceStore.get("compress.output.count"));
+        assertEquals(4, TraceStore.get("compress.output.count"));
         assertEquals(false, TraceStore.get("compress.failSoft"));
         assertEquals(1, TraceStore.get("overdrive.stagesApplied"));
-        assertEquals(3, TraceStore.get("overdrive.finalCandidateCount"));
+        assertEquals(4, TraceStore.get("overdrive.finalCandidateCount"));
         assertEquals(Boolean.FALSE, TraceStore.get("overdrive.exactPhraseProbeUsed"));
     }
 

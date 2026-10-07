@@ -114,4 +114,92 @@ class ChatSessionTraceRecorderTest {
         }
         return sb.toString();
     }
+
+    @Test
+    void recordTerminal_keepsRejectedDiagnosticsSeparateFromCompletedOutcome() throws Exception {
+        ChatSessionTraceRecorder recorder = new ChatSessionTraceRecorder(tempDir, true, null);
+        Map<String, Object> meta = Map.of(
+                "finalAnswer.releaseStatus", "REJECT",
+                "finalAnswer.releaseReason", "verification_rejected",
+                "factVerifier.terminalStage", "claim_verification",
+                "factVerifier.terminalReason", "rejected",
+                "factVerifier.judgeUnavailable", Boolean.TRUE);
+
+        recorder.recordTerminal("chat", 901L, "diagnostic-rejected", "m", "m", true,
+                "completed", meta);
+
+        Map<String, Object> record = readTerminalDiagnosticRecord();
+        assertEquals("completed", record.get("outcome"));
+        assertEquals("none", record.get("errorClass"));
+        assertEquals("REJECT", record.get("releaseStatus"));
+        assertEquals("verification_rejected", record.get("releaseReasonCode"));
+        assertEquals("claim_verification", record.get("terminalStage"));
+        assertEquals("rejected", record.get("terminalReason"));
+        assertEquals(Boolean.TRUE, record.get("judgeUnavailable"));
+    }
+
+    @Test
+    void recordTerminal_keepsExplicitUnknownAndObservedFalseWithoutGuessingStatus() throws Exception {
+        ChatSessionTraceRecorder recorder = new ChatSessionTraceRecorder(tempDir, true, null);
+        Map<String, Object> meta = Map.of(
+                "finalAnswer.releaseStatus", "UNVERIFIED",
+                "finalAnswer.releaseReason", "verification_unknown_release",
+                "factVerifier.terminalStage", "evidence_coverage",
+                "factVerifier.terminalReason", "unknown",
+                "factVerifier.judgeUnavailable", Boolean.FALSE);
+
+        recorder.recordTerminal("chat", 902L, "diagnostic-unknown", "m", "m", true,
+                "completed", meta);
+
+        Map<String, Object> record = readTerminalDiagnosticRecord();
+        assertEquals("UNVERIFIED", record.get("releaseStatus"));
+        assertEquals("verification_unknown_release", record.get("releaseReasonCode"));
+        assertEquals("evidence_coverage", record.get("terminalStage"));
+        assertEquals("unknown", record.get("terminalReason"));
+        assertEquals(Boolean.FALSE, record.get("judgeUnavailable"));
+    }
+
+    @Test
+    void recordTerminal_missingAuthoritativeDiagnosticsStayNullable() throws Exception {
+        ChatSessionTraceRecorder recorder = new ChatSessionTraceRecorder(tempDir, true, null);
+        recorder.recordTerminal("chat", 903L, "diagnostic-missing", "m", "m", true,
+                "completed", Map.of());
+
+        Map<String, Object> record = readTerminalDiagnosticRecord();
+        for (String key : List.of("releaseStatus", "releaseReasonCode", "terminalStage",
+                "terminalReason", "judgeUnavailable")) {
+            assertTrue(record.containsKey(key), "nullable diagnostic field must remain explicit: " + key);
+            assertEquals(null, record.get(key), "missing authority must not be inferred: " + key);
+        }
+    }
+
+    @Test
+    void recordTerminal_privateReasonsAndStringJudgeFlagsAreNeverCopiedOrInferred() throws Exception {
+        ChatSessionTraceRecorder recorder = new ChatSessionTraceRecorder(tempDir, true, null);
+        Map<String, Object> meta = Map.of(
+                "finalAnswer.releaseStatus", "PRIVATE_STATUS_SENTINEL",
+                "finalAnswer.releaseReason", "PRIVATE_RAW_RELEASE_REASON_SENTINEL",
+                "factVerifier.terminalStage", "PRIVATE_STAGE_SENTINEL",
+                "factVerifier.terminalReason", "PRIVATE_RAW_TERMINAL_REASON_SENTINEL",
+                "factVerifier.judgeUnavailable", "true");
+
+        recorder.recordTerminal("chat", 904L, "diagnostic-private", "m", "m", true,
+                "completed", meta);
+
+        Map<String, Object> record = readTerminalDiagnosticRecord();
+        for (String key : List.of("releaseStatus", "releaseReasonCode", "terminalStage",
+                "terminalReason", "judgeUnavailable")) {
+            assertEquals(null, record.get(key), "invalid authority must not be inferred: " + key);
+        }
+        String content = readAll(tempDir);
+        assertFalse(content.contains("PRIVATE_STATUS_SENTINEL"));
+        assertFalse(content.contains("PRIVATE_RAW_RELEASE_REASON_SENTINEL"));
+        assertFalse(content.contains("PRIVATE_STAGE_SENTINEL"));
+        assertFalse(content.contains("PRIVATE_RAW_TERMINAL_REASON_SENTINEL"));
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> readTerminalDiagnosticRecord() throws Exception {
+        return new com.fasterxml.jackson.databind.ObjectMapper().readValue(readAll(tempDir), Map.class);
+    }
 }

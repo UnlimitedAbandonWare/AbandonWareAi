@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -36,7 +37,7 @@ import java.util.UUID;
  *   <li>프롬프트/응답 본문, 토큰, API 키 값은 절대 기록하지 않는다.</li>
  *   <li>sessionId/runId는 {@code hash:<sha256-12>} 형태로만 기록한다
  *       (runId는 attach/cancel 권한을 가진 clientToken이므로 원문 저장 금지).</li>
- *   <li>trace 메타는 키 이름만 수집하고 값은 복사하지 않는다.</li>
+ *   <li>trace 메타는 키 이름과 고정 허용 진단 값만 수집하며 본문 값은 복사하지 않는다.</li>
  *   <li>파일 쓰기 실패는 호출자에게 전파하지 않는다(fail-soft).</li>
  * </ul>
  * </p>
@@ -46,6 +47,17 @@ public class ChatSessionTraceRecorder {
 
     private static final Logger log = LoggerFactory.getLogger(ChatSessionTraceRecorder.class);
     private static final String SCHEMA = "awx.chat-session-trace.v1";
+    private static final Set<String> RELEASE_STATUSES = Set.of(
+            "NOT_REQUIRED", "UNVERIFIED", "HOLD", "APPROVE", "REJECT");
+    private static final Set<String> RELEASE_REASONS = Set.of(
+            "verification_not_required", "verification_unknown_release", "verification_outcome_unknown",
+            "verification_accepted", "verification_insufficient", "verification_rejected",
+            "verification_state_inconsistent", "verification_unavailable_excerpt", "verification_unavailable_guidance");
+    private static final Set<String> VERIFIER_TERMINAL_STAGES = Set.of(
+            "not_run", "draft_presence", "entity_validation", "context_presence", "claim_verification",
+            "source_credibility", "meta_check", "fact_classification", "evidence_coverage", "correction");
+    private static final Set<String> VERIFIER_TERMINAL_REASONS = Set.of(
+            "pass", "corrected", "insufficient", "rejected", "unknown");
     private static final int MAX_TRACE_KEYS = 256;
     private static final long MAX_DEDUP_SCAN_BYTES = 512L * 1024L;
     private static final DateTimeFormatter DAY_DIR =
@@ -128,6 +140,12 @@ public class ChatSessionTraceRecorder {
             String outcomeLabel = SafeRedactor.traceLabelOrFallback(outcome, "unknown");
             record.put("outcome", outcomeLabel);
             record.put("errorClass", errorClass(outcomeLabel));
+            record.put("releaseStatus", diagnosticLabel(meta.get("finalAnswer.releaseStatus"), RELEASE_STATUSES));
+            record.put("releaseReasonCode", diagnosticLabel(meta.get("finalAnswer.releaseReason"), RELEASE_REASONS));
+            record.put("terminalStage", diagnosticLabel(meta.get("factVerifier.terminalStage"), VERIFIER_TERMINAL_STAGES));
+            record.put("terminalReason", diagnosticLabel(meta.get("factVerifier.terminalReason"), VERIFIER_TERMINAL_REASONS));
+            Object judgeUnavailable = meta.get("factVerifier.judgeUnavailable");
+            record.put("judgeUnavailable", judgeUnavailable instanceof Boolean ? judgeUnavailable : null);
             record.put("fallbackCount", asInt(meta.get("llm.gateway.fallback.count"), 0));
             record.put("traceKeys", sanitizedTraceKeys(meta));
 
@@ -154,6 +172,10 @@ public class ChatSessionTraceRecorder {
             Files.writeString(file, line + "\n", StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.APPEND);
         }
+    }
+
+    private static String diagnosticLabel(Object value, Set<String> allowed) {
+        return value instanceof String label && allowed.contains(label) ? SafeRedactor.traceLabel(label) : null;
     }
 
     private static String errorClass(String outcome) {

@@ -13,7 +13,7 @@ import java.util.Set;
 import com.example.lms.search.TraceStore;
 import com.example.lms.trace.SafeRedactor;
 
-final class NoEvidenceChatFallback {
+public final class NoEvidenceChatFallback {
 
     private static final String LOCAL_FALLBACK_NOTICE =
             "\uAE30\uBCF8 \uBAA8\uB378 \uC751\uB2F5\uC774 \uC9C0\uAE08 "
@@ -98,18 +98,21 @@ final class NoEvidenceChatFallback {
     }
 
     static boolean isExplicitGeneralConceptOnly(String query) {
-        if (!com.example.lms.util.QueryTypeHeuristics.isDefinitional(query)
-                || java.util.regex.Pattern.compile(
+        if (query == null) return false;
+        var request = java.util.regex.Pattern.compile(
+                "(?iu)^([^.!?\\n]+(?:일반적인|일반)\\s*개념으로\\s*(?:[1-5]|한|두|세|네|다섯)\\s*"
+                        + "문장(?:만|\\s*정도)?\\s*설명해(?:줘|주세요))\\s*[.!?]?\\s*"
+                        + "(?:최신\\s*정보나\\s*)?외부\\s*검색이\\s*(?:꼭\\s*)?필요한\\s*"
+                        + "(?:주제|질문)(?:는|은)\\s*아니(?:야|에요)\\s*[.!?]?$"
+        ).matcher(query.strip());
+        if (!request.matches()) return false;
+        // Classify the explanation, separately from its explicit search disclaimer.
+        String explanation = request.group(1);
+        return com.example.lms.util.QueryTypeHeuristics.isDefinitional(explanation)
+                && !java.util.regex.Pattern.compile(
                         "(?iu)(?:최신|오늘|현재|출처|공식|원문|인용|https?://|교수|소속|프로필|"
                                 + "진료|처방|진단|의료|복용|병용|약물|투자|법률|찾아|알아내|확인해|검증해|알려줘|CEO)")
-                        .matcher(query).find()) {
-            return false;
-        }
-        return java.util.regex.Pattern.compile(
-                "(?iu)^[^.!?\\n]+(?:일반적인|일반)\\s*개념으로\\s*(?:[1-5]|한|두|세|네|다섯)\\s*"
-                        + "문장(?:만)?\\s*설명해(?:줘|주세요)\\s*[.!?]?\\s*"
-                        + "외부\\s*검색이\\s*필요한\\s*주제는\\s*아니(?:야|에요)\\s*[.!?]?$"
-        ).matcher(query.strip()).matches();
+                        .matcher(explanation).find();
     }
 
     static String compose(String query) {
@@ -713,6 +716,35 @@ final class NoEvidenceChatFallback {
                 .replace("\uD5EC\uB85C", " ")
                 .replaceAll("[\\s\\p{Punct}~_]+", "");
         return remainder.isEmpty();
+    }
+
+    /** Shared whole-request gate for local replies, before retrieval or auxiliary models. */
+    public static boolean isLocalSocialReplyRequest(com.example.lms.dto.ChatRequestDto req) {
+        if (req == null || req.isStrictModelSelection()
+                || "strict".equalsIgnoreCase(req.getModelSelectionMode())
+                || (req.getExecutionMode() != null
+                    && req.getExecutionMode() != com.example.lms.domain.enums.ExecutionMode.AUTO)
+                || req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
+                || req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
+                || "evidence_only".equalsIgnoreCase(req.getRagAnswerPolicy())
+                || (req.getAttachmentIds() != null && !req.getAttachmentIds().isEmpty())
+                || (req.getImageBase64() != null && !req.getImageBase64().isBlank())
+                || (req.getInputType() != null && !"text".equalsIgnoreCase(req.getInputType()))
+                || req.isUseAdaptive() || req.isAutoTranslate()) {
+            return false;
+        }
+        return isCasualGreetingOnly(req.getMessage()) || isThanksOnly(req.getMessage());
+    }
+
+    static boolean isThanksOnly(String query) {
+        return query != null && query.strip().toLowerCase(Locale.ROOT).matches(
+                "(?:thanks|thank\\s+you|고마워요?|고맙습니다|감사합니다|감사해요)[\\s\\p{Punct}~]*");
+    }
+
+    static String localSocialReply(String query) {
+        return isThanksOnly(query)
+                ? "천만에요! 더 필요한 것이 있으면 말씀해 주세요."
+                : "안녕하세요! 무엇을 도와드릴까요?";
     }
 
     private static boolean containsGreetingToken(String text, String token) {

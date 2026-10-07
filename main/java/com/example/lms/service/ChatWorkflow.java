@@ -1332,9 +1332,17 @@ public class ChatWorkflow {
     public ChatResult continueChat(ChatRequestDto req,
             Function<String,List<String>> externalCtxProvider,ChatConversationContext conversationContext) {
         Objects.requireNonNull(conversationContext);
-        // An explicit OAuth route always retains exact selection, regardless of the browser's flag.
-        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req.getModel()))
-            req.setStrictModelSelection(true);
+        // Local social replies use only owner-bound account metadata; no model is executed.
+        if (com.example.lms.llm.ChatGptOAuthRegistration.isRoute(req.getModel())) {
+            if (NoEvidenceChatFallback.isLocalSocialReplyRequest(req)) {
+                if (chatModelCatalogService == null || !chatModelCatalogService.isRegisteredOAuthModel(
+                        req.getModel(), req.getVerifiedRequestOwnerHash()))
+                    throw new com.example.lms.llm.ModelSelectionException("model_unavailable");
+            } else {
+                // Every generating OAuth request retains exact selection.
+                req.setStrictModelSelection(true);
+            }
+        }
         boolean ownsGuardContext = GuardContextHolder.get() == null;
         if (ownsGuardContext) {
             GuardContextHolder.set(GuardContext.defaultContext());
@@ -1397,6 +1405,15 @@ public class ChatWorkflow {
         ChatWorkflowRequestTraceEnvelope.seed(req, sessionKey);
         com.example.lms.llm.RequestedModelSelection.begin(req.isStrictModelSelection() ? req.getModel() : null,
                 req.getVerifiedRequestOwnerHash());
+        if (NoEvidenceChatFallback.isLocalSocialReplyRequest(req)) {
+            throwIfCancelled(parseNumericSessionId(req.getSessionId()));
+            TraceStore.put("answer.verify.skipped", true);
+            TraceStore.put("answer.verify.reason", "local_social_reply");
+            TraceStore.put("finalAnswer.memorySaveAllowed", false);
+            TraceStore.put("finalAnswer.memorySaveBlockedReason", "local_social_reply");
+            return finishEarlyResult(ChatResult.of(
+                    NoEvidenceChatFallback.localSocialReply(req.getMessage()), "local:social", false));
+        }
         if (req.isStrictModelSelection()) {
             var choice = chatModelCatalogService == null ? null
                     : chatModelCatalogService.resolve(req.getModel(), req.getVerifiedRequestOwnerHash()).orElse(null);
@@ -1461,6 +1478,30 @@ public class ChatWorkflow {
         // Domain classification for this query
         QueryDomain queryDomain = queryDomainClassifier.classify(userQuery);
 
+        // AUTO eligibility does not make every enabled source necessary for this message.
+        final boolean dynamicAutoText = req.getExecutionMode() == com.example.lms.domain.enums.ExecutionMode.AUTO
+                && req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.AUTO
+                && !evidenceReleaseRequired && !evidenceScopeBound && queryDomain.isLowRisk()
+                && !"HIGH".equals(detectRisk(userQuery))
+                && !"BLOCK".equals(TraceStore.get("blackbox.risk.routingDecision"))
+                && (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
+                && !StringUtils.hasText(req.getImageBase64());
+        final boolean externalFactIntent = java.util.regex.Pattern.compile(
+                "(?iu)(?:최신|오늘|현재|공식|출처|원문|인용|https?://|교수|소속|프로필|"
+                        + "진료|처방|진단|의료|복용|병용|약물|투자|법률|찾아|알아내|확인해|검증해|CEO)")
+                .matcher(userQuery).find();
+        final boolean dynamicAutoSessionContext = dynamicAutoText && !externalFactIntent
+                && ((!currentTurnMemoryValues(userQuery).isEmpty()
+                && java.util.regex.Pattern.compile("^기억해\\s*[:：]\\s*[^.!?\\n]+\\s*[.]?$").matcher(userQuery.strip()).matches())
+                || java.util.regex.Pattern.compile(
+                        "^(?:[^.!?\\n]+(?:바꿔|정정해|수정해)(?:줘|주세요)?\\s*[.]\\s*)?"
+                                + "(?:아까|앞에서|앞서|이전에)\\s*[^.!?\\n]+(?:뭐였지|무엇이었지|뭐라고\\s*했지)\\s*[.!?]?$")
+                        .matcher(userQuery.strip()).matches());
+        final boolean dynamicAutoGeneralExplanation = dynamicAutoText && !externalFactIntent
+                && com.example.lms.util.QueryTypeHeuristics.isDefinitional(userQuery)
+                && java.util.regex.Pattern.compile(
+                        "^[^.!?\\n]+(?:차이|개념|정의|원리)(?:를|을|는|은)?\\s*(?:간단히\\s*|간단하게\\s*|쉽게\\s*)?설명해(?:줘|주세요)\\s*[.!?]?$")
+                        .matcher(userQuery.strip()).matches();
         final boolean conceptExplanationDirectMode = interactionShortCircuitAllowed
                 && !evidenceReleaseRequired && !evidenceScopeBound
                 && queryDomain.isLowRisk() && !"HIGH".equals(detectRisk(userQuery))
@@ -1468,15 +1509,19 @@ public class ChatWorkflow {
                 && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
                 && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
                 && (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
-                && NoEvidenceChatFallback.isExplicitGeneralConceptOnly(userQuery);
+                && (NoEvidenceChatFallback.isExplicitGeneralConceptOnly(userQuery) || dynamicAutoGeneralExplanation);
         final boolean sessionMemoryDirectMode = !evidenceReleaseRequired
                 && !"HIGH".equals(detectRisk(userQuery))
                 && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_LIGHT
                 && req.getSearchMode() != com.example.lms.gptsearch.dto.SearchMode.FORCE_DEEP
                 && !"evidence_only".equalsIgnoreCase(req.getRagAnswerPolicy())
                 && (req.getAttachmentIds() == null || req.getAttachmentIds().isEmpty())
-                && NoEvidenceChatFallback.isSessionMemoryOnly(userQuery);
-        final boolean directRetrievalOffMode = sessionMemoryDirectMode || conceptExplanationDirectMode || req != null
+                && (NoEvidenceChatFallback.isSessionMemoryOnly(userQuery) || dynamicAutoSessionContext);
+        final List<Content> priorWebEvidence = isPriorWebComparisonRequest(req)
+                && externalCtxProvider instanceof WebEvidenceSupplier supplier && supplier.priorTurnEvidence()
+                ? List.copyOf(supplier.evidence(userQuery)) : List.of();
+        final boolean reusePriorWebEvidence = !priorWebEvidence.isEmpty();
+        final boolean directRetrievalOffMode = sessionMemoryDirectMode || conceptExplanationDirectMode || reusePriorWebEvidence || req != null
                 && (req.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.OFF
                 || Boolean.FALSE.equals(req.getUseWebSearch()))
                 && Boolean.FALSE.equals(req.getUseRag());
@@ -1707,7 +1752,8 @@ public class ChatWorkflow {
         }
 
         String earlyCurrentTurnMemoryFallback = composeCurrentTurnMemoryFallback(userQuery);
-        if (interactionShortCircuitAllowed && earlyCurrentTurnMemoryFallback != null && !earlyCurrentTurnMemoryFallback.isBlank()) {
+        if (interactionShortCircuitAllowed && !req.isStrictModelSelection()
+                && earlyCurrentTurnMemoryFallback != null && !earlyCurrentTurnMemoryFallback.isBlank()) {
             try {
                 TraceStore.put("chat.currentTurnMemoryFallback.shortCircuit", true);
                 TraceStore.put("chat.currentTurnMemoryFallback.shortCircuitBefore", "disambiguation");
@@ -1824,7 +1870,9 @@ public class ChatWorkflow {
                 && !"BLOCK".equals(TraceStore.get("blackbox.risk.routingDecision"))
                 && NoEvidenceChatFallback.isClarificationFirstPriorComparison(userQuery)
                 && (dr == null || !dr.isConfident()
-                || dr.getRewrittenQuery() == null || dr.getRewrittenQuery().isBlank())) {
+                || dr.getRewrittenQuery() == null || dr.getRewrittenQuery().isBlank()
+                || userQuery.strip().equals(dr.getRewrittenQuery().strip())
+                || "DICTIONARY_TERM".equals(dr.getDetectedCategory()))) {
             throwIfCancelled(sessionIdLong);
             TraceStore.put("chat.disambiguation.reasonCode", "prior_comparison_unresolved");
             TraceStore.put("finalAnswer.memorySaveAllowed", false);
@@ -1910,6 +1958,7 @@ public class ChatWorkflow {
                     finalQuery == null ? 0 : finalQuery.length());
         }
 
+        if (reusePriorWebEvidence) useRag = false;
         // plan hints: cap allowWeb/allowRag
         if (planHints != null) {
             if (planHints.allowWeb() != null && !planHints.allowWeb())
@@ -1964,7 +2013,7 @@ public class ChatWorkflow {
 
         List<String> planned = List.of();
         SearchPolicyDecision searchPolicyDecision = null;
-        List<dev.langchain4j.rag.content.Content> fused = List.of();
+        List<dev.langchain4j.rag.content.Content> fused = priorWebEvidence;
         // Ownership survives a skipped/failed tool call: later search must not bypass its budget.
         List<Content> approvedToolWebEvidence = externalCtxProvider instanceof WebEvidenceSupplier ? List.of() : null;
         // Needle probe (2-pass) state (used for trace + outcome reward)
@@ -1975,7 +2024,7 @@ public class ChatWorkflow {
         java.util.List<Content> needleDocsForReward = java.util.List.of();
         boolean needleExecuted = false;
         boolean preLlmRetrievalBudgetLow = false;
-        if (useWeb) {
+        if (useWeb && !reusePriorWebEvidence) {
 
             // MERGE_HOOK:PROJ_AGENT::ORCH_STAGE_POLICY_PLANNER_GATE
             boolean allowPlannerByPolicy = true;
@@ -2645,7 +2694,7 @@ public class ChatWorkflow {
 
         List<dev.langchain4j.rag.content.Content> topDocs;
         if (useWeb && fused != null && !fused.isEmpty()) {
-            boolean doRerank = (hints == null || hints.isEnableCrossEncoder());
+            boolean doRerank = !reusePriorWebEvidence && (hints == null || hints.isEnableCrossEncoder());
             if (doRerank) {
                 // Additional cost-control: optionally cap the number of candidates sent to the
                 // cross-encoder.
@@ -4606,14 +4655,20 @@ public class ChatWorkflow {
                 promotionResult != null
                         && promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.PROMOTED,
                 evidenceReleaseRequired, evidenceScopeBound);
-        if (isUnavailableVerificationRelease(releaseDecision)) {
+        if (queryDomain.isLowRisk() && !"HIGH".equals(detectRisk(userQuery))) {
+            releaseDecision = applyInsufficientVerificationRelease(releaseDecision,
+                    userQuery != null && !userQuery.isBlank() ? userQuery : finalQuery,
+                    promptWebDocs, citableEvidence, evidenceReleaseRequired, evidenceScopeBound);
+        }
+        if (isUnavailableVerificationRelease(releaseDecision) || isInsufficientVerificationRelease(releaseDecision)) {
             citableEvidence = releaseDecision.releasedEvidence();
             finalAnswerFallbackApplied = true;
             finalAnswerMemoryDeniedByPolicy = true;
             if (primarySuccessRef.get() == null) modelUsed = "unknown";
         }
         if (priorFallbackApplied && releaseDecision.releaseAllowed()
-                && !isUnavailableVerificationRelease(releaseDecision)) {
+                && !isUnavailableVerificationRelease(releaseDecision)
+                && !isInsufficientVerificationRelease(releaseDecision)) {
             releaseDecision = new FinalVerificationReleaseDecision(
                     priorFallbackContent,
                     releaseDecision.releaseStatus(),
@@ -4646,7 +4701,8 @@ public class ChatWorkflow {
             finalAnswerFallbackApplied = true;
         }
         boolean protectedBaseContent = !baseReleaseDecision.releaseAllowed() || priorFallbackApplied || supportedSubsetSelected
-                || isUnavailableVerificationRelease(releaseDecision) || isVerificationUnknownRelease(releaseDecision);
+                || isUnavailableVerificationRelease(releaseDecision) || isVerificationUnknownRelease(releaseDecision)
+                || isInsufficientVerificationRelease(releaseDecision);
         boolean finalAnswerWeakResult = EvidenceAwareGuard.looksWeak(out);
         String finalAnswerForMemoryCandidate = out;
         if (!protectedBaseContent && !releaseDecision.evidencePolicyApplied()) {
@@ -4895,7 +4951,8 @@ public class ChatWorkflow {
                 java.util.Collections.unmodifiableSet(evidence),
                 visibleEvidenceMetadata == null ? java.util.List.of() : visibleEvidenceMetadata,
                 conversationContext.present() && conversationContext.focusGoogleSearchAllowed() && finalGeneration != null
-                        ? finalGeneration.grounding() : null, googleSearchRescue);
+                        ? finalGeneration.grounding() : null, googleSearchRescue,
+                releaseDecision.releaseAllowed() ? retainCitableWebEvidence(promptWebDocs, visibleEvidenceMetadata) : List.of());
     } // ??硫붿꽌???? ?먥쁾??諛섎뱶???ル뒗 以묎큵???뺤씤
 
     /**
@@ -8178,7 +8235,8 @@ public class ChatWorkflow {
                         true,
                         false);
             }
-            if (isUnavailableVerificationRelease(base) || isVerificationUnknownRelease(base)) return base;
+            if (isUnavailableVerificationRelease(base) || isVerificationUnknownRelease(base)
+                    || isInsufficientVerificationRelease(base)) return base;
             // 근거 0·인용 메타데이터 불완전만으로 본문을 보류하지 않는다 — 명시적
             // evidence_needed 지시가 있을 때만 HOLD를 유지하고, 미검증 공개 답변은
             // 장기 기억 저장을 차단한다(knowledgeWriteAllowed=false).
@@ -8320,6 +8378,36 @@ public class ChatWorkflow {
                         + "질문과 관련된 공식 자료의 원문과 출처를 확인한 뒤 다시 시도해 주세요. "
                         + "확인되지 않은 설명은 제공하지 않습니다.",
                 "UNVERIFIED", "verification_unavailable_guidance", true, false, false, java.util.List.of());
+    }
+
+    static FinalVerificationReleaseDecision applyInsufficientVerificationRelease(
+            FinalVerificationReleaseDecision base, String query,
+            java.util.List<dev.langchain4j.rag.content.Content> rawWeb,
+            java.util.List<RagEvidenceMetadata> promoted, boolean evidenceRequired, boolean scopeBound) {
+        com.example.lms.service.chat.ChatRunExecutionContext.throwIfCancelled();
+        if (base.releaseAllowed() || !"verification_insufficient".equals(base.reasonCode())
+                || evidenceRequired || scopeBound) return base;
+        // Select only current, exactly attributed public descriptions. Never restore the draft.
+        var excerpt = EvidenceAnswerComposer.supportedDescriptionExcerpt(query, rawWeb, promoted);
+        if (excerpt.isEmpty()) excerpt = EvidenceAnswerComposer.supportedIdentityExcerpt(query, rawWeb, promoted);
+        if (excerpt.isPresent()) {
+            var supported = excerpt.get();
+            return new FinalVerificationReleaseDecision(supported.content(), "UNVERIFIED",
+                    "verification_insufficient_excerpt", true, false, false, supported.evidence());
+        }
+        return new FinalVerificationReleaseDecision(
+                "[검증 미완료 · 확인 범위 안내]\n"
+                        + "현재 자료로는 질문의 구체적인 사실이나 관계를 확정할 수 없습니다. "
+                        + "확인되지 않은 이름이나 수치를 추측하지 않겠습니다. "
+                        + "대상과 해당 사실을 함께 설명하는 1차 출처의 원문이 필요합니다. "
+                        + "공식 소개나 공지의 링크를 주시면 확인할 범위를 좁힐 수 있습니다.",
+                "UNVERIFIED", "verification_insufficient_guidance", true, false, false, java.util.List.of());
+    }
+
+    private static boolean isInsufficientVerificationRelease(FinalVerificationReleaseDecision decision) {
+        return decision != null && decision.releaseAllowed() && !decision.knowledgeWriteAllowed()
+                && ("verification_insufficient_excerpt".equals(decision.reasonCode())
+                || "verification_insufficient_guidance".equals(decision.reasonCode()));
     }
 
     private static boolean isUnavailableVerificationRelease(FinalVerificationReleaseDecision decision) {
@@ -8810,9 +8898,42 @@ public class ChatWorkflow {
         TraceStore.put("ensemble.refiner.wiredOfficialSourceCount", officialSources.size());
     }
 
+    /** Whole-request prior-source comparison only; fresh facts and explicit source modes retain their paths. */
+    public static boolean isPriorWebComparisonRequest(ChatRequestDto request) {
+        return request != null && request.getExecutionMode() == com.example.lms.domain.enums.ExecutionMode.AUTO
+                && request.getSearchMode() == com.example.lms.gptsearch.dto.SearchMode.AUTO && request.isUseWebSearch()
+                && !request.isUseAdaptive() && !request.isAutoTranslate()
+                && !"evidence_only".equalsIgnoreCase(request.getRagAnswerPolicy())
+                && (request.getAttachmentIds() == null || request.getAttachmentIds().isEmpty())
+                && !org.springframework.util.StringUtils.hasText(request.getImageBase64())
+                && !"image".equalsIgnoreCase(request.getInputType())
+                && request.getMessage() != null && java.util.regex.Pattern.compile(
+                    "^(?:앞의|앞서\\s*확인한|앞에서\\s*확인한|이전에\\s*확인한)\\s*(?:두|2)\\s*(?:공식\\s*)?(?:자료|출처)를\\s*"
+                    + "(?:같은\\s*조건에서\\s*)?비교(?:해줘|해주세요|하고\\s*가정도\\s*밝혀줘)\\s*[.!?]?$")
+                    .matcher(request.getMessage().strip()).matches();
+    }
+
+    public static WebEvidenceSupplier priorWebEvidenceSupplier(List<Content> admitted) {
+        List<Content> documents = List.copyOf(admitted);
+        return new WebEvidenceSupplier() {
+            public List<Content> evidence(String query) { return documents; }
+            public boolean priorTurnEvidence() { return true; }
+        };
+    }
+
+    private static List<Content> retainCitableWebEvidence(List<Content> documents, List<RagEvidenceMetadata> citations) {
+        if (documents == null || citations == null || citations.isEmpty()) return List.of();
+        var sources = citations.stream().filter(c -> "WEB".equalsIgnoreCase(c.kind()))
+                .map(c -> publicUrlKey(c.source())).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.toSet());
+        return documents.stream().filter(java.util.Objects::nonNull)
+                .filter(c -> sources.contains(publicUrlKey(needleExtractUrlOrNull(c))))
+                .filter(c -> c.textSegment().text().length() <= 8000).limit(8).toList();
+    }
+
     /** Internal admitted-request supplier; typed evidence never enters diagnostic maps. */
     public interface WebEvidenceSupplier extends Function<String, List<String>> {
         List<Content> evidence(String query);
+        default boolean priorTurnEvidence() { return false; }
         @Override default List<String> apply(String query) {
             return evidence(query).stream().map(item -> item.textSegment().text()).toList();
         }

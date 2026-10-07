@@ -62,6 +62,8 @@ TRIGGERS = [
             ("$demo1-dev-reload", "skill",
              "Java/Spring/Display 소스 변경 반영 절차 (compile+ForceRestart)"),
             ("Start-RAG.bat", "bat", "live 반영 시작점 — stale JVM 200은 증거 아님"),
+            ("ForceRestart-RAG.bat", "bat",
+             "JVM 템플릿 파일락 해제 및 클린 백엔드/DevWatch 재기동 (브라우저 팝업 없음)"),
             ("powershell -File scripts/dev_reload_watch.ps1 -MetaDisplay",
              "ps1", "DevWatch 자동 재빌드 관찰"),
         ],
@@ -165,8 +167,10 @@ TRIGGERS = [
     {
         "id": "lease-conflict",
         "match": ["lease conflict", "리스 충돌", "foreign lease", "lease 막힘",
-                  "blocked by lease", "점유 중"],
+                  "blocked by lease", "점유 중", "lease 충돌"],
         "calls": [
+            ("Reclaim-Lease.bat", "bat",
+             "stale/expired lease 자동 회수 및 점유자 who 확인 (원클릭)"),
             ("python -B scripts/lease_conflict_autoflow.py plan "
              "--goal-files <paths> --task <taskId>", "script",
              "stale 자동 reclaim + live는 request-release"),
@@ -253,6 +257,55 @@ TRIGGERS = [
         ],
         "routerBeat": [],
         "why": "실제 디스크 압박/잔여물은 safe-cleanup이 정답 (journal 문제가 아닐 때)",
+    },
+    {
+        "id": "signal-digest",
+        "match": ["signal digest", "다이제스트", "플릿 현황", "플릿 상태",
+                  "세션 시작 전", "전체 현황", "에이전트 현황"],
+        "calls": [
+            ("Signal-Digest.bat", "bat",
+             "세션 진입 시 필수 플릿 현황 1초 출력 (lease, journal, handoff, git dirty)"),
+        ],
+        "routerBeat": [],
+        "why": "세션 진입 현황 질문은 Signal-Digest 한 번이 정답 타점",
+    },
+    {
+        "id": "verify-chat-fast",
+        "match": ["chat fast", "스트림 경계", "chat-stream-boundaries",
+                  "채팅 테스트", "오프라인 회귀", "빠른 채팅 검증"],
+        "calls": [
+            ("Verify-Chat-Fast.bat", "bat",
+             "node 24개 스트림 경계 테스트 즉시 검증 (400ms)"),
+        ],
+        "routerBeat": [],
+        "why": "스트림 경계 오프라인 회귀는 Verify-Chat-Fast가 정답 타점",
+    },
+    {
+        "id": "bat-toolkit",
+        "match": ["bat", "배치 파일", "원클릭 도구", "bat 활용", "bat 도구"],
+        "calls": [
+            ("Signal-Digest.bat", "bat", "세션 진입 플릿 현황 1초 출력"),
+            ("Reclaim-Lease.bat", "bat", "stale/expired lease 원클릭 회수"),
+            ("ForceRestart-RAG.bat", "bat",
+             "JVM 락 해제 + 클린 재기동 (브라우저 없음)"),
+            ("Verify-Chat-Fast.bat", "bat", "스트림 경계 24개 400ms 검증"),
+            ("docs/agent-tooling/DEMO1-BAT-TOOLKIT.md", "file",
+             "에이전트 BAT 활용 SSOT — 단계별 어떤 BAT를 쓰는지"),
+        ],
+        "routerBeat": [],
+        "why": "BAT 활용 ask는 툴킷 문서 + 핵심 4대 BAT가 정답 타점",
+    },
+    {
+        "id": "chat-session-debug",
+        "match": ["chat trace", "session trace", "모델 관측",
+                  "model.obs", "디버그 트레이스", "트레이스 조회"],
+        "calls": [
+            ("python -B scripts/chat_session_debug_export.py list "
+             "--since-hours 2 --summary", "script",
+             "durable chat session trace 1줄 카드 조회"),
+        ],
+        "routerBeat": [],
+        "why": "chat trace/모델 관측 ask는 chat_session_debug_export가 정답 타점",
     },
 ]
 

@@ -128,3 +128,59 @@ test('quota limit suspends only provider traffic and keeps microphone until expl
  await f.capture.start();f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();assert.equal(f.stopped(),0);assert.equal(f.capture.state.phase,'LISTENING');assert.equal(f.capture.state.sttPausedReason,'asr_quota_exceeded');
  for(let i=0;i<100;i++)f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();assert.equal(outbound,1);assert.equal(f.capture.state.droppedAudioMs,24240);assert.equal(f.stopped(),0);await f.capture.stop();assert.equal(f.stopped(),1);
 });
+
+test('start failures record which await stage threw so the surfaced code is actionable',async()=>{
+ const missing=fixture({env:{navigator:{mediaDevices:{getUserMedia:async()=>{throw Object.assign(Error(),{name:'NotFoundError'});}}}}});
+ await missing.capture.start();assert.equal(missing.capture.state.phase,'ERROR');
+ assert.equal(missing.capture.state.errorCode,'microphone_device_missing');assert.equal(missing.capture.state.errorStage,'mic_open');
+ assert.equal(missing.capture.state.events.find(e=>e.event==='MIC_SESSION_STOP').stage,'mic_open');
+ class BadContext{constructor(){this.audioWorklet={addModule:async()=>{throw Error('worklet_load_failed');}};this.destination={};}async resume(){}async close(){}createMediaStreamSource(){return{connect:()=>({connect:()=>({connect(){}})})};}createGain(){return{gain:{value:1}};}}
+ const graph=fixture({env:{AudioContext:BadContext}});
+ await graph.capture.start();assert.equal(graph.capture.state.phase,'ERROR');
+ assert.equal(graph.capture.state.errorCode,'worklet_load_failed');assert.equal(graph.capture.state.errorStage,'audio_graph');
+ const server=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){const e=Error('paired_phone_required');e.status=403;throw e;}}});
+ await server.capture.start();assert.equal(server.capture.state.phase,'ERROR');
+ assert.equal(server.capture.state.errorCode,'paired_phone_required');assert.equal(server.capture.state.errorStage,'server_begin');
+});
+test('a stale saved input device retries once on the system default input and clears the pin',async()=>{
+ const constraints=[];let fallback=0;
+ const media={getTracks:()=>[{stop(){}}],getAudioTracks:()=>[{label:'default input'}]};
+ const f=fixture({options:{deviceId:()=>'stale-input',onDeviceFallback:()=>{fallback++;}},
+  env:{navigator:{mediaDevices:{getUserMedia:async args=>{constraints.push(args);if(args.audio.deviceId)throw Object.assign(Error(),{name:'OverconstrainedError'});return media;}}}}});
+ assert.equal(await f.capture.start(),true);assert.equal(f.capture.state.phase,'LISTENING');
+ assert.equal(constraints.length,2);assert.deepEqual(constraints[0].audio.deviceId,{exact:'stale-input'});
+ assert.equal('deviceId' in constraints[1].audio,false);
+ assert.equal(fallback,1);assert.equal(f.capture.state.errorCode,null);assert.equal(f.capture.state.errorStage,null);
+ assert.ok(f.capture.state.events.some(e=>e.event==='MIC_DEVICE_FALLBACK'));
+ await f.capture.stop();
+});
+test('a failed default-input retry keeps the original error path and never fires the pin clear',async()=>{
+ const constraints=[];let fallback=0;
+ const f=fixture({options:{deviceId:()=>'stale-input',onDeviceFallback:()=>{fallback++;}},
+  env:{navigator:{mediaDevices:{getUserMedia:async args=>{constraints.push(args);throw Object.assign(Error(),{name:args.audio.deviceId?'OverconstrainedError':'NotFoundError'});}}}}});
+ assert.equal(await f.capture.start(),false);assert.equal(f.capture.state.phase,'ERROR');
+ assert.equal(constraints.length,2);assert.equal(f.capture.state.errorCode,'microphone_device_missing');
+ assert.equal(f.capture.state.errorStage,'mic_open');assert.equal(fallback,0);
+});
+test('assist_not_found on start reconnects the session and retries beginVoice once',async()=>{
+ let begins=0,reconnects=0;
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+  async reconnect(options){reconnects++;assert.equal(options.preserveSession,true);},
+  async beginVoice(){begins++;if(begins===1)throw Error('assist_not_found');}}});
+ assert.equal(await f.capture.start(),true);assert.equal(f.capture.state.phase,'LISTENING');
+ assert.equal(begins,2);assert.equal(reconnects,1);assert.equal(f.capture.state.errorCode,null);assert.equal(f.capture.state.errorStage,null);
+ await f.capture.stop();
+});
+test('assist_not_found surviving the reconnect stops with its code and stage exposed',async()=>{
+ let reconnects=0;
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+  async reconnect(){reconnects++;},async beginVoice(){throw Error('assist_not_found');}}});
+ assert.equal(await f.capture.start(),false);assert.equal(f.capture.state.phase,'ERROR');
+ assert.equal(reconnects,1);assert.equal(f.capture.state.errorCode,'assist_not_found');
+ assert.equal(f.capture.state.errorStage,'server_begin');
+});
+test('assist_not_found without a reconnect-capable client still surfaces the code',async()=>{
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){throw Error('assist_not_found');}}});
+ await f.capture.start();assert.equal(f.capture.state.phase,'ERROR');
+ assert.equal(f.capture.state.errorCode,'assist_not_found');assert.equal(f.capture.state.errorStage,'server_begin');
+});

@@ -444,6 +444,7 @@ class FactVerifierDetailedOutcomeTest {
             assertEquals("unknown", result.status());
             assertFalse(result.outcomeKnown());
             assertEquals("fact_verifier_judge", TraceStore.get("llm.call.timeout.stage"));
+            assertEquals(Boolean.TRUE, TraceStore.get("factVerifier.judgeUnavailable"));
         } finally {
             TimeBudgetContext.clear();
             TraceStore.clear();

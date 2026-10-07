@@ -712,7 +712,7 @@ button:disabled {
 }
 
 .message.assistant[data-state="pending"]::before {
-    content: "답변 준비 중";
+    content: "Planning";
     display: inline-block;
 }
 

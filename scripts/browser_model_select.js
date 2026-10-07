@@ -44,6 +44,10 @@ function bareModelId(catalogId) {
 async function selectModel(page, catalogId, { timeout = 15000 } = {}) {
   const select = await firstMatch(page, SELECT_SELECTORS);
   if (!select) throw new Error('model select not found');
+  if (!(await select.isVisible())) {
+    const settings = page.locator('[data-testid="chat-response-settings"] > summary');
+    if (await settings.count()) await settings.click();
+  }
   await select.waitFor({ state: 'visible', timeout });
   const values = await select.locator('option').evaluateAll(o => o.map(x => x.value));
   const bare = bareModelId(catalogId);

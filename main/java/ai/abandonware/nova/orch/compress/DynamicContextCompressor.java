@@ -44,6 +44,9 @@ import java.util.UUID;
 public class DynamicContextCompressor {
 
     private static final Logger log = LoggerFactory.getLogger(DynamicContextCompressor.class);
+    private static final java.util.regex.Pattern SESSION_ASSIGNMENT_LINE = java.util.regex.Pattern.compile(
+            "(?iu)^User:.*(?:기억\\s*해\\s*(?:줘|주세요)|정정\\s*해\\s*(?:줘|주세요))");
+
     private static final String COMPOSER_VERSION = "ablation-spread-v2";
     private static final double GOLDEN_RATIO_PHI = 0.618d;
 
@@ -391,6 +394,8 @@ public class DynamicContextCompressor {
             double threshold = clamp01(cfg.getMemoryContaminationThreshold());
             String anchor = anchorFrom(query);
 
+            boolean assignmentMemory = java.util.Arrays.stream(rawLines)
+                    .anyMatch(line -> SESSION_ASSIGNMENT_LINE.matcher(line == null ? "" : line.trim()).find());
             List<MemoryLine> candidates = new ArrayList<>();
             int dropped = 0;
             double contaminationMax = 0.0d;
@@ -406,11 +411,16 @@ public class DynamicContextCompressor {
                     continue;
                 }
                 boolean anchorHit = containsAnchor(line, anchor);
-                double score = (anchorHit ? 2.0d : 0.0d)
-                        + (isMemoryHeaderLine(line) ? 0.65d : 0.0d)
+                boolean assignmentLine = SESSION_ASSIGNMENT_LINE.matcher(line).find();
+                double score = (assignmentLine ? 3.0d : 0.0d)
+                        + (anchorHit ? 2.0d : 0.0d)
+                        + (assignmentMemory && (line.equals("Conversation summary:")
+                            || line.equals("Important session memory:") || line.equals("Recent turns:"))
+                                ? 4.0d : isMemoryHeaderLine(line) ? 0.65d : 0.0d)
                         + Math.min(0.35d, line.length() / 600.0d)
                         - contamination;
-                candidates.add(new MemoryLine(i, clipMemoryLine(line), score, contamination));
+                candidates.add(new MemoryLine(i, assignmentLine ? trimMemoryLine(line, 366) : clipMemoryLine(line),
+                        score, contamination));
             }
 
             boolean overflow = inputLen > maxChars || rawLines.length > maxLines;
@@ -500,7 +510,7 @@ public class DynamicContextCompressor {
 
             List<Content> out = new ArrayList<>(Math.min(keepN, sorted.size()));
             Map<String, Integer> perHostCount = new HashMap<>();
-            Set<String> seenText = new HashSet<>();
+            Set<DedupKey> seenText = new HashSet<>();
 
             for (Content c : sorted) {
                 if (c == null) {
@@ -522,8 +532,8 @@ public class DynamicContextCompressor {
                 if (text.isBlank()) {
                     continue;
                 }
-                String normKey = normalizeForDedupe(text);
-                if (!seenText.add(normKey)) {
+                DedupKey normKey = dedupKey(c, text);
+                if (normKey != null && !seenText.add(normKey)) {
                     continue;
                 }
 
@@ -2022,6 +2032,20 @@ public class DynamicContextCompressor {
                 int half = anchorWindowChars / 2;
                 int start = Math.max(0, idx - half);
                 int end = Math.min(t.length(), idx + a.length() + half);
+                // Keep the anchor's whole sentence when it fits, including qualifiers
+                // beyond the configured window (negation, limits, and uncertainty).
+                java.text.BreakIterator sentences = java.text.BreakIterator.getSentenceInstance(java.util.Locale.ROOT);
+                sentences.setText(t);
+                int sentenceStart = sentences.preceding(idx + 1);
+                int sentenceEnd = sentences.following(idx + a.length() - 1);
+                if (sentenceStart != java.text.BreakIterator.DONE && sentenceEnd != java.text.BreakIterator.DONE) {
+                    int excerptChars = sentenceEnd - sentenceStart
+                            + (sentenceStart > 0 ? 3 : 0) + (sentenceEnd < t.length() ? 3 : 0);
+                    if (excerptChars <= bodyBudget) {
+                        start = sentenceStart;
+                        end = sentenceEnd;
+                    }
+                }
                 String sub = t.substring(start, end);
                 String prefix = start > 0 ? "..." : "";
                 String suffix = end < t.length() ? "..." : "";
@@ -2113,19 +2137,27 @@ public class DynamicContextCompressor {
         return text.toLowerCase().indexOf(needle.toLowerCase());
     }
 
-    private static String normalizeForDedupe(String text) {
-        if (text == null) {
-            return "";
+    private record DedupKey(String body, String citation, Map<String, Object> provenance) {
+    }
+
+    private static DedupKey dedupKey(Content content, String text) {
+        Map<String, Object> meta = metadataOf(content);
+        String citation = strongCitationIdentifier(meta);
+        // Missing identity cannot prove that matching text came from the same document.
+        if (citation.isBlank() && value(meta, "sourceId").isBlank()) {
+            return null;
         }
-        String s = text
-                .replaceAll("<[^>]+>", " ")
-                .replaceAll("\\s+", " ")
-                .trim()
-                .toLowerCase();
-        if (s.length() > 240) {
-            s = s.substring(0, 240);
+        Map<String, Object> provenance = new LinkedHashMap<>();
+        for (String key : List.of("sourceId", "doc_id", "docId", "chunk_id", "parent_doc_id",
+                "revision", "bodyHash", "retrievedAt", "_nova.origHash")) {
+            Object item = meta.get(key);
+            if (item != null) {
+                provenance.put(key, item);
+            }
         }
-        return s;
+        // Compare the complete body; case, markup and qualifiers may carry meaning.
+        String body = text.replace("\r\n", "\n").replace('\r', '\n');
+        return new DedupKey(body, citation, Map.copyOf(provenance));
     }
 
     private static void traceCompression(String anchor, int inputCount, int outputCount, boolean failSoft, String reason) {

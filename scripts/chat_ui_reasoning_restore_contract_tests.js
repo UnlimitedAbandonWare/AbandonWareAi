@@ -126,13 +126,16 @@ function hydrationHarness() {
   const messages = [];
   const context = vm.createContext({
     state: { currentSessionId: 42 }, dom: { chatMessages: { children: messages } },
+    // This harness observes transcript restoration; trace/receipt views have their own tests.
+    window: {}, markControlHydrationReady() {}, chatTraceRequestUrl: url => url,
+    turnTracesByTurnId: () => new Map(), renderExecutionModeReceipt() {},
     sessionIdFromPayload: p => p.sessionId, restoreCurrentSessionId: () => 42,
     normalizeSessionIdValue: n => n, beginChatTransitionDebugTurn() {},
     apiCall: async () => { calls++; return context.response(); },
-    response: async () => ({ json: async () => ({ found: true, messages: [{ role: 'assistant', content: 'restored' }] }) }),
+    response: async () => ({ json: async () => ({ found: true, turnTraces: [], messages: [{ role: 'assistant', content: 'restored', turnId: 7 }] }) }),
     validateSessionDetail: (sid, detail) => detail.valid === false ? null : detail,
     rememberCurrentSessionId() {}, clearSelectionEntropyTrace() {},
-    appendMessage: (role, content) => { const node = { role, content }; messages.push(node); return node; },
+    appendMessage: (role, content) => { const node = { role, content, dataset: {} }; messages.push(node); return node; },
     applyRestoredTerminalStoppedState() {}, applyRestoredSessionSettings() {}, restoreSessionModeBadge() {},
     resumeStoredRunIfNeeded() {}, focusRestoredComposerIfDocumentOwned() {},
     clearSessionModeDiagnostics() {}, clearActiveRunIdentity() {}, setStatusRailValue() {},

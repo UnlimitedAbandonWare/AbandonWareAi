@@ -62,10 +62,11 @@ Codex 세션의 반복적 목표 충돌(P7: cannot create a new goal because thi
 - 제품 소스 코드(Java/JS) 임의 변경 금지.
 
 ## 7. Acceptance
-1. `python -B scripts/demo1_goal_switch_barrier.py check-goal` 실행 시 정상 JSON(exit 0) 및 Safe Registration 스니펫 반환.
-2. `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`에 P7 Safe Protocol이 반영됨.
-3. `python -B scripts/test_demo1_goal_switch_barrier.py` 실행 결과 exit 0 확인. 미실행 항목은 NOT_RUN 표기.
-4. 작업 완료 후 소유한 모든 lease 해제 (종료 시 lease 0).
+- WP1: `python -B scripts/demo1_goal_switch_barrier.py check-goal` 실행 시 정상 JSON(exit 0) 및 Safe Registration 스니펫 반환.
+- WP2: `docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md`에 P7 Safe Protocol이 반영됨.
+- WP3: `scripts/agent_session_watch.py` 실행 시 P7 감지 결과에 `next_action`/`remedy_cmd` 처방이 정상 출력됨.
+- WP4: `python -B scripts/test_demo1_goal_switch_barrier.py` 실행 결과 exit 0 확인. 미실행 항목은 NOT_RUN 표기.
+- 종료 시 lease 0 확인.
 
 ## 8. 보고 형식
 외부 API: 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0

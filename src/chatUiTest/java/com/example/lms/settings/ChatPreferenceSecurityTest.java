@@ -98,6 +98,25 @@ class ChatPreferenceSecurityTest {
                 .contentType("application/json").content("{\"expectedRevision\":0,\"set\":{}}")).andReturn().getResponse().getStatus());
         assertTrue(states.isEmpty());
     }
+    @Test void traceSaveCannotCrossAnOwnerChangeWithIdenticalRevisionAndHash() throws Exception {
+        String expectedScope = com.example.lms.service.AttachmentOwnerIdentity.forAnonymous(A).hash();
+        var response = mvc.perform(patch("/api/settings/preferences")
+                .cookie(new jakarta.servlet.http.Cookie("ownerKey", B)).contentType("application/json")
+                .content("{\"expectedRevision\":0,\"expectedHash\":null,\"expectedOwnerScopeId\":\"" + expectedScope
+                        + "\",\"set\":{\"chatTraceEnabled\":false}}"))
+                .andReturn().getResponse();
+        assertEquals(409, response.getStatus());
+        assertTrue(states.isEmpty());
+    }
+    @Test void traceSaveAcceptsItsVerifiedOwnerWithoutChangingProtectedAccess() throws Exception {
+        String scope = com.example.lms.service.AttachmentOwnerIdentity.forAnonymous(A).hash();
+        assertEquals(200, mvc.perform(patch("/api/settings/preferences")
+                .cookie(new jakarta.servlet.http.Cookie("ownerKey", A)).contentType("application/json")
+                .content("{\"expectedRevision\":0,\"expectedHash\":null,\"expectedOwnerScopeId\":\"" + scope
+                        + "\",\"set\":{\"chatTraceEnabled\":false}}"))
+                .andReturn().getResponse().getStatus());
+        assertEquals(false, states.get(scope).overrides().get("chatTraceEnabled"));
+    }
     @Test void globalAndAdminApisRetainProtectedStatus() throws Exception {
         assertEquals(403, mvc.perform(post("/api/settings").contentType("application/json").content("{}")).andReturn().getResponse().getStatus());
         assertEquals(403, mvc.perform(get("/admin/pipeline-status")).andReturn().getResponse().getStatus());

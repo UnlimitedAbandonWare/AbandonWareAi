@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""test_brief_save.py — brief_save.py 8건 회귀 테스트 (격리: temp downloads/repo-root)."""
+"""test_brief_save.py — brief_save.py 12건 회귀 테스트 (격리: temp downloads/repo-root)."""
 from __future__ import annotations
 
 import json
@@ -77,19 +77,33 @@ class BriefSaveTest(unittest.TestCase):
                  "--repo-root", str(self.repo)])
         return json.loads(r.stdout)
 
-    def test_1_pass_saves_two_copies_and_registry(self):
+    def test_1_pass_saves_downloads_only_by_default(self):
         r = self.save(GOOD)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         paste = self.downloads / "PASTE_DEVIN_test-brief_20261002.txt"
         brief = self.repo / "agent-prompts" / "devin-test-brief-20261002" / "BRIEF.txt"
-        self.assertTrue(paste.is_file() and brief.is_file())
-        self.assertEqual(paste.read_bytes(), brief.read_bytes())
+        self.assertTrue(paste.is_file())
+        self.assertFalse(brief.exists())
+        self.assertFalse((self.repo / "agent-prompts").exists())
         reg = self.repo / "data" / "agent-handoff" / "brief-registry" / "briefs.jsonl"
         rows = [json.loads(l) for l in reg.read_text(encoding="utf-8").splitlines()]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["agent"], "DEVIN")
         self.assertEqual(rows[0]["topic"], "test-brief")
+        self.assertIsNone(rows[0]["repoPath"])
         self.assertIsNotNone(rows[0]["sha12"])
+
+    def test_1b_pass_saves_repo_copy_when_flagged(self):
+        r = self.save(GOOD, extra=["--repo-copy"])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        paste = self.downloads / "PASTE_DEVIN_test-brief_20261002.txt"
+        brief = self.repo / "agent-prompts" / "devin-test-brief-20261002" / "BRIEF.txt"
+        self.assertTrue(paste.is_file() and brief.is_file())
+        self.assertEqual(paste.read_bytes(), brief.read_bytes())
+        self.assertIn("두 사본 일치: 예", r.stdout)
+        reg = self.repo / "data" / "agent-handoff" / "brief-registry" / "briefs.jsonl"
+        rows = [json.loads(l) for l in reg.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(rows[0]["repoPath"], str(brief))
 
     def test_2_same_name_gets_r2_and_original_unchanged(self):
         self.save(GOOD)
@@ -185,6 +199,70 @@ class BriefSaveTest(unittest.TestCase):
         self.assertEqual(row["sha12Note"], "backfill-meta-only")
         self.assertEqual(row["author"], "unknown")
         self.assertNotIn("secret-content", reg.read_text(encoding="utf-8"))
+
+    # --- add-only: cover 하위 명령 (F2 주제 커버리지, 2026-10-06) ---
+
+    def _paste(self, name: str, text: str = "", data: bytes | None = None) -> Path:
+        p = self.downloads / name
+        p.write_bytes(data) if data is not None else p.write_text(
+            text, encoding="utf-8")
+        return p
+
+    def test_cover_covered_with_file_line_evidence(self):
+        self._paste("PASTE_CODEX_graph-hybrid_20261005.md",
+                    "first tag line\nGraphRAG uses hybrid RRF fusion\nother\n")
+        r = run(["cover", "--topic", "GraphRAG", "--terms",
+                 "graph|hybrid|RRF", *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verdict=COVERED", r.stdout)
+        self.assertIn("PASTE_CODEX_graph-hybrid_20261005.md:2:", r.stdout)
+
+    def test_cover_partial_lists_missing_terms(self):
+        self._paste("PASTE_CODEX_partial_20261005.txt",
+                    "only graph term here\n")
+        r = run(["cover", "--topic", "T", "--terms", "graph|missingterm",
+                 *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verdict=PARTIAL", r.stdout)
+        self.assertIn("missingterm", r.stdout)
+
+    def test_cover_none_when_no_hits(self):
+        self._paste("PASTE_CODEX_nothing_20261005.txt", "unrelated text\n")
+        r = run(["cover", "--topic", "T", "--terms", "zzz|qqq",
+                 *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verdict=NONE", r.stdout)
+
+    def test_cover_json_line_numbers_exact(self):
+        self._paste("PASTE_CODEX_lines_20261005.txt",
+                    "a\nb\nterm-x here\nd\n")
+        r = run(["cover", "--topic", "T", "--terms", "term-x", "--json",
+                 *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        res = json.loads(r.stdout)["results"][0]
+        self.assertEqual("COVERED", res["verdict"])
+        entry = res["files"][0]
+        self.assertEqual("PASTE_CODEX_lines_20261005.txt", entry["file"])
+        self.assertEqual(3, entry["hits"][0]["lines"][0][0])
+        self.assertIsNotNone(entry["sha12"])
+
+    def test_cover_cp949_bytes_do_not_break(self):
+        self._paste("PASTE_CODEX_cp949_20261005.txt",
+                    data="한글 RRF 내용\n".encode("cp949"))
+        r = run(["cover", "--topic", "T", "--terms", "RRF|한글",
+                 *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("verdict=COVERED", r.stdout)
+
+    def test_cover_topics_file_multi(self):
+        self._paste("PASTE_CODEX_multi_20261005.txt", "alpha beta\n")
+        tf = Path(self.tmp.name) / "topics.json"
+        tf.write_text(json.dumps({"T-one": ["alpha", "beta"],
+                                  "T-two": ["zzz"]}), encoding="utf-8")
+        r = run(["cover", "--topics-file", str(tf), *self.base_args])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("topic=T-one verdict=COVERED", r.stdout)
+        self.assertIn("topic=T-two verdict=NONE", r.stdout)
 
 
 if __name__ == "__main__":

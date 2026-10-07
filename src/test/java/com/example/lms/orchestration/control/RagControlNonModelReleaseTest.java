@@ -58,6 +58,25 @@ class RagControlNonModelReleaseTest {
     }
 
     @Test
+    void knownInsufficientRecoverySurvivesEnforceButRejectAndChangedBodyRemainHeld() {
+        for (String reason : List.of("verification_insufficient_excerpt", "verification_insufficient_guidance")) {
+            TraceStore.put("finalAnswer.verificationStatus", "insufficient");
+            TraceStore.put("factVerifier.terminalStage", "claim_verification");
+            TraceStore.put("factVerifier.terminalReason", "insufficient");
+            TraceStore.put("factVerifier.judgeUnavailable", false);
+            var known = new RagControlRuntimeAdapter.RuntimeInput(true, 2, 1, false,
+                    true, false, false, true, true);
+            var input = authorize(known, reason, GUIDANCE);
+            assertFalse(input.verificationAccepted());
+            assertTrue(input.verificationKnown());
+            assertReleased(project(input, GUIDANCE), GUIDANCE);
+            assertHeld(project(input, GUIDANCE + " UNAPPROVED_BODY_SENTINEL"), "UNAPPROVED_BODY_SENTINEL");
+            TraceStore.put("finalAnswer.verificationStatus", "rejected");
+            assertHeld(project(input, GUIDANCE), GUIDANCE);
+        }
+    }
+
+    @Test
     void realTrackerFinalRowBindsNonModelBodyWithoutInventingModelLineage() {
         var tracker=new ModelRuntimeHealthTracker();
         String timeline=tracker.beginRequestTimeline("synthetic-request","synthetic-session");

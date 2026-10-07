@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -220,6 +221,171 @@ class LeaseWaitTest(unittest.TestCase):
         self.assertEqual(0, rc)
         out = json.loads(buf.getvalue())
         self.assertEqual("live", out["result"])
+
+
+FIXED_NOW = datetime(2026, 10, 6, 0, 0, 0, tzinfo=timezone.utc)
+
+
+def _iso(dt):
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def rich_row(topic, lifecycle="live", status="active",
+             heartbeat_state="valid", release_pending=False,
+             expires_at=None):
+    return {"topic": topic, "lifecycle": lifecycle, "status": status,
+            "heartbeatState": heartbeat_state,
+            "releasePending": release_pending,
+            "expiresAtUtc": expires_at}
+
+
+def rich_scanner(live=(), stale=(), free=()):
+    def scan(paths):
+        return {"result": ("live" if live else
+                           ("stale" if stale else "free")),
+                "free": list(free), "live": [dict(r) for r in live],
+                "stale": [dict(r) for r in stale]}
+    return scan
+
+
+def ticket(td, paths, task, created, expires):
+    d = CAU._waiter_dir(td, paths)
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / (created.strftime("%Y%m%dT%H%M%SZ") + "-" + task + ".json")
+    write(p, json.dumps({"task": task, "targets": sorted(paths),
+                         "createdAtUtc": _iso(created),
+                         "expiresAtUtc": _iso(expires)}))
+    return p
+
+
+class LeaseWaitAutoBudgetTest(unittest.TestCase):
+    """W1: --max-min auto가 막은 lease 상태로 예산을 정한다."""
+
+    def test_finishing_ttl_budget(self):
+        exp = FIXED_NOW + timedelta(minutes=40)
+        row = rich_row("peer", status="finishing", release_pending=True,
+                       expires_at=_iso(exp))
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min="auto",
+                             dry_run=True, scanner=rich_scanner(live=[row]),
+                             wall_now_fn=lambda: FIXED_NOW)
+        self.assertEqual("live", rep["result"])
+        self.assertEqual(2700, rep["budgetSec"])       # 40분 + 5분 버퍼
+        self.assertEqual("finishing_ttl", rep["budgetBasis"])
+
+    def test_active_default_budget(self):
+        row = rich_row("peer", status="active",
+                       expires_at=_iso(FIXED_NOW + timedelta(minutes=90)))
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min="auto",
+                             dry_run=True, scanner=rich_scanner(live=[row]),
+                             wall_now_fn=lambda: FIXED_NOW)
+        self.assertEqual(1200, rep["budgetSec"])
+        self.assertEqual("active_default", rep["budgetBasis"])
+
+    def test_stale_skips_wait(self):
+        row = rich_row("peer", lifecycle="stale", status="ended",
+                       heartbeat_state="absent",
+                       expires_at=_iso(FIXED_NOW - timedelta(minutes=5)))
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min="auto",
+                             dry_run=True, scanner=rich_scanner(stale=[row]),
+                             wall_now_fn=lambda: FIXED_NOW)
+        self.assertEqual("stale", rep["result"])
+        self.assertEqual(0, rep["budgetSec"])
+        self.assertEqual("stale_skip", rep["budgetBasis"])
+
+    def test_budget_capped_at_60min(self):
+        exp = FIXED_NOW + timedelta(minutes=180)
+        row = rich_row("peer", status="finishing", release_pending=True,
+                       expires_at=_iso(exp))
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min="auto",
+                             dry_run=True, scanner=rich_scanner(live=[row]),
+                             wall_now_fn=lambda: FIXED_NOW)
+        self.assertEqual(3600, rep["budgetSec"])
+        self.assertEqual("finishing_ttl", rep["budgetBasis"])
+
+    def test_numeric_max_min_backward_compat(self):
+        row = rich_row("peer")
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min=5,
+                             dry_run=True, scanner=rich_scanner(live=[row]))
+        self.assertEqual(300, rep["budgetSec"])
+        self.assertEqual("fixed", rep["budgetBasis"])
+        rep2 = CAU.lease_wait(["scripts/x.py"], "unused", max_min="7",
+                              dry_run=True, scanner=rich_scanner(live=[row]))
+        self.assertEqual(420, rep2["budgetSec"])
+
+    def test_output_fields_present(self):
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", dry_run=True,
+                             scanner=rich_scanner())
+        for key in ("waitedSec", "waitedSeconds", "budgetSec",
+                    "budgetBasis", "lastStatus", "blockers"):
+            self.assertIn(key, rep)
+
+    def test_heartbeat_called_each_interval(self):
+        calls = {"hb": 0, "sleeps": 0}
+        states = [rich_scanner(live=[rich_row("p")]),
+                  rich_scanner(live=[rich_row("p")]),
+                  rich_scanner()]
+        it = iter(states)
+        rep = CAU.lease_wait(["scripts/x.py"], "unused", max_min="auto",
+                             sleep_fn=lambda s: calls.__setitem__(
+                                 "sleeps", calls["sleeps"] + 1),
+                             heartbeat_fn=lambda: calls.__setitem__(
+                                 "hb", calls["hb"] + 1),
+                             scanner=lambda p: next(it)(p))
+        self.assertEqual("free", rep["result"])
+        self.assertEqual(2, calls["hb"])
+        self.assertEqual(2, calls["sleeps"])
+
+
+class LeaseWaitEnqueueTest(unittest.TestCase):
+    """W2: --enqueue 대기표 순번·만료 무시·예외 시 삭제."""
+
+    def test_second_waiter_gets_free_wait_turn(self):
+        with tempfile.TemporaryDirectory() as td:
+            ticket(td, ["scripts/x.py"], "other-agent",
+                   FIXED_NOW - timedelta(minutes=1),
+                   FIXED_NOW + timedelta(minutes=30))
+            rep = CAU.lease_wait(["scripts/x.py"], td, max_min="0",
+                                 enqueue=True, task="me",
+                                 scanner=rich_scanner(),
+                                 wall_now_fn=lambda: FIXED_NOW)
+            self.assertEqual("free_wait_turn", rep["result"])
+
+    def test_first_waiter_gets_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            rep = CAU.lease_wait(["scripts/x.py"], td, max_min="0",
+                                 enqueue=True, task="me",
+                                 scanner=rich_scanner(),
+                                 wall_now_fn=lambda: FIXED_NOW)
+            self.assertEqual("free", rep["result"])
+            self.assertEqual([], list(
+                (Path(td) / "waiters").rglob("*.json")))
+
+    def test_expired_ticket_ignored(self):
+        with tempfile.TemporaryDirectory() as td:
+            ticket(td, ["scripts/x.py"], "dead-agent",
+                   FIXED_NOW - timedelta(hours=2),
+                   FIXED_NOW - timedelta(hours=1))  # 이미 만료
+            rep = CAU.lease_wait(["scripts/x.py"], td, max_min="0",
+                                 enqueue=True, task="me",
+                                 scanner=rich_scanner(),
+                                 wall_now_fn=lambda: FIXED_NOW)
+            self.assertEqual("free", rep["result"])
+
+    def test_exception_removes_my_ticket(self):
+        with tempfile.TemporaryDirectory() as td:
+            def boom(paths):
+                raise RuntimeError("scan failed")
+            with self.assertRaises(RuntimeError):
+                CAU.lease_wait(["scripts/x.py"], td, max_min="0",
+                               enqueue=True, task="me", scanner=boom)
+            mine = list((Path(td) / "waiters").rglob("*-me.json"))
+            self.assertEqual([], mine)
+
+    def test_dry_run_creates_no_ticket(self):
+        with tempfile.TemporaryDirectory() as td:
+            CAU.lease_wait(["scripts/x.py"], td, enqueue=True, task="me",
+                           dry_run=True, scanner=rich_scanner())
+            self.assertFalse((Path(td) / "waiters").exists())
 
 
 class SupersededTest(unittest.TestCase):

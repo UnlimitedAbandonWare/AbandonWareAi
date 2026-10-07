@@ -2,6 +2,17 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
+// Public failure-copy contracts. Compare the message body separately from
+// appended recovery actions; real DOM textContent includes both.
+const EXPECTED_STREAM_FAILURE = '응답이 완료되지 않았습니다. 수신한 내용과 질문은 유지됩니다. 대화 기록에서 완료 여부를 확인해 주세요.';
+const EXPECTED_SERVICE_FAILURE = '서버가 일시적으로 응답할 수 없습니다. 질문은 입력창에 유지됩니다.';
+const EXPECTED_BACKEND_FAILURE = '모델 서비스에 연결할 수 없거나 실행이 실패했습니다. 서비스 상태를 확인해 주세요. 질문은 보관됩니다.';
+const EXPECTED_NETWORK_FAILURE = '연결이 끊겼습니다. 수신한 답변은 유지됩니다. 연결 상태를 확인해 주세요.';
+const EXPECTED_TIMEOUT_FAILURE = '응답 대기 시간이 초과되었습니다. 질문과 수신한 내용은 유지됩니다.';
+const EXPECTED_ACCESS_FAILURE = '접근 권한을 확인해 주세요. 모델을 변경해도 해결되지 않는 요청입니다.';
+const EXPECTED_SESSION_FAILURE = '이 대화에 접근할 수 없습니다. 내 대화를 선택하거나 새 대화를 시작해 주세요.';
+const EXPECTED_LOGIN_FAILURE = '로그인이 필요합니다. 작성한 질문은 보관됩니다.';
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -36,21 +47,34 @@ let focusedElement = null;
 function fakeElement(id) {
   const listeners = {};
   const attributes = {};
+  let ownText = '';
   return {
     id,
     dataset: {},
-    textContent: '',
+    __textContentAggregates: true,
+    get textContent() {
+      return ownText + this.children.map((child) => String(child?.textContent ?? '')).join('');
+    },
+    set textContent(value) {
+      ownText = String(value ?? '');
+      for (const child of this.children || []) child.parentElement = null;
+      this.children = [];
+    },
     title: '',
     value: '',
     checked: false,
     disabled: false,
-    style: {},
+    style: { setProperty(name, value) { this[name] = String(value); } },
     children: [],
     parentElement: null,
     appendChild(child) {
       child.parentElement = this;
       this.children.push(child);
       return child;
+    },
+    prepend(...children) {
+      children.forEach((child) => { child.parentElement = this; });
+      this.children.unshift(...children);
     },
     append(...children) {
       children.forEach((child) => this.appendChild(child));
@@ -61,7 +85,7 @@ function fakeElement(id) {
       });
       this.children = [];
       children.forEach((child) => this.appendChild(child));
-      this.textContent = children.map((child) => child.textContent || '').join('');
+      ownText = '';
     },
     addEventListener(type, handler) {
       listeners[type] = handler;
@@ -90,6 +114,19 @@ function fakeElement(id) {
       const result = listeners.click && listeners.click(event);
       this.lastClickDefaultPrevented = event.defaultPrevented;
       return result;
+    },
+    get isConnected() {
+      for (let node = this; node; node = node.parentElement) {
+        if (node.id === 'chatWindow' || node.id === 'document-body') return true;
+      }
+      return false;
+    },
+    after(node) {
+      if (!this.parentElement?.children) return;
+      const index = this.parentElement.children.indexOf(this);
+      if (index < 0) return;
+      node.parentElement = this.parentElement;
+      this.parentElement.children.splice(index + 1, 0, node);
     },
     before(node) {
       this.previousSibling = node || null;
@@ -130,6 +167,7 @@ function fakeElement(id) {
 }
 
 function nodeText(node) {
+  if (node?.__textContentAggregates) return String(node.textContent || '');
   if (!node) return '';
   const own = node.textContent || '';
   const childText = Array.isArray(node.children) ? node.children.map(nodeText).join('') : '';
@@ -482,6 +520,7 @@ elements.get('useRagToggle').checked = false;
 elements.get('useRagToggle').defaultChecked = false;
 const currentModelBadge = fakeElement('currentModelBadge');
 const fakeDocumentBody = fakeElement('document-body');
+const traceFixtureToggle = fakeElement('trace-fixture-toggle');
 const fakeDocumentElement = fakeElement('document-element');
 focusedElement = fakeDocumentBody;
 
@@ -529,6 +568,10 @@ const context = {
     return { type: name, name, detail: init && init.detail };
   },
   document: {
+    addEventListener(type, handler) {
+      this.listeners = this.listeners || {};
+      this.listeners[type] = handler;
+    },
     get activeElement() {
       return focusedElement;
     },
@@ -538,9 +581,14 @@ const context = {
       const registered = elements.get(id);
       if (registered) return registered;
       const dynamicMatch = findNodesById(elements.get('chatWindow'), id)[0];
-      return dynamicMatch || fakeElement(id);
+      return dynamicMatch || null;
     },
     querySelector(selector) {
+      if (selector === 'meta[name="chat-request-budget-ms"]' && context.__requestBudgetMs) {
+        return { getAttribute: () => String(context.__requestBudgetMs) };
+      }
+      if (selector === '[data-admin-diagnostics]') return fakeDocumentBody;
+      if (selector === '[data-chat-trace-toggle]') return traceFixtureToggle;
       if (selector === 'meta[name="_csrf"]') {
         return { content: 'csrf-token-123' };
       }
@@ -1224,7 +1272,8 @@ context.window.fetch = async (url, options = {}) => {
                     done: false,
                     value: new TextEncoder().encode(
                       'event: message\n' +
-                      'data: {"type":"message","data":"message fallback chunk"}\n\n'
+                      'data: {"type":"message","data":"message fallback chunk"}\n\n' +
+                      'event: final\ndata: {"type":"final","data":"message fallback chunk","answerMode":"streamed","evidence":[]}\n\n'
                     )
                   };
                 }
@@ -1335,6 +1384,15 @@ context.window.fetch = async (url, options = {}) => {
     }
     return makeResponse();
   }
+  if (String(url) === '/api/chat/sessions') {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      json: async () => [],
+      text: async () => '[]'
+    };
+  }
   const w3DetailMatch = String(url).match(/^\/api\/chat\/sessions\/(\d+)$/);
   if (w3DetailMatch && context.__w3DetailScenario) {
     const scenario = context.__w3DetailScenario;
@@ -1442,6 +1500,8 @@ vm.createContext(context);
 
 const script = fs.readFileSync(path.join(__dirname, '..', 'main', 'resources', 'static', 'js', 'chat.js'), 'utf8');
 const imageJobUiSource = fs.readFileSync(path.join(__dirname, '..', 'main', 'resources', 'static', 'js', 'image-jobs-ui.js'), 'utf8');
+vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'main', 'resources', 'static', 'js', 'chat-trace-ui.js'), 'utf8'), context, { filename: 'chat-trace-ui.js' });
+vm.runInContext(script, context, { filename: 'chat.js' });
 const stylesheet = fs.readFileSync(path.join(__dirname, '..', 'main', 'resources', 'static', 'css', 'chat-style.css'), 'utf8');
 const template = fs.readFileSync(path.join(__dirname, '..', 'main', 'resources', 'templates', 'chat-ui.html'), 'utf8');
 const heartbeatProbe = fs.readFileSync(path.join(__dirname, '..', 'main', 'java', 'com', 'example', 'lms', 'web', 'ChatUiCoreHeartbeatProbe.java'), 'utf8');
@@ -1488,14 +1548,14 @@ const compactDiagnosticsSummaryRule = compactDecisionStylesStart >= 0
   ? cssRuleAfter(stylesheet, compactDecisionStylesStart, '#diagnosticsSummary {')
   : '';
 const chatRegionIndex = template.indexOf('<section class="chat-area-wrapper"');
-const projectIntroIndex = template.indexOf('<aside class="project-intro"');
+const historyRegionIndex = template.indexOf('<details class="conversation-sidebar"');
 assert(
-  chatRegionIndex >= 0 && projectIntroIndex > chatRegionIndex,
-  `conversation must lead DOM and visual order: chat=${chatRegionIndex} intro=${projectIntroIndex}`
+  historyRegionIndex >= 0 && chatRegionIndex > historyRegionIndex,
+  `collapsible history must precede the chat workspace: history=${historyRegionIndex} chat=${chatRegionIndex}`
 );
 assert(
   template.includes('<details class="admin-tools"') &&
-    template.includes('<summary>Admin tools</summary>') &&
+    template.includes('<summary>고급 도구 (선택)</summary>') &&
     template.includes('<details class="response-settings"') &&
     template.includes('id="responseSettingsSummary"') &&
     template.includes('<details class="diagnostics-disclosure"') &&
@@ -1638,246 +1698,44 @@ assert(
     narrowDetailRule.includes('white-space: normal;'),
   'Short mobile heartbeat should keep external evidence readable in a bounded scroll area without pushing the composer below the viewport'
 );
+const workspaceStylesStart = stylesheet.lastIndexOf('/* Conversation workspace:');
+const viewportOwnerRule = cssRuleAfter(stylesheet, workspaceStylesStart, 'body.chat-app {');
+const transcriptViewportRule = cssRuleAfter(stylesheet, workspaceStylesStart, '.chat-app .chat-transcript-region {');
+const transcriptScrollRule = cssRuleAfter(stylesheet, workspaceStylesStart, '.chat-app #chatWindow {');
+const composerDockRule = cssRuleAfter(stylesheet, workspaceStylesStart, '.chat-app .composer-dock {');
 assert(
-  stylesheet.includes('chat-composer-viewport-lock') &&
-    /\.chat-area-wrapper\s*{[\s\S]*height:\s*calc\(100vh\s*-\s*var\(--top-bar-min-height\)\s*-\s*20px\)/m.test(stylesheet) &&
-    /\.chat-area-wrapper\s*{[\s\S]*overflow:\s*hidden/m.test(stylesheet) &&
-    stylesheet.includes('.chat-area-wrapper:has(> .response-settings[open])') &&
-    stylesheet.includes('.chat-area-wrapper:has(> .diagnostics-disclosure[open])') &&
-    finalMobileStatusRule.includes('display: grid;') &&
-    finalMobileStatusRule.includes('grid-template-columns: repeat(3, minmax(0, 1fr));') &&
-    finalMobileStatusRule.includes('overflow-x: visible;') &&
-    finalMobileStatusRule.includes('overflow-y: visible;') &&
-    finalMobileHealthRule.includes('grid-column: 1 / -1;') &&
-    /\.composer\s*{[\s\S]*flex:\s*0\s+0\s+auto/m.test(stylesheet) &&
-    /\.composer\s*{[\s\S]*position:\s*static;[\s\S]*bottom:\s*auto;/m.test(stylesheet),
-  'Chat area should own viewport height while the transcript scrolls and the mobile status grid keeps the composer reachable without a nested horizontal scroller'
-);
-assert(
+  workspaceStylesStart >= 0 && viewportOwnerRule.includes('height: 100dvh;') &&
+    viewportOwnerRule.includes('overflow: hidden;') &&
+    transcriptViewportRule.includes('flex: 1 1 0;') && transcriptViewportRule.includes('min-height: 0;') &&
+    transcriptScrollRule.includes('overflow-y: auto;') && transcriptScrollRule.includes('min-width: 0;') &&
+    composerDockRule.includes('flex: 0 0 auto;') &&
+    /class="composer-dock"[\s\S]*class="composer"/.test(template),
+  'one viewport owner must bound the scrolling transcript while the composer dock remains reachable'
+);assert(
   stylesheet.includes('chat-supporting-proof-scroll-lock') &&
     /\.debug-proof-strip\s*{[\s\S]*max-height:\s*58px;[\s\S]*overflow-y:\s*auto/m.test(stylesheet) &&
     /\.debug-flow-rail\s*{[\s\S]*max-height:\s*58px;[\s\S]*overflow-y:\s*auto/m.test(stylesheet) &&
     /\.diagnostics-stack\s*>\s*\.brain-state-panel--compact\s*{[\s\S]*max-height:\s*76px/m.test(stylesheet),
   'Desktop supporting proof rails should scroll internally so optional evidence cannot push the composer below the viewport'
 );
+const currentWorkspaceStart = stylesheet.lastIndexOf('.chat-app .chat-layout {');
+const currentWorkspaceRule = cssRuleAfter(stylesheet, currentWorkspaceStart, '.chat-app .chat-layout {');
+const currentChatRule = cssRuleAfter(stylesheet, currentWorkspaceStart, '.chat-app .chat-area-wrapper {');
 assert(
-  stylesheet.includes('conversation-first-grid') &&
-    /\.chat-layout\s*{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+minmax\(240px,\s*320px\)/m.test(stylesheet) &&
-    /\.chat-area-wrapper\s*{[\s\S]*grid-column:\s*1;/m.test(stylesheet) &&
-    /\.project-intro\s*{[\s\S]*grid-column:\s*2;/m.test(stylesheet),
-  'desktop layout must lead with a wide chat workspace and trail with context'
+  currentWorkspaceStart >= 0 &&
+    /grid-template-columns:\s*252px\s+minmax\(0,\s*1fr\)/.test(currentWorkspaceRule) &&
+    currentChatRule.includes('grid-column: 2;') && currentChatRule.includes('grid-row: 1;'),
+  'desktop sidebar and chat must follow the current DOM and final workspace grid rules'
 );
+const currentMobileWorkspace = stylesheet.slice(stylesheet.lastIndexOf('@media (max-width: 760px)'));
 assert(
-  stylesheet.includes('conversation-first-mobile') &&
-    /@media \(max-width:\s*760px\)[\s\S]*\.chat-area-wrapper\s*{[\s\S]*grid-row:\s*1;/m.test(stylesheet) &&
-    /@media \(max-width:\s*760px\)[\s\S]*\.project-intro\s*{[\s\S]*grid-row:\s*2;/m.test(stylesheet) &&
-    cssRuleAfter(stylesheet, stylesheet.indexOf('/* conversation-first-mobile */'), '.orch-signal-badges')
-      .includes('grid-column: 1 / -1') &&
-    !/@media \(max-width:\s*760px\)[\s\S]*\.chat-area-wrapper\s*{[\s\S]*order:\s*1;/m.test(stylesheet),
-  'mobile layout must use matching DOM/grid order without creating implicit header columns'
+  /grid-template-columns:\s*minmax\(0,\s*1fr\)/.test(currentMobileWorkspace) &&
+    /grid-template-rows:\s*auto\s+minmax\(0,\s*1fr\)/.test(currentMobileWorkspace) &&
+    cssRuleAfter(currentMobileWorkspace, 0, '.chat-app .chat-area-wrapper {').includes('grid-row: 2;') &&
+    cssRuleAfter(currentMobileWorkspace, 0, '.chat-app .conversation-sidebar {').includes('grid-row: 1;') &&
+    cssRuleAfter(currentMobileWorkspace, 0, '.chat-app .conversation-sidebar[open] {').includes('max-height: min(25dvh, 220px);'),
+  'mobile history must stay bounded above a reachable chat workspace in the same DOM order'
 );
-assert(
-  /<header class="conversation-header">\s*<div class="conversation-copy">[\s\S]*?<\/div>\s*<div class="orch-signal-badges"/m.test(template) &&
-    /\.conversation-copy\s*\{[\s\S]*grid-column:\s*1;[\s\S]*\}/m.test(stylesheet) &&
-    /\.orch-signal-badges\s*\{[\s\S]*grid-column:\s*2;/m.test(stylesheet),
-  'conversation header copy and status badges must occupy two explicit grid cells'
-);
-assert(
-  /<div class="chat-transcript-region">\s*<div id="chatEmptyState"[\s\S]*?<div id="chatWindow" role="log"/m.test(template) &&
-    /\.chat-transcript-region\s*\{[\s\S]*display:\s*grid;[\s\S]*overflow:\s*hidden;[\s\S]*\}/m.test(stylesheet) &&
-    conversationTranscriptRule.includes('min-height: 0') &&
-    /\.chat-transcript-region\s*>\s*\.chat-empty-state,\s*\.chat-transcript-region\s*>\s*#chatWindow\s*\{[\s\S]*grid-area:\s*1\s*\/\s*1;[\s\S]*\}/m.test(stylesheet),
-  'empty prompt starters and the chat log must share one bounded transcript region'
-);
-assert(
-  conversationStatusRule.includes('display: flex') &&
-    conversationStatusRule.includes('flex-wrap: wrap') &&
-    conversationStatusRule.includes('overflow-x: visible') &&
-    conversationStatusRule.includes('overflow-y: visible') &&
-    finalMobileStatusRule.includes('display: grid;') &&
-    finalMobileStatusRule.includes('grid-template-columns: repeat(3, minmax(0, 1fr));') &&
-    finalMobileStatusRule.includes('overflow-x: visible;') &&
-    finalMobileStatusRule.includes('overflow-y: visible;') &&
-    finalMobileHealthRule.includes('grid-column: 1 / -1;'),
-  'conversation status evidence may wrap on desktop and must use a bounded three-column mobile grid without a nested scroller'
-);
-assert(
-  /button,\s*\.admin-tools\s*>\s*summary,\s*\.response-settings\s*>\s*summary,\s*\.diagnostics-disclosure\s*>\s*summary\s*{[\s\S]*min-height:\s*44px/m.test(stylesheet),
-  'interactive controls and disclosures must expose 44px targets'
-);
-assert(
-  /@media \(max-width:\s*760px\)[\s\S]*\.composer textarea\s*{[\s\S]*height:\s*44px;[\s\S]*min-height:\s*44px;/m.test(stylesheet),
-  'mobile composer input must preserve a 44px touch target'
-);
-assert(
-  /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*\.composer textarea\s*\{[\s\S]*height:\s*44px;[\s\S]*min-height:\s*44px;/m.test(stylesheet) &&
-    /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*button\s*\{[\s\S]*min-height:\s*44px;/m.test(stylesheet),
-  'short mobile composer controls must preserve 44px touch targets'
-);
-assert(
-  stylesheet.includes('.chat-area-wrapper:has(#chatWindow .message) .chat-empty-state') &&
-    stylesheet.includes('.diagnostics-stack') &&
-    stylesheet.includes('max-height: min(40vh, 360px)') &&
-    stylesheet.includes('@media (prefers-reduced-motion: reduce)'),
-  'empty state, bounded diagnostics, and reduced motion must be explicit'
-);
-assert(
-  decisionFirstStylesStart >= 0 && evidenceQualityRule.includes('overflow-wrap: anywhere'),
-  'Evidence badge styling must live in the final decision-first layer'
-);
-assert(
-  decisionRibbonRule.includes('flex: 1 1 100%'),
-  'Decision ribbon styling must refine the final status rail'
-);
-assert(
-  stylesheet.includes('.decision-ribbon [data-state="not-observed"]'),
-  'Decision ribbon must visibly distinguish not-observed'
-);
-assert(
-  stylesheet.includes('@media (prefers-reduced-motion: reduce)'),
-  'Decision-first UI must preserve reduced-motion handling'
-);
-assert(
-  conversationHealthRule.includes('flex-basis: 240px;') &&
-    finalMobileHealthRule.includes('grid-column: 1 / -1;'),
-  'Final base and mobile Health layout must use the semantic data-health-pill hook'
-);
-assert(
-  compactDecisionStylesStart > finalNarrowMobileStart &&
-    compactDecisionStylesStart < finalShortMobileStart &&
-    compactDecisionHeaderRule.includes('padding: 10px;') &&
-    compactDecisionTitleRule.includes('font-size: 20px;') &&
-    compactDecisionTitleRule.includes('line-height: 1.15;') &&
-    compactDecisionActionRule.includes('min-width: 72px;') &&
-    compactDecisionBadgeRule.includes('font-size: 10px;') &&
-    compactDecisionBadgeRule.includes('line-height: 1.1;') &&
-    compactDecisionStageRule.includes('grid-template-columns: repeat(3, minmax(0, 1fr));') &&
-    compactDiagnosticsSummaryRule.includes('min-width: 0;') &&
-    compactDiagnosticsSummaryRule.includes('font-size: 12px;') &&
-    compactDiagnosticsSummaryRule.includes('line-height: 1.2;') &&
-    finalShortMobileDecisionRule.includes('grid-template-columns: repeat(3, minmax(0, 1fr));'),
-  'Compact phones must preserve a contained composer through explicit header, Decision density, and bounded Diagnostics summary copy'
-);
-assert(
-  /\.admin-tools:not\(\[open\]\)\s*>\s*:not\(summary\),\s*\.response-settings:not\(\[open\]\)\s*>\s*:not\(summary\),\s*\.diagnostics-disclosure:not\(\[open\]\)\s*>\s*:not\(summary\)\s*{[\s\S]*display:\s*none/m.test(stylesheet),
-  'closed native disclosures must explicitly hide direct content despite author display rules'
-);
-assert(
-  /\.admin-tools-menu\s+a,\s*\.sign-in-link\s*{[\s\S]*min-height:\s*44px/m.test(stylesheet),
-  'top-level sign-in links must share the 44px admin menu target'
-);
-assert(
-  conversationStylesStart >= 0 &&
-    unqualifiedConversationTranscriptRule > conversationStylesStart &&
-    finalShortMobileStart > unqualifiedConversationTranscriptRule &&
-    finalShortMobileTranscriptRule.includes('flex: 1 1 140px;') &&
-    finalShortMobileTranscriptRule.includes('min-height: 0;') &&
-    finalShortMobileWindowRule.includes('padding: 10px;'),
-  'the final short-height mobile transcript override must remain shrinkable after the unqualified conversation rule'
-);
-assert(
-  stylesheet.includes('chat-mobile-short-transcript-priority') &&
-    /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*\.chat-transcript-region\s*{[\s\S]*flex:\s*1\s+1\s+140px;[\s\S]*min-height:\s*0/m.test(stylesheet) &&
-    finalMobileStatusRule.includes('display: grid;') &&
-    finalMobileStatusRule.includes('grid-template-columns: repeat(3, minmax(0, 1fr));') &&
-    finalMobileStatusRule.includes('overflow-x: visible;') &&
-    finalMobileStatusRule.includes('overflow-y: visible;') &&
-    finalMobileHealthRule.includes('grid-column: 1 / -1;') &&
-    /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*\.conversation-copy\s*>\s*p:not\(\.eyebrow\)\s*{[\s\S]*display:\s*none;/m.test(stylesheet) &&
-    /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*\.quick-prompts\s*{[\s\S]*grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/m.test(stylesheet) &&
-    stylesheet.includes('chat-status-cards-remain-readable-on-short-phones') &&
-    compactHealthRule.includes('overflow-wrap: anywhere;') &&
-    compactHealthRule.includes('white-space: normal;') &&
-    !compactHealthRule.includes('white-space: nowrap;') &&
-    !compactHealthRule.includes('overflow-wrap: normal;') &&
-    compactHeartbeatRule.includes('max-height: 44px;') &&
-    compactHeartbeatRule.includes('overflow-y: auto;') &&
-    /@media \(max-width:\s*760px\) and \(max-height:\s*760px\)[\s\S]*\.debug-heartbeat-card\[data-debug-heartbeat-field="harmony"\][\s\S]*\.debug-heartbeat-card\[data-debug-heartbeat-field="traceMemory"\][\s\S]*display:\s*none/m.test(stylesheet),
-  'Short mobile chat layout should reserve transcript height while keeping visible status evidence readable'
-);
-const compactHeightRule = stylesheet.slice(stylesheet.indexOf('@media (max-height: 760px)'), stylesheet.indexOf('@media (max-width: 760px) and (max-height: 760px)'));
-assert(
-  !/\.debug-heartbeat-card:nth-of-type/.test(compactHeightRule) &&
-    /\.debug-heartbeat-card\s*{[\s\S]*display:\s*none/m.test(compactHeightRule) &&
-    /\.debug-heartbeat-card\[data-debug-heartbeat-field="supabase"\][\s\S]*\.debug-heartbeat-card\[data-debug-heartbeat-field="browser"\][\s\S]*\.debug-heartbeat-card\[data-debug-heartbeat-field="computer"\][\s\S]*display:\s*grid/m.test(compactHeightRule),
-  'Short-height heartbeat should use explicit external evidence selectors, not nth-of-type order, so Supabase/Browser/Computer remain visible'
-);
-assert(
-  stylesheet.includes('chat-short-desktop-transcript-priority') &&
-    /@media \(max-height:\s*760px\)[\s\S]*\.debug-heartbeat-summary\s*{[\s\S]*grid-column:\s*auto/m.test(stylesheet) &&
-    /@media \(max-height:\s*760px\)[\s\S]*\.debug-heartbeat-card--wide\s*{[\s\S]*grid-column:\s*auto/m.test(stylesheet) &&
-    /@media \(max-height:\s*760px\)[\s\S]*\.debug-heartbeat-bar\s*{[\s\S]*grid-template-columns:\s*repeat\(6,\s*minmax\(0,\s*1fr\)\)/m.test(stylesheet) &&
-    /@media \(max-height:\s*760px\)[\s\S]*#chatWindow\s*{[\s\S]*flex:\s*1\s+1\s+180px;[\s\S]*min-height:\s*clamp\(150px,\s*24vh,\s*220px\)/m.test(stylesheet),
-  'Short-height desktop chat layout should compact debug heartbeat to preserve a usable transcript pane'
-);
-assert(
-  /\.message\.assistant\[data-state="pending"\][\s\S]*?border-left:\s*3px\s+solid\s+#5f7f95/i.test(stylesheet) &&
-    /\.message\.assistant\[data-state="pending"\][\s\S]*?font-style:\s*italic/i.test(stylesheet) &&
-    /\.message\.assistant\[data-state="ready"\][\s\S]*?border-left:\s*0/i.test(stylesheet),
-  'Assistant message visual states should distinguish pending response bubbles and reset ready bubbles'
-);
-assert(
-  /\.message\.assistant\[data-state="pending"\]::before[\s\S]*?content:\s*"Assistant is preparing"/i.test(stylesheet) &&
-    /\.message\.assistant\[data-state="pending"\]::before[\s\S]*?display:\s*inline-block/i.test(stylesheet),
-  'Pending assistant bubbles should show a short visible placeholder without mutating answer text'
-);
-{
-  const imageContext = {
-    document: {
-      createElement: imageDomElement,
-      createTextNode(text) {
-        return { nodeType: 3, textContent: String(text ?? ''), children: [] };
-      }
-    }
-  };
-  vm.createContext(imageContext);
-  vm.runInContext(
-    imageJobUiSource
-      .replace(/export async function (\w+)/g, 'globalThis.$1 = async function $1')
-      .replace(/export function (\w+)/g, 'globalThis.$1 = function $1'),
-    imageContext,
-    { filename: 'image-jobs-ui.js' }
-  );
-  const target = imageDomElement('div');
-  const card = vm.runInContext(
-    "renderImageJobCard(globalThis.__target, { status: 'failed', reason: 'image plugin disabled', content: '[image job unavailable]' })",
-    Object.assign(imageContext, { __target: target })
-  );
-  assert(
-    card.getAttribute('aria-label')?.includes('Image request unavailable') &&
-      card.getAttribute('aria-label')?.includes('status failed') &&
-      card.getAttribute('aria-label')?.includes('reason image plugin disabled'),
-    `image job card aria should preserve the redacted failure reason: ${card.getAttribute('aria-label')}`
-  );
-  const readableCardText = nodeText(card);
-  assert(
-    readableCardText.includes('Image job Image request unavailable status: failed id: - reason: image plugin disabled content: [image job unavailable]') &&
-      !readableCardText.includes('id: pending') &&
-      !readableCardText.includes('Image jobImage request') &&
-      !readableCardText.includes('unavailablestatus') &&
-      !readableCardText.includes('failedid'),
-    `image job card visible text should preserve readable separators: ${readableCardText}`
-  );
-  vm.runInContext(
-    "renderImageJobCard(globalThis.__target, { status: 'failed', reason: 'image_prompt_required', content: '[image job unavailable]' })",
-    Object.assign(imageContext, { __target: target })
-  );
-  assert(
-    target.children.filter((child) => child?.dataset?.imageJobDebug === 'true').length === 2,
-    `image job render should preserve one card per request: cardCount=${target.children.length}`
-  );
-}
-vm.runInContext(script, context, { filename: 'chat.js' });
-assert(vm.runInContext(`
-  dom.diagnosticsSummary.dataset.diagnosticCode = 'current-turn-failure';
-  renderRuntimeToolkit({FULL_LOAD_READY:false, requiredReady:2, requiredTotal:3, optionalTotal:1, services:[{serviceId:'ollama-local', required:true, status:'COOLDOWN', primaryPathStatus:'NOT_READY', functionalStatus:'FALLBACK_ACTIVE', reasonCode:'GPU_UNAVAILABLE'}]});
-  const failedText = document.getElementById('runtimeToolkitServices').textContent;
-  const primaryKept = dom.diagnosticsSummary.dataset.diagnosticCode === 'current-turn-failure';
-  renderRuntimeToolkit({FULL_LOAD_READY:true, requiredReady:3, requiredTotal:3, services:[{serviceId:'ollama-local', status:'READY', functionalStatus:'VERIFIED'}]});
-  const recoveredText = document.getElementById('runtimeToolkitServices').textContent;
-  delete dom.diagnosticsSummary.dataset.diagnosticCode;
-  failedText.includes('FALLBACK_ACTIVE') && failedText.includes('GPU_UNAVAILABLE') && !recoveredText.includes('GPU_UNAVAILABLE') && primaryKept;
-`, context), 'Runtime Diagnostics must distinguish fallback and recovery while preserving the primary diagnostic');
 
 assert(vm.runInContext(`
   renderDebugHeartbeat({localLlmRecovery: {state:'COOLDOWN', fallbackUsed:true}});
@@ -2376,14 +2234,22 @@ const selectionEntropyReplayFixture = Object.freeze({
   reasonCode: ''
 });
 const installSelectionEntropyCard = (assistant) => {
+  const priorSearch = context.window.location.search;
+  context.window.location.search = '?codexSmoke=contract&debug=true';
   context.__selectionEntropyAssistant = assistant;
   context.__selectionEntropySignal = selectionEntropyReplayFixture;
-  return vm.runInContext(
-    "renderSelectionEntropyTrace({ selectionEntropySignal: globalThis.__selectionEntropySignal }, globalThis.__selectionEntropyAssistant)",
-    context
-  );
+  try {
+    return vm.runInContext(
+      "renderSelectionEntropyTrace({ selectionEntropySignal: globalThis.__selectionEntropySignal }, globalThis.__selectionEntropyAssistant)",
+      context
+    );
+  } finally {
+    context.window.location.search = priorSearch;
+  }
 };
 {
+  const priorSelectionSearch = context.window.location.search;
+  context.window.location.search = '?codexSmoke=contract&debug=true';
   const chatWindow = elements.get('chatWindow');
   const newAssistant = (id) => {
     const assistant = fakeElement(id);
@@ -2590,6 +2456,7 @@ const installSelectionEntropyCard = (assistant) => {
   );
   delete context.__selectionEntropyAssistant;
   delete context.__selectionEntropySignal;
+  context.window.location.search = priorSelectionSearch;
 }
 
 {
@@ -2975,11 +2842,11 @@ assert(
 );
 assert(
   elements.get('chatWindow').getAttribute('aria-busy') === 'false' &&
-    elements.get('sendBtn').getAttribute('aria-label') === 'Send message' &&
-      elements.get('sendBtn').textContent === 'Send' &&
+    elements.get('sendBtn').getAttribute('aria-label') === '질문 전송' &&
+      elements.get('sendBtn').textContent === '↑' &&
       elements.get('sendBtn').disabled === true &&
-      elements.get('stopBtn').getAttribute('aria-label') === 'Stop response' &&
-      elements.get('stopBtn').textContent === 'Stop' &&
+      elements.get('stopBtn').getAttribute('aria-label') === '답변 중지' &&
+      elements.get('stopBtn').textContent === '중지' &&
       elements.get('stopBtn').hidden === true &&
       elements.get('stopBtn').style.display === 'none',
   `initial composer state should hide inactive stop control without enabling blank sends: busy=${elements.get('chatWindow').getAttribute('aria-busy')} send=${elements.get('sendBtn').getAttribute('aria-label')}/${elements.get('sendBtn').textContent}/${elements.get('sendBtn').disabled} stop=${elements.get('stopBtn').getAttribute('aria-label')}/${elements.get('stopBtn').textContent}/${elements.get('stopBtn').hidden}/${elements.get('stopBtn').style.display}`
@@ -3019,8 +2886,8 @@ assert(
   assert(
     elements.get('searchModeSelect').value === 'FORCE_DEEP' &&
       elements.get('useRagToggle').checked === true &&
-      elements.get('searchStatus').textContent === 'DEEP' &&
-    elements.get('ragStatus').textContent === 'ON',
+      elements.get('searchStatus').textContent === '요청 DEEP' &&
+    elements.get('ragStatus').textContent === '요청 ON',
   `quick prompt must leave explicit response settings unchanged: search=${elements.get('searchModeSelect').value}/${elements.get('searchStatus').textContent} rag=${elements.get('useRagToggle').checked}/${elements.get('ragStatus').textContent}`
 );
 elements.get('messageInput').value = '';
@@ -3152,7 +3019,7 @@ assert(
   'Chat UI should expose a RAG status rail value connected to the RAG toggle'
 );
 assert(
-  /<script\s+defer\s+src="\/js\/chat\.js\?v=chat-ui-[^"]+"/.test(template),
+  /<script\s+defer\s+src="\/js\/chat\.js\?v=[^"]+"/.test(template),
   'Chat UI should version the chat.js script URL so browser proof reloads the current debug UI asset'
 );
 assert(
@@ -3168,10 +3035,10 @@ assert(
   'Status rail labels and values should keep trace ids separate from quality signals'
 );
 assert(
-  elements.get('modelStatus').textContent === 'local' &&
+  elements.get('modelStatus').textContent === '요청 local' &&
     currentModelBadge.textContent === 'local' &&
-    elements.get('searchStatus').textContent === 'DEEP' &&
-    elements.get('ragStatus').textContent === 'ON',
+    elements.get('searchStatus').textContent === '요청 DEEP' &&
+    elements.get('ragStatus').textContent === '요청 ON',
   `quick prompt must retain the user-selected control rail: model=${elements.get('modelStatus').textContent} badge=${currentModelBadge.textContent} search=${elements.get('searchStatus').textContent} rag=${elements.get('ragStatus').textContent}`
 );
 assert(
@@ -3184,7 +3051,7 @@ elements.get('searchModeSelect').value = 'AUTO';
 elements.get('useRagToggle').checked = false;
 vm.runInContext('syncControlStatus({ persist: false });', context);
 assert(
-  elements.get('responseSettingsSummary').textContent === 'local | Search AUTO | RAG OFF',
+  elements.get('responseSettingsSummary').textContent === '요청 모델 local | 선택 방식 strict | 전략 자동 | 검색 AUTO | RAG OFF',
   `response settings summary should reflect the fixture controls: ${elements.get('responseSettingsSummary').textContent}`
 );
 elements.get('modelSelect').value = 'qwen3:30b';
@@ -3194,12 +3061,12 @@ elements.get('modelSelect').listeners.change();
 elements.get('searchModeSelect').listeners.change();
 elements.get('useRagToggle').listeners.change();
 assert(
-  elements.get('modelStatus').textContent === 'qwen3:30b' &&
+  elements.get('modelStatus').textContent === '요청 qwen3:30b' &&
     currentModelBadge.textContent === 'qwen3:30b' &&
     currentModelBadge.getAttribute('aria-label') === 'Current model: qwen3:30b' &&
-    elements.get('searchStatus').textContent === 'DEEP' &&
-    elements.get('ragStatus').textContent === 'ON' &&
-    statusPills.rag.getAttribute('aria-label') === 'RAG: ON',
+    elements.get('searchStatus').textContent === '요청 DEEP' &&
+    elements.get('ragStatus').textContent === '요청 ON' &&
+    statusPills.rag.getAttribute('aria-label') === 'RAG: 요청 ON',
   `control changes should update status rail and header badge before send: model=${elements.get('modelStatus').textContent} badge=${currentModelBadge.textContent} search=${elements.get('searchStatus').textContent} rag=${elements.get('ragStatus').textContent} aria=${statusPills.rag.getAttribute('aria-label')}`
 );
 const persistedControlSettings = JSON.parse(context.window.sessionStorage.getItem('chat.controlSettings') || '{}');
@@ -3218,8 +3085,8 @@ assert(
     currentModelBadge.textContent === 'qwen3:30b' &&
     elements.get('searchModeSelect').value === 'FORCE_DEEP' &&
     elements.get('useRagToggle').checked === true &&
-    elements.get('searchStatus').textContent === 'DEEP' &&
-    elements.get('ragStatus').textContent === 'ON',
+    elements.get('searchStatus').textContent === '요청 DEEP' &&
+    elements.get('ragStatus').textContent === '요청 ON',
   `stored control settings should restore before next send: model=${elements.get('modelSelect').value} badge=${currentModelBadge.textContent} search=${elements.get('searchModeSelect').value} rag=${elements.get('useRagToggle').checked} rail=${elements.get('searchStatus').textContent}/${elements.get('ragStatus').textContent}`
 );
 
@@ -3255,7 +3122,7 @@ assert(
 );
 assert(
   statusPills.stream.getAttribute('aria-label') === 'Stream: OFF' &&
-    statusPills.model.getAttribute('aria-label') === 'Model: local',
+    statusPills.model.getAttribute('aria-label') === 'Model: 응답 local',
   `status rail should expose label/value separators: ${statusPills.stream.getAttribute('aria-label')} / ${statusPills.model.getAttribute('aria-label')}`
 );
 const transformerHeartbeatAssistant = fakeElement('transformer-heartbeat-assistant');
@@ -3264,7 +3131,7 @@ vm.runInContext("updateOrchestrationSignalBar({ streamStatus: 'connecting', stre
 vm.runInContext("renderChatEvent({ type: 'transformer', status: 'running', transformerBlocks: [] }, globalThis.__transformerHeartbeatAssistant, 'transformer');", context);
 assert(
   elements.get('streamStatus').textContent !== '-' &&
-    elements.get('modelStatus').textContent === 'qwen3:8b',
+    elements.get('modelStatus').textContent === '응답 qwen3:8b',
   `transformer heartbeat without model detail should not overwrite route/model rails with placeholders: route=${elements.get('streamStatus').textContent} model=${elements.get('modelStatus').textContent}`
 );
 elements.get('modelSelect').value = 'qwen3:8b';
@@ -3272,14 +3139,14 @@ vm.runInContext('syncControlStatus({ persist: false });', context);
 vm.runInContext("updateOrchestrationSignalBar({ streamStatus: 'UI-MODE:LOCAL_EVIDENCE', model: 'qwen3:8b', answerMode: 'UI-MODE:LOCAL_EVIDENCE' });", context);
 assert(
   elements.get('streamStatus').textContent === 'ui mode: local evidence' &&
-    elements.get('modelStatus').textContent === 'qwen3:8b' &&
-    statusPills.model.getAttribute('aria-label') === 'Model: qwen3:8b',
+    elements.get('modelStatus').textContent === '응답 qwen3:8b' &&
+    statusPills.model.getAttribute('aria-label') === 'Model: 응답 qwen3:8b',
   `local UI evidence mode should not overwrite the model rail: stream=${elements.get('streamStatus').textContent} model=${elements.get('modelStatus').textContent} aria=${statusPills.model.getAttribute('aria-label')}`
 );
 vm.runInContext("updateOrchestrationSignalBar({ streamStatus: 'UI-MODE:LOCAL_EVIDENCE', model: 'ui-mode:local:evidence', answerMode: 'UI-MODE:LOCAL_EVIDENCE' });", context);
 assert(
-  elements.get('modelStatus').textContent === 'qwen3:8b' &&
-    statusPills.model.getAttribute('aria-label') === 'Model: qwen3:8b',
+  elements.get('modelStatus').textContent === '응답 qwen3:8b' &&
+    statusPills.model.getAttribute('aria-label') === 'Model: 응답 qwen3:8b',
   `local UI evidence payload model marker should fall back to selected model: model=${elements.get('modelStatus').textContent} aria=${statusPills.model.getAttribute('aria-label')}`
 );
 
@@ -3374,7 +3241,7 @@ assert(
 );
 assert(
   matrixCells.get('model-answer').getAttribute('aria-label')?.includes('Model/Answer: OK - model:OK answer:OK live:OK') &&
-    matrixCells.get('external-proof').getAttribute('aria-label')?.includes('External Proof: OK - supporting supabase:WARN browser:OK computer:OK'),
+    matrixCells.get('external-proof').getAttribute('aria-label')?.includes('External Proof: WARN - supabase:WARN browser:OK computer:OK'),
   `debug matrix cells should expose separated label/status/detail aria: ${matrixCells.get('model-answer').getAttribute('aria-label')} / ${matrixCells.get('external-proof').getAttribute('aria-label')}`
 );
 elements.get('streamStatus').textContent = 'idle';
@@ -3966,15 +3833,15 @@ vm.runInContext(`
   });
 `, context);
 assert(
-  heartbeatFields.get('browser').dataset.status === 'OK' &&
-    heartbeatFields.get('browser').getAttribute('aria-label')?.includes('Browser: OK - supporting scope:local-ui-proof') &&
+  heartbeatFields.get('browser').dataset.status === 'WARN' &&
+    heartbeatFields.get('browser').getAttribute('aria-label')?.includes('Browser: WARN - scope:local-ui-proof') &&
     heartbeatFields.get('browser').getAttribute('aria-label')?.includes('stale:true') &&
-    proofCells.get('browser').getAttribute('aria-label')?.includes('Browser: OK - supporting scope:local-ui-proof') &&
-    heartbeatFields.get('computer').dataset.status === 'OK' &&
-    heartbeatFields.get('computer').getAttribute('aria-label')?.includes('Computer: OK - supporting scope:gui-supporting-only') &&
+    proofCells.get('browser').getAttribute('aria-label')?.includes('Browser: WARN - scope:local-ui-proof') &&
+    heartbeatFields.get('computer').dataset.status === 'WARN' &&
+    heartbeatFields.get('computer').getAttribute('aria-label')?.includes('Computer: WARN - supporting scope:gui-supporting-only') &&
     heartbeatFields.get('computer').getAttribute('aria-label')?.includes('stale:true') &&
-    matrixCells.get('external-proof').getAttribute('aria-label')?.includes('External Proof: OK - supporting'),
-  `desktop-only heartbeat should demote stale Browser/Computer to supporting evidence without hiding stale detail: browser=${heartbeatFields.get('browser').getAttribute('aria-label')} computer=${heartbeatFields.get('computer').getAttribute('aria-label')} external=${matrixCells.get('external-proof').getAttribute('aria-label')}`
+    matrixCells.get('external-proof').getAttribute('aria-label')?.includes('External Proof: WARN -'),
+  `stale required Browser proof and supporting Computer proof should remain visible warnings: browser=${heartbeatFields.get('browser').getAttribute('aria-label')} computer=${heartbeatFields.get('computer').getAttribute('aria-label')} external=${matrixCells.get('external-proof').getAttribute('aria-label')}`
 );
 vm.runInContext(`
   renderDebugHeartbeat({
@@ -4209,14 +4076,14 @@ assert(
   `Supabase badge should preserve read-only evidence_needed state: ${orchBadges.get('supabase').title}`
 );
 assert(
-  elements.get('healthStatus').textContent === 'Live OK / external proof supporting' &&
-    elements.get('healthStatus').dataset.status === 'ok' &&
+  elements.get('healthStatus').textContent === 'Live OK / external proof needed' &&
+    elements.get('healthStatus').dataset.status === 'warn' &&
     elements.get('healthStatus').title.includes('live:OK') &&
-    elements.get('healthStatus').title.includes('proof:SUPPORTING external:SUPPORTING') &&
-    statusPills.health.getAttribute('aria-label') === 'Health: Live OK / external proof supporting' &&
+    elements.get('healthStatus').title.includes('proof:WARN external:WARN') &&
+    statusPills.health.getAttribute('aria-label') === 'Health: Live OK / external proof needed' &&
     !statusPills.health.getAttribute('aria-label')?.includes('raw:') &&
     statusPills.health.title.includes('raw: live:OK') &&
-    statusPills.health.title.includes('proof:SUPPORTING external:SUPPORTING'),
+    statusPills.health.title.includes('proof:WARN external:WARN'),
   `Health rail should show a readable summary while preserving raw evidence: ${elements.get('healthStatus').textContent} / ${statusPills.health.getAttribute('aria-label')}`
 );
 vm.runInContext("setStatusRailHealth('WARN', 'live:WARN core:OK ui:OK model:WARN answer:OK proof:SUPPORTING external:SUPPORTING');", context);
@@ -4928,9 +4795,10 @@ const genericEmptyEvidenceRailText = nodeText(genericEmptyEvidenceRail);
     `unknown SSE events should render compact redacted diagnostics, not disappear or leak data: ${unknownDiagnostic?.textContent}`
   );
 
+  traceFixtureToggle.checked = true;
   const traceAssistantBubble = fakeElement('assistant-trace');
 traceAssistantBubble.textContent = 'normal answer';
-traceAssistantBubble.parentElement = chatWindow;
+chatWindow.appendChild(traceAssistantBubble);
 const traceChildrenBefore = chatWindow.children.length;
 context.__traceAssistantBubble = traceAssistantBubble;
 vm.runInContext("renderChatEvent({ type: 'trace_html', html: '<details>debug trace</details>' }, globalThis.__traceAssistantBubble);", context);
@@ -4940,18 +4808,19 @@ assert(
 );
 assert(
   chatWindow.children.length === traceChildrenBefore + 1 &&
-    chatWindow.children[chatWindow.children.length - 1].dataset.role === 'trace',
+    chatWindow.children[chatWindow.children.length - 1].querySelector('[data-role="trace"]'),
   'trace_html should append a trace block after the answer'
 );
 assert(
-  chatWindow.children[chatWindow.children.length - 1].getAttribute('aria-hidden') === 'true' &&
-    chatWindow.children[chatWindow.children.length - 1].getAttribute('role') === 'presentation',
+  chatWindow.children[chatWindow.children.length - 1].querySelector('[data-role="trace"]').getAttribute('aria-live') === 'off' &&
+    chatWindow.children[chatWindow.children.length - 1].querySelector('[data-role="trace"]').dataset.liveRegion === 'excluded' &&
+    nodeText(chatWindow.children[chatWindow.children.length - 1]).includes('트레이스 표시 불가'),
   'trace_html diagnostic should stay out of the chat live-region announcement stream'
 );
 
 const traceSignalAssistantBubble = fakeElement('assistant-trace-signal');
 traceSignalAssistantBubble.textContent = 'trace signal answer';
-traceSignalAssistantBubble.parentElement = chatWindow;
+chatWindow.appendChild(traceSignalAssistantBubble);
 context.__traceSignalAssistantBubble = traceSignalAssistantBubble;
 const traceSignalChildrenBefore = chatWindow.children.length;
 vm.runInContext(`
@@ -4972,8 +4841,8 @@ vm.runInContext(`
   }, globalThis.__traceSignalAssistantBubble);
 `, context);
 const traceSignalChildren = chatWindow.children.slice(traceSignalChildrenBefore);
-const traceSignalDetail = traceSignalChildren.find((child) => child.dataset?.role === 'trace-signal-detail');
-const scoreDeltaDetail = traceSignalChildren.find((child) => child.dataset?.role === 'score-delta-detail');
+const traceSignalDetail = traceSignalAssistantBubble.parentElement.querySelector('[data-role="trace-signal-detail"]');
+const scoreDeltaDetail = traceSignalAssistantBubble.parentElement.querySelector('[data-role="score-delta-detail"]');
 const traceSignalDetailText = nodeText(traceSignalDetail);
 const scoreDeltaDetailText = nodeText(scoreDeltaDetail);
 assert(
@@ -4994,7 +4863,7 @@ assert(
 
 const canonicalTraceSignalAssistantBubble = fakeElement('assistant-canonical-trace-signal');
 canonicalTraceSignalAssistantBubble.textContent = 'canonical trace signal answer';
-canonicalTraceSignalAssistantBubble.parentElement = chatWindow;
+chatWindow.appendChild(canonicalTraceSignalAssistantBubble);
 context.__canonicalTraceSignalAssistantBubble = canonicalTraceSignalAssistantBubble;
 const canonicalTraceSignalChildrenBefore = chatWindow.children.length;
 vm.runInContext(`
@@ -5005,15 +4874,15 @@ vm.runInContext(`
     }
   }, globalThis.__canonicalTraceSignalAssistantBubble);
 `, context);
-const canonicalTraceSignalDetail = chatWindow.children
-  .slice(canonicalTraceSignalChildrenBefore)
-  .find((child) => child.dataset?.role === 'trace-signal-detail');
+const canonicalTraceSignalDetail = chatWindow.children.slice(canonicalTraceSignalChildrenBefore)
+  .flatMap((child) => child.querySelectorAll('[data-role="trace-signal-detail"]'))[0];
 const canonicalTraceSignalDetailText = nodeText(canonicalTraceSignalDetail);
 assert(
   canonicalTraceSignalDetailText.includes('request: hash:0123456789ab'),
   `canonical traceSignal payload should render its request hash: ${canonicalTraceSignalDetailText}`
 );
 
+traceFixtureToggle.checked = false;
 const planModeChildrenBefore = chatWindow.children.length;
 vm.runInContext(
   "renderPlanModeCard({ route: 'transformer' }, document.getElementById('chatWindow'));",
@@ -5408,7 +5277,7 @@ vm.runInContext(`
   }, globalThis.__compactProofBubble);
 `, context);
 assert(
-  elements.get('modelStatus').textContent === 'fallback: evidence' &&
+  elements.get('modelStatus').textContent === '응답 fallback: evidence' &&
     elements.get('streamStatus').textContent === 'fallback: evidence',
   `fallback evidence final should use a readable rail label instead of raw pseudo-models: model=${elements.get('modelStatus').textContent} stream=${elements.get('streamStatus').textContent}`
 );
@@ -5641,42 +5510,31 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     `missing image UI module should still render an actionable image message: ${missingImageUiAssistant.textContent}`
   );
 
-  const eofAssistant = fakeElement('assistant-eof');
-  elements.set('assistant-eof', eofAssistant);
-  context.__streamMode = 'eof-session-only';
-  elements.get('coreStatusRail').dataset.coreStatus = 'streaming';
-  elements.get('streamStatus').textContent = 'connecting';
-  await vm.runInContext("streamChat({ message: 'eof-only' }, 'assistant-eof')", context);
-  assert(
-    elements.get('coreStatusRail').dataset.coreStatus === 'error',
-    `stream EOF without final should not look complete: ${elements.get('coreStatusRail').dataset.coreStatus}`
-  );
-  assert(
-    elements.get('streamStatus').textContent === 'empty_stream_eof' &&
-      eofAssistant.textContent.includes('Stream ended before an answer') &&
-      !eofAssistant.textContent.includes('No response received before the stream ended'),
-    `stream EOF without final should expose an empty-stream diagnostic: status=${elements.get('streamStatus').textContent} text=${eofAssistant.textContent}`
-  );
-  assert(
-    elements.get('healthStatus').dataset.status === 'warn' &&
-      elements.get('healthStatus').textContent === 'Needs attention / external proof supporting' &&
-      elements.get('healthStatus').title.includes('state:attention') &&
-      elements.get('healthStatus').title.includes('stream:empty_stream_eof'),
-    `stream EOF without final must replace responding health with terminal attention: status=${elements.get('healthStatus').dataset.status} text=${elements.get('healthStatus').textContent} raw=${elements.get('healthStatus').title}`
-  );
-
-  const completeNoFinalAssistant = fakeElement('assistant-complete-no-final');
-  elements.set('assistant-complete-no-final', completeNoFinalAssistant);
-  context.__streamMode = 'status-complete-no-final';
-  elements.get('coreStatusRail').dataset.coreStatus = 'streaming';
-  elements.get('streamStatus').textContent = 'connecting';
-  await vm.runInContext("streamChat({ message: 'complete without final' }, 'assistant-complete-no-final')", context);
-  assert(
-    elements.get('coreStatusRail').dataset.coreStatus === 'error' &&
-      elements.get('streamStatus').textContent === 'empty_stream_eof' &&
-      completeNoFinalAssistant.textContent.includes('Stream ended before an answer'),
-    `status-complete EOF without final should not become a fake done state: core=${elements.get('coreStatusRail').dataset.coreStatus} stream=${elements.get('streamStatus').textContent} text=${completeNoFinalAssistant.textContent}`
-  );
+  for (const [mode, draft] of [['eof-session-only', 'eof-only'], ['status-complete-no-final', 'complete without final']]) {
+    context.__streamMode = mode;
+    vm.runInContext('clearActiveRunIdentity(); setComposerBusy(false);', context);
+    elements.get('messageInput').value = draft;
+    const childrenBeforeEof = chatWindow.children.length;
+    const callsBeforeEof = fetchCalls.length;
+    await vm.runInContext('sendMessage()', context);
+    const eofAssistant = chatWindow.children.slice(childrenBeforeEof)
+      .find((child) => child.dataset?.speaker === 'assistant');
+    assert(
+      eofAssistant && elements.get('coreStatusRail').dataset.coreStatus === 'error' &&
+        elements.get('streamStatus').textContent === 'message_failed' &&
+        eofAssistant.dataset.failureCode === 'stream_incomplete' &&
+        eofAssistant.dataset.failureKind === 'stream_failed' &&
+        eofAssistant.dataset.failureRetryable === 'false' &&
+        elements.get('messageInput').value === draft &&
+        !fetchCalls.slice(callsBeforeEof).some((call) => call.url === '/api/chat'),
+      `EOF without a final must produce a typed failure, retain draft and avoid sync fallback: ${mode}/${JSON.stringify(eofAssistant?.dataset)}`
+    );
+    assert(
+      elements.get('healthStatus').dataset.status === 'warn' &&
+        elements.get('healthStatus').title.includes('state:attention'),
+      `EOF without a final must leave terminal attention: ${mode}/${elements.get('healthStatus').title}`
+    );
+  }
 
   const headerSessionAssistant = fakeElement('assistant-header-session');
   elements.set('assistant-header-session', headerSessionAssistant);
@@ -5685,8 +5543,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   await vm.runInContext("streamChat({ message: 'header session only' }, 'assistant-header-session')", context);
   assert(
     vm.runInContext('state.currentSessionId', context) === null &&
-      elements.get('modelStatus').textContent === 'header-model' &&
-      elements.get('ragStatus').textContent === 'OFF' &&
+      elements.get('modelStatus').textContent === '응답 header-model' &&
+      elements.get('ragStatus').textContent === '적용 OFF' &&
       elements.get('traceStatus').textContent === 'trace-header-222',
     `stream headers must not replace canonical SSE session identity: session=${vm.runInContext('state.currentSessionId', context)} model=${elements.get('modelStatus').textContent} rag=${elements.get('ragStatus').textContent} trace=${elements.get('traceStatus').textContent}`
   );
@@ -5742,6 +5600,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   context.__streamMode = 'open-no-data';
   context.__nowMs = 0;
   elements.get('coreStatusRail').dataset.coreStatus = 'streaming';
+  vm.runInContext("setServerStatusRailHealth('OK', 'live:OK core:OK ui:OK model:OK answer:OK proof:SUPPORTING external:SUPPORTING');", context);
   const staleStream = vm.runInContext("streamChat({ message: 'slow local model', model: 'gemma4:26b' }, 'assistant-stale')", context);
   await new Promise((resolve) => setImmediate(resolve));
   context.__nowMs = 65000;
@@ -5752,8 +5611,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       heartbeatFields.get('liveStream').small.textContent.includes('stream:model_wait') &&
       staleAssistant.dataset.state === 'pending' &&
       staleAssistant.dataset.waitMs === '65000' &&
-      staleAssistant.getAttribute('aria-label')?.includes('client-wait:65000ms') &&
-      staleAssistant.textContent.includes('Response still pending'),
+      staleAssistant.getAttribute('aria-label') === 'Planning' &&
+      nodeText(staleAssistant).includes('Planning'),
     `open SSE without data should expose stale model wait without fake completion or a blank bubble: stream=${elements.get('streamStatus').textContent} state=${staleAssistant.dataset.state} wait=${staleAssistant.dataset.waitMs} label=${staleAssistant.getAttribute('aria-label')} text=${staleAssistant.textContent}`
   );
   assert(
@@ -5839,7 +5698,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   assert(
     !context.__cancelOrder.includes('abort') &&
       deadlineAssistant.dataset.state === 'pending' &&
-      deadlineAssistant.textContent.includes('Response still pending') &&
+      nodeText(deadlineAssistant).includes('Planning') && deadlineAssistant.getAttribute('aria-label') === 'Planning' &&
       elements.get('coreStatusRail').dataset.coreStatus === 'streaming' &&
       elements.get('streamStatus').textContent.includes('client-wait:95000ms') &&
       elements.get('streamStatus').textContent.includes('next:stop_or_wait'),
@@ -5851,11 +5710,17 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const evidenceDeadlineMs = vm.runInContext("streamClientDeadlineMs({ message: 'slow evidence stream', useRag: true, searchMode: 'FORCE_DEEP' })", context);
   const evidenceServerBudgetMs = vm.runInContext("streamServerBudgetMs({ useRag: true, searchMode: 'FORCE_DEEP' })", context);
   assert(
-    failSoftDeadlineMs === null &&
-      evidenceServerBudgetMs === 120000 &&
-      evidenceDeadlineMs === null,
-    `client deadline should be disabled for chat streams; stale wait remains visible and user-controlled: failSoft=${failSoftDeadlineMs} server=${evidenceServerBudgetMs} evidence=${evidenceDeadlineMs}`
+    failSoftDeadlineMs === 600000 &&
+      evidenceServerBudgetMs === 600000 &&
+      evidenceDeadlineMs === 600000,
+    `client and server budgets should share the bounded legacy fallback when admission meta is absent: failSoft=${failSoftDeadlineMs} server=${evidenceServerBudgetMs} evidence=${evidenceDeadlineMs}`
   );
+
+  context.__requestBudgetMs = 15321;
+  assert(vm.runInContext('streamClientDeadlineMs({})', context) === 15321 &&
+    vm.runInContext("streamServerBudgetMs({ searchMode: 'FORCE_DEEP' })", context) === 15321,
+    'admitted page budget must bound both client and server across search modes');
+  delete context.__requestBudgetMs;
 
   context.__streamMode = 'fallback';
   fetchCalls.length = 0;
@@ -6056,6 +5921,9 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     { label: 'missing-detail-id', identity: {} }
   ];
   for (const restoreIdentityCase of restoreIdentityCases) {
+    // Prior final events schedule an independent session-list refresh.
+    // Settle it before capturing this detail-hydration isolation baseline.
+    await vm.runInContext('sessionListRefreshInFlight || Promise.resolve()', context);
     fetchCalls.length = 0;
     chatWindow.children = [];
     chatWindow.textContent = '';
@@ -6392,8 +6260,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     elements.get('modelSelect').value === 'qwen3:30b' &&
       elements.get('searchModeSelect').value === 'FORCE_DEEP' &&
       elements.get('useRagToggle').checked === true &&
-      elements.get('searchStatus').textContent === 'DEEP' &&
-      elements.get('ragStatus').textContent === 'ON',
+      elements.get('searchStatus').textContent === '요청 DEEP' &&
+      elements.get('ragStatus').textContent === '요청 ON',
     `user-updated controls should survive reload hydration: model=${elements.get('modelSelect').value} search=${elements.get('searchModeSelect').value} rag=${elements.get('useRagToggle').checked} rail=${elements.get('searchStatus').textContent}/${elements.get('ragStatus').textContent}`
   );
 
@@ -6457,7 +6325,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     vm.runInContext('state.currentSessionId', context) === 654 &&
       context.window.sessionStorage.getItem('chat.currentSessionId') === '654' &&
       chatWindow.children.length === 1 &&
-      chatWindow.children[0].textContent === 'newer session turn' &&
+      chatWindow.children[0] === newerSessionMessage &&
+      newerSessionMessage.textContent === 'newer session turn' + newerSessionSelectionCard.textContent &&
       newerSessionMessage.querySelector('[data-selection-entropy-card]') === newerSessionSelectionCard &&
       !sessionModeList.children.some((child) => child.textContent.startsWith('session:321 ')) &&
       elements.get('modelSelect').value === 'qwen3:30b' &&
@@ -6583,6 +6452,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   elements.get('searchModeSelect').value = 'OFF';
   elements.get('useRagToggle').checked = false;
   elements.get('messageInput').value = 'ordinary local model turn';
+  context.__requestBudgetMs = 90000;
   await vm.runInContext("sendMessage({ preventDefault() {} })", context);
   const ordinaryStreamCall = fetchCalls.find((call) => call.url.includes('/api/chat/stream'));
   const ordinaryBudgetMs = Number(fetchHeader(ordinaryStreamCall, 'x-budget-ms') || 0);
@@ -6590,6 +6460,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     ordinaryBudgetMs === 90000,
     `ordinary stream call should request the verified bounded server budget for a local model response: ${JSON.stringify(ordinaryStreamCall?.headers)}`
   );
+  delete context.__requestBudgetMs;
 
   context.window.sessionStorage.clear();
   vm.runInContext("state.currentSessionId = 123;", context);
@@ -6704,9 +6575,11 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   assert(streamCall?.headers?.['X-CSRF-TOKEN'] === 'csrf-token-123', `stream POST did not include CSRF header: ${JSON.stringify(streamCall?.headers)}`);
   const failedStreamNodes = chatWindow.children.slice(failedStreamChildrenBefore);
   const failedStreamUser = failedStreamNodes.find((child) => child.textContent === 'stream unavailable question');
-  const failedStreamAssistant = failedStreamNodes.find((child) => child.textContent === 'message_failed');
+  const failedStreamAssistant = failedStreamNodes.find((child) => child.dataset?.speaker === 'assistant' &&
+    child.dataset?.state === 'error');
   assert(
-    failedStreamAssistant && !fetchCalls.some((call) => call.url === '/api/chat'),
+    failedStreamAssistant?.dataset?.ariaText === '서버가 일시적으로 응답할 수 없습니다. 질문은 입력창에 유지됩니다.' &&
+      !fetchCalls.some((call) => call.url === '/api/chat'),
     `ambiguous stream failure must not start sync generation: ${fetchCalls.map((call) => call.url).join('|')}`
   );
   assert(
@@ -6741,7 +6614,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     emptyStreamAnswerEventsAfter === emptyStreamAnswerEventsBefore &&
       emptyStreamSyncRequestsAfter === emptyStreamSyncRequestsBefore &&
       emptyStreamAssistant?.dataset?.state === 'error' &&
-      emptyStreamAssistant.textContent.includes('Stream ended before an answer'),
+      emptyStreamAssistant.dataset.failureCode === 'stream_incomplete' &&
+      emptyStreamAssistant.dataset.ariaText === '응답이 완료되지 않았습니다. 수신한 내용과 질문은 유지됩니다. 대화 기록에서 완료 여부를 확인해 주세요.',
     `empty SSE must fail visibly without answer dispatch or duplicate sync generation: children=${emptyStreamChildren.length} answers=${emptyStreamAnswerEventsBefore}->${emptyStreamAnswerEventsAfter} sync=${emptyStreamSyncRequestsBefore}->${emptyStreamSyncRequestsAfter} calls=${fetchCalls.map((call) => call.url).join('|')} state=${emptyStreamAssistant?.dataset?.state} text=${emptyStreamAssistant?.textContent}`
   );
 
@@ -6759,7 +6633,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const terminalErrorAnswerEventsAfter = dispatchedEvents.filter((event) => event.type === 'brain-state:answer').length;
   const terminalErrorSyncRequestsAfter = fetchCalls.filter((call) => call.url === '/api/chat').length;
   assert(
-    terminalErrorAssistant?.dataset?.state === 'error' && terminalErrorAssistant.textContent === 'message_failed',
+    terminalErrorAssistant?.dataset?.state === 'error' && terminalErrorAssistant.dataset?.ariaText === EXPECTED_STREAM_FAILURE,
     `terminal SSE error should own the assistant bubble: state=${terminalErrorAssistant?.dataset?.state} text=${terminalErrorAssistant?.textContent} id=${terminalErrorAssistant?.id} idMatches=${findNodesById(chatWindow, terminalErrorAssistant?.id).length}`
   );
   assert(
@@ -6783,7 +6657,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const sameChunkTerminalAssistant = sameChunkTerminalChildren.find((child) => child?.dataset?.speaker === 'assistant');
   assert(
     sameChunkTerminalAssistant?.dataset?.state === 'error' &&
-      sameChunkTerminalAssistant.textContent === 'message_failed' &&
+      sameChunkTerminalAssistant.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       !sameChunkTerminalChildren.some((child) => nodeText(child).includes('SAME_CHUNK_FINAL_MUST_NOT_RENDER')),
     `same-chunk terminal SSE error must suppress a later final data line: state=${sameChunkTerminalAssistant?.dataset?.state} text=${sameChunkTerminalAssistant?.textContent} all=${sameChunkTerminalChildren.map(nodeText).join('|')}`
   );
@@ -6800,7 +6674,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const sameMillisecondChildren = chatWindow.children.slice(sameMillisecondChildrenBefore);
   const sameMillisecondAssistant = sameMillisecondChildren.find((child) => child?.dataset?.speaker === 'assistant');
   assert(
-    sameMillisecondAssistant?.dataset?.state === 'error' && sameMillisecondAssistant.textContent === 'message_failed',
+    sameMillisecondAssistant?.dataset?.state === 'error' && sameMillisecondAssistant.dataset?.ariaText === EXPECTED_STREAM_FAILURE,
     `same-millisecond terminal errors must keep distinct active assistants: state=${sameMillisecondAssistant?.dataset?.state} text=${sameMillisecondAssistant?.textContent} firstId=${terminalErrorAssistant?.id} secondId=${sameMillisecondAssistant?.id}`
   );
   assert(
@@ -6829,7 +6703,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       missingSessionSyncRequestsAfter.length === missingSessionSyncRequestsBefore &&
       missingSessionAssistants.length === 1 &&
       missingSessionAssistants[0]?.dataset?.state === 'error' &&
-      missingSessionAssistants[0]?.textContent === 'message_failed' &&
+      missingSessionAssistants[0]?.dataset?.ariaText === EXPECTED_SERVICE_FAILURE &&
       vm.runInContext('state.currentSessionId', context) === 42,
     `fresh stream failure must issue one stream request without reusing a stale answer or starting sync, and must preserve the seeded session: children=${missingSessionChildren.length} assistants=${missingSessionAssistants.length} answers=${missingSessionAnswerEventsBefore}->${missingSessionAnswerEventsAfter.length} stream=${missingSessionStreamRequestsBefore}->${missingSessionStreamRequestsAfter.length} sync=${missingSessionSyncRequestsBefore}->${missingSessionSyncRequestsAfter.length} session=${vm.runInContext('state.currentSessionId', context)}`
   );
@@ -6873,10 +6747,10 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   );
   assert(
     chatWindow.getAttribute('aria-busy') === 'true' &&
-      elements.get('sendBtn').getAttribute('aria-label') === 'Sending message' &&
-      elements.get('sendBtn').textContent === 'Sending' &&
-      elements.get('stopBtn').getAttribute('aria-label') === 'Stop streaming response' &&
-      elements.get('stopBtn').textContent === 'Stop' &&
+      elements.get('sendBtn').getAttribute('aria-label') === '질문 전송 중' &&
+      elements.get('sendBtn').textContent === '…' &&
+      elements.get('stopBtn').getAttribute('aria-label') === '답변 생성 중지' &&
+      elements.get('stopBtn').textContent === '중지' &&
       elements.get('stopBtn').hidden === false &&
       elements.get('stopBtn').style.display === '',
     `send start should expose composer busy state: busy=${chatWindow.getAttribute('aria-busy')} send=${elements.get('sendBtn').getAttribute('aria-label')}/${elements.get('sendBtn').textContent} stop=${elements.get('stopBtn').getAttribute('aria-label')}/${elements.get('stopBtn').textContent}/${elements.get('stopBtn').hidden}/${elements.get('stopBtn').style.display}`
@@ -6890,17 +6764,17 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     pendingAssistant?.dataset?.speaker === 'assistant' &&
       pendingAssistant?.dataset?.state === 'pending' &&
       pendingAssistant.getAttribute('role') === 'article' &&
-      pendingAssistant.getAttribute('aria-label') === 'Assistant response pending',
+      pendingAssistant.getAttribute('aria-label') === 'Planning',
     `pending assistant bubble should expose speaker and pending state: speaker=${pendingAssistant?.dataset?.speaker} state=${pendingAssistant?.dataset?.state} role=${pendingAssistant?.getAttribute('role')} label=${pendingAssistant?.getAttribute('aria-label')}`
   );
   context.__resolvePendingStream();
   await pendingSend;
   assert(
     chatWindow.getAttribute('aria-busy') === 'false' &&
-      elements.get('sendBtn').getAttribute('aria-label') === 'Send message' &&
-      elements.get('sendBtn').textContent === 'Send' &&
-      elements.get('stopBtn').getAttribute('aria-label') === 'Stop response' &&
-      elements.get('stopBtn').textContent === 'Stop' &&
+      elements.get('sendBtn').getAttribute('aria-label') === '질문 전송' &&
+      elements.get('sendBtn').textContent === '↑' &&
+      elements.get('stopBtn').getAttribute('aria-label') === '답변 중지' &&
+      elements.get('stopBtn').textContent === '중지' &&
       elements.get('stopBtn').hidden === true &&
       elements.get('stopBtn').style.display === 'none',
     `send completion should clear composer busy state: busy=${chatWindow.getAttribute('aria-busy')} send=${elements.get('sendBtn').getAttribute('aria-label')}/${elements.get('sendBtn').textContent} stop=${elements.get('stopBtn').getAttribute('aria-label')}/${elements.get('stopBtn').textContent}/${elements.get('stopBtn').hidden}/${elements.get('stopBtn').style.display}`
@@ -7194,7 +7068,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   await stoppedNonAbortSend;
   assert(
     stoppedNonAbortAssistant?.dataset?.state === 'error' &&
-      stoppedNonAbortAssistant.textContent === 'message_failed',
+      stoppedNonAbortAssistant.dataset?.ariaText === EXPECTED_STREAM_FAILURE,
     `an unacknowledged tokenless Stop must report the transport failure, not fabricate cancellation: state=${stoppedNonAbortAssistant?.dataset?.state} text=${stoppedNonAbortAssistant?.textContent}`
   );
   assert(
@@ -7231,7 +7105,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       failedSyncRequestsAfter === failedSyncRequestsBefore &&
       failedAssistants.length === 1 &&
       failedAssistants[0]?.dataset?.state === 'error' &&
-      failedAssistants[0]?.textContent === 'message_failed',
+      failedAssistants[0]?.dataset?.ariaText === EXPECTED_SERVICE_FAILURE,
     `ambiguous stream failure must issue one stream request, no answer/sync, and one failed assistant: answers=${failedAnswerEventsBefore}->${failedAnswerEventsAfter} stream=${failedStreamRequestsBefore}->${failedStreamRequestsAfter} sync=${failedSyncRequestsBefore}->${failedSyncRequestsAfter} assistants=${failedAssistants.length} children=${failedChildren.map((child) => child.textContent).join('|')}`
   );
   const failedRail = failedChildren
@@ -7241,7 +7115,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     failedRailText.includes('Message failed') &&
       failedRailText.includes('Stream') &&
       failedRailText.includes('Sync not_attempted') &&
-      failedRailText.includes('Next retry_or_check_model') &&
+      failedRailText.includes('Next retry') &&
       !/Authorization|Bearer|sk-[A-Za-z0-9_-]{12,}/.test(failedRailText),
     `failed send should render redacted diagnostic rail: ${failedRailText}`
   );
@@ -7376,10 +7250,15 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     const target = fakeElement('w1-score-target');
     const assistant = fakeElement('w1-score-assistant');
     target.appendChild(assistant);
+    chatWindow.appendChild(target);
     context.__w1ScoreSignal = signal;
     context.__w1ScoreAssistant = assistant;
     context.__w1Console = [];
     const originalConsole = context.console;
+    const originalSearch = context.window.location.search;
+    const originalTraceEnabled = traceFixtureToggle.checked;
+    context.window.location.search = '?debug=true';
+    traceFixtureToggle.checked = true;
     context.console = {
       log: (...args) => context.__w1Console.push(args.map(String).join(' ')),
       warn: (...args) => context.__w1Console.push(args.map(String).join(' ')),
@@ -7392,10 +7271,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       );
     } finally {
       context.console = originalConsole;
+      context.window.location.search = originalSearch;
+      traceFixtureToggle.checked = originalTraceEnabled;
     }
     return {
       target,
-      detail: target.children.find((child) => child?.dataset?.role === 'score-delta-detail'),
+      detail: target.querySelector('[data-role="score-delta-detail"]'),
       consoleOutput: context.__w1Console.slice()
     };
   }
@@ -7668,7 +7549,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const overflowSurface = `${w1NodeSurface(chatWindow)}|${[...elements.values()].map(w1NodeSurface).join('|')}|${context.__w1Console.join('|')}`;
   assert(
     overflowAssistant?.dataset?.state === 'error' &&
-      overflowAssistant?.textContent === 'message_failed' &&
+      overflowAssistant?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       elements.get('coreStatusRail').dataset.coreStatus === 'error' &&
       context.__w1StreamReadCount === 2 &&
       !overflowSurface.includes(overflowSentinel) &&
@@ -7808,7 +7689,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   assert(
     malformedTerminalProbe.assistants.length === 1 &&
       malformedTerminalProbe.assistants[0]?.dataset?.state === 'error' &&
-      malformedTerminalProbe.assistants[0]?.textContent === 'message_failed' &&
+      malformedTerminalProbe.assistants[0]?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       malformedTerminalProbe.coreStatus === 'error' &&
       malformedTerminalProbe.answerEventCount === 0 &&
       malformedTerminalProbe.syncRequestCount === 0 &&
@@ -7882,7 +7763,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       'clearActiveRunIdentity(); forgetCurrentSessionId(); pendingStopBeforeToken = null; ' +
         'streamCancelRequested = false; streamRenderSuppressed = false; sendMessageInFlight = false; ' +
         'state.latestEvidenceRailItems = []; state.latestVisibleTurnEvidence = null; ' +
-        'lastAssistantModelFallback = null; resetCurrentTurnHealthOverlay();',
+        'lastAssistantModelFallback = null; chatAccessState = "ready"; resetCurrentTurnHealthOverlay();',
       context
     );
     const sessionId = Number(options.sessionId || 321);
@@ -7986,7 +7867,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const astralBoundaryText = astralBoundaryProbe.result?.text || '';
   const astralBoundaryLastUnit = astralBoundaryText.charCodeAt(astralBoundaryText.length - 1);
   assert(
-    boundedFailureProbe.assistant?.textContent === 'message_failed' &&
+    boundedFailureProbe.assistant?.dataset?.ariaText === EXPECTED_SERVICE_FAILURE &&
       boundedFailureProbe.assistant?.dataset?.state === 'error' &&
       boundedFailureProbe.assistant?.dataset?.failureKind === 'service_unavailable' &&
       boundedFailureProbe.assistant?.dataset?.failureRetryable === 'true' &&
@@ -8030,13 +7911,13 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   const typed503Error = vm.runInContext('chatFailureError(classifyChatFailure(globalThis.__w2ClassifierInput))', context);
   delete context.__w2ClassifierInput;
   assert(
-    typed503Probe.assistant?.textContent === 'message_failed' &&
+    typed503Probe.assistant?.dataset?.ariaText === EXPECTED_BACKEND_FAILURE &&
       typed503Probe.assistant?.dataset?.state === 'error' &&
-      typed503Probe.assistant?.dataset?.failureKind === 'service_unavailable' &&
-      typed503Probe.assistant?.dataset?.failureRetryable === 'true' &&
+      typed503Probe.assistant?.dataset?.failureKind === 'backend_unavailable' &&
+      typed503Probe.assistant?.dataset?.failureRetryable === 'false' &&
       typed503Probe.assistant?.dataset?.failureStatus === '503' &&
       typed503Probe.assistant?.dataset?.failureCode === 'backend_unavailable' &&
-      typed503Probe.assistant?.dataset?.failureNextAction === 'retry' &&
+      typed503Probe.assistant?.dataset?.failureNextAction === 'check_service' &&
       typed503Probe.draftAfter === typed503Probe.draft &&
       typed503Probe.currentSessionId === 321 &&
       typed503Probe.persistedSessionId === '321' &&
@@ -8064,15 +7945,15 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     bodyChunks: [JSON.stringify({ error: 'forbidden', detail: typed403ForbiddenSentinel })]
   });
   assert(
-    typed403ForbiddenProbe.assistant?.textContent === 'message_failed' &&
+    typed403ForbiddenProbe.assistant?.dataset?.ariaText === EXPECTED_ACCESS_FAILURE &&
       typed403ForbiddenProbe.assistant?.dataset?.state === 'error' &&
       typed403ForbiddenProbe.assistant?.dataset?.failureKind === 'access_denied' &&
       typed403ForbiddenProbe.assistant?.dataset?.failureRetryable === 'false' &&
       typed403ForbiddenProbe.assistant?.dataset?.failureStatus === '403' &&
       typed403ForbiddenProbe.assistant?.dataset?.failureCode === 'forbidden' &&
-      typed403ForbiddenProbe.assistant?.dataset?.failureNextAction === 'sign_in_or_change_session' &&
+      typed403ForbiddenProbe.assistant?.dataset?.failureNextAction === 'check_access' &&
       typed403ForbiddenProbe.assistant?.getAttribute('aria-label') ===
-        'Message failed. access_denied. sign_in_or_change_session.' &&
+        EXPECTED_ACCESS_FAILURE &&
       typed403ForbiddenProbe.draftAfter === typed403ForbiddenProbe.draft &&
       typed403ForbiddenProbe.currentSessionId === 321 &&
       typed403ForbiddenProbe.persistedSessionId === '321' &&
@@ -8091,7 +7972,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     bodyChunks: [' \r\n session_forbidden \t ']
   });
   assert(
-    typed403SessionProbe.assistant?.textContent === 'message_failed' &&
+    typed403SessionProbe.assistant?.dataset?.ariaText === EXPECTED_SESSION_FAILURE &&
       typed403SessionProbe.assistant?.dataset?.state === 'error' &&
       typed403SessionProbe.assistant?.dataset?.failureKind === 'access_denied' &&
       typed403SessionProbe.assistant?.dataset?.failureRetryable === 'false' &&
@@ -8099,7 +7980,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       typed403SessionProbe.assistant?.dataset?.failureCode === 'session_forbidden' &&
       typed403SessionProbe.assistant?.dataset?.failureNextAction === 'choose_or_start_session' &&
       typed403SessionProbe.assistant?.getAttribute('aria-label') ===
-        'Message failed. access_denied. choose_or_start_session.' &&
+        EXPECTED_SESSION_FAILURE &&
       typed403SessionProbe.draftAfter === typed403SessionProbe.draft &&
       typed403SessionProbe.currentSessionId === null &&
       typed403SessionProbe.persistedSessionId === null &&
@@ -8129,13 +8010,13 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   delete context.__w2StaleDatasetAssistant;
   delete context.__w2StatusOnlyMeta;
   assert(
-    typed403StatusOnlyProbe.assistant?.textContent === 'message_failed' &&
+    typed403StatusOnlyProbe.assistant?.dataset?.ariaText === EXPECTED_ACCESS_FAILURE &&
       typed403StatusOnlyProbe.assistant?.dataset?.state === 'error' &&
       typed403StatusOnlyProbe.assistant?.dataset?.failureKind === 'access_denied' &&
       typed403StatusOnlyProbe.assistant?.dataset?.failureRetryable === 'false' &&
       typed403StatusOnlyProbe.assistant?.dataset?.failureStatus === '403' &&
       !typed403StatusOnlyProbe.assistant?.dataset?.failureCode &&
-      typed403StatusOnlyProbe.assistant?.dataset?.failureNextAction === 'sign_in_or_change_session' &&
+      typed403StatusOnlyProbe.assistant?.dataset?.failureNextAction === 'check_access' &&
       typed403StatusOnlyProbe.draftAfter === typed403StatusOnlyProbe.draft &&
       typed403StatusOnlyProbe.currentSessionId === 321 &&
       typed403StatusOnlyProbe.persistedSessionId === '321' &&
@@ -8150,8 +8031,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
 
   const typed401Failures = [];
   for (const [code, nextAction, preservesSession] of [
-    ['forbidden', 'sign_in_or_change_session', true],
-    ['session_forbidden', 'choose_or_start_session', false]
+    ['forbidden', 'sign_in', true],
+    ['session_forbidden', 'sign_in', false]
   ]) {
     const sentinel = 'PRIVATE_W2_HTTP_401_SENTINEL';
     const probe = await runW2FailureProbe({
@@ -8160,8 +8041,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       bodyChunks: [JSON.stringify({ code, detail: sentinel })]
     });
     const d = probe.assistant?.dataset || {};
-    if (!(probe.assistant?.textContent === 'message_failed' && d.state === 'error' &&
-      d.failureKind === 'access_denied' && d.failureRetryable === 'false' &&
+    if (!(probe.assistant?.dataset?.ariaText === EXPECTED_LOGIN_FAILURE && d.state === 'error' &&
+      d.failureKind === 'login_required' && d.failureRetryable === 'false' &&
       d.failureStatus === '401' && d.failureCode === code && d.failureNextAction === nextAction &&
       probe.currentSessionId === (preservesSession ? 321 : null) &&
       probe.persistedSessionId === (preservesSession ? '321' : null) &&
@@ -8178,13 +8059,13 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     bodyChunks: [JSON.stringify({ reason: 'backend_timeout', detail: typed504Sentinel })]
   });
   assert(
-    typed504Probe.assistant?.textContent === 'message_failed' &&
+    typed504Probe.assistant?.dataset?.ariaText === EXPECTED_TIMEOUT_FAILURE &&
       typed504Probe.assistant?.dataset?.state === 'error' &&
       typed504Probe.assistant?.dataset?.failureKind === 'timeout' &&
-      typed504Probe.assistant?.dataset?.failureRetryable === 'true' &&
+      typed504Probe.assistant?.dataset?.failureRetryable === 'false' &&
       typed504Probe.assistant?.dataset?.failureStatus === '504' &&
       typed504Probe.assistant?.dataset?.failureCode === 'backend_timeout' &&
-      typed504Probe.assistant?.dataset?.failureNextAction === 'retry' &&
+      typed504Probe.assistant?.dataset?.failureNextAction === 'check_run' &&
       typed504Probe.draftAfter === typed504Probe.draft &&
       typed504Probe.currentSessionId === 321 &&
       typed504Probe.persistedSessionId === '321' &&
@@ -8203,7 +8084,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     networkMessage: typedNetworkSentinel
   });
   assert(
-    typedNetworkProbe.assistant?.textContent === 'message_failed' &&
+    typedNetworkProbe.assistant?.dataset?.ariaText === EXPECTED_NETWORK_FAILURE &&
       typedNetworkProbe.assistant?.dataset?.state === 'error' &&
       typedNetworkProbe.assistant?.dataset?.failureKind === 'network_error' &&
       typedNetworkProbe.assistant?.dataset?.failureRetryable === 'true' &&
@@ -8211,7 +8092,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       !typedNetworkProbe.assistant?.dataset?.failureCode &&
       typedNetworkProbe.assistant?.dataset?.failureNextAction === 'check_connection' &&
       typedNetworkProbe.assistant?.getAttribute('aria-label') ===
-        'Message failed. network_error. check_connection.' &&
+        EXPECTED_NETWORK_FAILURE &&
       typedNetworkProbe.draftAfter === typedNetworkProbe.draft &&
       typedNetworkProbe.currentSessionId === 321 &&
       typedNetworkProbe.persistedSessionId === '321' &&
@@ -8277,7 +8158,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     bodyChunks: [`{"code":"backend_unavailable","detail":"${malformedFailureSentinel}"`]
   });
   assert(
-    malformedFailureProbe.assistant?.textContent === 'message_failed' &&
+    malformedFailureProbe.assistant?.dataset?.ariaText === EXPECTED_SERVICE_FAILURE &&
       malformedFailureProbe.assistant?.dataset?.failureKind === 'service_unavailable' &&
       malformedFailureProbe.assistant?.dataset?.failureRetryable === 'true' &&
       malformedFailureProbe.assistant?.dataset?.failureStatus === '503' &&
@@ -8319,7 +8200,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   );
   delete context.__w2UntrustedBodyCases;
   assert(
-    unknownFailureProbe.assistant?.textContent === 'message_failed' &&
+    unknownFailureProbe.assistant?.dataset?.ariaText === EXPECTED_SERVICE_FAILURE &&
       unknownFailureProbe.assistant?.dataset?.failureKind === 'service_unavailable' &&
       unknownFailureProbe.assistant?.dataset?.failureRetryable === 'true' &&
       unknownFailureProbe.assistant?.dataset?.failureStatus === '503' &&
@@ -8356,13 +8237,13 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     sseTimeoutProbe.assistants.length === 1 &&
-      sseTimeoutProbe.assistant?.textContent === 'message_failed' &&
+      sseTimeoutProbe.assistant?.dataset?.ariaText === EXPECTED_TIMEOUT_FAILURE &&
       sseTimeoutProbe.assistant?.dataset?.state === 'error' &&
       sseTimeoutProbe.assistant?.dataset?.failureKind === 'timeout' &&
-      sseTimeoutProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      sseTimeoutProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !sseTimeoutProbe.assistant?.dataset?.failureStatus &&
       sseTimeoutProbe.assistant?.dataset?.failureCode === 'backend_timeout' &&
-      sseTimeoutProbe.assistant?.dataset?.failureNextAction === 'retry' &&
+      sseTimeoutProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       sseTimeoutProbe.draftAfter === sseTimeoutProbe.draft &&
       sseTimeoutProbe.currentSessionId === 321 &&
       sseTimeoutProbe.persistedSessionId === '321' &&
@@ -8393,7 +8274,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     sseSessionProbe.assistants.length === 1 &&
-      sseSessionProbe.assistant?.textContent === 'message_failed' &&
+      sseSessionProbe.assistant?.dataset?.ariaText === EXPECTED_SESSION_FAILURE &&
       sseSessionProbe.assistant?.dataset?.failureKind === 'access_denied' &&
       sseSessionProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !sseSessionProbe.assistant?.dataset?.failureStatus &&
@@ -8435,12 +8316,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     sseFixedKeyConflictProbe.assistants.length === 1 &&
-      sseFixedKeyConflictProbe.assistant?.textContent === 'message_failed' &&
+      sseFixedKeyConflictProbe.assistant?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       sseFixedKeyConflictProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      sseFixedKeyConflictProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      sseFixedKeyConflictProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !sseFixedKeyConflictProbe.assistant?.dataset?.failureStatus &&
       !sseFixedKeyConflictProbe.assistant?.dataset?.failureCode &&
-      sseFixedKeyConflictProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      sseFixedKeyConflictProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       sseFixedKeyConflictProbe.draftAfter === sseFixedKeyConflictProbe.draft &&
       sseFixedKeyConflictProbe.currentSessionId === 321 &&
       sseFixedKeyConflictProbe.persistedSessionId === '321' &&
@@ -8489,12 +8370,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     sseUnknownProbe.assistants.length === 1 &&
-      sseUnknownProbe.assistant?.textContent === 'message_failed' &&
+      sseUnknownProbe.assistant?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       sseUnknownProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      sseUnknownProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      sseUnknownProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !sseUnknownProbe.assistant?.dataset?.failureStatus &&
       !sseUnknownProbe.assistant?.dataset?.failureCode &&
-      sseUnknownProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      sseUnknownProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       sseUnknownProbe.draftAfter === sseUnknownProbe.draft &&
       sseUnknownProbe.currentSessionId === 321 &&
       sseUnknownProbe.persistedSessionId === '321' &&
@@ -8507,12 +8388,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       !sseUnknownProbe.surface.includes(sseUnknownCode) &&
       !sseUnknownProbe.surface.includes(sseUnknownSentinel) &&
       !sseUnknownProbe.surface.includes('LATE_W2_UNKNOWN_TOKEN') &&
-      missingBodyProbe.assistant?.textContent === 'message_failed' &&
+      missingBodyProbe.assistant?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       missingBodyProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      missingBodyProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      missingBodyProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !missingBodyProbe.assistant?.dataset?.failureStatus &&
       !missingBodyProbe.assistant?.dataset?.failureCode &&
-      missingBodyProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      missingBodyProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       missingBodyProbe.draftAfter === missingBodyProbe.draft &&
       missingBodyProbe.currentSessionId === 321 &&
       missingBodyProbe.persistedSessionId === '321' &&
@@ -8522,13 +8403,13 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     'typed-sse-unknown-error-missing'
   );
 
-  const streamFailedPartialSentinel = 'PRIVATE_W2_STREAM_FAILED_PARTIAL_SENTINEL';
+  const validPartialAnswer = 'VALID_PARTIAL_BEFORE_STREAM_FAILURE';
   const streamFailedProbe = await runW2FailureProbe({
     ok: true,
     status: 200,
     contentType: 'text/event-stream',
     bodyChunks: [
-      `event: token\ndata: ${JSON.stringify({ type: 'token', data: streamFailedPartialSentinel })}\n\n` +
+      `event: token\ndata: ${JSON.stringify({ type: 'token', data: validPartialAnswer })}\n\n` +
         'event: stream_failed\ndata: {"type":"stream_failed","code":"unknown_remote_failure"}\n\n'
     ]
   });
@@ -8547,12 +8428,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     streamFailedProbe.assistants.length === 1 &&
-      streamFailedProbe.assistant?.textContent === 'message_failed' &&
+      streamFailedProbe.assistant?.dataset?.ariaText === validPartialAnswer &&
       streamFailedProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      streamFailedProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      streamFailedProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !streamFailedProbe.assistant?.dataset?.failureStatus &&
       !streamFailedProbe.assistant?.dataset?.failureCode &&
-      streamFailedProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      streamFailedProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       streamFailedProbe.draftAfter === streamFailedProbe.draft &&
       streamFailedProbe.currentSessionId === 321 &&
       streamFailedProbe.persistedSessionId === '321' &&
@@ -8562,14 +8443,15 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       streamFailedProbe.readCount === 1 &&
       streamFailedProbe.syncRequestCount === 0 &&
       streamFailedProbe.answerEventCount === 0 &&
-      !streamFailedProbe.surface.includes(streamFailedPartialSentinel) &&
+      streamFailedProbe.assistantText.includes(validPartialAnswer) &&
+      streamFailedProbe.assistantText.includes(EXPECTED_STREAM_FAILURE) &&
       overflowTerminalProbe.assistants.length === 1 &&
-      overflowTerminalProbe.assistant?.textContent === 'message_failed' &&
+      overflowTerminalProbe.assistant?.dataset?.ariaText === EXPECTED_STREAM_FAILURE &&
       overflowTerminalProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      overflowTerminalProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      overflowTerminalProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !overflowTerminalProbe.assistant?.dataset?.failureStatus &&
       overflowTerminalProbe.assistant?.dataset?.failureCode === 'sse_event_too_large' &&
-      overflowTerminalProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      overflowTerminalProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       overflowTerminalProbe.draftAfter === overflowTerminalProbe.draft &&
       overflowTerminalProbe.currentSessionId === 321 &&
       overflowTerminalProbe.persistedSessionId === '321' &&
@@ -8600,12 +8482,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   });
   assert(
     malformedFinalProbe.assistants.length === 1 &&
-      malformedFinalProbe.assistant?.textContent === 'message_failed' &&
+      malformedFinalProbe.assistant?.dataset?.ariaText === 'PARTIAL_BEFORE_MALFORMED_FINAL' &&
       malformedFinalProbe.assistant?.dataset?.failureKind === 'stream_failed' &&
-      malformedFinalProbe.assistant?.dataset?.failureRetryable === 'true' &&
+      malformedFinalProbe.assistant?.dataset?.failureRetryable === 'false' &&
       !malformedFinalProbe.assistant?.dataset?.failureStatus &&
       malformedFinalProbe.assistant?.dataset?.failureCode === 'malformed_terminal_event' &&
-      malformedFinalProbe.assistant?.dataset?.failureNextAction === 'retry_or_check_model' &&
+      malformedFinalProbe.assistant?.dataset?.failureNextAction === 'check_run' &&
       malformedFinalProbe.draftAfter === malformedFinalProbe.draft &&
       malformedFinalProbe.currentSessionId === 321 &&
       malformedFinalProbe.persistedSessionId === '321' &&
@@ -8616,7 +8498,8 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       malformedFinalProbe.syncRequestCount === 0 &&
       malformedFinalProbe.answerEventCount === 0 &&
       !malformedFinalProbe.surface.includes(malformedFinalSentinel) &&
-      !malformedFinalProbe.surface.includes('PARTIAL_BEFORE_MALFORMED_FINAL') &&
+      malformedFinalProbe.assistantText.includes('PARTIAL_BEFORE_MALFORMED_FINAL') &&
+      malformedFinalProbe.assistantText.includes(EXPECTED_STREAM_FAILURE) &&
       !malformedFinalProbe.surface.includes('LATE_W2_MALFORMED_TOKEN'),
     'malformed-final-fail-closed-missing'
   );
@@ -8710,7 +8593,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       role: node.dataset?.messageRole,
       state: node.dataset?.state
     })),
-    list: sessionModeList.children.map((node) => ({
+    list: sessionModeList.children.filter((node) => node.dataset?.sessionSelectionState !== 'true').map((node) => ({
       text: node.textContent,
       dataset: { ...node.dataset },
       selected: node.getAttribute?.('aria-pressed') || null,
@@ -8733,6 +8616,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   };
 
   if (w3FunctionsAvailable) {
+    await vm.runInContext('sessionListRefreshInFlight || Promise.resolve()', context);
     context.console = {
       log: (...args) => w3CapturedConsole.push(args.join(' ')),
       info: (...args) => w3CapturedConsole.push(args.join(' ')),
@@ -8770,6 +8654,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       primaryRows[0].textContent.includes('Primary') &&
       !w3NodeSurface(sessionModeList).includes(listSecret) &&
       !w3NodeSurface(sessionModeList).includes('private.invalid');
+    w3.validRowDetail = JSON.stringify({rows:primaryRows.map(n => ({text:n.textContent,dataset:n.dataset})),surface:w3NodeSurface(sessionModeList)});
     w3.missingIdRejected = vm.runInContext('strictBackendSessionId(undefined) === null', context);
     w3.zeroIdRejected = vm.runInContext('strictBackendSessionId(0) === null', context);
     w3.negativeIdRejected = vm.runInContext('strictBackendSessionId(-1) === null', context);
@@ -8932,7 +8817,10 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     };
     const mismatchResult = await vm.runInContext('selectSessionCandidate(203)', context);
     w3.mismatchAtomic = mismatchResult === false && w3VisibleSnapshot() === atomicBaseline &&
-      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard;
+      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard &&
+      w3OwnedRows('[data-session-selection-state]').length === 1 &&
+      w3OwnedRows('[data-session-selection-state]')[0].textContent === '대화 내용을 불러오지 못했습니다. 목록에서 다시 선택해 주세요.' &&
+      w3OwnedRows('[data-session-selection-state]')[0].getAttribute('role') === 'status';
 
     context.__w3DetailScenario = {
       status: 200,
@@ -8949,7 +8837,9 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       context
     );
     w3.invalidAtomic = invalidResult === false && w3VisibleSnapshot() === atomicBaseline && pureValidationShapes &&
-      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard;
+      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard &&
+      w3OwnedRows('[data-session-selection-state]').length === 1 &&
+      w3OwnedRows('[data-session-selection-state]')[0].textContent === '대화 내용을 불러오지 못했습니다. 목록에서 다시 선택해 주세요.';
     delete context.__w3AbsentSettingsDetail;
     delete context.__w3FoundFalseDetail;
     delete context.__w3ArraySettingsDetail;
@@ -8957,7 +8847,10 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     context.__w3DetailScenario = { status: 503, body: { detail: 'PRIVATE_W3_DETAIL_FAILURE_SENTINEL' } };
     const failureResult = await vm.runInContext('selectSessionCandidate(203)', context);
     w3.failureAtomic = failureResult === false && w3VisibleSnapshot() === atomicBaseline &&
-      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard;
+      restoredMessages[1].querySelector('[data-selection-entropy-card]') === rejectedSelectionCard &&
+      w3OwnedRows('[data-session-selection-state]').length === 1 &&
+      w3OwnedRows('[data-session-selection-state]')[0].textContent === '대화를 불러오지 못했습니다. 잠시 후 다시 선택해 주세요.' &&
+      !w3NodeSurface(sessionModeList).includes('PRIVATE_W3_DETAIL_FAILURE_SENTINEL');
 
     resetW3List();
     context.__w3StaleRows = [
@@ -9044,7 +8937,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
       !w3NodeSurface(sessionModeList).includes('PRIVATE_W3_STALE_LIST_SENTINEL');
 
     w3.validRow = w3.validRow &&
-      template.includes('aria-label="Session history and mode diagnostics"') &&
+      template.includes('data-session-mode-list aria-label="내 대화 기록"') &&
       !template.includes('aria-label="Session mode history"');
     const w3PublicSurface = [
       w3NodeSurface(sessionModeList),
@@ -9095,10 +8988,12 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
     elements.get('chatWindow').replaceChildren();
     vm.runInContext("appendMessage('user', 'newer tokenless user'); appendMessage('assistant', 'newer tokenless answer');", context);
     const tokenlessAssistant = fakeElement('w3-quality-tokenless-assistant');
+    chatWindow.appendChild(tokenlessAssistant);
     elements.set('w3-quality-tokenless-assistant', tokenlessAssistant);
     context.__streamMode = 'w1-sse-frames';
     context.__w1StreamChunks = [
-      'event: token\ndata: {"type":"token","data":"newer tokenless stream"}\n\n'
+      'event: token\ndata: {"type":"token","data":"newer tokenless stream"}\n\n' +
+      'event: final\ndata: {"type":"final","data":"newer tokenless stream","answerMode":"streamed","evidence":[]}\n\n'
     ];
     elements.get('coreStatusRail').dataset.coreStatus = 'idle';
     await vm.runInContext("streamChat({ message: 'quality tokenless ownership' }, 'w3-quality-tokenless-assistant')", context);
@@ -9164,7 +9059,7 @@ const eventNameFallbackSession = dispatchedEvents.filter((event) => event.type =
   w3Check(w3.listRequestId, 'session-list-request-id-missing');
   w3Check(w3.listCorrelation, 'session-list-current-session-correlation-missing');
   w3Check(w3.noFabricatedSession, 'session-list-session-id-fabricated');
-  w3Check(w3.validRow, 'session-list-valid-row-not-rendered');
+  w3Check(w3.validRow, 'session-list-valid-row-not-rendered', w3.validRowDetail);
   w3Check(w3.missingIdRejected, 'session-list-missing-id-accepted');
   w3Check(w3.zeroIdRejected, 'session-list-zero-id-accepted');
   w3Check(w3.negativeIdRejected, 'session-list-negative-id-accepted');

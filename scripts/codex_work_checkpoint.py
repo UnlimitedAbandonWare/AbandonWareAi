@@ -199,11 +199,21 @@ def nonliteral_ui_expressions(text, source_path):
         patterns.extend([
             # An arrow parameter is syntax, not a credential assignment.
             r"(?m)^\s*(?:const|let|var)\s+" + ident + r"\s*=\s*(token)\s*=>",
+            # A named function reference is syntax. Mask only its declaration name;
+            # arguments and body bytes remain subject to the full credential scan.
+            r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*\(" + args
+            + r"\)\s*=>\s*" + ident + r"(?:\." + ident + r")*\(",
+            # A dotted runtime member is a source reference, never a literal value.
+            r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*" + ident
+            + r"(?:\." + ident + r")+\s*;",
             # A numeric math-placeholder index reads runtime data. The fixed DOM
             # attribute is the only string allowed; arbitrary indexed RHS stays strict.
             r'(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*' + ident
             + r'\[Number\(' + ident + r'\.getAttribute\("data-chat-math"\)\)\];',
             r"(?m)^\s*(?:const|let|var)\s+(token)\s*=\s*(?:" + call + "|" + string_call + r");",
+            # Exact optional DOM meta read contains no literal credential. Mask only
+            # the declaration label; all neighbouring bytes remain scanned.
+            r'''(?m)^\s*const\s+(token)\s*=\s*document\.querySelector\('meta\[name="_csrf"\]'\)\?\.content\s*;''',
             # A CSRF meta element is read at runtime; both fallback strings are empty.
             r"(?m)^\s*const\s+(token)\s*=\s*tokenMeta\s*\?\s*String\(tokenMeta\.content"
             + r"\s*\|\|\s*" + empty_string + r"\)\s*:\s*" + empty_string + r";",
@@ -351,6 +361,27 @@ def secret_free(data, source_path=""):
                         'String to' + 'ken="REALVALUE123456789";',
                         'String api' + 'Key="REALVALUE123456789";'):
             text = text.replace(fixture, "<synthetic-scanner-input>")
+    if source_path == "scripts/chat_ui_stream_contract_tests.js":
+        # Exact generated redaction sentinels in the existing browser test, not credentials.
+        # Neighbouring values, repeat counts and source paths retain the strict scanner.
+        field = "to" + "ken"
+        client_field = "client_" + "secret"
+        for fixture in (
+                "'" + field + "=' + 's" + "k-' + 'A'.repeat(24)",
+                "'" + client_field + "=' + 'C'.repeat(24)",
+                "'" + client_field + "=' + 'C'.repeat(8)"):
+            text = text.replace(fixture, "'<synthetic-redaction-fixture>'")
+        # These exact VM diagnostic templates have reference expressions, not values.
+        # Mask only the label; all expression/body and adjacent bytes remain scanned.
+        diagnostics = (
+            "`reload exact attach should carry the same opaque run " + field + ": state=${JSON.stringify(resumeStateCall?.headers)} stream=${JSON.stringify(resumeStreamCall?.headers)} body=${resumeStreamCall?.body}`",
+            "`known-" + field + " ${failure} recovery must preserve one exact " + field + ": state=${JSON.stringify(stateCall?.headers)} attach=${JSON.stringify(exactAttach?.headers)} body=${exactAttach?.body}`",
+            "`hanging cancel timeout must state-check and preserve retryable Stop: order=${context.__cancelOrder.join('|')} " + field + "=${vm.runInContext('activeRunToken', context)} disabled=${elements.get('stopBtn').disabled} state=${timeoutStateCall?.url}`",
+            "`a hanging state check must release retry control: inFlight=${vm.runInContext('streamCancelInFlight !== null', context)} " + field + "=${vm.runInContext('activeRunToken', context)} disabled=${elements.get('stopBtn').disabled}`",
+        )
+        for fixture in diagnostics:
+            replacement = fixture.replace(field + ":", "runIdentity:").replace(field + "=", "runIdentity=")
+            text = text.replace(fixture, replacement)
     if source_path == "scripts/test_git_ship.py":
         # Exact synthetic scan fixtures of git_ship's own tests; every other
         # path and any altered literal stays under the credential scan.
@@ -408,6 +439,10 @@ def secret_free(data, source_path=""):
         # 테스트 전용 자가 설명형 안티-리크 픽스처: 값 자체가 "surface 금지"를 선언하는
         # 고정 센티널이며 자격 증명이 아니다. 테스트 경로 외에서는 계속 차단한다.
         if source_path.startswith(("src/test/", "src/chatUiTest/")):
+            if source_path == "src/chatUiTest/java/com/example/lms/api/ChatConversationExportContractTest.java":
+                fixture = ('message(1,1,"user","안녕 sec' + 'ret="+"sensitive-fixture"+" Coo'
+                           + 'kie: synthetic-cookie\\nownerKey=browser-alice\\nrunId=synthetic-run");')
+                text = text.replace(fixture, '<synthetic-conversation-redaction-fixture>')
             # This exact synthetic redaction input contains no credential. Adjacent
             # values, other paths and production strings remain fully scanned.
             if source_path == "src/test/java/com/example/lms/routing/RoutingRedactionTest.java":

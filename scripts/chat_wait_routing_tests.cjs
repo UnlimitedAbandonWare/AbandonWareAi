@@ -26,14 +26,16 @@ assert.equal(context.modelSelectionPayload().model, 'llmrouter.auto');
 assert.equal(context.modelSelectionPayload().strictModelSelection, false);
 delete context.dom.modelSelectionMode;
 assert.equal(context.modelSelectionPayload().strictModelSelection, true);
-assert.equal(context.streamServerBudgetMs({useRag: true}), 120000);
+assert.equal(context.streamServerBudgetMs({useRag: true}), 600000);
 cap = '240000';
 assert.equal(context.streamServerBudgetMs({useRag: true}), 240000);
 assert.equal(context.streamServerBudgetMs({useWebSearch: false}), 240000);
 cap = '30000';
 assert.equal(context.streamServerBudgetMs({useRag: true}), 30000);
-for (cap of ['NaN', '-1', '3600001', '1.5', '']) {
-  assert.equal(context.streamServerBudgetMs({useRag: true}), 120000);
+cap = '3600001';
+assert.equal(context.streamServerBudgetMs({useRag: true}), 3600001);
+for (cap of ['NaN', '-1', '1.5', '']) {
+  assert.equal(context.streamServerBudgetMs({useRag: true}), 600000);
 }
 Object.assign(context, {
   isAssistantStreamStopped: () => false,

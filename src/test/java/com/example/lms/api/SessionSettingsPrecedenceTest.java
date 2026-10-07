@@ -20,6 +20,21 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 이 테스트는 그 조합 자체를 단위로 확인한다.
  */
 class SessionSettingsPrecedenceTest {
+    @Test
+    void googleSearchRescueRestoresSessionAndExplicitFalsePersists() throws Exception {
+        var session = sessionWithMeta("{\"googleSearchRescueEnabled\":true}");
+        var inherited = objectMapper.readValue("{\"googleSearchRescueEnabled\":null}", ChatRequestDto.class);
+        ChatSessionMetaMerger.merge(objectMapper, session, inherited, LOG);
+        assertTrue(inherited.isGoogleSearchRescueEnabled());
+        var off = ChatRequestDto.builder().googleSearchRescueEnabled(false).build();
+        var meta = ChatSessionMetaMerger.merge(objectMapper, session, off, LOG);
+        assertEquals(false, meta.get("googleSearchRescueEnabled"));
+        session.setSessionMeta(objectMapper.writeValueAsString(meta));
+        var restored = ChatRequestDto.builder().build();
+        ChatSessionMetaMerger.merge(objectMapper, session, restored, LOG);
+        assertEquals(false, ChatRequestSettingsMerger.requestValues(restored).get("googleSearchRescueEnabled"));
+    }
+
 
     @Test
     void responsePreferencesRestorePerSessionAndExplicitBlankClearsInstructions() throws Exception {

@@ -113,7 +113,7 @@ public class PageContentScraper {
                 doc = response.parse();
                 break;
             }
-            String text = doc.text();
+            String text = extractBodyText(doc);
             traceFetchSuccess(redirectCount);
             return (text != null) ? text.strip() : null;
         } catch (BudgetExhaustedException e) {
@@ -128,6 +128,25 @@ public class PageContentScraper {
             traceFetchFailure(url, timeoutMs, e, wireAttemptObserved, redirectCount);
             return null;
         }
+    }
+
+    private static String extractBodyText(Document doc) {
+        if (doc.body() == null) {
+            return doc.text();
+        }
+        // Remove inherited complementary/hidden status before selecting a semantic root.
+        var page = doc.clone();
+        page.select("script, style, noscript, nav, aside, [role=navigation], "
+                + "[role=complementary], [hidden], [aria-hidden=true]").remove();
+        var main = page.selectFirst("main, [role=main]");
+        var articles = (main != null ? main : page).select("article");
+        var selected = articles.size() == 1 ? articles.first() : main;
+        // No unambiguous semantic body: retain the existing unstructured-page fallback.
+        if (selected == null || selected.text().isBlank()) {
+            return doc.text();
+        }
+        // Article headers retain title/date/qualifiers; the fetched document stays untouched.
+        return selected.text();
     }
 
     /**

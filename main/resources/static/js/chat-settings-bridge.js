@@ -15,11 +15,13 @@
   const STORAGE_KEY = 'awx.settings.v1.preferences';
   const REMEMBER_KEY = 'awx.settings.v1.rememberChatChanges';
   const MAX_BYTES = 16384;
-  const KEYS = Object.freeze(['model', 'modelSelectionMode', 'executionMode', 'searchMode', 'useRag']);
+  const KEYS = Object.freeze(['model', 'modelSelectionMode', 'executionMode', 'searchMode', 'useRag', 'googleSearchRescueEnabled']);
+  const BOOLEAN_KEYS = ['useRag', 'googleSearchRescueEnabled'];
   // Explanatory template fallbacks. Never persist this merged object on page load.
   const DEFAULTS = Object.freeze({ modelSelectionMode: 'preferred', executionMode: 'AUTO', searchMode: 'AUTO', useRag: true });
   const IDS = Object.freeze({ model: 'modelSelect', modelSelectionMode: 'modelSelectionMode',
-    executionMode: 'executionModeSelect', searchMode: 'searchModeSelect', useRag: 'useRagToggle' });
+    executionMode: 'executionModeSelect', searchMode: 'searchModeSelect', useRag: 'useRagToggle',
+    googleSearchRescueEnabled: 'googleSearchRescueToggle' });
 
   function isRecord(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -37,7 +39,7 @@
     for (const key of Object.keys(value)) {
       if (!KEYS.includes(key)) throw new Error('지원하지 않는 설정 키가 있습니다.');
       const v = value[key];
-      const valid = key === 'model' ? validModelId(v) : key === 'useRag' ? typeof v === 'boolean' :
+      const valid = key === 'model' ? validModelId(v) : BOOLEAN_KEYS.includes(key) ? typeof v === 'boolean' :
         key === 'modelSelectionMode' ? ['preferred', 'strict', 'auto'].includes(v) :
         key === 'executionMode' ? ['AUTO', 'STRIKE', 'SELF_ASK'].includes(v) :
           ['AUTO', 'OFF', 'FORCE_LIGHT', 'FORCE_DEEP'].includes(v);
@@ -86,7 +88,7 @@
 
   const PREFERENCE_KEYS = Object.freeze([...KEYS, 'temperature', 'topP', 'frequencyPenalty',
     'presencePenalty', 'maxTokens', 'useWebSearch', 'ragAnswerPolicy',
-    'customInstructions', 'responseTone', 'responseLength', 'responseLanguage', 'memoryMode']);
+    'customInstructions', 'responseTone', 'responseLength', 'responseLanguage', 'memoryMode', 'chatTraceEnabled']);
   const CACHE_KEY = 'awx.settings.v2.preferences';
   function validatePreferences(value) {
     if (!isRecord(value)) throw new Error('설정은 객체여야 합니다.');
@@ -96,7 +98,7 @@
       if (KEYS.includes(key)) Object.assign(clean, validateValues({[key]:v}));
       else {
         const ranges = {temperature:[0,2], topP:[0,1], frequencyPenalty:[-2,2], presencePenalty:[-2,2], maxTokens:[1,2147483647]};
-        const valid = key === 'useWebSearch' ? typeof v === 'boolean' :
+        const valid = ['useWebSearch','chatTraceEnabled'].includes(key) ? typeof v === 'boolean' :
           key === 'ragAnswerPolicy' ? ['adaptive','evidence_only'].includes(v) :
           key === 'customInstructions' ? typeof v === 'string' && v.length <= 4000 && Array.from(v).length <= 2000 :
           key === 'responseTone' ? ['neutral','friendly','formal'].includes(v) :
@@ -131,6 +133,7 @@
     return {overrides:validatePreferences(value.overrides), effective:validatePreferences(value.effective),
       factoryDefaults:validatePreferences(value.factoryDefaults), sources, revision:value.revision,
       hash:value.hash, defaultsVersion:value.defaultsVersion, ownerScope:'cookie',
+      ownerScopeId:typeof value.ownerScopeId === 'string' && /^[0-9a-f]{64}$/.test(value.ownerScopeId) ? value.ownerScopeId : null,
       ...(temperature ? {sampling:{temperature}} : {})};
   }
   async function requestPreferences(win, options) {
@@ -156,7 +159,9 @@
     const clean = validatePreferences(set);
     if (unset.some(key => !PREFERENCE_KEYS.includes(key) || Object.hasOwn(clean,key))) throw new Error('초기화 범위 오류');
     const ack = await requestPreferences(win, {method:'PATCH', headers:{Accept:'application/json','Content-Type':'application/json'},
-      body:JSON.stringify({expectedRevision:baseline.revision, expectedHash:baseline.hash, set:clean, unset})});
+      body:JSON.stringify({expectedRevision:baseline.revision, expectedHash:baseline.hash, set:clean, unset,
+        ...(Object.hasOwn(clean,'chatTraceEnabled') || unset.includes('chatTraceEnabled')
+          ? {expectedOwnerScopeId:baseline.ownerScopeId} : {})})});
     const observed = await readPreferences(win);
     if (ack.revision !== observed.revision || ack.hash !== observed.hash) throw new Error('저장 확인 충돌 · 다시 읽어 주세요.');
     if (migrate) {
@@ -182,6 +187,20 @@
     const send = doc.getElementById('sendBtn');
     let baseline = null, pending = {}, applying = false, catalogReady = false, generation = 0, ready = false;
     const edited = new Set();
+    const rescue = controls.googleSearchRescueEnabled;
+    // Display intent belongs to the verified owner, never a conversation or generation payload.
+    const trace = doc.getElementById('chatTraceToggle');
+    function applyTrace(value) {
+      if (!trace) return;
+      applying = true;
+      try {
+        trace.checked = value !== false;
+        trace.dispatchEvent(new win.Event('change', {bubbles:true}));
+      } finally { applying = false; }
+    }
+    const sessionIdentity = () => {
+      try { return win.sessionStorage.getItem('chat.currentSessionId') || null; } catch { return null; }
+    };
     const freshSession = () => {
       try { return !win.sessionStorage.getItem('chat.currentSessionId') && !win.sessionStorage.getItem('chat.activeRun'); }
       catch { return false; }
@@ -209,11 +228,13 @@
           const control = controls[key];
           // The existing request builder maps auto mode to llmrouter.auto; the catalog keeps concrete choices.
           if (key === 'model' && pending[key] === 'llmrouter.auto' && mode === 'auto') { delete pending[key]; continue; }
-          if (control.disabled || (key !== 'useRag' && !selectable(control, pending[key]))) continue;
+          if (control.disabled || (!BOOLEAN_KEYS.includes(key) && !selectable(control, pending[key]))) continue;
           const value = pending[key];
-          if (key === 'useRag') control.checked = value; else control.value = value;
+          if (BOOLEAN_KEYS.includes(key)) control.checked = value; else control.value = value;
           delete pending[key];
-          control.dispatchEvent(new win.Event('change', {bubbles:true}));
+          control.dataset.awxSettingsApplying = 'true';
+          try { control.dispatchEvent(new win.Event('change', {bubbles:true})); }
+          finally { delete control.dataset.awxSettingsApplying; }
         }
         // The picker can change mode synchronously when model changes.
         if (mode && selectable(controls.modelSelectionMode,mode)) {
@@ -226,23 +247,61 @@
     }
     async function begin() {
       const ticket = ++generation; pending = {}; edited.clear();
+      if (trace) { trace.disabled = true; applyTrace(false); }
+      const session = sessionIdentity();
+      let draft = null;
+      const priorScope = rescue.dataset.rescueOwnerScopeId;
+      delete rescue.dataset.rescueOwnerScopeId;
       try {
         const settings = JSON.parse(win.sessionStorage.getItem('chat.controlSettings') || 'null');
+        draft = settings;
         if (settings && settings.source !== 'factory') {
-          for (const key of ['model', 'modelSelectionMode', 'executionMode']) {
-            if (Object.hasOwn(settings, key)) edited.add(key);
+          for (const key of KEYS) {
+            if (key !== 'googleSearchRescueEnabled' && Object.hasOwn(settings, key)) edited.add(key);
           }
         }
       } catch { /* malformed stored controls grant no preference override */ }
-      if (!freshSession()) { gate(true); message('session-preserved','현재 대화 설정 유지'); return; }
-      gate(false); message('server-loading','서버 개인 설정 확인 중');
+      const fresh = freshSession();
+      if (fresh) { gate(false); message('server-loading','서버 개인 설정 확인 중'); }
+      else { gate(true); message('session-preserved','현재 대화 설정 유지'); }
       try {
         const value = await readPreferences(win);
-        if (ticket !== generation || !freshSession()) return;
+        if (ticket !== generation || sessionIdentity() !== session) return;
         baseline = value;
+        applyTrace(value.overrides.chatTraceEnabled);
+        if (trace) trace.disabled = !value.ownerScopeId;
+        if (typeof value.effective.googleSearchRescueEnabled === 'boolean')
+          rescue.dataset.rescueInherited = String(value.effective.googleSearchRescueEnabled);
+        if (priorScope && priorScope !== value.ownerScopeId) {
+          if (!edited.has('googleSearchRescueEnabled')) {
+            delete rescue.dataset.rescueExplicit;
+            rescue.checked = rescue.defaultChecked === true;
+          }
+        } else if (priorScope && rescue.dataset.rescueExplicit === 'true') edited.add('googleSearchRescueEnabled');
+        if (value.ownerScopeId) rescue.dataset.rescueOwnerScopeId = value.ownerScopeId;
+        // Legacy/unscoped caches are never authority for a new owner's rescue intent.
+        if (!edited.has('googleSearchRescueEnabled') && value.ownerScopeId
+            && draft?.googleSearchRescueOwnerScopeId === value.ownerScopeId
+            && draft.googleSearchRescueSessionId === session
+            && typeof draft.googleSearchRescueEnabled === 'boolean') {
+          rescue.checked = draft.googleSearchRescueEnabled;
+          rescue.dataset.rescueExplicit = 'true';
+          edited.add('googleSearchRescueEnabled');
+        }
+        doc.dispatchEvent(new win.CustomEvent('awx:rescue-owner-verified'));
+        if (!fresh || !freshSession()) return;
         pending = Object.fromEntries(KEYS.filter(key => !edited.has(key) && Object.hasOwn(value.effective,key)).map(key => [key,value.effective[key]]));
         applyAvailable();
-      } catch { if (ticket === generation) { gate(false); message('server-unavailable','개인 설정을 확인하지 못했습니다 · 페이지를 다시 열어 주세요.'); } }
+      } catch { if (ticket === generation) {
+        delete rescue.dataset.rescueOwnerScopeId;
+        if (!edited.has('googleSearchRescueEnabled')) delete rescue.dataset.rescueExplicit;
+        baseline = null;
+        if (trace) trace.disabled = true;
+        gate(!freshSession());
+        if (save) save.disabled = true;
+        doc.dispatchEvent(new win.CustomEvent('awx:rescue-owner-verified'));
+        message('server-unavailable','개인 설정을 확인하지 못했습니다 · 저장은 서버 재확인 후 가능합니다.');
+      } }
     }
     for (const [key, control] of Object.entries(controls)) control.addEventListener('change', () => {
       if (applying) return;
@@ -250,18 +309,41 @@
       edited.add(key); delete pending[key];
       if (baseline && catalogReady && Object.keys(pending).length === 0 && selectable(controls.model, controls.model.value)) gate(true);
     });
+    if (trace) trace.addEventListener('change', async () => {
+      if (applying || trace.disabled || !baseline?.ownerScopeId) return;
+      const ticket = generation, ownerScopeId = baseline.ownerScopeId, value = trace.checked;
+      trace.disabled = true;
+      try {
+        const current = await readPreferences(win);
+        if (ticket !== generation) return;
+        if (current.ownerScopeId !== ownerScopeId) { void begin(); return; }
+        const saved = await savePreferences(win,current,{chatTraceEnabled:value});
+        if (ticket !== generation) return;
+        if (saved.ownerScopeId !== ownerScopeId) { void begin(); return; }
+        baseline = saved;
+        applyTrace(saved.overrides.chatTraceEnabled);
+        message('trace-saved','답변별 트레이스 표시 설정 저장됨');
+      } catch {
+        if (ticket === generation) message('trace-save-failed','트레이스 표시 설정 저장 실패 · 서버 설정을 다시 확인해 주세요.');
+      } finally {
+        if (ticket === generation) trace.disabled = !baseline?.ownerScopeId;
+      }
+    });
     doc.addEventListener('chat:model-catalog', event => {
       catalogReady = event.detail?.hydrated === true || event.detail?.ready === true;
       if (catalogReady) applyAvailable(); else if (freshSession()) gate(false);
     });
     if (save) save.addEventListener('click', async () => {
       if (!ready) return;
-      const set = Object.fromEntries(KEYS.map(key => [key, key === 'useRag' ? controls[key].checked : controls[key].value]));
+      const set = Object.fromEntries(KEYS.map(key => [key, BOOLEAN_KEYS.includes(key) ? controls[key].checked : controls[key].value]));
       try { baseline = await savePreferences(win,baseline || await readPreferences(win),set); message('server-saved','개인 기본값 저장됨 · 다음 새 대화부터 적용'); }
       catch { message('save-failed','저장 실패 · 현재 대화 선택은 유지합니다. 설정 페이지에서 서버 값을 확인하세요.'); }
     });
     doc.addEventListener('brain-state:session', event => {
-      if (event.detail?.sessionId) { generation++; pending = {}; gate(true); message('session-preserved','현재 대화 설정 유지'); }
+      if (event.detail?.sessionId) {
+        generation++; pending = {}; gate(true); message('session-preserved','현재 대화 설정 유지');
+        if (trace || !rescue.dataset.rescueOwnerScopeId) void begin();
+      }
       else void begin();
     });
     doc.addEventListener('click', event => {
@@ -274,8 +356,7 @@
     }, true);
     win.addEventListener('storage', event => {
       if (event.key === CACHE_KEY || event.key === null) {
-        void readPreferences(win).then(value => {baseline=value; message('next-new-chat','다른 탭의 저장 확인 · 다음 새 대화부터 적용');})
-          .catch(() => message('server-unavailable','서버 설정 재확인 실패'));
+        void begin();
       }
     });
     win.addEventListener('pagehide', () => { generation++; });

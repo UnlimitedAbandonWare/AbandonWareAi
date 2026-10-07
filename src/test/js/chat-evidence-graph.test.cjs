@@ -21,7 +21,8 @@ function setup() {
   const answer = () => {
     const wrap = f.fakeElement('synthetic-message');
     const node = f.fakeElement('synthetic-answer');
-    node.ownerDocument = f.document; node.isConnected = true; wrap.appendChild(node);
+    node.ownerDocument = f.document; wrap.appendChild(node);
+    f.document.getElementById('chatWindow').appendChild(wrap);
     return node;
   };
   const packet = (extra = {}) => ({ identity: { ...current }, sessionId: current.sessionId,
@@ -104,7 +105,7 @@ test('U1: DOM removal and projection mismatch reject pending work', () => {
   for (const change of ['removed', 'version']) {
     const s = setup(), a = s.answer(), input = s.packet();
     s.graph.begin(a, input.identity, s.isCurrent);
-    if (change === 'removed') a.isConnected = false;
+    if (change === 'removed') a.remove();
     else input.projectionVersion = 999;
     assert.equal(s.graph.finalize(a, input), false);
     assert.equal(s.graph.view(a).status, 'unavailable');
@@ -112,6 +113,7 @@ test('U1: DOM removal and projection mismatch reject pending work', () => {
 });
 test('U1: deleting a completed assistant removes its sibling panel and leaves another answer intact', () => {
   const s = setup(), root = s.f.fakeElement('shared-thread'), a = s.answer(), b = s.answer();
+  s.f.document.getElementById('chatWindow').appendChild(root);
   root.appendChild(a); root.appendChild(b);
   s.graph.finalize(a, s.packet());
   const panelA = root.querySelector('[data-answer-provenance]');

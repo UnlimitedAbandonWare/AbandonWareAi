@@ -18,6 +18,11 @@ import java.util.Set;
 public final class RagControlRuntimeAdapter {
 
     static final String PRESENTATION_INPUT_TRACE_KEY = "ragControl.presentation.runtimeInput";
+    private static final Set<String> VERIFIER_TERMINAL_STAGES = Set.of(
+            "not_run", "draft_presence", "entity_validation", "context_presence", "claim_verification",
+            "source_credibility", "meta_check", "fact_classification", "evidence_coverage", "correction");
+    private static final Set<String> VERIFIER_TERMINAL_REASONS = Set.of(
+            "pass", "corrected", "insufficient", "rejected", "unknown");
 
     public static void capturePresentationInput(RuntimeInput input) {
         TraceStore.putInternal(PRESENTATION_INPUT_TRACE_KEY, input);
@@ -390,6 +395,21 @@ public final class RagControlRuntimeAdapter {
                 Map.copyOf(evidence));
     }
 
+    private static Map<String, Object> verificationEvidence(Map<String, Object> evidence) {
+        Map<String, Object> result = new LinkedHashMap<>(evidence);
+        String terminalStage = diagnosticLabel(TraceStore.get("factVerifier.terminalStage"), VERIFIER_TERMINAL_STAGES);
+        String terminalReason = diagnosticLabel(TraceStore.get("factVerifier.terminalReason"), VERIFIER_TERMINAL_REASONS);
+        if (terminalStage != null) result.put("terminalStage", terminalStage);
+        if (terminalReason != null) result.put("terminalReason", terminalReason);
+        Object judgeUnavailable = TraceStore.get("factVerifier.judgeUnavailable");
+        if (judgeUnavailable instanceof Boolean) result.put("judgeUnavailable", judgeUnavailable);
+        return Map.copyOf(result);
+    }
+
+    private static String diagnosticLabel(Object value, Set<String> allowed) {
+        return value instanceof String label && allowed.contains(label) ? SafeRedactor.traceLabel(label) : null;
+    }
+
     private RagControlFinding finding(
             RagControlFinding.Stage stage,
             RagControlFinding.FailureClass failureClass,
@@ -411,7 +431,7 @@ public final class RagControlRuntimeAdapter {
                 proof.complete()
                         ? RagControlFinding.LineageStatus.COMPLETE
                         : RagControlFinding.LineageStatus.MISSING,
-                evidence);
+                stage == RagControlFinding.Stage.VERIFICATION ? verificationEvidence(evidence) : evidence);
     }
 
     private LineageProof lineageProof(
@@ -589,7 +609,9 @@ public final class RagControlRuntimeAdapter {
     public enum NonModelRelease {
         NONE(""),
         SUPPORTED_EXCERPT("verification_unavailable_excerpt"),
-        VERIFICATION_GUIDANCE("verification_unavailable_guidance");
+        VERIFICATION_GUIDANCE("verification_unavailable_guidance"),
+        INSUFFICIENT_EXCERPT("verification_insufficient_excerpt"),
+        INSUFFICIENT_GUIDANCE("verification_insufficient_guidance");
 
         private final String reasonCode;
         NonModelRelease(String reasonCode) { this.reasonCode = reasonCode; }
@@ -645,7 +667,11 @@ public final class RagControlRuntimeAdapter {
             NonModelRelease kind = "verification_unavailable_excerpt".equals(reason)
                     ? NonModelRelease.SUPPORTED_EXCERPT
                     : "verification_unavailable_guidance".equals(reason)
-                    ? NonModelRelease.VERIFICATION_GUIDANCE : NonModelRelease.NONE;
+                    ? NonModelRelease.VERIFICATION_GUIDANCE
+                    : "verification_insufficient_excerpt".equals(reason)
+                    ? NonModelRelease.INSUFFICIENT_EXCERPT
+                    : "verification_insufficient_guidance".equals(reason)
+                    ? NonModelRelease.INSUFFICIENT_GUIDANCE : NonModelRelease.NONE;
             if (kind == NonModelRelease.NONE) {
                 return new RuntimeInput(ragRequested, retrievedCount, citableCount, answerBlank,
                         verificationKnown, verificationAccepted, hardGuardHeld,
@@ -669,7 +695,12 @@ public final class RagControlRuntimeAdapter {
         boolean hasNonModelRelease() { return nonModelRelease != NonModelRelease.NONE; }
 
         boolean nonModelReleaseEligible() {
-            return ragRequested && verificationRequired && !verificationKnown && !verificationAccepted
+            boolean insufficient = nonModelRelease == NonModelRelease.INSUFFICIENT_EXCERPT
+                    || nonModelRelease == NonModelRelease.INSUFFICIENT_GUIDANCE;
+            boolean verdictEligible = insufficient
+                    ? verificationKnown && "insufficient".equals(TraceStore.get("finalAnswer.verificationStatus"))
+                    : ragRequested && !verificationKnown;
+            return verificationRequired && verdictEligible && !verificationAccepted
                     && !hardGuardHeld && finalBoundaryReached && !answerBlank
                     && nonModelBodyHash != null && nonModelTimelineId != null
                     && !nonModelTimelineId.isBlank();

@@ -360,7 +360,91 @@ class CoopVerifyTest(unittest.TestCase):
                 self.writer_begin(agent="new-owner")
         self.assertEqual(self.state(), state)
 
+    def test_closed_ticket_capacity_preserves_evidence_and_historical_lookup(self):
+        state = CV.empty_state()
+        state["tickets"] = {
+            f"cv-old-{i:03d}": {"ticketId": f"cv-old-{i:03d}", "state": "FAILED",
+                "updatedAtUtc": "2026-10-01T00:00:00+00:00",
+                "coveredRequests": [{"requester": "old-owner", "taskId": "old-task"}],
+                "receiptPath": f"receipts/cv-old-{i:03d}.json"}
+            for i in range(CV.MAX_TICKETS)
+        }
+        receipt = self.store_dir() / "receipts/cv-old-000.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_bytes(b'{"verdict":"FAILED","exitCode":7}\n')
+        before_receipt = receipt.read_bytes()
+        CV.save_state(self.store_dir(), state)
+        result = self.request()
+        current = self.state()
+        self.assertEqual(len(current["tickets"]), CV.MAX_TICKETS)
+        self.assertNotEqual(result["state"], "VERIFIED_PASS")
+        archives = list((self.store_dir() / "closed-tickets").glob("*.json"))
+        self.assertEqual([p.name for p in archives], ["cv-old-000.json"])
+        self.assertEqual(json.loads(archives[0].read_text(encoding="utf-8")), state["tickets"]["cv-old-000"])
+        self.assertNotIn("cv-old-000", current["tickets"])
+        self.assertEqual(receipt.read_bytes(), before_receipt)
+        _, status = self._call(CV.cmd_status, self.args(ticket="cv-old-000"))
+        self.assertEqual(status["tickets"], {"cv-old-000": state["tickets"]["cv-old-000"]})
+        code, replay = self._call(CV.cmd_run_once, self.args(ticket="cv-old-000"))
+        self.assertEqual((code, replay["state"], replay["alreadyClosed"]), (CV.EXIT_FAILED, "FAILED", True))
+        self.assertEqual(replay["receiptPath"], "receipts/cv-old-000.json")
+        self.assertFalse(self.counter.exists())
+        current = self.state()
+        current["tickets"][result["ticketId"]]["state"] = "SUPERSEDED"
+        CV.save_state(self.store_dir(), current)
+        code, replay = self._call(CV.cmd_run_once, self.args(ticket="cv-old-000"))
+        self.assertEqual((code, replay["state"], replay["alreadyClosed"]), (CV.EXIT_FAILED, "FAILED", True))
+        self.assertFalse(self.counter.exists())
+
+    def test_ticket_capacity_keeps_pending_inflight_unknown_and_blocked_records(self):
+        for ticket_state in ("WAITING_FOR_RUNNER", "VERIFYING", "BLOCKED_UNKNOWN_OWNER", "UNKNOWN"):
+            with self.subTest(state=ticket_state):
+                state = CV.empty_state()
+                state["tickets"] = {
+                    f"cv-open-{i:03d}": {"ticketId": f"cv-open-{i:03d}", "state": ticket_state}
+                    for i in range(CV.MAX_TICKETS)
+                }
+                CV.save_state(self.store_dir(), state)
+                with self.assertRaisesRegex(Exception, "ticket-cap"):
+                    self.request()
+                self.assertEqual(self.state(), state)
+                self.assertFalse((self.store_dir() / "closed-tickets").exists())
+
+    def test_ticket_archive_failure_keeps_saved_state_and_receipts(self):
+        from unittest.mock import patch
+        state = CV.empty_state()
+        state["tickets"] = {
+            f"cv-old-{i:03d}": {"ticketId": f"cv-old-{i:03d}", "state": "VERIFIED_PASS"}
+            for i in range(CV.MAX_TICKETS)
+        }
+        CV.save_state(self.store_dir(), state)
+        with patch.object(CV.ck, "write_json", side_effect=OSError("synthetic archive failure")):
+            with self.assertRaisesRegex(OSError, "synthetic archive failure"):
+                self.request()
+        self.assertEqual(self.state(), state)
+        self.assertFalse(self.counter.exists())
+
     # -- T1: foreign EDITING writer → zero builds, DEFERRED ticket ------------
+    def test_status_preserves_writer_registered_before_lock_acquisition(self):
+        from unittest.mock import patch
+
+        real_lock = CV.exclusive_lock
+        interleaved = {}
+
+        @contextlib.contextmanager
+        def delayed_status_lock(directory, name, busy_error):
+            if name == ".coop.lock" and not interleaved:
+                interleaved["started"] = True
+                interleaved["writer"] = self.writer_begin(agent="concurrent")
+            with real_lock(directory, name, busy_error) as handle:
+                yield handle
+
+        with patch.object(CV, "exclusive_lock", delayed_status_lock):
+            self.status()
+
+        self.assertIn(interleaved["writer"]["editBatchId"], self.state()["writers"],
+                      "status must preserve a writer committed before its lock acquisition")
+
     def test_t1_foreign_editing_defers_and_never_builds(self):
         w = self.writer_begin(agent="codex-other")
         req = self.request()

@@ -81,7 +81,11 @@ public record ChatConversationContext(List<Turn> recent,String summary,List<Turn
             else throw new IllegalArgumentException("focus_model_context_limit");
             ChatMessage current=result.get(result.size()-1);
             result.subList(contextIndex,result.size()).clear();
-            String reference=builder.build(prompt.toBuilder().memory(reduced.memoryText()).build());
+            // Evicted conversation data must leave every field rendered by PromptBuilder.
+            String reference=builder.build(prompt.toBuilder().memory(reduced.memoryText())
+                    .history(String.join("\n",reduced.interpretationHistory()))
+                    .lastAssistantAnswer(reduced.recent().isEmpty()?null:
+                            reduced.recent().get(reduced.recent().size()-1).answer()).build());
             result.add(prompt.preparedContextPacket()==null?SystemMessage.from(reference):UserMessage.from(reference));
             result.addAll(reduced.roleMessages());result.add(current);
         }

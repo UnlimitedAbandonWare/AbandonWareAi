@@ -1944,9 +1944,16 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         }
     }
 
+    private static String braveQueryForLeg(String query) {
+        String braveQuery = convertToEnglishSearchTerm(query);
+        // Provider representation of this leg; independent retries still admit their own query.
+        return com.example.lms.service.rag.SelfAskSearchBudget.tryQueryAlias(query, braveQuery)
+                ? braveQuery : query;
+    }
+
     private List<String> searchKoreanBraveAndNaver(String query, int topK) {
 
-        final String braveQuery = convertToEnglishSearchTerm(query);
+        final String braveQuery = braveQueryForLeg(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
         final long deadlineNs = requestDeadline(timeoutMs);
 
@@ -2216,7 +2223,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     }
 
     private List<String> searchKoreanNaverAndBrave(String query, int topK) {
-        final String braveQuery = convertToEnglishSearchTerm(query);
+        final String braveQuery = braveQueryForLeg(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
         final long deadlineNs = requestDeadline(timeoutMs);
 
@@ -2949,7 +2956,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
     private NaverSearchService.SearchResult searchWithTraceKoreanBraveAndNaver(String query, int topK) {
 
-        final String braveQuery = convertToEnglishSearchTerm(query);
+        final String braveQuery = braveQueryForLeg(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
         final long deadlineNs = requestDeadline(timeoutMs);
 
@@ -3203,7 +3210,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
 
     private NaverSearchService.SearchResult searchWithTraceKoreanNaverAndBrave(String query, int topK) {
 
-        final String braveQuery = convertToEnglishSearchTerm(query);
+        final String braveQuery = braveQueryForLeg(query);
         final long timeoutMs = TimeUnit.SECONDS.toMillis(timeoutSec);
         final long deadlineNs = requestDeadline(timeoutMs);
 

@@ -1713,6 +1713,9 @@ public class ChatApiController {
             }
             initialRun.set(started);
         }
+        final var priorWebEvidence = initialRun.get() == null ? java.util.List.<dev.langchain4j.rag.content.Content>of()
+                : java.util.Optional.ofNullable(runRegistry.priorWebEvidence(initialRun.get().context(),
+                        AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey).hash())).orElseGet(java.util.List::of);
         // Use a bounded replay sink so that early emissions are not lost when the
         // HTTP layer subscribes a few milliseconds later ("zero-subscriber" race),
         // and to avoid silent token/event drops under bursty emission.
@@ -1882,6 +1885,8 @@ public class ChatApiController {
                 com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(dto.getExecutionMode());
                 publicRequestBudgetGuard.validateChatEffective(dto);
                 final boolean __hasAttachments = hasAttachments(dto);
+                final boolean __localSocialReply = com.example.lms.service.NoEvidenceChatFallback.isLocalSocialReplyRequest(dto);
+                final boolean __reusePriorWeb = !priorWebEvidence.isEmpty() && priorSession != null && ChatWorkflow.isPriorWebComparisonRequest(dto);
                 final boolean __looksLikeAttachmentQ =
                         ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(dto.getMessage());
 
@@ -1901,10 +1906,10 @@ public class ChatApiController {
                 try {
                     AnswerMode __am = AnswerMode.fromString(dto.getMode());
                     QueryDomain __qd = (gctx != null && gctx.isSensitiveTopic()) ? QueryDomain.SENSITIVE : QueryDomain.GENERAL;
-                    if (workflowOrchestrator != null) {
+                    if (workflowOrchestrator != null && !__localSocialReply) {
                         workflowOrchestrator.ensurePlanSelected(gctx, __am, __qd, dto.getMessage(), __hasAttachments);
                     }
-                    if (planHintApplier != null && gctx != null && gctx.getPlanId() != null) {
+                    if (!__localSocialReply && planHintApplier != null && gctx != null && gctx.getPlanId() != null) {
                         __planHints = planHintApplier.load(gctx.getPlanId());
                         planHintApplier.applyToGuardContext(__planHints, gctx);
                     }
@@ -1939,13 +1944,13 @@ public class ChatApiController {
                 final boolean __directSupabaseOperationalJudgment =
                         ChatWorkflow.isSupabaseOperationalJudgmentRequest(dto.getMessage());
                 boolean __finalUseWeb = (__hasAttachments && __looksLikeAttachmentQ) ? false : __reqUseWeb;
-                __finalUseWeb = __finalUseWeb && !__directDebugAnswer;
+                __finalUseWeb = __finalUseWeb && !__localSocialReply && !__directDebugAnswer;
                 __finalUseWeb = __finalUseWeb && !__directLiteralAnswer;
                 __finalUseWeb = __finalUseWeb && !__directUiModeStatusAnswer;
                 __finalUseWeb = __finalUseWeb && !__directSupabaseOperationalJudgment;
                 // Plan cap: allowWeb/allowRag (applied before prefetch/search)
                 __finalUseWeb = __finalUseWeb && __allowWebCap;
-                final boolean __finalUseRag = __allowRagCap
+                final boolean __finalUseRag = !__localSocialReply && __allowRagCap
                         && Boolean.TRUE.equals(dto.isUseRag())
                         && !__directDebugAnswer
                         && !__directLiteralAnswer
@@ -2052,6 +2057,7 @@ public class ChatApiController {
                         return;
                     }
                     ChatRunExecutionContext runContext = started.context();
+                    runRegistry.priorWebEvidence(runContext, AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey).hash());
                     runContextRef.set(runContext);
                     Disposable workerHandle = runWorkerRef.get();
                     if (workerHandle != null) {
@@ -2184,7 +2190,7 @@ public class ChatApiController {
                     // Execute the lightweight pre-processing chain. Use the injected
                     // ChatStreamEmitter rather than an undefined variable. Any
                     // exceptions are swallowed to avoid blocking the primary chat flow.
-                    chainRunner.run(
+                    if (!__localSocialReply && !__reusePriorWeb) chainRunner.run(
                             sessionKey,
                             userId,
                             req.getMessage(),
@@ -2222,6 +2228,8 @@ public class ChatApiController {
                 // 4) ???롪틵????怨뺣뾼??
                 // ???롪틵???? 嶺뚣끉裕뉏펺?useWebSearch ????뗥윜?__finalUseWeb)?띠럾? true???굿??롪틵???嶺뚮ㅄ維獄?쑚泥? OFF?띠럾? ?熬곣뫀鍮????異???臾먮뺄??類ｋ펲.
                 // 嶺뚳퐘維? 嶺뚯쉶?꾣룇???롪퍔???__finalUseWeb??false???????롪틵?????節띉????紐꾩끋??類ｋ펲.
+                final boolean __reusePriorWebForCall = __reusePriorWeb && initialRun.get() != null
+                        && initialRun.get().context().belongsToSession(session.getId());
                 int topKParam = (dto.getWebTopK() == null || dto.getWebTopK() <= 0) ? 5 : dto.getWebTopK();
                 com.example.lms.gptsearch.dto.SearchMode sm = dto.getSearchMode();
                 // treat null as AUTO for compatibility
@@ -2230,15 +2238,15 @@ public class ChatApiController {
                 final com.example.lms.gptsearch.dto.SearchMode effectiveSearchMode =
                         effectiveSearchMode(dto.getMessage(), sm);
                 recordSearchModeRewriteHint(effectiveSearchMode);
-                final boolean allowWeb = shouldUseWebForSearchMode(
-                        dto.getMessage(), effectiveSearchMode, __finalUseWeb, __finalUseRag, searchDecisionService, topKParam);
+                final boolean allowWeb = !__localSocialReply && (__reusePriorWebForCall && __finalUseWeb || shouldUseWebForSearchMode(
+                        dto.getMessage(), effectiveSearchMode, __finalUseWeb, __finalUseRag, searchDecisionService, topKParam));
                 markCheapSearchMode(gctx, effectiveSearchMode, "stream.preSearch");
                 final String __providerSearchQuery = providerSearchQuery(dto.getMessage());
                 NaverSearchService.SearchResult sr;
                 NaverSearchService.SearchTrace rawTrace = null;
                 List<String> rawSnips = java.util.Collections.emptyList();
                 String traceHtml = null;
-                if (allowWeb && !agentWebRequest) {
+                if (allowWeb && !agentWebRequest && !__reusePriorWebForCall) {
                     try {
                         Long remainingMs = __capturedBudget == null ? null : __capturedBudget.remainingMillis();
                         long tookMs = Math.max(0L, (System.nanoTime() - __streamStartedNs) / 1_000_000L);
@@ -2372,7 +2380,8 @@ public class ChatApiController {
                         new java.util.concurrent.atomic.AtomicBoolean(false);
 
                 final String agentEvidenceSession = String.valueOf(session.getId());
-                java.util.function.Function<String, java.util.List<String>> __webSupplier = agentWebRequest
+                java.util.function.Function<String, java.util.List<String>> __webSupplier = __reusePriorWebForCall
+                        ? ChatWorkflow.priorWebEvidenceSupplier(priorWebEvidence) : agentWebRequest
                         ? (com.example.lms.service.ChatWorkflow.WebEvidenceSupplier)
                             q -> agentPromptSearch(q, topKParam, agentEvidenceSession, allowWeb, agentWebAuthority)
                         : (q) -> {
@@ -2499,6 +2508,7 @@ public class ChatApiController {
                 ChatRunExecutionContext generatedRun = runContextRef.get();
                 if (generatedRun != null) {
                     generatedRun.markGenerationSucceeded();
+                    runRegistry.stageWebEvidence(generatedRun, dtoForCall.getVerifiedRequestOwnerHash(), result.retainedWebEvidence());
                 }
                 String semanticFinalText = result.content();
                 String modelUsedFinal = ChatModelMetaSupport.resolveModelUsed(
@@ -4284,6 +4294,7 @@ public class ChatApiController {
         com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(dto.getExecutionMode());
         publicRequestBudgetGuard.validateChatEffective(dto);
         final boolean __hasAttachments = hasAttachments(dto);
+        final boolean __localSocialReply = com.example.lms.service.NoEvidenceChatFallback.isLocalSocialReplyRequest(dto);
         final boolean __looksLikeAttachmentQ =
                 ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(dto.getMessage());
 
@@ -4296,10 +4307,10 @@ public class ChatApiController {
             if (__gctx != null) {
                 AnswerMode __am = AnswerMode.fromString(dto.getMode());
                 QueryDomain __qd = (__gctx.isSensitiveTopic()) ? QueryDomain.SENSITIVE : QueryDomain.GENERAL;
-                if (workflowOrchestrator != null) {
+                if (workflowOrchestrator != null && !__localSocialReply) {
                     workflowOrchestrator.ensurePlanSelected(__gctx, __am, __qd, dto.getMessage(), __hasAttachments);
                 }
-                if (planHintApplier != null && __gctx.getPlanId() != null) {
+                if (!__localSocialReply && planHintApplier != null && __gctx.getPlanId() != null) {
                     __planHints = planHintApplier.load(__gctx.getPlanId());
                     planHintApplier.applyToGuardContext(__planHints, __gctx);
                 }
@@ -4333,13 +4344,13 @@ public class ChatApiController {
         final boolean __directSupabaseOperationalJudgment =
                 ChatWorkflow.isSupabaseOperationalJudgmentRequest(dto.getMessage());
         boolean __finalUseWeb = (__hasAttachments && __looksLikeAttachmentQ) ? false : __reqUseWeb;
-        __finalUseWeb = __finalUseWeb && !__directDebugAnswer;
+        __finalUseWeb = __finalUseWeb && !__localSocialReply && !__directDebugAnswer;
         __finalUseWeb = __finalUseWeb && !__directLiteralAnswer;
         __finalUseWeb = __finalUseWeb && !__directUiModeStatusAnswer;
         __finalUseWeb = __finalUseWeb && !__directSupabaseOperationalJudgment;
         // Plan cap: allowWeb/allowRag
         __finalUseWeb = __finalUseWeb && __allowWebCap;
-        final boolean __finalUseRag = __allowRagCap
+        final boolean __finalUseRag = !__localSocialReply && __allowRagCap
                 && Boolean.TRUE.equals(dto.isUseRag())
                 && !__directDebugAnswer
                 && !__directLiteralAnswer
@@ -4382,6 +4393,9 @@ public class ChatApiController {
             throw new java.util.concurrent.CancellationException("run_active");
         }
         ChatRunExecutionContext syncRun = syncStarted.context();
+        final var priorWebEvidence = java.util.Optional.ofNullable(runRegistry.priorWebEvidence(syncRun,
+                AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey).hash())).orElseGet(java.util.List::of);
+        final boolean __reusePriorWeb = !priorWebEvidence.isEmpty() && ChatWorkflow.isPriorWebComparisonRequest(dto);
         // 세션 디버그 증거: 어느 종료 경로든 한 번만 기록한다.
         final AtomicBoolean syncTraceOnce = new AtomicBoolean(false);
         final AtomicReference<java.util.Map<String, Object>> syncTraceMetaRef = new AtomicReference<>();
@@ -4450,8 +4464,8 @@ public class ChatApiController {
             sm = com.example.lms.gptsearch.dto.SearchMode.AUTO;
         final com.example.lms.gptsearch.dto.SearchMode effectiveSearchMode =
                 effectiveSearchMode(dto.getMessage(), sm);
-        boolean performSearch = shouldUseWebForSearchMode(
-                dto.getMessage(), effectiveSearchMode, __finalUseWeb, __finalUseRag, searchDecisionService, topKParam);
+        boolean performSearch = !__localSocialReply && (__reusePriorWeb && __finalUseWeb || shouldUseWebForSearchMode(
+                dto.getMessage(), effectiveSearchMode, __finalUseWeb, __finalUseRag, searchDecisionService, topKParam));
         final boolean agentWebAuthority = isAdmin(
                 org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication());
         final boolean agentWebRequest = agentWebRequestAuthorized(agentWebAuthority);
@@ -4461,7 +4475,7 @@ public class ChatApiController {
         if (performSearch) {
             recordSearchModeRewriteHint(effectiveSearchMode);
         }
-        NaverSearchService.SearchResult sr = performSearch && !agentWebRequest
+        NaverSearchService.SearchResult sr = performSearch && !agentWebRequest && !__reusePriorWeb
                 ? webSearchProvider.searchWithTrace(__providerSearchQuery, topKParam)
                 : new NaverSearchService.SearchResult(List.of(), null);
         if (performSearch && !agentWebRequest && sr != null) {
@@ -4545,7 +4559,8 @@ public class ChatApiController {
         final Integer __prefetchMinCitations = (__prefetchCtx == null ? null : __prefetchCtx.getMinCitations());
 
         final String agentEvidenceSession = String.valueOf(session.getId());
-        java.util.function.Function<String, java.util.List<String>> __webSupplier = agentWebRequest
+        java.util.function.Function<String, java.util.List<String>> __webSupplier = __reusePriorWeb
+                ? ChatWorkflow.priorWebEvidenceSupplier(priorWebEvidence) : agentWebRequest
                 ? (com.example.lms.service.ChatWorkflow.WebEvidenceSupplier)
                     q -> agentPromptSearch(q, topKParam, agentEvidenceSession, performSearch, agentWebAuthority)
                 : (q) -> {
@@ -4639,6 +4654,7 @@ public class ChatApiController {
         dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey));
         bindGeneralGraphScope(dtoForCall, session, username, preResolvedOwnerKey);
         ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
+        runRegistry.stageWebEvidence(syncRun, dtoForCall.getVerifiedRequestOwnerHash(), result.retainedWebEvidence());
         boolean finalAnswerMemorySaveAllowed =
                 !Boolean.FALSE.equals(TraceStore.get("finalAnswer.memorySaveAllowed"));
         String semanticFinalContent = result.content();
@@ -4938,7 +4954,8 @@ public class ChatApiController {
 
     private void captureFinalizedGraph(ChatRequestDto request, com.example.lms.service.rag.graph.GeneralGraphScope scope,
                                        Long userMessageId, Long assistantMessageId, boolean held) {
-        if (held || userMessageId == null || assistantMessageId == null) return;
+        if (held || userMessageId == null || assistantMessageId == null
+                || com.example.lms.service.NoEvidenceChatFallback.isLocalSocialReplyRequest(request)) return;
         try {
             if(generalGraphSourceAuthority!=null&&!request.getUsedAttachmentSources().isEmpty())
                 generalGraphSourceAuthority.rememberAttachmentSelection(scope,request.getUsedAttachmentSources(),true);
@@ -5024,6 +5041,7 @@ public class ChatApiController {
         }
 
         boolean hasAttachments = hasAttachments(dto);
+        boolean localSocialReply = com.example.lms.service.NoEvidenceChatFallback.isLocalSocialReplyRequest(dto);
         boolean attachmentQuestion = ChatAttachmentQuestionDetector.looksLikeAttachmentQuestion(dto.getMessage());
         if (sensitiveTopicDetector != null) {
             try {
@@ -5039,11 +5057,11 @@ public class ChatApiController {
         try {
             AnswerMode answerMode = AnswerMode.fromString(dto.getMode());
             QueryDomain queryDomain = context.isSensitiveTopic() ? QueryDomain.SENSITIVE : QueryDomain.GENERAL;
-            if (workflowOrchestrator != null) {
+            if (workflowOrchestrator != null && !localSocialReply) {
                 workflowOrchestrator.ensurePlanSelected(
                         context, answerMode, queryDomain, dto.getMessage(), hasAttachments);
             }
-            if (planHintApplier != null && context.getPlanId() != null) {
+            if (!localSocialReply && planHintApplier != null && context.getPlanId() != null) {
                 planHints = planHintApplier.load(context.getPlanId());
                 planHintApplier.applyToGuardContext(planHints, context);
             }
@@ -5060,14 +5078,14 @@ public class ChatApiController {
         boolean directLiteral = ChatWorkflow.isDirectLiteralAnswerRequest(dto.getMessage());
         boolean directModeStatus = ChatWorkflow.isCurrentModeStatusRequest(dto.getMessage());
         boolean directSupabase = ChatWorkflow.isSupabaseOperationalJudgmentRequest(dto.getMessage());
-        boolean finalWeb = !(hasAttachments && attachmentQuestion)
+        boolean finalWeb = !localSocialReply && !(hasAttachments && attachmentQuestion)
                 && requestedWeb
                 && !directDebug
                 && !directLiteral
                 && !directModeStatus
                 && !directSupabase
                 && allowWeb;
-        boolean finalRag = allowRag
+        boolean finalRag = !localSocialReply && allowRag
                 && Boolean.TRUE.equals(dto.isUseRag())
                 && !directDebug
                 && !directLiteral
@@ -5078,6 +5096,49 @@ public class ChatApiController {
 
         publicRequestBudgetGuard.validateChatProjected(
                 dto, planHints, context.getPlanId(), workflowWeb, workflowRag);
+    }
+
+    @Autowired(required = false)
+    private ChatConversationExportSupport conversationExport;
+
+    private ChatConversationExportSupport.Actor exportActor(Authentication authentication) {
+        String username = authentication != null && authentication.isAuthenticated() ? authentication.getName() : null;
+        return new ChatConversationExportSupport.Actor(username, ownerKeyResolver.ownerKey());
+    }
+
+    @GetMapping("/sessions/export-options")
+    public ResponseEntity<?> conversationExportOptions(Authentication authentication,
+            @RequestParam(value = "before", required = false) String before,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        return conversationExportResponse(() -> conversationExport.options(exportActor(authentication), before, limit));
+    }
+
+    @PostMapping("/sessions/exports")
+    public ResponseEntity<?> captureConversationExport(Authentication authentication,
+            @RequestBody ChatConversationExportSupport.Selection selection) {
+        return conversationExportResponse(() -> conversationExport.capture(exportActor(authentication), selection));
+    }
+
+    @GetMapping("/sessions/exports/{exportId}")
+    public ResponseEntity<?> downloadConversationExport(Authentication authentication,
+            @PathVariable("exportId") String exportId,
+            @RequestParam(value = "format", defaultValue = "json") String format) {
+        return conversationExportResponse(() -> conversationExport.download(exportActor(authentication), exportId, format));
+    }
+
+    private ResponseEntity<?> conversationExportResponse(java.util.function.Supplier<Object> operation) {
+        String requestId = java.util.UUID.randomUUID().toString();
+        if (conversationExport == null) return ResponseEntity.status(503).header("Cache-Control", "no-store")
+                .header("X-Request-Id", requestId).body(Map.of("reasonCode", "EXPORT_UNAVAILABLE", "requestId", requestId));
+        try {
+            Object result = operation.get();
+            if (result instanceof ResponseEntity<?> response) return ResponseEntity.status(response.getStatusCode())
+                    .headers(response.getHeaders()).header("X-Request-Id", requestId).body(response.getBody());
+            return ResponseEntity.ok().header("Cache-Control", "no-store").header("X-Request-Id", requestId).body(result);
+        } catch (ChatConversationExportSupport.ExportFailure failure) {
+            return ResponseEntity.status(failure.status).header("Cache-Control", "no-store")
+                    .header("X-Request-Id", requestId).body(Map.of("reasonCode", failure.reason, "requestId", requestId));
+        }
     }
 
     // ===== other APIs =====
@@ -5407,9 +5468,16 @@ public class ChatApiController {
         String cookieOwner = com.example.lms.web.OwnerKeyBootstrapFilter.usableOwnerKey(ownerKey);
         Map<String, Object> preferences = cookieOwner == null ? Map.of()
                 : chatPreferenceService.read(AttachmentOwnerIdentity.forAnonymous(cookieOwner).hash()).overrides();
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        String actor = auth == null || !auth.isAuthenticated() ? null : auth.getName();
+        var factory = modelCatalog == null || cookieOwner == null ? chatDefaultsProperties.values()
+                : modelCatalog.firstSessionDefaults(chatDefaultsProperties.values(), AttachmentOwnerIdentity.forActor(actor, cookieOwner).hash());
         request.bindChatSettingsSnapshot(new ChatRequestDto.ChatSettingsSnapshot(preferences,
-                settingsService.getChatAdminOverrides(), ChatRequestSettingsMerger.requestValues(request)));
+                settingsService.getChatAdminOverrides(), ChatRequestSettingsMerger.requestValues(request), factory));
     }
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.example.lms.service.ChatModelCatalogService modelCatalog;
 
     private java.util.Map<String, Object> mergeSessionMetaIntoRequest(ChatSession session, ChatRequestDto uiReq) {
         return ChatSessionMetaMerger.merge(objectMapper, session, uiReq, log);

@@ -17,6 +17,7 @@ const dom = {
   executionMode: $("executionModeSelect"),
   searchModeSelect: $("searchModeSelect"),
   useRag: $("useRagToggle"),
+  googleSearchRescue: $("googleSearchRescueToggle"),
   chatMessages: $("chatWindow"),
   coreStatusRail: $("coreStatusRail"),
   streamStatus: $("streamStatus"),
@@ -1171,7 +1172,7 @@ const TURN_TRACE_SNAPSHOT_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
 const TURN_TRACE_FIELD_KEY = /^[A-Za-z0-9_.:-]{1,80}$/;
 const TURN_TRACE_FIELD_VALUE = /^[\x20-\x7E]{0,160}$/;
 const TURN_TRACE_MAX_ENTRIES = 64;
-const TURN_TRACE_MAX_FIELDS = 16;
+const TURN_TRACE_MAX_FIELDS = 19; // Existing 16 fields plus three observed overview scalars.
 
 function normalizeMessageTurnId(raw) {
   const numeric = Number(raw);
@@ -1194,7 +1195,10 @@ function validateTurnTraces(raw) {
     let invalid = false;
     for (const key of keys) {
       const value = src[key];
-      if (!TURN_TRACE_FIELD_KEY.test(key) || typeof value !== "string" || !TURN_TRACE_FIELD_VALUE.test(value)) {
+      const safeValue = key === 'observedModel'
+        ? typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._/:+\-]{0,199}$/.test(value) && !/^(sk-|AIza|eyJ)/.test(value)
+        : typeof value === 'string' && TURN_TRACE_FIELD_VALUE.test(value);
+      if (!TURN_TRACE_FIELD_KEY.test(key) || !safeValue) {
         invalid = true;
         break;
       }
@@ -1322,6 +1326,10 @@ async function selectSessionCandidate(candidateId) {
     restoredSessionHydrationGeneration += 1;
     restoredSessionHydrated = true;
     localControlOverrideActive = false;
+    if (strictBackendSessionId(state.currentSessionId) !== id && dom.googleSearchRescue) {
+      delete dom.googleSearchRescue.dataset.rescueExplicit;
+      dom.googleSearchRescue.checked = dom.googleSearchRescue.dataset.rescueInherited === "true";
+    }
     clearActiveRunIdentity();
     rememberCurrentSessionId(id);
     clearSessionModeDiagnostics();
@@ -1373,6 +1381,12 @@ function currentControlSettings(source = "") {
     useRag: dom.useRag?.checked !== false
   };
   if (source) settings.source = source;
+  const rescue = dom.googleSearchRescue;
+  if (rescue?.dataset.rescueExplicit === "true") {
+    settings.googleSearchRescueEnabled = rescue.checked === true;
+    if (rescue.dataset.rescueOwnerScopeId) settings.googleSearchRescueOwnerScopeId = rescue.dataset.rescueOwnerScopeId;
+    settings.googleSearchRescueSessionId = window.sessionStorage?.getItem(CURRENT_SESSION_STORAGE_KEY) || null;
+  }
   return settings;
 }
 
@@ -1431,6 +1445,10 @@ function resetControlSettingsToDefaults() {
   const defaultSearchMode = defaultSelectOption(dom.searchModeSelect);
   if (defaultSearchMode) dom.searchModeSelect.value = defaultSearchMode.value;
   if (dom.useRag) dom.useRag.checked = dom.useRag.defaultChecked !== false;
+  if (dom.googleSearchRescue) {
+    dom.googleSearchRescue.checked = dom.googleSearchRescue.defaultChecked === true;
+    delete dom.googleSearchRescue.dataset.rescueExplicit;
+  }
 }
 
 function isSmokeProofSession() {
@@ -1512,6 +1530,12 @@ function startNewChatSession() {
   beginChatTransitionDebugTurn("turn:not-observed", "new-chat");
   restoredSessionHydrationGeneration += 1;
   forgetCurrentSessionId();
+  if (dom.googleSearchRescue) {
+    dom.googleSearchRescue.checked = dom.googleSearchRescue.defaultChecked === true;
+    delete dom.googleSearchRescue.dataset.rescueExplicit;
+    delete dom.googleSearchRescue.dataset.rescueOwnerScopeId;
+  }
+  persistControlSettings();
   pendingAttachments.length = 0;
   renderAttachChips();
   clearSessionModeDiagnostics();
@@ -1581,6 +1605,12 @@ function selectCanUseValue(select, value) {
 
 function applyRestoredSessionSettings(detail = {}, options = {}) {
   const settings = detail?.settings && typeof detail.settings === "object" ? detail.settings : {};
+  // Stored browser drafts require the bridge's fresh owner check; session detail is server-authorized.
+  if (options.source !== "stored-controls" && dom.googleSearchRescue
+      && typeof settings.googleSearchRescueEnabled === "boolean"
+      && dom.googleSearchRescue.dataset.rescueExplicit !== "true") {
+    dom.googleSearchRescue.checked = settings.googleSearchRescueEnabled;
+  }
   if (localControlOverrideActive && options.source !== "stored-controls") {
     syncControlStatus({ persist: false });
     return false;
@@ -1807,7 +1837,11 @@ async function resumeStoredRunIfNeeded(expectedSessionId) {
         runToken: expectedRun.runToken
       }, loaderId);
       return true;
-    } catch {
+    } catch (error) {
+      if (activeStreamAssistant === resumeAssistant && resumeAssistant?.dataset?.state === "pending") {
+        if (error?.name === "AbortError" && streamCancelRequested) markAssistantStreamStopped(resumeAssistant);
+        else renderChatFailureNotice(resumeAssistant, error?.chatFailure || classifyChatFailure({ error }));
+      }
       if (sameActiveRunIdentity(expectedRun)) {
         setStatusRailValue(dom.traceStatus, "exact run resume unavailable");
       }
@@ -2925,6 +2959,7 @@ function defaultMessageState(role, text, state) {
 
 function setMessageContent(node, role, text, state) {
   if (!node) return;
+  clearAssistantPendingPlaceholder(node);
   const content = String(text ?? "");
   const cleanText = role === "assistant" ? stripAssistantReasoningBlocks(text) : content;
   node.textContent = cleanText;
@@ -3109,28 +3144,76 @@ function isIdleRetrievalWarmupState(answerOutput = {}, modelRuntime = {}, provid
   return noAnswerAttempt && idleRail && noModelAttempt && noProviderFailure && noLadderOutput && ladderIdleReason;
 }
 
+function assistantWaitLabel(node) {
+  const completed = {
+    ready: '검색 완료', empty: '검색 종료 · 자료 미확보',
+    partial: '검색 종료 · 일부 자료만 확보', skipped: '검색 생략'
+  }[node.dataset.waitSearchOutcome];
+  const phase = node.dataset.waitPhase;
+  const current = phase === 'generating' ? '답변 작성 중'
+    : phase === 'searching' ? '검색 중'
+    : phase === 'attaching' ? '이전 응답에 다시 연결 중' : 'Planning';
+  return completed ? `${completed} · ${current}` : current;
+}
+
 function markAssistantClientWait(node, elapsedMs) {
-  if (!node) return;
-  if (node.dataset.state && node.dataset.state !== "pending") return;
+  if (!node || isAssistantStreamStopped(node) || node.dataset.waitStopped === 'true') return;
+  if (node.dataset.state && node.dataset.state !== 'pending') return;
   const safeElapsedMs = Math.max(0, Math.round(Number(elapsedMs) || 0));
-  const waitLabel = `client-wait:${safeElapsedMs}ms`;
-  node.dataset.speaker = "assistant";
-  node.dataset.state = "pending";
-  node.dataset.waitMs = String(safeElapsedMs);
-  node.setAttribute("role", "article");
-  node.setAttribute("aria-label", `Assistant response pending: ${waitLabel}`);
-  node.title = `Response still pending (${waitLabel}). Use Stop to cancel.`;
-  if (!String(node.textContent || "").trim()) {
-    node.dataset.pendingPlaceholder = "client-wait";
-    node.textContent = `Response still pending (${waitLabel}). Use Stop to cancel.`;
+  let row = node.querySelector?.('[data-wait-progress]');
+  if (!row) {
+    if (node.dataset.pendingPlaceholder === 'client-wait') node.textContent = '';
+    else if (String(node.textContent || '').trim()) return;
+    row = document.createElement('div');
+    row.className = 'chat-wait-progress'; row.dataset.waitProgress = 'true';
+    const spinner = document.createElement('span');
+    spinner.className = 'chat-wait-spinner'; spinner.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span'); label.dataset.waitLabel = 'true';
+    label.setAttribute('role', 'status'); label.setAttribute('aria-live', 'polite');
+    label.setAttribute('aria-atomic', 'true');
+    const elapsed = document.createElement('span'); elapsed.dataset.waitElapsed = 'true';
+    elapsed.className = 'chat-wait-elapsed'; elapsed.setAttribute('aria-hidden', 'true');
+    elapsed.title = '클라이언트에서 응답을 기다린 시간';
+    row.append(spinner, label, elapsed); node.appendChild(row);
+    node.dataset.waitProgress = 'true'; node.dataset.pendingPlaceholder = 'client-wait';
   }
+  node.dataset.speaker = 'assistant'; node.dataset.state = 'pending';
+  node.dataset.waitMs = String(safeElapsedMs);
+  const label = row.querySelector('[data-wait-label]');
+  const text = assistantWaitLabel(node);
+  if (label.textContent !== text) label.textContent = text;
+  const elapsed = row.querySelector('[data-wait-elapsed]');
+  const elapsedText = `대기 ${Math.floor(safeElapsedMs / 1000)}초`;
+  if (elapsed.textContent !== elapsedText) elapsed.textContent = elapsedText;
+  node.setAttribute('role', 'article');
+  node.setAttribute('aria-label', text);
+  node.title = safeElapsedMs >= STREAM_STALE_WAIT_MS
+    ? '응답을 기다리고 있습니다. 중단할 수 있습니다.' : '';
+}
+
+function updateAssistantWaitProgress(node, signal = {}) {
+  if (!node || node.dataset.state !== 'pending' || node.dataset.waitStopped === 'true'
+      || isAssistantStreamStopped(node)) return;
+  const code = String(signal.code || '').toLowerCase();
+  if (code === 'answer_generation_started') node.dataset.waitPhase = 'generating';
+  else if (code === 'web_search_running' && !node.dataset.waitSearchOutcome
+      && node.dataset.waitPhase !== 'generating') node.dataset.waitPhase = 'searching';
+  else if (/^retrieval_completed_(ready|empty|partial|skipped)$/.test(code)) {
+    if (!node.dataset.waitSearchOutcome) node.dataset.waitSearchOutcome = code.slice('retrieval_completed_'.length);
+    if (node.dataset.waitPhase !== 'generating') node.dataset.waitPhase = 'preparing';
+  }
+  markAssistantClientWait(node, node.dataset.waitMs || 0);
 }
 
 function clearAssistantPendingPlaceholder(node) {
-  if (!node || node.dataset.pendingPlaceholder !== "client-wait") return;
-  node.textContent = "";
-  delete node.dataset.pendingPlaceholder;
+  if (!node) return;
+  node.querySelector?.('[data-wait-progress]')?.remove();
+  if (node.dataset.pendingPlaceholder === 'client-wait' && !node.dataset.waitProgress) node.textContent = '';
+  delete node.dataset.pendingPlaceholder; delete node.dataset.waitProgress;
+  delete node.dataset.waitMs; delete node.dataset.waitPhase; delete node.dataset.waitSearchOutcome;
+  node.title = '';
 }
+
 
 function clearActiveStreamHeartbeat(timerId = activeStreamHeartbeatTimer) {
   if (timerId != null && typeof window.clearInterval === "function") {
@@ -3145,6 +3228,7 @@ function appendMessage(role, text) {
   const node = document.createElement("div");
   node.className = `message ${role}`;
   setMessageContent(node, role, text);
+  if (role === "assistant" && node.dataset.state === "pending") markAssistantClientWait(node, 0);
   dom.chatMessages.appendChild(node);
   scrollChatToBottom();
   return node;
@@ -3454,7 +3538,15 @@ function renderExecutionModeReceipt(pipeline = {}, assistant) {
   if (!summary) {
     summary = document.createElement("small");
     summary.dataset.executionModeReceipt = "true";
-    assistant.appendChild(summary);
+    const meta = document.createElement("div");
+    meta.dataset.role = "execution-mode-meta";
+    meta.style.display = "block";
+    meta.style.marginTop = "0.5rem";
+    meta.style.borderTop = "1px solid var(--border-color, #d1d5db)";
+    meta.style.paddingTop = "0.4rem";
+    markChatDiagnosticNode(meta);
+    meta.appendChild(summary);
+    assistant.appendChild(meta);
   }
   const parts = [`전략: ${labels[receipt.requested]} → ${labels[receipt.effective]}`];
   if (Number.isInteger(receipt.queryCount) && receipt.queryCount >= 0 && receipt.queryCount <= 3) parts.push(`검색 질의 ${receipt.queryCount}개`);
@@ -5969,6 +6061,43 @@ function isHttp403(error) {
   return error?.status === 403 || String(error?.message || "").includes("403");
 }
 
+// Gemini output belongs to this final response, outside the main answer and W/V evidence.
+function renderGoogleSearchRescue(receipt, bubble) {
+  if (!receipt || !bubble || receipt.reasonCode !== 'READY_FOR_DISPLAY' || !receipt.attributionValid) return;
+  const answer = receipt.answer, html = answer?.metadata?.searchEntryPoint?.renderedContent;
+  if (!answer || typeof answer.originalText !== 'string' || !answer.originalText.trim() || typeof html !== 'string' || !html.trim()) return;
+  const template = document.createElement('template'); template.innerHTML = html;
+  const allowed = new Set(['DIV','SPAN','STYLE','A','SVG','PATH','P','BR','G','CIRCLE']);
+  const unsafeStyle = value => /\\|@import|url\s*\(|expression\s*\(|behavior\s*:|position\s*:\s*fixed/i.test(value || '');
+  for (const el of template.content.querySelectorAll('*')) {
+    if (!allowed.has(el.tagName.toUpperCase())) return;
+    for (const attr of el.attributes) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on') || ['src','srcdoc','action','formaction','xlink:href'].includes(name)) return;
+      if (name === 'href') { try { const url = new URL(attr.value); if (el.tagName.toUpperCase() !== 'A' || url.protocol !== 'https:' || url.username || url.password) return; } catch { return; } }
+      if (name === 'style' && unsafeStyle(attr.value)) return;
+    }
+    if (el.tagName.toUpperCase() === 'STYLE' && unsafeStyle(el.textContent)) return;
+  }
+  const panel = document.createElement('section'); panel.dataset.googleSearchRescue = 'true';
+  const label = document.createElement('strong'); label.textContent = '검색 보강';
+  const text = document.createElement('div'); text.textContent = answer.originalText; text.style.whiteSpace = 'pre-wrap';
+  const sources = document.createElement('div'), seen = new Set();
+  for (const support of answer.metadata.groundingSupports || []) for (const index of support.groundingChunkIndices || []) {
+    if (!Number.isInteger(index) || index < 0) return;
+    if (seen.has(index)) continue; seen.add(index);
+    const source = answer.metadata.groundingChunks?.[index]?.web;
+    let url; try { url = new URL(source?.uri); } catch { return; }
+    if (url.protocol !== 'https:' || url.username || url.password) return;
+    const link = document.createElement('a'); link.href = source.uri; link.textContent = 'G' + (index + 1) + ': ' + (source.title || source.uri);
+    link.target = '_blank'; link.rel = 'noopener noreferrer'; sources.append(link, document.createElement('br'));
+  }
+  if (!seen.size) return;
+  const suggestions = document.createElement('div'); const shadow = suggestions.attachShadow?.({mode:'closed'});
+  if (!shadow) return; shadow.innerHTML = html; suggestions.style.contain = 'content'; suggestions.style.position = 'relative';
+  panel.append(label, text, sources, suggestions); bubble.appendChild(panel);
+}
+
 function renderChatEvent(payload, assistant, fallbackType = "message", exactFinalRun = null) {
   const rawType = payload?.type || fallbackType || "message";
   const type = rawType === "stream_failed" ? "error" : rawType;
@@ -5984,8 +6113,11 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
   }
   if (type === "token" || type === "message") {
     const bubble = assistant;
-    clearAssistantPendingPlaceholder(bubble);
-    appendTextWithBreaks(bubble, filterAssistantReasoningChunk(payload.data || "", bubble));
+    const visibleText = filterAssistantReasoningChunk(payload.data || "", bubble);
+    if (visibleText.trim()) clearAssistantPendingPlaceholder(bubble);
+    if (visibleText && (visibleText.trim() || bubble?.dataset?.state === "ready")) {
+      appendTextWithBreaks(bubble, visibleText);
+    }
     refreshEvidenceRailFromAnswerText(bubble?.parentElement || dom.chatMessages,
       bubble?.dataset?.ariaText || bubble?.textContent || "", {
         answerMode: "streamed",
@@ -6028,6 +6160,11 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
       clearSelectionEntropyTrace(assistant);
     }
   } else if (type === "final") {
+    clearAssistantPendingPlaceholder(assistant);
+    if (assistant?.dataset) {
+      assistant.dataset.waitStopped = "true";
+      if (assistant.dataset.state === "pending") assistant.dataset.state = "ready";
+    }
     const legacyReportedModel = payload.modelUsed || state.responseModelUsed;
     const legacyModel = legacyReportedModel || dom.modelSelect?.value || "-";
     const hasObservation = ["observedModel", "observed_model", "observedProvider",
@@ -6036,6 +6173,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
     const observedModel = [payload.observedModel, payload.observed_model]
       .find(value => typeof value === "string" && value.trim())?.trim() || null;
     const reportedModel = hasObservation ? observedModel : legacyReportedModel;
+    window.AwxChatTraceUi?.upsertSummary(assistant, { observedModel });
     const model = hasObservation ? observedModel || "UNKNOWN" : legacyModel;
     const finalSessionId = sessionIdFromPayload(payload);
     const sid = finalSessionId || state.currentSessionId;
@@ -6112,6 +6250,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
       });
       renderFallbackEvidenceDiagnostic(bubble?.parentElement || dom.chatMessages, finalMode, pipeline, payload.evidence, model);
     }
+    renderGoogleSearchRescue(payload.googleSearchRescue, bubble);
     dispatchBrainStateSignal('answer', {
       sessionId: sid,
       answerMode: finalMode,
@@ -6153,6 +6292,7 @@ function renderChatEvent(payload, assistant, fallbackType = "message", exactFina
       }));
       return;
     }
+    updateAssistantWaitProgress(assistant, signal);
     const waitReason = defaultModelWaitReason(signal.code || signal.message || payload.data);
     updateOrchestrationSignalBar({
       streamStatus: type,
@@ -6796,21 +6936,14 @@ function modelSelectionPayload() {
 }
 
 async function sendMessageUnlocked(text) {
-  await waitForPendingStreamCancel();
-  clearSelectionEntropyTrace(dom.chatMessages);
-  clearDirectLiteralDiagnosticsSuppression();
-  state.latestVisibleTurnEvidence = null;
-  const draftText = text;
-  let clearDraft = false;
-  clearActiveRunIdentity();
-  streamCancelRequested = false;
-  streamRenderSuppressed = false;
+  // Capture this submission before cancellation yields to mutable controls.
   const payload = {
     message: text,
     question: text,
     ...modelSelectionPayload(),
     useRag: dom.useRag?.checked ?? true,
     useWebSearch: dom.searchModeSelect?.value !== "OFF",
+    googleSearchRescueEnabled: currentControlSettings().googleSearchRescueEnabled,
     searchMode: dom.searchModeSelect?.value || "AUTO",
     executionMode: dom.executionMode?.value || "AUTO"
   };
@@ -6820,6 +6953,15 @@ async function sendMessageUnlocked(text) {
   if (attachmentIds.length) payload.attachmentIds = attachmentIds;
   payload.attachmentGraphConsent = attachmentIds.length > 0 && $("attachmentGraphConsent")?.checked === true;
   payload.contextPreparationRequested = attachmentIds.length > 0 && $("contextPreparationRequested")?.checked === true;
+  await waitForPendingStreamCancel();
+  clearSelectionEntropyTrace(dom.chatMessages);
+  clearDirectLiteralDiagnosticsSuppression();
+  state.latestVisibleTurnEvidence = null;
+  const draftText = text;
+  let clearDraft = false;
+  clearActiveRunIdentity();
+  streamCancelRequested = false;
+  streamRenderSuppressed = false;
   appendMessage("user", text);
   const loaderId = `assistant-${Date.now()}-${++assistantMessageSequence}`;
   beginChatTransitionDebugTurn(`turn:${assistantMessageSequence}`, "new-turn");
@@ -7021,6 +7163,8 @@ async function streamChat(payload, loaderId, options = {}) {
     const elapsedMs = Math.max(0, Math.round(nowMs() - streamStartedAt));
     return elapsedMs;
   };
+  if (payload?.attach === true && assistant?.dataset?.state === "pending") assistant.dataset.waitPhase = "attaching";
+  markAssistantClientWait(assistant, streamWaitMs());
   const streamHeartbeatContext = () => {
     return `client-wait:${streamWaitMs()}ms`;
   };
@@ -7061,8 +7205,8 @@ async function streamChat(payload, loaderId, options = {}) {
       streamStatus: streamHeartbeatStatus,
       streamContext: streamHeartbeatDetail
     });
+    markAssistantClientWait(assistant, elapsedMs);
     if (streamHeartbeatStale) {
-      markAssistantClientWait(assistant, elapsedMs);
       setCoreStatus("streaming", streamHeartbeatDetail);
     }
     // Each transport keeps a positive header wait and a byte-idle limit.
@@ -7550,6 +7694,12 @@ dom.modelSelectionMode?.addEventListener("change", handleControlChange);
 dom.executionMode?.addEventListener("change", handleControlChange);
 dom.searchModeSelect?.addEventListener("change", handleControlChange);
 dom.useRag?.addEventListener("change", handleControlChange);
+dom.googleSearchRescue?.addEventListener("change", () => {
+  if (dom.googleSearchRescue.dataset.awxSettingsApplying === "true") return;
+  dom.googleSearchRescue.dataset.rescueExplicit = "true";
+  handleControlChange();
+});
+document.addEventListener("awx:rescue-owner-verified", () => persistControlSettings());
 dom.newChatBtn?.addEventListener("click", startNewChatSession);
 document.querySelectorAll(".qa[data-q]").forEach((button) => {
   button.addEventListener("click", handleQuickPromptClick);
@@ -7574,6 +7724,7 @@ try {
   syncSendButtonState();
 } catch { /* optional per-tab draft recovery */ }
 restoreCurrentSessionId();
+window.ChatConversationExport?.bind({ getCurrentSessionId: () => state.currentSessionId });
 void refreshSessionList("init");
 restoreActiveRunIdentity();
 reconcileRestoredSessionTranscript();

@@ -478,6 +478,15 @@ public class DynamicChatModelFactory {
             var budget = com.abandonware.ai.addons.budget.TimeBudgetContext.get();
             if (budget != null) timeoutMs = Math.min(timeoutMs, budget.remainingMillis());
             ChatModel selected = chatGptOAuth.modelFor(modelName, timeoutMs);
+            if (modelRuntimeHealthTracker != null) {
+                selected = modelRuntimeHealthTracker.decorateRequestAttempt(
+                        selected, "primary",
+                        modelRuntimeHealthTracker.redactedRequestAttemptRoute(
+                                "dynamic_factory", modelName, "https://api.openai.com/v1", "openai_responses"),
+                        ModelRuntimeHealthTracker.requestAttemptOptionEnvelope(
+                                ChatGptOAuthRegistration.PROVIDER, modelName, "openai_responses",
+                                Map.of("timeoutMs", timeoutMs)));
+            }
             CONFIGURED_MODEL_IDS.put(selected, new ConfiguredModelIdentity(modelName, null, null, null, null));
             return selected;
         }

@@ -152,3 +152,44 @@ test('concurrent lens requests issue once and sticky renewal uses lens/link only
  const key=[...data.keys()][0];data.set(key,JSON.stringify({token:'b'.repeat(64),expiresAt:Date.now()+1000,sticky:true}));
  await f.c.lensLink();assert.equal(issued,2);f.c.dispose();
 });
+
+function standalonePage(storage){
+ const nodes=new Map();let client,captureOptions;
+ const voice={state:{phase:'OFF',errorCode:null,errorStage:null,permission:'not_requested',events:[],level:0,frames:0,bytes:0},
+  isActive(){return this.state.phase==='LISTENING';},start:async()=>true,async stop(){this.state.phase='OFF';},async finish(){},async resume(){return true;},async reconnect(){return false;},async deviceChanged(){return false;}};
+ const get=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',hidden:false,style:{setProperty(){}},checked:false,open:false,files:[],
+  classList:{toggle(){}},setAttribute(){},removeAttribute(){},focus(){},add(){},replaceChildren(){},getClientRects:()=>[1],addEventListener(e,fn){this[e]=fn;}});return nodes.get(id);};
+ const host={DisplayCore:{},DisplayConversate:{createClient(options){client=createClient({...options,storage,uuid:()=>id,setTimer:()=>1,clearTimer(){},
+   fetchImpl:async()=>({ok:true,status:200,headers:{get:()=>null},json:async()=>view({audioAvailable:true,audioState:'OFF',testStatus:{relay:{eventOwner:'THIS DEVICE',enabled:true,segmentSeconds:0}}})})});return client;}},
+  DisplayVoice:{createCapture(options){captureOptions=options;return voice;}},location:{href:'https://example.test/assets/display/index.html',search:''},addEventListener(){}};
+ vm.runInNewContext(fs.readFileSync('main/resources/static/assets/display/app.js','utf8'),
+  {window:host,location:host.location,document:{body:{hasAttribute:()=>true},getElementById:get,addEventListener(){},visibilityState:'visible',activeElement:null},
+   navigator:{},localStorage:storage,Option:class{constructor(text,value){this.text=text;this.value=value;}},URL,URLSearchParams,crypto:{randomUUID:()=>id},
+   setTimeout:()=>1,clearTimeout(){},requestAnimationFrame:fn=>fn(),MutationObserver:class{observe(){}disconnect(){}}});
+ return {get,client,voice,captureOptions,dispose(){client.dispose();}};
+}
+test('standalone mic failure shows the mapped reason and code without opening the debug panel',async()=>{
+ const storage=previewStorage();storage.setItem('awx.display.settings.live',JSON.stringify({device:'stale-id'}));
+ const p=standalonePage(storage);await flush();await flush();
+ assert.equal(p.get('input-device').value,'stale-id');
+ p.captureOptions.onDeviceFallback();
+ assert.equal(p.get('input-device').value,'');
+ assert.ok(!('device' in JSON.parse(storage.getItem('awx.display.settings.live'))));
+ assert.match(p.get('input-label').textContent,/기본 입력으로 시작/);
+ p.voice.state.phase='ERROR';p.voice.state.errorCode='microphone_device_changed';p.voice.state.errorStage='mic_open';
+ p.captureOptions.onChange({phase:'ERROR',message:'음성 입력을 준비하지 못했습니다. 오류 코드를 확인해 주세요.',errorCode:'microphone_device_changed'});
+ assert.match(p.get('microphone-status').textContent,/\(코드: microphone_device_changed\)/);
+ assert.match(p.get('error').textContent,/저장된 입력 장치가 바뀌었습니다.*\(코드: microphone_device_changed\)/);
+ assert.match(p.get('debug-state').textContent,/"errorStage": "mic_open"/);
+ p.dispose();
+});
+test('unmapped and non-token errors fall back to the generic line with a safe code only',async()=>{
+ const p=standalonePage(previewStorage());await flush();await flush();
+ p.voice.state.phase='ERROR';p.voice.state.errorCode='server_mystery';
+ p.captureOptions.onChange({phase:'ERROR',message:'x',errorCode:'server_mystery'});
+ assert.match(p.get('error').textContent,/연결 상태를 확인하고 다시 시도해 주세요\. \(코드: server_mystery\)/);
+ p.captureOptions.onChange({phase:'ERROR',message:'x',errorCode:'PRIVATE <html>'});
+ assert.match(p.get('error').textContent,/\(코드: request_failed\)/);
+ assert.ok(!p.get('error').textContent.includes('PRIVATE'));
+ p.dispose();
+});

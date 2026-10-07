@@ -52,6 +52,11 @@ MARKDOWN_GUIDE = ("Markdown 문서는 독점 lease 없이 journal+checkpoint 권
 _BAD_CHARS = re.compile(r'[:<>"|?*\x00-\x1f]')
 _RESERVED_NAME = re.compile(r'(?i)^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)')
 _SAFE_NAME = re.compile(r'^[A-Za-z0-9_.-]{1,120}$')
+_PS_REASON_RE = re.compile(r"\[source-edit-session\]\[([^\]]+)\]")
+_PS_BLOCK_RULE_RE = re.compile(r'"firstBlockingRule"\s*:\s*"([^"]+)"')
+# exit 6이어도 lease 겹침 계열 사유면 autoflow 평가 가치가 있다
+_RECOVERABLE_EXIT6_REASONS = frozenset(
+    {"source-target-overlap", "preimage-changed", "index-lock-conflict"})
 
 
 class ScopeError(Exception):
@@ -127,6 +132,24 @@ def parse_json_lines(text: str):
     return None
 
 
+def extract_ps_reason(proc, receipt=None) -> str:
+    """run_ps 실패 출력에서 실패 사유를 꺼낸다 (exit 6 침묵 방지).
+    우선순위: JSON 구조 증거(firstBlockingRule/reason) > 마지막
+    [source-edit-session][<reason>] 마커 > 원문의 firstBlockingRule."""
+    text = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+    for source in (receipt, parse_json_lines(text)):
+        if isinstance(source, dict):
+            for key in ("firstBlockingRule", "reason"):
+                value = source.get(key)
+                if value:
+                    return str(value)
+    markers = _PS_REASON_RE.findall(text)
+    if markers:
+        return markers[-1]
+    rules = _PS_BLOCK_RULE_RE.findall(text)
+    return rules[-1] if rules else ""
+
+
 def run_ps(root: Path, action: str, topic=None, owner=None, manifest=None,
            fingerprint=None, ttl=None, task_id=None, want_json=False, timeout=75):
     session = os.environ.get("AWX_SCOPE_SESSION_PS1") or str(SESSION_PS1)
@@ -148,9 +171,14 @@ def run_ps(root: Path, action: str, topic=None, owner=None, manifest=None,
         cmd += ["-TaskId", str(task_id)]
     if want_json:
         cmd += ["-Json"]
+    # Windows PowerShell needs its native modules rather than inherited
+    # PowerShell 7 paths; Windows environment keys may be uppercase.
+    child_env = {key: value for key, value in os.environ.items()
+                 if key.casefold() != "psmodulepath"}
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout)
+                              encoding="utf-8", errors="replace", timeout=timeout,
+                              env=child_env)
     except subprocess.TimeoutExpired:
         raise ScopeError("session-timeout")
 
@@ -416,14 +444,16 @@ def cmd_check(root: Path, args) -> int:
                     pass
             summary = parse_json_lines(proc.stdout)
             if summary is None:
-                raise ScopeError("check-evidence-unavailable:session-json-missing")
+                raise ScopeError("check-evidence-unavailable:" +
+                                 (extract_ps_reason(proc) or "session-json-missing"))
             conflict = summary.get("targetConflict") or {}
             if proc.returncode == 7 or conflict.get("allowed") is False:
                 result["allowed"] = False
                 exit_code = 7
             elif proc.returncode != 0:
                 raise ScopeError("check-evidence-unavailable:" +
-                                 str(summary.get("reason") or proc.returncode))
+                                 str(summary.get("reason") or
+                                     extract_ps_reason(proc) or proc.returncode))
             result["leaseConflict"] = {
                 "allowed": conflict.get("allowed", True),
                 "conflictingPaths": conflict.get("conflictingPaths") or [],
@@ -522,10 +552,12 @@ def cmd_claim(root: Path, args) -> int:
     proc = run_ps(root, "begin", topic=topic, owner=owner, manifest=manifest_path,
                   ttl=args.ttl, task_id=task_id, want_json=True)
     receipt = parse_json_lines(proc.stdout) or {}
+    reason = extract_ps_reason(proc, receipt)
     flow = None
-    if proc.returncode == 7:
+    if proc.returncode == 7 or (proc.returncode == 6
+                              and reason in _RECOVERABLE_EXIT6_REASONS):
         # 충돌 자동 처리: stale lease는 사용자 중개 없이 회수,
-        # live 소유자에게만 1회 해제 요청
+        # live 소유자에게만 1회 해제 요청. exit 6의 겹침 계열 사유도 동일 평가.
         flow = autoflow_plan(root, goal_paths, task_id=task_id, execute=True)
         if (isinstance(flow, dict) and flow.get("blocked") == []
                 and (flow.get("staleReclaim") or {}).get("reclaimed")):
@@ -534,11 +566,29 @@ def cmd_claim(root: Path, args) -> int:
                           manifest=manifest_path, ttl=args.ttl,
                           task_id=task_id, want_json=True)
             receipt = parse_json_lines(proc.stdout) or {}
+            reason = extract_ps_reason(proc, receipt)
+    if proc.returncode == 6 and reason == "preimage-changed":
+        # manifest 작성~begin 사이에 대상이 생성/변경된 경우(세션 내 신규 파일
+        # 포함): 현재 바이트를 preimage로 다시 선언해 begin을 한 번만 재시도한다.
+        try:
+            doc = build_manifest(root, args.path or [], args.reserve_path or [])
+            manifest_path.write_text(json.dumps(doc, ensure_ascii=True),
+                                     encoding="utf-8")
+        except ScopeError:
+            pass
+        else:
+            proc = run_ps(root, "begin", topic=topic, owner=owner,
+                          manifest=manifest_path, ttl=args.ttl,
+                          task_id=task_id, want_json=True)
+            receipt = parse_json_lines(proc.stdout) or {}
+            reason = extract_ps_reason(proc, receipt)
     if proc.returncode != 0 or receipt.get("acquired") is not True:
         journal_note(root, task_id, "hold",
-                     f"scope claim blocked: topic={topic} exit={proc.returncode}")
+                     f"scope claim blocked: topic={topic} "
+                     f"reason={reason or 'unknown'} exit={proc.returncode}")
         print(json.dumps({"schemaVersion": SCHEMA, "action": "claim", "acquired": False,
                           "taskId": task_id, "topic": topic, "exitCode": proc.returncode,
+                          "reason": reason,
                           "leaseConflictAutoflow": flow,
                           "detail": (proc.stdout + proc.stderr).strip()[-MAX_TEXT:]},
                          ensure_ascii=True))
@@ -584,6 +634,7 @@ def cmd_verify(root: Path, args) -> int:
     print(json.dumps({"schemaVersion": SCHEMA, "action": "verify", "taskId": args.task,
                       "topic": claim["topic"], "verified": proc.returncode == 0,
                       "exitCode": proc.returncode,
+                      "reason": extract_ps_reason(proc),
                       "detail": (proc.stdout + proc.stderr).strip()[-MAX_TEXT:]},
                      ensure_ascii=True))
     return proc.returncode
@@ -602,15 +653,53 @@ def cmd_heartbeat(root: Path, args) -> int:
     return proc.returncode
 
 
+def release_journal_close(root: Path, args, lease_failed: bool, reason: str,
+                          own_leases_remain: bool = False):
+    requested = args.close_result
+    result = {"closed": False, "exitCode": None,
+              "reason": "not-requested", "requestedResult": requested}
+    if not requested:
+        return result
+    if lease_failed:
+        result["reason"] = "lease-release-failed"
+        return result
+    if own_leases_remain:
+        result["reason"] = "own-leases-remain"
+        return result
+    close_args = ["close", "--task", args.task, "--result", requested,
+                  "--summary", (args.summary or f"scope {reason}")[:400],
+                  "--idempotent"]
+    if getattr(args, "check_evidence", False):
+        close_args.append("--check-evidence")
+    try:
+        proc = run_journal(root, *close_args, timeout=120)
+    except (ScopeError, OSError, subprocess.TimeoutExpired):
+        result["reason"] = "journal-close-unavailable"
+        return result
+    receipt = parse_json_lines(proc.stdout)
+    result["exitCode"] = proc.returncode
+    if (proc.returncode == 0 and isinstance(receipt, dict)
+            and receipt.get("status") == "closed"
+            and receipt.get("result") == requested):
+        result["closed"] = True
+        result["reason"] = "closed"
+        if receipt.get("alreadyClosed") is True:
+            result["alreadyClosed"] = True
+        return result
+    result["reason"] = ("journal-close-failed" if proc.returncode
+                        else "journal-close-receipt-mismatch")
+    if isinstance(receipt, dict):
+        for key in ("reason", "errorId"):
+            if isinstance(receipt.get(key), str) and receipt[key]:
+                result["reason"] = receipt[key][:160]
+                break
+    return result
+
+
 def cmd_release(root: Path, args, reason: str) -> int:
     wanted = getattr(args, "topic", None)
     claims = [c for c in task_claims(root, args.task)
               if not c.get("released") and (not wanted or c.get("topic") == wanted)]
-    if not claims:
-        print(json.dumps({"schemaVersion": SCHEMA, "action": reason, "taskId": args.task,
-                          "released": True, "alreadyReleased": True,
-                          "topics": []}, ensure_ascii=True))
-        return 0
     results, released_topics = [], []
     for claim in claims:
         proc = run_ps(root, "end", topic=claim["topic"], owner=claim["ownerId"],
@@ -630,14 +719,19 @@ def cmd_release(root: Path, args, reason: str) -> int:
         note = args.note or f"scope lease(s) released ({reason}): {','.join(released_topics)}"
         journal_note(root, args.task, kind, note,
                      [claim_ref(args.task, t) for t in released_topics])
-        if args.close_result:
-            run_journal(root, "close", "--task", args.task, "--result", args.close_result,
-                        "--summary", (args.summary or f"scope {reason}")[:400])
     failed = [r for r in results if not r["released"]]
-    print(json.dumps({"schemaVersion": SCHEMA, "action": reason, "taskId": args.task,
-                      "released": not failed, "topics": released_topics,
-                      "results": results}, ensure_ascii=True))
-    return 0 if not failed else 6
+    own_leases_remain = bool(args.close_result) and any(
+        not claim.get("released") for claim in task_claims(root, args.task))
+    journal_close = release_journal_close(root, args, bool(failed), reason,
+                                          own_leases_remain=own_leases_remain)
+    receipt = {"schemaVersion": SCHEMA, "action": reason, "taskId": args.task,
+               "released": not failed, "topics": released_topics, "results": results,
+               "journalClose": journal_close}
+    if not claims:
+        receipt["alreadyReleased"] = True
+    print(json.dumps(receipt, ensure_ascii=True))
+    close_failed = bool(args.close_result) and not journal_close["closed"]
+    return 6 if failed or close_failed else 0
 
 
 def cmd_recover(root: Path, args) -> int:
@@ -749,6 +843,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note")
     p.add_argument("--close-result", choices=("verified", "partial", "blocked", "superseded"))
     p.add_argument("--summary")
+    p.add_argument("--check-evidence", action="store_true",
+                   help="validate journal evidence before closing")
     p.set_defaults(func=lambda r, a: cmd_release(r, a, "done"))
 
     p = sub.add_parser("abort", help="release lease(s) on abandon (+journal hold note)")
@@ -757,6 +853,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--note")
     p.add_argument("--close-result", choices=("abandoned", "blocked", "partial"))
     p.add_argument("--summary")
+    p.add_argument("--check-evidence", action="store_true",
+                   help="validate journal evidence before closing")
     p.set_defaults(func=lambda r, a: cmd_release(r, a, "abort"))
 
     p = sub.add_parser("recover", help="reclaim leases with proven-dead owners only")

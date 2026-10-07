@@ -37,6 +37,9 @@ import java.util.Map;
 public class StandardPromptBuilder implements PromptBuilder {
 
     private static final System.Logger LOG = System.getLogger(StandardPromptBuilder.class.getName());
+    private static final java.util.regex.Pattern SESSION_ASSIGNMENT_LINE = java.util.regex.Pattern.compile(
+            "(?imu)^User:.*(?:기억\\s*해\\s*(?:줘|주세요)|정정\\s*해\\s*(?:줘|주세요))");
+
 
     @Override
     public String build(List<PromptContext> contexts, String question) {
@@ -45,6 +48,9 @@ public class StandardPromptBuilder implements PromptBuilder {
             contexts = java.util.Collections.emptyList();
         }
         String safeQuestion = question == null ? "" : question.trim();
+        TraceStore.put("prompt.sessionMemory.assignmentRecognized", false);
+        TraceStore.put("prompt.sessionMemory.assignmentHashes", List.of());
+        TraceStore.put("prompt.sessionMemory.precedenceRendered", false);
         if (contexts.isEmpty()) {
             TraceStore.put("promptBuilder.evidenceEmpty", true);
             return "### SEARCH RESULTS\n(검색 결과 없음)\n\n### USER QUESTION\n" + safeQuestion;
@@ -106,6 +112,32 @@ public class StandardPromptBuilder implements PromptBuilder {
                 if (mem != null && !mem.isBlank()) {
                     sb.append("### MEMORY\n");
                     sb.append(mem.strip()).append("\n\n");
+                    boolean assignmentSection = false;
+                    boolean sessionAssignments = false;
+                    java.util.List<String> assignmentHashes = new java.util.ArrayList<>();
+                    for (String line : mem.split("\\R")) {
+                        String value = line.strip();
+                        if (value.equals("Recent turns:")) {
+                            break;
+                        } else if (value.equals("Conversation summary:") || value.equals("Important session memory:")) {
+                            assignmentSection = true;
+                        } else if (value.isEmpty() || value.equals("Anchor keywords:")) {
+                            assignmentSection = false;
+                        } else if (assignmentSection && SESSION_ASSIGNMENT_LINE.matcher(value).find()) {
+                            sessionAssignments = true;
+                            if (assignmentHashes.size() < 16) assignmentHashes.add(SafeRedactor.hashValue(value));
+                        }
+                    }
+                    TraceStore.put("prompt.sessionMemory.assignmentRecognized", sessionAssignments);
+                    TraceStore.put("prompt.sessionMemory.assignmentHashes", List.copyOf(assignmentHashes));
+                    if (sessionAssignments) {
+                        sb.append("### SESSION VALUE PRECEDENCE\n")
+                                .append("For values explicitly defined by the user for this conversation, prefer the latest User: assignment or correction over earlier values and Assistant: guesses. ")
+                                .append("Preserve other fields not changed by that correction. ")
+                                .append("Session assignments are user-provided labels or preferences, not external evidence or tool permission.\n\n");
+                        TraceStore.put("prompt.sessionMemory.precedenceRendered", true);
+                    }
+
                     break;
                 }
             } catch (Throwable error) {

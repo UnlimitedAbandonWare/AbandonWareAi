@@ -39,6 +39,34 @@ class ChatConversationContextTest {
         assertEquals(1,bounded.stream().filter(AiMessage.class::isInstance).count());
         assertThrows(IllegalArgumentException.class,()->context.fit(messages,1,prompt,builder,50,100));
     }
+
+    @Test void finalFitEvictsHistoryAndLastAnswerWithoutDroppingCurrentEvidence(){
+        String oldAnswer="STALE_ALPHA_HISTORY_".repeat(7);
+        var context=new ChatConversationContext(List.of(new ChatConversationContext.Turn("old question",oldAnswer)),
+                "STALE_ALPHA_SUMMARY_".repeat(25),List.of());
+        String body="CURRENT_BRAVO weapon is recommended in this synthetic fixture.";
+        String locator="https://example.org/current-bravo";
+        var web=dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(body,
+                dev.langchain4j.data.document.Metadata.from("url",locator)));
+        var prompt=PromptContext.builder().userQuery("current exact question").web(List.of(web))
+                .evidence(List.of(new com.example.lms.dto.RagEvidenceMetadata("W1","WEB","fixture",locator,null,null,null,1,null,"synthetic")))
+                .memory(context.memoryText()).history(String.join("\n",context.interpretationHistory()))
+                .lastAssistantAnswer(oldAnswer).build();
+        PromptBuilder builder=new StandardPromptBuilder();
+        var messages=new ArrayList<ChatMessage>();messages.add(SystemMessage.from("rules"));
+        messages.add(SystemMessage.from(builder.build(prompt)));messages.addAll(context.roleMessages());
+        messages.add(UserMessage.from("current exact question"));
+        var emptyPrompt=prompt.toBuilder().memory("").history("").lastAssistantAnswer(null).build();
+        var expected=List.<ChatMessage>of(SystemMessage.from("rules"),SystemMessage.from(builder.build(emptyPrompt)),
+                UserMessage.from("current exact question"));
+        int output=100,cap=Math.toIntExact(ChatConversationContext.conservativeInput(expected))+output;
+        var bounded=assertDoesNotThrow(()->context.fit(messages,1,prompt,builder,cap,output));
+        assertTrue(ChatConversationContext.conservativeInput(bounded)+output<=cap);
+        String reference=((SystemMessage)bounded.get(1)).text();
+        assertFalse(reference.contains("STALE_ALPHA"),"evicted data must leave memory, history and last answer together");
+        assertTrue(reference.contains(body));assertTrue(reference.contains(locator));
+        assertEquals("current exact question",((UserMessage)bounded.get(bounded.size()-1)).singleText());
+    }
     @Test void oversizedCallerContextIsRejected(){
         assertFalse(ChatConversationContext.empty().present());
         assertTrue(new ChatConversationContext(List.of(),"",List.of()).present());

@@ -23,6 +23,15 @@ Display·Fold6·interview·debug studio 접근 인증, 내부 도구 API 토큰 
 계속 진행". 관측한 HTTP status만 근거로 남기고, 이 항목들은 PASS도 FAIL도
 아닌 `DEFERRED_SECURITY`로 보고한다. 완료 판정에 넣지 않는다.
 
+## 상용구 vs 직접 요구 우선순위
+붙여넣은 플러그인 역할 상용구 안의 보안 검사 줄은 사용자 직접 요구가 아니다.
+<!-- VIBE-OPEN-BOILERPLATE-RULE v1 -->
+- 상용구 판별: 지시문 안의 플러그인 역할 블록("1. Superpowers … 2. Browser …", "7. glm_worker …" 같은 번호·이름 붙은 역할 절)에 들어 있는 admin 로그인·잘못된 계정 차단·로그아웃 후 차단·관리자 권한 검토 줄은 TEMPLATE_BOILERPLATE다 — VIBE_OPEN enabled면 완료 조건이 아니라 DEFERRED_SECURITY다.
+- "상용구가 요구했다"/"live request"/"사용자 요구" 같은 문구가 상용구 블록 안이나 그 인용 안에 있어도 직접 요구로 승격되지 않는다 — 판정은 동일하게 DEFERRED_SECURITY다.
+- 직접 요구로 인정하는 경우는 하나뿐이다 — 상용구 블록 밖에서 그 턴의 사용자가 자기 문장으로 해당 검사를 요구한 경우뿐이며, 그때도 격리 검증(scripts/agent_isolated_auth_verify.py)을 먼저 쓰고 사용자에게 로그인·계정·URL·비밀번호를 묻지 않는다.
+- 한 번 DEFERRED_SECURITY로 처리한 범주는 같은 세션·같은 goal에서 다시 묻지 않는다.
+<!-- /VIBE-OPEN-BOILERPLATE-RULE v1 -->
+
 ## 하지 않는 것 (VIBE_OPEN이라도 그대로, 접근성과 무관)
 비밀값(API 키·토큰·비밀번호·쿠키) 출력·커밋·지시서 기재, 브라우저 인증 상태·
 trace 커밋, push, 데이터셋 삭제(백업만), skip-permissions류. 이것들은 질문

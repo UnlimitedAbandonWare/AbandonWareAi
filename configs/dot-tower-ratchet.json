@@ -1,7 +1,7 @@
 {
   "schemaVersion": "awx.behavior-ratchet.config.v1",
   "doc": "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
-  "note": "dot control-tower invariants INV-T1~T5 (user directive 2026-10-05) + INV-D1~D4 (dot-only downloads lane) + INV-R1~R4 (morning-pace restore 2026-10-05: dot=brief+Downloads, user=manual apply, auto multi-role forbidden) + INV-S1~S3 (SERIAL_LANE: 한 세션 = 활성 지시서 1개, 2026-10-05) + INV-P1~P4 (ASSIST_PAIR: opt-in [DOT-ASSIST-PAIR] read-only dual-lane + RESUME handoff, 2026-10-05). Same engine as configs/behavior-ratchet.json via --config/--lock. While flags.promoteDateBlockToFail is false, INV-T4 reports WARN_PENDING_DOT_LANE (the dot OAUTH_CONTINUITY_RULES lane still owns the F6 wording); flip it to true once that lane's reflection is confirmed, then run `update` to lock.",
+  "note": "dot control-tower invariants INV-T1~T5 (user directive 2026-10-05) + INV-D1~D4 (dot-only downloads lane) + INV-R1~R4 (morning-pace restore 2026-10-05: dot=brief+Downloads, user=manual apply, auto multi-role forbidden) + INV-S1~S3 (SERIAL_LANE: 한 세션 = 활성 지시서 1개, 2026-10-05) + INV-P1~P4 (ASSIST_PAIR: opt-in [DOT-ASSIST-PAIR] read-only dual-lane + RESUME handoff, 2026-10-05) + INV-G1~G3 (sub-agent gaps: INPUT_FALLBACK rule, brief_save cover, SUB_REPORT_V1 6-field check, 2026-10-06). Same engine as configs/behavior-ratchet.json via --config/--lock. While flags.promoteDateBlockToFail is false, INV-T4 reports WARN_PENDING_DOT_LANE (the dot OAUTH_CONTINUITY_RULES lane still owns the F6 wording); flip it to true once that lane's reflection is confirmed, then run `update` to lock.",
   "flags": {"promoteDateBlockToFail": false},
   "entries": [
     {"id": "INV-T1", "kind": "present", "contract": "devin-dot-control-tower-keep-cd80e87d",
@@ -69,6 +69,15 @@
      "pattern": "\"assistPair\"\\s*:\\s*\\{[^}]*\"maxLanes\"\\s*:\\s*2"},
     {"id": "INV-P4", "kind": "present", "contract": "devin-dot-dual-assist-capacity-9b2e61d4 (ASSIST_PAIR)",
      "file": "docs/agents-rules/DEMO1-DOT-CONTROL-TOWER.md",
-     "pattern": "RESUME_<date>[\\s\\S]{0,160}새 dot 세션"}
+     "pattern": "RESUME_<date>[\\s\\S]{0,160}새 dot 세션"},
+    {"id": "INV-G1", "kind": "present", "contract": "devin-dot-subagent-gaps-714b2131 (W1 입력 폴백)",
+     "file": "docs/agents-rules/DEMO1-DOT-FILE-CARD.md",
+     "pattern": "INPUT_FALLBACK_DOWNLOADS"},
+    {"id": "INV-G2", "kind": "present", "contract": "devin-dot-subagent-gaps-714b2131 (W2 cover)",
+     "file": "scripts/brief_save.py",
+     "pattern": "def cmd_cover"},
+    {"id": "INV-G3", "kind": "present", "contract": "devin-dot-subagent-gaps-714b2131 (W4 SUB_REPORT_V1)",
+     "file": "scripts/dot_card_check.py",
+     "pattern": "SUB_REPORT_FIELDS"}
   ]
 }

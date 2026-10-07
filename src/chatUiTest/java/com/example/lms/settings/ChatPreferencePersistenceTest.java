@@ -25,6 +25,41 @@ class ChatPreferencePersistenceTest {
         ReflectionTestUtils.setField(service, "entityManager", SharedEntityManagerCreator.createSharedEntityManager(emf));
     }
     @AfterEach void close() { emf.close(); }
+    @Test void traceDisplayBooleanRoundtripUnsetAndOwnerIsolationPreserveMemory() {
+        var off = service.patch(owner, Map.of("chatTraceEnabled", false, "memoryMode", "ephemeral"), List.of(), 0, null);
+        assertEquals(false, service.read(owner).overrides().get("chatTraceEnabled"));
+        assertTrue(service.read("b".repeat(64)).overrides().isEmpty());
+        var on = service.patch(owner, Map.of("chatTraceEnabled", true), List.of(), off.revision(), off.hash());
+        assertEquals(true, service.read(owner).overrides().get("chatTraceEnabled"));
+        var unset = service.patch(owner, Map.of(), List.of("chatTraceEnabled"), on.revision(), on.hash());
+        assertEquals(Map.of("memoryMode", "ephemeral"), unset.overrides());
+        assertThrows(IllegalArgumentException.class, () -> ChatPreferenceService.validate(Map.of("chatTraceEnabled", "false")));
+    }
+    @Test void googleSearchRescueBooleanRoundtripUnsetCasAndOwnerIsolation() {
+        var on = service.patch(owner, Map.of("googleSearchRescueEnabled", true), List.of(), 0, null);
+        assertEquals(on, service.read(owner));
+        var other = service.patch("b".repeat(64), Map.of("googleSearchRescueEnabled", false), List.of(), 0, null);
+        assertEquals(false, service.read("b".repeat(64)).overrides().get("googleSearchRescueEnabled"));
+        assertEquals(on, service.read(owner));
+        var off = service.patch(owner, Map.of("googleSearchRescueEnabled", false), List.of(), on.revision(), on.hash());
+        assertEquals(off, service.read(owner));
+        assertEquals(false, off.overrides().get("googleSearchRescueEnabled"));
+        assertNotEquals(on.hash(), off.hash());
+        assertThrows(ChatPreferenceService.Conflict.class, () -> service.patch(owner,
+                Map.of("googleSearchRescueEnabled", true), List.of(), on.revision(), on.hash()));
+        var unrelated = service.patch(owner, Map.of("responseTone", "friendly"), List.of(), off.revision(), off.hash());
+        assertEquals(false, unrelated.overrides().get("googleSearchRescueEnabled"));
+        var reset = service.patch(owner, Map.of(), List.of("googleSearchRescueEnabled"), unrelated.revision(), unrelated.hash());
+        assertFalse(reset.overrides().containsKey("googleSearchRescueEnabled"));
+        assertEquals("friendly", reset.overrides().get("responseTone"));
+        assertEquals(reset, service.read(owner));
+        assertEquals(other, service.read("b".repeat(64)));
+        var invalid = new HashMap<String, Object>(); invalid.put("googleSearchRescueEnabled", null);
+        assertThrows(IllegalArgumentException.class, () -> service.patch(owner, invalid, List.of(), reset.revision(), reset.hash()));
+        for (Object value : List.of("false", 0)) assertThrows(IllegalArgumentException.class,
+                () -> service.patch(owner, Map.of("googleSearchRescueEnabled", value), List.of(), reset.revision(), reset.hash()));
+        assertEquals(reset, service.read(owner));
+    }
     @Test void responsePreferencesReadBackUnsetAndStayOwnerScoped() {
         var saved = service.patch(owner, Map.of("customInstructions", "synthetic preference", "responseTone", "friendly",
                 "responseLength", "brief", "responseLanguage", "ko", "memoryMode", "ephemeral"), List.of(), 0, null);

@@ -39,6 +39,17 @@ function setup() {
   return { context, observed };
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
+test('explicit Gemini choice cannot cross into another authorized existing session',async()=>{
+  const s=setup();
+  s.context.dom.googleSearchRescue={checked:true,dataset:{rescueExplicit:'true',rescueOwnerScopeId:'a'.repeat(64)}};
+  s.context.syncControlStatus=()=>{};s.context.markControlHydrationReady=()=>{};
+  vm.runInContext(slice('function restoredSessionSetting(', 'function applyRestoredTerminalStoppedState('),s.context);
+  const selected=s.context.selectSessionCandidate(42);
+  s.observed.calls[0].resolve(response({id:42,found:true,messages:[],turnTraces:[],settings:{googleSearchRescueEnabled:false}}));
+  assert.equal(await selected,true);
+  assert.equal(s.context.dom.googleSearchRescue.checked,false);
+  assert.equal(s.context.dom.googleSearchRescue.dataset.rescueExplicit,undefined);
+});
 
 test('session and final invalidations discard the precreation snapshot and coalesce one fresh title request', async () => {
   const s = setup();

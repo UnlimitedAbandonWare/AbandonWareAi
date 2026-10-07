@@ -50,7 +50,10 @@ cancel; an `end` left behind becomes someone else's stale cleanup.
 
 Foreign lease classes: **live** (valid TTL / recent heartbeat / proven-alive
 owner) — never forced, deleted, or stolen; proceed on non-overlapping targets
-and leave one `request-release`. **stale** (expired, owner not proven alive) —
+and leave one `request-release`. While blocked, wait instead of ending the
+turn: `python -B scripts/codex_auto_unblock.py lease-wait --paths <blocked>
+--max-min auto --enqueue --task <id>` (details:
+`.agents/skills/demo1-lease-conflict-autoflow/SKILL.md` step 6). **stale** (expired, owner not proven alive) —
 reclaim via `reclaim` (quarantine + `AUTO:lease-reclaimed=` journal), never via
 user relay. **orphan** (unreadable lock) — manual review, `--include-orphan` to
 quarantine. Never ask the user to carry "please end your lease" to another

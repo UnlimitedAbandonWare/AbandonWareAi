@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
@@ -27,6 +28,75 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 class PageContentScraperTest {
+
+    @Test
+    void fetchTextDoesNotPromoteAnArticleInsideComplementaryOrHiddenContent() throws Exception {
+        for (String wrapper : List.of("aside", "nav", "div hidden", "div aria-hidden='true'", "div role='complementary'")) {
+            String closingTag = wrapper.split(" ")[0];
+            String html = "<body><main><p>S449_BODY_SENTINEL visible qualified body</p><" + wrapper
+                    + "><article>AD_NOISE</article></" + closingTag + "></main></body>";
+            assertEquals("S449_BODY_SENTINEL visible qualified body", fetchHtml(html));
+        }
+    }
+
+    @Test
+    void fetchTextSelectsQualifiedArticleInsteadOfQueryMatchingChrome() throws Exception {
+        String qualifiedBody = "S449_BODY_SENTINEL 베스나 배경 능력은 합성 예시이며, "
+                + "비공식 커뮤니티의 2026-10-01 당시 추정으로 공식 확정은 아니다.";
+        String noise = "베스나 배경 능력 메뉴 " + "채널안내 ".repeat(90);
+        String html = "<html><body><header>HEADER_NOISE " + noise + "</header>"
+                + "<main><nav>NAV_NOISE " + noise + "</nav><article>"
+                + "<header><h1>합성 자료</h1></header><p>" + qualifiedBody + "</p>"
+                + "<aside>COMMENT_NOISE " + noise + "</aside></article>"
+                + "<aside>AD_NOISE " + noise + "</aside></main>"
+                + "<footer>OTHER_POST_NOISE " + noise + "</footer></body></html>";
+        TraceStore.clear();
+
+        String text = fetchHtml(html);
+
+        assertTrue(text.contains(qualifiedBody), "body, date and unofficial qualifier remain together");
+        for (String marker : List.of("HEADER_NOISE", "NAV_NOISE", "COMMENT_NOISE", "AD_NOISE", "OTHER_POST_NOISE")) {
+            assertFalse(text.contains(marker), "semantic chrome must not compete with the article");
+        }
+        assertEquals(true, TraceStore.get("web.pageScraper.fetchText.wireAttemptObserved"));
+        assertFalse(TraceStore.getAll().toString().contains("S449_BODY_SENTINEL"));
+    }
+
+    @Test
+    void fetchTextKeepsUnstructuredAndAmbiguousPagesAsFallbacks() throws Exception {
+        for (String html : List.of("<body><p>unstructured body</p></body>",
+                "<body><main></main><p>fallback body</p></body>",
+                "<body><article>first body</article><article>second body</article></body>")) {
+            assertEquals(Jsoup.parse(html).text(), fetchHtml(html));
+        }
+        assertEquals("", fetchHtml("<body><main></main></body>"));
+    }
+
+    @Test
+    void fetchTextRecognizesSemanticBodiesAndPreservesTheirPublicationHeaders() throws Exception {
+        for (String tag : List.of("main", "article", "div role='main'")) {
+            String closingTag = tag.split(" ")[0];
+            String html = "<body><header>outside header</header><" + tag + ">"
+                    + "<header>비공식 <time>2026-10-01</time></header><p>S449_BODY_SENTINEL 당시 추정</p>"
+                    + "<div role='complementary'>AD_NOISE</div><p hidden>HIDDEN_NOISE</p>"
+                    + "</" + closingTag + "><footer>outside footer</footer></body>";
+            assertEquals("비공식 2026-10-01 S449_BODY_SENTINEL 당시 추정", fetchHtml(html));
+        }
+    }
+
+    private static String fetchHtml(String html) throws Exception {
+        String target = "http://93.184.216.34/fixture";
+        Document document = Jsoup.parse(html);
+        Connection connection = mockConnection();
+        Connection.Response response = mock(Connection.Response.class);
+        when(connection.execute()).thenReturn(response);
+        when(response.statusCode()).thenReturn(200);
+        when(response.parse()).thenReturn(document);
+        try (MockedStatic<Jsoup> jsoup = mockStatic(Jsoup.class)) {
+            jsoup.when(() -> Jsoup.connect(target)).thenReturn(connection);
+            return new PageContentScraper().fetchText(target, 1000);
+        }
+    }
 
     @Test
     void fetchFailureReturnsNullAndLeavesRedactedTraceBreadcrumb() {

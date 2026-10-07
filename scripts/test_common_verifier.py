@@ -10,6 +10,7 @@ Exit 0 = all cases behaved; 1 = a case disagreed (details printed).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -91,6 +92,37 @@ def main() -> int:
                       == "VERIFIED_PENDING_APPROVAL"
                       and payload.get("verified") is True
                       and payload.get("testCount") == 12, out))
+
+        # --- string "command" spec with a Windows backslash path -----------
+        # nt-only: on POSIX the backslash path legitimately cannot resolve.
+        if os.name == "nt":
+            exe_cmd = (f'"{sys.executable}"' if " " in sys.executable
+                       else sys.executable)
+            cmd_spec = {"taskId": "t-fixture", "agent": "synthetic",
+                        "commands": [{"id": "cmdstr", "required": True,
+                                      "timeoutSec": 30,
+                                      "command": f"{exe_cmd} -B "
+                                                 r"scripts\fake_runner.py"
+                                                 " green"}]}
+            p = root / "spec_cmdstr.json"
+            p.write_text(json.dumps(cmd_spec), encoding="utf-8")
+            code, out = run_verifier("verify", "--root", str(root),
+                                     "--spec", str(p))
+            payload = parse_json_block(out)
+            cases.append(("command-string-backslash-verified", code == 0
+                          and payload.get("verdict")
+                          == "VERIFIED_PENDING_APPROVAL"
+                          and payload.get("testCount") == 12, out))
+
+            # --- CLI --argv with a Windows backslash path -------------------
+            code, out = run_verifier(
+                "verify", "--root", str(root), "--argv",
+                f"{exe_cmd} -B " + r"scripts\fake_runner.py" + " green")
+            payload = parse_json_block(out)
+            cases.append(("cli-argv-backslash-verified", code == 0
+                          and payload.get("verdict")
+                          == "VERIFIED_PENDING_APPROVAL"
+                          and payload.get("testCount") == 12, out))
 
         # --- scenario 1: non-zero exit -------------------------------------
         p = spec("exit1", ["exit1"])
@@ -185,6 +217,117 @@ def main() -> int:
         cases.append(("adjudicate-replay-verified", code == 0
                       and payload.get("verdict") == "VERIFIED_PENDING_APPROVAL",
                       out))
+
+        # Recorded green is valid only while every pinned file still matches.
+        p = spec("pinned-replay", ["green"], testFiles=["scripts/test_thing.py"],
+                 sourceFiles=["src/Thing.java"], testPreimageDir="preimage",
+                 expectedMinTests=12)
+        code, out = run_verifier("verify", "--root", str(root), "--spec", str(p))
+        recorded = parse_json_block(out)
+        result_file = root / "pinned_result.json"
+        result_file.write_text(json.dumps(recorded), encoding="utf-8")
+        receipt_bytes = result_file.read_bytes()
+        receipt_mtime = result_file.stat().st_mtime_ns
+        code, out = run_verifier("adjudicate", "--root", str(root),
+                                 "--result", str(result_file))
+        payload = parse_json_block(out)
+        cases.append(("pinned-unchanged-replay-verified", code == 0
+                      and payload.get("verdict") == "VERIFIED_PENDING_APPROVAL"
+                      and recorded.get("expectedMinTests") == 12, out))
+        source_bytes = src.read_bytes()
+        src.write_bytes(source_bytes + b"// changed after verify\n")
+        code, out = run_verifier("adjudicate", "--root", str(root),
+                                 "--result", str(result_file))
+        payload = parse_json_block(out)
+        cases.append(("saved-green-current-source-changed-INVALIDATED", code == 2
+                      and payload.get("verdict") == "INVALIDATED"
+                      and any("current-digest-mismatch" in r for r in payload.get("reasons", []))
+                      and result_file.read_bytes() == receipt_bytes
+                      and result_file.stat().st_mtime_ns == receipt_mtime, out))
+        src.unlink()
+        code, out = run_verifier("adjudicate", "--root", str(root),
+                                 "--result", str(result_file))
+        payload = parse_json_block(out)
+        cases.append(("saved-green-current-source-missing-INVALIDATED", code == 2
+                      and payload.get("verdict") == "INVALIDATED"
+                      and any("current-digest-missing" in r for r in payload.get("reasons", [])), out))
+        src.write_bytes(source_bytes)
+
+        for missing_map in ("pre", "post", "both"):
+            missing = json.loads(json.dumps(recorded))
+            missing["sourceFiles"] = ["src/Thing.java"]
+            for key in (("pre", "post") if missing_map == "both" else (missing_map,)):
+                missing["digests"][key].pop("src/Thing.java")
+            missing_result = root / f"missing_{missing_map}_result.json"
+            missing_result.write_text(json.dumps(missing), encoding="utf-8")
+            code, out = run_verifier("adjudicate", "--root", str(root),
+                                     "--result", str(missing_result))
+            payload = parse_json_block(out)
+            cases.append((f"missing-{missing_map}-pinned-digest-NOT_PROVEN", code == 2
+                          and payload.get("verdict") == "REJECTED"
+                          and any("pinned-digest-NOT_PROVEN" in r for r in payload.get("reasons", [])), out))
+
+        # A recorded weakening rejection cannot be promoted by replay.
+        test_file.write_text(removed, encoding="utf-8")
+        p = spec("rejected-replay", ["green"], testFiles=["scripts/test_thing.py"],
+                 testPreimageDir="preimage")
+        code, out = run_verifier("verify", "--root", str(root), "--spec", str(p))
+        rejected = parse_json_block(out)
+        rejected_result = root / "rejected_result.json"
+        rejected_result.write_text(json.dumps(rejected), encoding="utf-8")
+        rejected_bytes = rejected_result.read_bytes()
+        for restored in (False, True):
+            if restored:
+                test_file.write_text((pre_dir / "test_thing.py").read_text(encoding="utf-8"),
+                                     encoding="utf-8")
+            code, out = run_verifier("adjudicate", "--root", str(root),
+                                     "--result", str(rejected_result))
+            payload = parse_json_block(out)
+            cases.append((f"saved-REJECTED-replay-restored-{restored}", code == 2
+                          and payload.get("verdict") == "REJECTED"
+                          and any("test-assertion-weakened" in r for r in payload.get("reasons", []))
+                          and rejected_result.read_bytes() == rejected_bytes, out))
+
+        for variant, changed in (("skip", weakened), ("assertion", removed)):
+            test_file.write_text(changed, encoding="utf-8")
+            code, out = run_verifier("adjudicate", "--root", str(root),
+                                     "--result", str(result_file))
+            payload = parse_json_block(out)
+            cases.append((f"saved-green-current-test-{variant}-REJECTED", code == 2
+                          and payload.get("verdict") == "REJECTED"
+                          and any("test-disabled-added" in r or "test-assertion-weakened" in r
+                                  for r in payload.get("reasons", [])), out))
+        test_file.write_text((pre_dir / "test_thing.py").read_text(encoding="utf-8"),
+                             encoding="utf-8")
+
+        optional_spec = root / "optional_spec.json"
+        optional_spec.write_text(json.dumps({
+            "commands": [{"id": "required-green", "argv": [sys.executable, "-B", str(runner), "green"],
+                          "required": True},
+                         {"id": "optional-exit1", "argv": [sys.executable, "-B", str(runner), "exit1"],
+                          "required": False}], "expectedMinTests": 13}), encoding="utf-8")
+        code, out = run_verifier("verify", "--root", str(root), "--spec", str(optional_spec))
+        optional_recorded = parse_json_block(out)
+        optional_result = root / "optional_result.json"
+        optional_result.write_text(json.dumps(optional_recorded), encoding="utf-8")
+        code, out = run_verifier("adjudicate", "--root", str(root), "--result", str(optional_result))
+        payload = parse_json_block(out)
+        cases.append(("optional-command-required-metadata-preserved", code == 0
+                      and payload.get("verdict") == "VERIFIED_PENDING_APPROVAL"
+                      and optional_recorded.get("expectedMinTests") == 13
+                      and any(c.get("id") == "optional-exit1" and c.get("required") is False
+                              for c in optional_recorded.get("commands", [])), out))
+
+        p = spec("minimum-rejected", ["green"], expectedMinTests=13)
+        code, out = run_verifier("verify", "--root", str(root), "--spec", str(p))
+        minimum_recorded = parse_json_block(out)
+        minimum_result = root / "minimum_result.json"
+        minimum_result.write_text(json.dumps(minimum_recorded), encoding="utf-8")
+        code, out = run_verifier("adjudicate", "--root", str(root), "--result", str(minimum_result))
+        payload = parse_json_block(out)
+        cases.append(("saved-INCOMPLETE-minimum-replay-blocked", code == 2
+                      and payload.get("verdict") == "INCOMPLETE"
+                      and "no-tests-executed" in payload.get("reasons", []), out))
 
     failed = [name for name, ok, _ in cases if not ok]
     for name, ok, out in cases:

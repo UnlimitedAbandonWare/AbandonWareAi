@@ -98,7 +98,7 @@ final class ChatSessionDetailResponseBuilder {
                                     if (exposeTrace) tracesByAssistant.put(assistantId, new ChatApiController.TurnTraceDto(
                                             assistantId,
                                             pointer.get().snapshotId(),
-                                            mergeModelMetaField(pointer.get().projection(), lastModelMeta, session.getId())));
+                                            mergeModelMetaField(pointer.get().projection(), pointer.get().diagnostics(), lastModelMeta, session.getId())));
                                 }
                             }
                             if (exposeTrace) lastModelMeta = null;
@@ -186,8 +186,14 @@ final class ChatSessionDetailResponseBuilder {
         return ok.body(detail);
     }
 
-    private static Map<String, String> mergeModelMetaField(Map<String, String> projection, String modelMeta, Long sessionId) {
+    private static Map<String, String> mergeModelMetaField(Map<String, String> projection, Map<String, Object> diagnostics,
+                                                        String modelMeta, Long sessionId) {
         Map<String, String> merged = new LinkedHashMap<>(projection);
+        // These scalars have already passed the durable diagnostic allowlist and are bound to this answer.
+        for (String key : List.of("observedModel", "prompt.citableEvidenceCount", "orch.mode")) {
+            Object value = diagnostics.get(key);
+            if (value != null) merged.put(key, String.valueOf(value));
+        }
         if (modelMeta != null && !modelMeta.isBlank() && SAFE_MODEL_META.matcher(modelMeta).matches()) {
             merged.put("modelUsed", modelMeta);
         }

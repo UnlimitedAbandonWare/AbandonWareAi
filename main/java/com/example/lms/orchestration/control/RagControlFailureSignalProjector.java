@@ -53,6 +53,8 @@ public final class RagControlFailureSignalProjector {
             "verification_outcome_missing",
             "verification_unavailable_excerpt",
             "verification_unavailable_guidance",
+            "verification_insufficient_excerpt",
+            "verification_insufficient_guidance",
             "verification_rejected",
             "verification_accepted",
             "silent_failure",

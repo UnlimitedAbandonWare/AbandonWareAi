@@ -90,7 +90,7 @@ class ChatApiControllerInputGuardTest {
 
         int parser = source.indexOf("const parser = createSseEventParser");
         int snapshot = source.indexOf("const exactFinalRun = effectiveType === \"final\"", parser);
-        int render = source.indexOf("renderChatEvent(eventPayload, assistant, effectiveType)", snapshot);
+        int render = source.indexOf("renderChatEvent(eventPayload, assistant, effectiveType, exactFinalRun)", snapshot);
         int finalAck = source.indexOf("exactFinalRun.sessionId, exactFinalRun.runToken, \"final\"", render);
         int awaitAck = source.indexOf("if (finalAckPromise) {", finalAck);
         assertTrue(parser >= 0 && snapshot > parser && render > snapshot && finalAck > render && awaitAck > finalAck,

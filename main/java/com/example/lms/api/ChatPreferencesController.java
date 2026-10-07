@@ -21,6 +21,8 @@ public class ChatPreferencesController {
     private final ClientOwnerKeyResolver owner;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.example.lms.llm.DynamicChatModelFactory modelFactory;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private ChatModelCatalogService modelCatalog;
     public ChatPreferencesController(ChatPreferenceService service, SettingsService settings,
             ChatDefaultsProperties defaults, ClientOwnerKeyResolver owner) {
         this.service = service; this.settings = settings; this.defaults = defaults; this.owner = owner;
@@ -31,11 +33,12 @@ public class ChatPreferencesController {
         return AttachmentOwnerIdentity.forAnonymous(cookie).hash();
     }
     @GetMapping public ResponseEntity<?> get() {
-        return response(service.read(owner()));
+        String scope = owner();
+        return response(service.read(scope), scope);
     }
     @PatchMapping public ResponseEntity<?> patch(@RequestBody Map<String, Object> body, HttpServletRequest request) {
         checkOrigin(request);
-        if (body.keySet().stream().anyMatch(key -> !Set.of("set", "unset", "expectedRevision", "expectedHash", "owner", "ownerKey").contains(key)))
+        if (body.keySet().stream().anyMatch(key -> !Set.of("set", "unset", "expectedRevision", "expectedHash", "expectedOwnerScopeId", "owner", "ownerKey").contains(key)))
             throw new IllegalArgumentException("unsupported_patch_field");
         if (!(body.get("expectedRevision") instanceof Number revision)
                 || revision.longValue() < 0 || revision.doubleValue() != revision.longValue())
@@ -49,19 +52,35 @@ public class ChatPreferencesController {
         @SuppressWarnings("unchecked") Map<String, Object> set = (Map<String, Object>) body.getOrDefault("set", Map.of());
         @SuppressWarnings("unchecked") List<String> unset = (List<String>) body.getOrDefault("unset", List.of());
         String scope = owner(); // Body, query and public owner headers never select the persistence target.
+        if (set.containsKey("chatTraceEnabled") || unset.contains("chatTraceEnabled")) {
+            Object expectedScope = body.get("expectedOwnerScopeId");
+            if (!(expectedScope instanceof String text && text.matches("[0-9a-f]{64}")))
+                throw new IllegalArgumentException("expected_owner_scope_required");
+            // Equality only: this value cannot select another owner's persistence target.
+            if (!scope.equals(expectedScope)) throw new ChatPreferenceService.Conflict();
+        }
         var saved = service.patch(scope, set, unset, revision.longValue(), (String) hash);
         var observed = service.read(scope);
         if (!saved.equals(observed)) throw new ChatPreferenceService.Conflict();
-        return response(observed);
+        return response(observed, scope);
     }
-    private ResponseEntity<?> response(ChatPreferenceService.State state) {
-        var resolved = ChatRequestSettingsMerger.resolve(ChatRequestDto.builder().build(), state.overrides(),
-                settings.getChatAdminOverrides(), defaults, LoggerFactory.getLogger(getClass()));
+    private ResponseEntity<?> response(ChatPreferenceService.State state, String scope) {
+        var auth = org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+        String actor = auth == null || !auth.isAuthenticated() ? null : auth.getName();
+        var factory = modelCatalog == null ? defaults.values()
+                : modelCatalog.firstSessionDefaults(defaults.values(), AttachmentOwnerIdentity.forActor(actor, owner.ownerKey()).hash());
+        var admin = settings.getChatAdminOverrides();
+        var request = ChatRequestDto.builder().build();
+        request.bindChatSettingsSnapshot(new ChatRequestDto.ChatSettingsSnapshot(state.overrides(), admin, Map.of(), factory));
+        var resolved = ChatRequestSettingsMerger.resolve(request, state.overrides(),
+                admin, defaults, LoggerFactory.getLogger(getClass()));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("overrides", state.overrides()); result.put("effective", resolved.effective());
-        result.put("factoryDefaults", defaults.values()); result.put("sources", resolved.sources());
+        result.put("factoryDefaults", factory); result.put("sources", resolved.sources());
         result.put("revision", state.revision()); result.put("hash", state.hash());
         result.put("ownerScope", "cookie"); result.put("defaultsVersion", defaults.getDefaultsVersion());
+        // Correlates a browser draft with this server-derived scope; never accepted as authority.
+        result.put("ownerScopeId", scope);
         String model = (String) resolved.effective().get("model");
         String selection = (String) resolved.effective().get("modelSelectionMode");
         var capability = modelFactory == null

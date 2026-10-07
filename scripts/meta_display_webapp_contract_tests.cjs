@@ -310,7 +310,7 @@ test('diagnostics leave missing timing unmeasured and errors omit raw server bod
   assert.match(app.nodes.get('error').textContent, /연결 상태/);
 });
 
-test('page exit stops capture and disposes polling; bfcache restore revives only a frozen capture', async () => {
+test('page exit stops capture and disposes polling; bfcache restore requires an explicit capture start', async () => {
   const app = mountDisplayApp({ role: 'PHONE', linked: true }); await app.click('microphone');
   app.windowEvent('pagehide');
   assert.equal(app.voice.isActive(), false);
@@ -320,6 +320,9 @@ test('page exit stops capture and disposes polling; bfcache restore revives only
   assert.equal(app.called('client.start').length, 1);
   app.windowEvent('pageshow', { persisted: true });
   assert.equal(app.called('client.start').length, 2);
+  assert.equal(app.called('voice.start').length, 1);
+  assert.equal(app.voice.isActive(), false);
+  await app.click('microphone');
   assert.equal(app.called('voice.start').length, 2);
   const idle = mountDisplayApp({ role: 'PHONE', linked: true });
   idle.windowEvent('pagehide'); idle.windowEvent('pageshow', { persisted: true });

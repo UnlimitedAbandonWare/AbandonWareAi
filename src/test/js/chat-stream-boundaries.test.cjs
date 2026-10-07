@@ -383,6 +383,51 @@ test('explicit concurrent user Stop posts the exact cancel once after transport 
   assert.equal(s.observed.acks,0);
 });
 
+test('submission retains its settings and context while previous cancellation is pending',async()=>{
+  const harness=fs.readFileSync('scripts/chat_ui_stream_contract_tests.js','utf8');
+  const fixtureEnd=harness.indexOf('const script = fs.readFileSync(');
+  assert(fixtureEnd>=0,'repository DOM fixture boundary missing');
+  for(const mode of ['strict','preferred','auto']) {
+    const scenario=`
+      for(const id of ['modelSelectionMode','executionModeSelect','googleSearchRescueToggle',
+        'attachmentGraphConsent','contextPreparationRequested','contextUsageText',
+        'memoryCompressionText','contextPercent','contextEvidenceText']) elements.set(id,fakeElement(id));
+      const gauge=fakeElement('contextGauge'); gauge.style.setProperty=()=>{};
+      elements.set('contextGauge',gauge);
+      context.document.addEventListener=()=>{};
+      vm.runInContext(productSource,context,{filename:'chat.js'});
+      context.__submittedMode=${JSON.stringify(mode)};
+      return vm.runInContext(
+        "(async()=>{let releaseCancel; const pending=new Promise(resolve=>releaseCancel=resolve); "+
+        "waitForPendingStreamCancel=()=>pending; let sent; streamChat=async payload=>{sent=JSON.parse(JSON.stringify(payload));}; "+
+        "state.currentSessionId=712; pendingAttachments.push({id:41}); "+
+        "dom.modelSelect.value='synthetic-model-A'; dom.modelSelectionMode.value=__submittedMode; "+
+        "dom.executionMode.value='AUTO'; dom.searchModeSelect.value='OFF'; dom.useRag.checked=false; "+
+        "$('googleSearchRescueToggle').checked=false; $('googleSearchRescueToggle').dataset.rescueExplicit='true'; $('attachmentGraphConsent').checked=true; "+
+        "$('contextPreparationRequested').checked=true; "+
+        "const sending=sendMessageUnlocked('synthetic submitted question'); "+
+        "dom.modelSelect.value='synthetic-model-B'; dom.modelSelectionMode.value='preferred'; "+
+        "dom.executionMode.value='STRIKE'; dom.searchModeSelect.value='FORCE_DEEP'; dom.useRag.checked=true; "+
+        "$('googleSearchRescueToggle').checked=true; $('attachmentGraphConsent').checked=false; "+
+        "$('contextPreparationRequested').checked=false; state.currentSessionId=713; "+
+        "pendingAttachments[0].id=42; releaseCancel(); await sending; return sent;})()",context);
+    `;
+    const sent=await vm.runInNewContext(harness.slice(0,fixtureEnd)+
+      '\n(async()=>{'+scenario+'})()',
+      {require,console,process,Buffer,TextEncoder,TextDecoder,URL,URLSearchParams,AbortController,
+        setTimeout,clearTimeout,setInterval,clearInterval,productSource:source,
+        __dirname:require('node:path').resolve('scripts')},
+      {filename:'submit-settings-snapshot-regression.cjs',timeout:10000});
+    assert.deepEqual(JSON.parse(JSON.stringify(sent)),{
+      message:'synthetic submitted question',question:'synthetic submitted question',
+      model:mode==='auto'?'llmrouter.auto':'synthetic-model-A',
+      strictModelSelection:mode==='strict',useRag:false,useWebSearch:false,
+      googleSearchRescueEnabled:false,searchMode:'OFF',executionMode:'AUTO',
+      sessionId:712,attachmentIds:[41],attachmentGraphConsent:true,contextPreparationRequested:true
+    },`submitted ${mode} settings changed during cancellation`);
+  }
+});
+
 test('WP6 user cancellation after SSE start blocks a late answer without ACK',async()=>{
   const s=setup({controlledReads:true,deadline:30000,
     run:{sessionId:715,runToken:'synthetic-run-715'}});
@@ -410,6 +455,7 @@ test('WP-U final provenance belongs to its answer and never borrows global evide
     const wrapperA=fakeElement('synthetic-message-A');
     const assistantA=fakeElement('synthetic-answer-A');
     wrapperA.appendChild(assistantA);
+    elements.get('chatWindow').appendChild(wrapperA);
     context.__provenanceA=assistantA;
     vm.runInContext("state.currentSessionId=711; rememberActiveRunIdentity(711,'synthetic-run-A'); " +
       "state.latestEvidenceRailItems=[{marker:'W9',title:'POISON_GLOBAL_SOURCE',source:'https://poison.example.test/'}]; " +
@@ -427,6 +473,7 @@ test('WP-U final provenance belongs to its answer and never borrows global evide
     const wrapperB=fakeElement('synthetic-message-B');
     const assistantB=fakeElement('synthetic-answer-B');
     wrapperB.appendChild(assistantB);
+    elements.get('chatWindow').appendChild(wrapperB);
     context.__provenanceB=assistantB;
     vm.runInContext("rememberActiveRunIdentity(711,'synthetic-run-B'); " +
       "renderChatEvent({type:'final',sessionId:711,traceTurnId:891702," +
@@ -442,6 +489,7 @@ test('WP-U final provenance belongs to its answer and never borrows global evide
     const wrapperC=fakeElement('synthetic-message-C');
     const assistantC=fakeElement('synthetic-answer-C');
     wrapperC.appendChild(assistantC);
+    elements.get('chatWindow').appendChild(wrapperC);
     context.__provenanceC=assistantC;
     vm.runInContext("rememberActiveRunIdentity(711,'synthetic-run-C'); state.responseTraceId=891703; "+
       "renderChatEvent({type:'final',sessionId:711,data:'Answer without terminal trace',evidence:[]},"+

@@ -94,11 +94,20 @@ public final class JevChoiceAdvisor {
             return runtime.rejected(key,surface,admission,"disabled",false);
         if(count<1||count>RELEVANCE.size())
             return runtime.rejected(key,surface,admission,"invalid_response",false);
+        var scope=JevDecisionScope.current();
+        if(scope==null)return runtime.rejected(key,surface,admission,"disabled",false);
+        if(scope.admission!=admission||!scope.isOpen())
+            return runtime.rejected(key,surface,admission,"cancelled",false);
         if(!admission.privacyAllowed())return runtime.rejected(key,surface,admission,"disabled",true);
         runtime.requireParent(admission,admission.deadlineNanos());
         var sanitized=sanitizer.sanitize(state);
         if(sanitized.isEmpty())return runtime.rejected(key,surface,admission,"state_oversized",true);
-        return runtime.prefetch(key,surface,sanitized.get(),RELEVANCE.subList(0,count),admission);
+        // A distinct purpose owns one attempt, including timeout/failure, in this request scope.
+        if(!scope.claimCandidateBatch(question,surface))
+            return runtime.rejected(key,surface,admission,"cancelled",false);
+        DecisionAdmission scoped=new DecisionAdmission(()->scope.isOpen()&&admission.current().getAsBoolean(),
+                admission.deadlineNanos(),admission.privacyAllowed());
+        return runtime.prefetch(key,surface,sanitized.get(),RELEVANCE.subList(0,count),scoped);
     }
     public void discard(EvaluationHandle handle){runtime.discard(handle);}
     private boolean enabled(String feature){return "true".equalsIgnoreCase(env.getProperty("demo.jev."+feature+".enabled","false"));}

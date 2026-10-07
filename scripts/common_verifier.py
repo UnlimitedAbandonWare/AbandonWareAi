@@ -151,10 +151,18 @@ def parse_metrics(text: str) -> dict:
     return {"testCount": tests, "skipped": skipped, "failures": failed}
 
 
+def split_command(command: str) -> list:
+    """Split a shell-style command string without eating Windows path
+    separators: posix mode treats ``\\`` as an escape (``scripts\\x.py`` ->
+    ``scriptsx.py``), so on nt use posix=False — quote characters stay in
+    tokens and pass through to the child's own argv parsing."""
+    return shlex.split(str(command), posix=(os.name != "nt"))
+
+
 def run_command(root: Path, spec: dict) -> dict:
     argv = spec.get("argv")
     if argv is None and spec.get("command"):
-        argv = shlex.split(str(spec["command"]))
+        argv = split_command(spec["command"])
     if not argv:
         return {"id": spec.get("id"), "launchError": "argv-missing",
                 "exitCode": None, "metrics": {"testCount": 0, "skipped": 0,
@@ -255,7 +263,25 @@ def adjudicate(commands: list, test_files: list, source_files: list,
         return "REJECTED", reasons, {"testCount": total, "skipped": skipped,
                                      "failures": failures}
 
-    # Rule 5: anything declared changed between pre- and post-run digests.
+    # Rule 5: recorded pins must be complete and still match the live files.
+    if not isinstance(digests_pre, dict) or not isinstance(digests_post, dict):
+        return "REJECTED", ["pinned-digest-NOT_PROVEN:invalid-map"], {
+            "testCount": total, "skipped": skipped, "failures": failures}
+    pinned = sorted(set(test_files) | set(source_files)
+                    | set(digests_pre) | set(digests_post))
+    try:
+        if any(rel_of(root, rel) != rel for rel in pinned):
+            raise ValueError("noncanonical-pinned-path")
+    except (OSError, ValueError, TypeError):
+        return "REJECTED", ["pinned-path-NOT_PROVEN"], {
+            "testCount": total, "skipped": skipped, "failures": failures}
+    unproven = [rel for rel in pinned
+                if any(not isinstance(values.get(rel), str)
+                       or re.fullmatch(r"[0-9a-fA-F]{64}", values[rel]) is None
+                       for values in (digests_pre, digests_post))]
+    if unproven:
+        return "REJECTED", [f"pinned-digest-NOT_PROVEN:{rel}" for rel in unproven], {
+            "testCount": total, "skipped": skipped, "failures": failures}
     digest_mismatch = []
     for rel in list(digests_pre):
         if digests_pre.get(rel) != digests_post.get(rel):
@@ -263,6 +289,14 @@ def adjudicate(commands: list, test_files: list, source_files: list,
     if digest_mismatch:
         return "INVALIDATED", [f"post-test-digest-mismatch:{r}"
                                for r in digest_mismatch], {
+            "testCount": total, "skipped": skipped, "failures": failures}
+
+    current = digest_map(root, pinned)
+    current_mismatch = [rel for rel in pinned
+                        if current[rel] != digests_post[rel].lower()]
+    if current_mismatch:
+        return "INVALIDATED", [f"current-digest-{'missing' if current[rel] is None else 'mismatch'}:{rel}"
+                               for rel in current_mismatch], {
             "testCount": total, "skipped": skipped, "failures": failures}
 
     return VERDICT_OK, [], {"testCount": total, "skipped": skipped,
@@ -287,7 +321,7 @@ def cmd_verify(args) -> int:
     if args.argv:
         spec.setdefault("commands", [])
         for i, raw in enumerate(args.argv):
-            spec["commands"].append({"id": f"cli-{i}", "argv": shlex.split(raw),
+            spec["commands"].append({"id": f"cli-{i}", "argv": split_command(raw),
                                      "required": True})
     for rel in args.test_file or []:
         spec.setdefault("testFiles", []).append(rel)
@@ -309,7 +343,8 @@ def cmd_verify(args) -> int:
     preimage_dir = (root / spec["testPreimageDir"]).resolve() \
         if spec.get("testPreimageDir") else None
 
-    ran = [run_command(root, c) for c in commands_spec]
+    ran = [dict(run_command(root, c), required=c.get("required", True))
+           for c in commands_spec]
     digests_post = digest_map(root, pinned)
 
     verdict, reasons, detail = adjudicate(
@@ -334,8 +369,12 @@ def cmd_verify(args) -> int:
         "failures": detail["failures"],
         "digestMatches": digest_matches,
         "reasons": reasons,
+        "testFiles": test_files,
+        "sourceFiles": source_files,
+        "testPreimageDir": spec.get("testPreimageDir"),
+        "expectedMinTests": int(spec.get("expectedMinTests", 1)),
         "commands": [{k: c.get(k) for k in
-                      ("id", "exitCode", "durationMs", "metrics", "launchError")}
+                      ("id", "required", "exitCode", "durationMs", "metrics", "launchError")}
                      for c in ran],
         "digests": {"pre": digests_pre, "post": digests_post},
         "checkedAtUtc": utcnow(),
@@ -358,13 +397,18 @@ def cmd_adjudicate(args) -> int:
     root = Path(args.root).resolve()
     commands = data.get("commands") or []
     digests = data.get("digests") or {}
+    preimage_dir = (root / data["testPreimageDir"]).resolve() \
+        if data.get("testPreimageDir") else None
     verdict, reasons, detail = adjudicate(
         commands,
         [rel_of(root, r) for r in data.get("testFiles") or []],
         [rel_of(root, r) for r in data.get("sourceFiles") or []],
-        root, None,
+        root, preimage_dir,
         digests.get("pre") or {}, digests.get("post") or {},
         int(data.get("expectedMinTests", 1)))
+    if data.get("verdict") in BLOCKING:
+        verdict = data["verdict"]
+        reasons = data.get("reasons") or [f"recorded-blocking-verdict:{verdict}"]
     verified = verdict == VERDICT_OK
     print(json.dumps({"schemaVersion": SCHEMA, "verdict": verdict,
                       "verified": verified, "reasons": reasons,

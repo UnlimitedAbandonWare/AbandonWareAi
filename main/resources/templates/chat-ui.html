@@ -19,6 +19,7 @@
     <script defer src="/js/vendor/chat/katex-0.18.7.min.js"></script>
     <script defer src="/js/chat-answer-renderer.js?v=20260923-document-1"></script>
     <script defer src="/js/chat-evidence-graph.js?v=answer-provenance-20261005"></script>
+  <script defer src="/js/chat-conversation-export.js?v=context-export-20261007"></script>
   <script defer src="/js/chat.js?v=sol-first-session-20261005"></script>
   <script defer src="/assets/interview/interview-core.js?v=interview-absorb-20261001"></script>
   <script defer src="/js/chat-display-bridge.js?v=interview-absorb-20261001"></script>
@@ -58,12 +59,24 @@
     <section class="chat-area-wrapper" aria-label="Chat">
         <header class="conversation-header">
             <div class="conversation-copy"><h1>대화</h1><span class="workspace-caption">생각을 이어가는 공간</span></div>
+            <details class="answer-tools" data-conversation-export>
+                <summary>전체 대화 진단 다운로드</summary>
+                <div class="answer-tools-panel">
+                    <p>현재 대화와 이전 본인 대화의 보존 자료를 함께 내려받습니다. 최대 10개 대화.</p>
+                    <div data-export-options aria-label="내보낼 본인 대화"></div>
+                    <button type="button" data-export-more hidden>이전 대화 더 불러오기</button>
+                    <p data-export-status role="status" aria-live="polite">저장된 대화를 선택하세요.</p>
+                    <button type="button" data-export-format="json">JSON 다운로드</button>
+                    <button type="button" data-export-format="zip">ZIP 다운로드</button>
+                    <button type="button" data-export-fresh>새로 캡처</button>
+                </div>
+            </details>
             <details class="answer-tools">
                 <summary>답변별 디버깅 <span aria-hidden="true">↗</span></summary>
                 <div class="answer-tools-panel">
                     <div data-admin-diagnostics th:if="${chatDiagnosticsEnabled}">
                     <p class="panel-heading">답변별 디버깅 표시</p>
-                    <label class="chat-trace-toggle"><input type="checkbox" data-chat-trace-toggle> 각 답변의 디버깅 트레이스 표시</label>
+                    <label class="chat-trace-toggle"><input id="chatTraceToggle" type="checkbox" data-chat-trace-toggle checked> 각 답변의 디버깅 트레이스 표시</label>
 <details class="diagnostics-disclosure" data-testid="chat-diagnostics">
             <summary id="diagnosticsSummaryControl" aria-label="Diagnostics: Checking signals"><span>Diagnostics</span><span id="diagnosticsSummary" data-status="WARN">Checking signals</span></summary>
             <div class="diagnostics-stack">
@@ -293,7 +306,7 @@
             <summary>대화 설정</summary>
             <div class="control-panel" aria-label="Chat controls">
                 <label class="model-control"><span>모델</span>
-<select id="modelSelect" name="model" aria-label="Model" data-testid="chat-model-select" data-first-session-model="chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5">
+<select id="modelSelect" name="model" aria-label="Model" data-testid="chat-model-select" data-first-session-model="chatgpt-oauth:gpt-5.6-luna,chatgpt-oauth:gpt-5.6-sol,chatgpt-oauth:gpt-5.5">
                         <option th:if="${models == null || #lists.isEmpty(models)}"
                                 th:value="${currentModel} ?: 'gemma4:26b'"
                                 th:text="${currentModel} ?: 'gemma4:26b'"
@@ -346,7 +359,6 @@
                         <option value="FORCE_DEEP">깊이 검색</option>
                     </select>
                 </label>
-                <label class="toggle-row"><input id="googleSearchRescueToggle" type="checkbox" aria-label="검색 보강"><span>검색 보강</span></label>
                 <label class="toggle-row"><input id="useRagToggle" type="checkbox" checked aria-label="Use RAG context" data-testid="chat-rag-toggle"><span>RAG</span></label>
             </div>
             <div class="help"><button type="button" id="chat-save-defaults" disabled>현재 선택을 개인 기본값으로 저장</button><span id="chat-defaults-status" role="status" aria-live="polite">개인 설정 확인 중</span></div>
@@ -369,6 +381,7 @@
             <div id="chatWindow" role="log" aria-live="polite" aria-label="대화 내용"></div>
         </div>
         <div class="composer-dock">
+            <label class="toggle-row"><input id="googleSearchRescueToggle" type="checkbox" aria-label="Gemini 검색 보강"><span>Gemini 검색 보강</span></label>
             <form id="chatForm" class="composer" method="post" action="/api/chat" data-testid="chat-composer">
                 <input id="attachInput" type="file" multiple hidden data-testid="chat-attach-input" aria-label="첨부할 파일 선택">
                 <div class="composer-input">

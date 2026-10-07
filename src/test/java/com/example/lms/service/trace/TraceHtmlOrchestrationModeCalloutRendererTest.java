@@ -14,6 +14,40 @@ import com.example.lms.trace.SafeRedactor;
 class TraceHtmlOrchestrationModeCalloutRendererTest {
 
     @Test
+    void snapshotSummaryKeepsUnpreservedContextDistinctFromDisabledSearch() {
+        String html = new TraceHtmlBuilder(null).buildSnapshotHtml(
+                "snapshot-context", null, null, null, null, "http_request", "GET",
+                null, 200, null, Map.of("orch.mode", "NORMAL"), Map.of());
+
+        assertTrue(html.contains("web NOT_OBSERVED / vector NOT_OBSERVED"));
+        assertFalse(html.contains("web disabled"));
+        assertFalse(html.contains("vector disabled"));
+    }
+
+    @Test
+    void liveSummaryPreservesExplicitDisabledContext() {
+        String html = new TraceHtmlBuilder(null).buildSplitPanel(
+                null, null, null, null, Map.of("orch.mode", "NORMAL"));
+
+        assertTrue(html.contains("web disabled / vector disabled"));
+        assertTrue(html.contains("Web: disabled"));
+        assertTrue(html.contains("Vector: disabled"));
+        assertFalse(html.contains("NOT_OBSERVED"));
+    }
+
+    @Test
+    void liveSummaryPreservesObservedEmptyContext() {
+        String html = new TraceHtmlBuilder(null).buildSplitPanel(
+                null, null, List.of(), List.of(), Map.of("orch.mode", "NORMAL"));
+
+        assertTrue(html.contains("web 0 / vector 0"));
+        assertTrue(html.contains("Web: 0 items"));
+        assertTrue(html.contains("Vector: 0 items"));
+        assertFalse(html.contains("web disabled"));
+        assertFalse(html.contains("vector disabled"));
+    }
+
+    @Test
     void renderReturnsEmptyForMissingMetadata() {
         assertEquals("", TraceHtmlOrchestrationModeCalloutRenderer.render(Map.of()));
     }

@@ -86,6 +86,39 @@ class StandardPromptBuilderEvidenceMetadataTest {
     }
 
     @Test
+    void oldVerifiedSummaryMarkersRemainHistoryWithoutCurrentEvidence() {
+        String old = "Entity A [W1] VERIFIED https://old.example/a";
+        PromptContext ctx = PromptContext.builder().memory(old).history("Assistant: " + old).build();
+
+        String prompt = builder.build(List.of(ctx), "Entity B?");
+
+        assertTrue(prompt.contains("### MEMORY\n" + old));
+        assertTrue(prompt.contains("### RECENT CONVERSATION\nAssistant: " + old));
+        assertFalse(prompt.contains("### CITABLE EVIDENCE METADATA"));
+        assertEquals(0, TraceStore.get("prompt.citableEvidenceRenderedCount"));
+        assertEquals(true, TraceStore.get("promptBuilder.evidenceEmpty"));
+    }
+
+    @Test
+    void currentEvidenceMarkerDoesNotPromoteTheSameMarkerFromOldHistory() {
+        String old = "Entity A [W1] VERIFIED https://old.example/a";
+        Content current = Content.from(TextSegment.from("Entity B qualified current evidence",
+                Metadata.from(Map.of("url", "https://current.example/b"))));
+        PromptContext ctx = PromptContext.builder().memory(old).history("Assistant: " + old)
+                .web(List.of(current)).evidence(List.of(new RagEvidenceMetadata(
+                        "W1", "WEB", "Entity B", "https://current.example/b", null,
+                        1, null, 1, 0.9d, "score"))).build();
+
+        String prompt = builder.build(List.of(ctx), "Entity B?");
+        String citations = prompt.split("### CITABLE EVIDENCE METADATA\\n", 2)[1].split("\\n\\n", 2)[0];
+
+        assertTrue(prompt.contains("### MEMORY\n" + old));
+        assertTrue(citations.contains("[W1] kind=WEB; title=Entity B; source=https://current.example/b"));
+        assertFalse(citations.contains("https://old.example/a"));
+        assertEquals(1, TraceStore.get("prompt.citableEvidenceRenderedCount"));
+    }
+
+    @Test
     void projectFeatureInventoryGuardPreventsExternalHomonymEvidenceClaims() {
         Content web = Content.from(TextSegment.from(
                 "GraphRAG toolkit for AWS knowledge graphs. CFVM means Control Flow Virtual Machine.",

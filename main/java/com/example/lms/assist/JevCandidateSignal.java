@@ -1,11 +1,8 @@
 package com.example.lms.assist;
 
-import com.abandonware.ai.addons.budget.TimeBudgetContext;
 import com.example.lms.assist.JevChoiceAdvisor.*;
 import com.example.lms.assist.JevEvaluationRuntime.*;
 import com.example.lms.search.TraceStore;
-import com.example.lms.service.chat.ChatRunExecutionContext;
-import com.example.lms.service.guard.GuardContextHolder;
 import com.example.lms.trace.SafeRedactor;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.rag.content.Content;
@@ -15,7 +12,6 @@ import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
 import java.util.*;
 import java.util.concurrent.CancellationException;
-import java.util.concurrent.TimeUnit;
 
 /** One bounded postfusion relevance batch. Only original Content references change order. */
 @Component
@@ -38,41 +34,37 @@ public final class JevCandidateSignal {
         return "true".equalsIgnoreCase(env.getProperty("demo.jev.candidate-signal.external-consent","false"));
     }
     public List<Content> rerank(String query,List<Content> candidates) {
-        if(!enabled()||!consent())return observed(candidates,"disabled");
-        var run=ChatRunExecutionContext.current();
-        var budget=TimeBudgetContext.get();
-        var guard=GuardContextHolder.get();
-        if(run==null||budget==null||guard==null)return observed(candidates,"request_context_missing");
-        boolean privacy=!guard.isSensitiveTopic()&&!guard.planBool("privacy.boundary.block-web-search",false)
-                &&!"true".equalsIgnoreCase(env.getProperty("privacy.boundary.block-web-search","false"));
-        var parent=JevDecisionScope.capture();
-        QuestionKey key=parent==null?new QuestionKey(UUID.randomUUID(),0,SafeRedactor.hashValue(query)):parent.key;
-        long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(budget.remainingMillis());
-        if(parent!=null)deadline=Math.min(deadline,parent.admission.deadlineNanos());
-        DecisionAdmission admission=new DecisionAdmission(()->enabled()&&consent()&&!budget.cancelled()&&run.admitCall(()->{})
-                &&!guard.isSensitiveTopic()&&!guard.planBool("privacy.boundary.block-web-search",false)
-                &&!"true".equalsIgnoreCase(env.getProperty("privacy.boundary.block-web-search","false"))
-                &&(parent==null||parent.admission.current().getAsBoolean()),deadline,
-                privacy&&(parent==null||parent.admission.privacyAllowed()));
-        return rerank(query,candidates,key,admission);
+        if(!enabled()||!consent()||"off".equals(new JevSurfacePolicy(env).resolve("main").mode()))
+            return observed(candidates,"disabled");
+        // Fusion precedes packing: it has no verified pressure/ambiguity input yet.
+        // Keep production pass-through until that existing policy can admit selection.
+        return observed(candidates,"selection_context_missing");
     }
+    /** Explicitly admitted contract path; the fusion entry point does not activate it. */
     public List<Content> rerank(String query,List<Content> candidates,QuestionKey question,DecisionAdmission admission) {
         List<Content> baseline=candidates==null?List.of():candidates;
         if(!enabled()||!consent()||"off".equals(new JevSurfacePolicy(env).resolve("main").mode()))
             return observed(baseline,"disabled");
         if(advisor==null)return observed(baseline,"advisor_unavailable");
         if(baseline.size()<2)return observed(baseline,"single_candidate");
+        var scope=JevDecisionScope.current();
+        if(scope==null||!scope.key.equals(question)||scope.admission!=admission||!scope.isOpen())
+            return observed(baseline,"cancelled");
         EvaluationHandle handle=null;
         if(baseline.stream().anyMatch(Objects::isNull))return observed(baseline,"candidate_invalid");
         List<Content> before=List.copyOf(baseline);
         try {
             if(before.stream().anyMatch(row->row.textSegment()==null||row.textSegment().text().isBlank()))
                 return observed(before,"candidate_invalid");
+            if(query==null||query.isBlank()||query.length()>256)return observed(baseline,"query_insufficient");
             String digest=digest(before);
             int count=Math.min(4,before.size());
             List<Map<String,String>> excerpts=new ArrayList<>();
-            for(int i=0;i<count;i++)excerpts.add(Map.of("id","candidate"+i,
-                    "excerpt",bounded(SafeRedactor.redact(before.get(i).textSegment().text()),160)));
+            for(int i=0;i<count;i++) {
+                String original=before.get(i).textSegment().text();
+                if(original.length()>160)return observed(baseline,"excerpt_insufficient");
+                excerpts.add(Map.of("id","candidate"+i,"excerpt",SafeRedactor.redact(original)));
+            }
             String state=JSON.writeValueAsString(Map.of("purpose","candidate_relevance",
                     "question",bounded(SafeRedactor.redact(query),256),"candidates",excerpts));
             QuestionKey effective=new QuestionKey(question.localRequestNonce(),question.revision(),
@@ -88,7 +80,7 @@ public final class JevCandidateSignal {
             for(int i=0;i<count;i++) {
                 ChoiceObservation observation=result.answers().get(JevChoiceAdvisor.RELEVANCE.get(i).id());
                 if(observation==null||!observation.schemaValid()||!observation.confidenceAccepted()
-                        ||!Set.of("RELEVANT","IRRELEVANT","UNCERTAIN").contains(observation.choice()))
+                        ||!Set.of("RELEVANT","IRRELEVANT").contains(observation.choice()))
                     return observed(before,"unaccepted_signal");
                 order.add(i);
             }
@@ -96,7 +88,7 @@ public final class JevCandidateSignal {
             List<Content> ranked=new ArrayList<>(before.size());
             for(int index:order)ranked.add(before.get(index));
             ranked.addAll(before.subList(count,before.size()));
-            if(Thread.currentThread().isInterrupted()||!admission.current().getAsBoolean())
+            if(Thread.currentThread().isInterrupted()||!scope.isOpen()||!admission.current().getAsBoolean())
                 return observed(before,"cancelled");
             if(System.nanoTime()>=admission.deadlineNanos())return observed(before,"timeout");
             return observed(List.copyOf(ranked),"applied");
@@ -110,7 +102,7 @@ public final class JevCandidateSignal {
             if(handle!=null)advisor.discard(handle);
         }
     }
-    private static int rank(String value) {return "RELEVANT".equals(value)?0:"UNCERTAIN".equals(value)?1:2;}
+    private static int rank(String value) {return "RELEVANT".equals(value)?0:1;}
     private static String bounded(String value,int limit) {
         if(value==null)return "";
         int length=Math.min(limit,value.length());

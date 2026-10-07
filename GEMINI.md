@@ -3,6 +3,8 @@
 
 - Project Root: C:\AbandonWare\demo-1\demo-1\src. Rules SSOT = ./AGENTS.md.
 - Current document/P0 entry: [Primary/P0 entry](docs/PRIMARY_SURFACE.md); implementation status remains [PROJECT_STATUS](docs/PROJECT_STATUS.md).
+- Before starting work or judging deadlines and added scope, READ the shared [guard-deadline-scope](docs/agents-rules/DEMO1-DEADLINE-SCOPE-JUDGMENT.md) body.
+  Planning margin covers the whole task; preserve existing authority, verification, and the user hard cap.
 - AGENTS.md is ~29 KB; agy loads only the first ~24,000 bytes (~line 266).
   Rule bodies were moved to `docs/agents-rules/<BLOCK-ID>.md` — each stub in
   AGENTS.md points at its doc. Before work on these topics READ the doc:

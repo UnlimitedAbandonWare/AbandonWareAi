@@ -252,6 +252,44 @@ class BraveSearchServiceResponseShapeTest {
         assertEquals(Boolean.FALSE, row.get("providerReceiptObserved"));
     }
 
+    @Test
+    void additionalLogicalQueryDenialIsNotARequestDeadlineAndNeverReachesHttp() {
+        BraveSearchService service = enabledService();
+        RestTemplate restTemplate = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(
+                com.example.lms.domain.enums.ExecutionMode.AUTO);
+        org.junit.jupiter.api.Assertions.assertTrue(budget.tryQuery("original retrieval leg"));
+
+        BraveSearchResult result = service.searchWithMeta("genuinely different retrieval leg", 1);
+
+        server.verify();
+        assertEquals(BraveSearchResult.Status.EXCEPTION, result.status());
+        assertEquals("query_alias_denied", result.message());
+        assertEquals("query_alias_denied", TraceStore.getString("web.brave.failureReason"));
+        assertFalse(Boolean.TRUE.equals(TraceStore.get("web.brave.requestBudgetExhausted")));
+        assertEquals(1, TraceStore.get("executionMode.queryCount"));
+        assertEquals(0, TraceStore.get("executionMode.httpAttempts"));
+        assertFalse(TraceStore.get("web.brave.attempt.runs") != null);
+    }
+
+    @Test
+    void expiredRequestDeadlineRetainsItsExistingDistinctReasonAndNoHttp() {
+        BraveSearchService service = enabledService();
+        RestTemplate restTemplate = (RestTemplate) ReflectionTestUtils.getField(service, "restTemplate");
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(0));
+        com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(
+                com.example.lms.domain.enums.ExecutionMode.AUTO);
+
+        BraveSearchResult result = service.searchWithMeta("deadline control query", 1);
+
+        server.verify();
+        assertEquals("request_budget_exhausted", result.message());
+        assertEquals(Boolean.TRUE, TraceStore.get("web.brave.requestBudgetExhausted"));
+        assertEquals(0, TraceStore.get("executionMode.httpAttempts"));
+    }
+
     private static BraveSearchService enabledService() {
         BraveSearchService service = new BraveSearchService(new BraveSearchProperties(
                 true,

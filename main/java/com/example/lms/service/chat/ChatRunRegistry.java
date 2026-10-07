@@ -117,6 +117,11 @@ public class ChatRunRegistry {
         volatile long ownerLeaseDeadlineNanos = Long.MAX_VALUE;
         volatile boolean ownerLeaseConfirmed = true;
         volatile boolean clusterFinalized;
+        String verifiedOwnerHash;
+        String priorEvidenceOwnerHash;
+        List<dev.langchain4j.rag.content.Content> finalWebEvidence = List.of();
+        List<dev.langchain4j.rag.content.Content> priorWebEvidence = List.of();
+        long evidenceExpiresAtMillis;
         final Object gate = new Object();
         final ReentrantLock terminalWriteLock = new ReentrantLock();
         volatile boolean terminalWriteInProgress;
@@ -388,6 +393,18 @@ public class ChatRunRegistry {
         Run run = runs.compute(sessionId, (id, existing) -> {
             if (existing == null || (isTerminal(existing.status) && !existing.deletionFence)) {
                 Run created = new Run(id, Sinks.many().replay().limit(replayCapacity), clock.getAsLong());
+                if (existing != null) {
+                    synchronized (existing.gate) {
+                        if (existing.status == Status.DONE && !existing.deletionFence
+                                && existing.generationSucceeded && existing.persisted
+                                && existing.finalDeliveryAccepted && "delivered".equals(existing.terminalReason)
+                                && "ok".equals(existing.finalEmitResult) && existing.terminalEventCount == 1
+                                && clock.getAsLong() < existing.evidenceExpiresAtMillis) {
+                            created.priorWebEvidence = existing.finalWebEvidence;
+                            created.priorEvidenceOwnerHash = existing.verifiedOwnerHash;
+                        }
+                    }
+                }
                 if (cluster != null) {
                     created.ownerLeaseDeadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(ChatRunOwnerDirectory.LEASE_MILLIS);
                     cluster.directory().claim(id, created.runId);
@@ -400,6 +417,48 @@ public class ChatRunRegistry {
         });
         captureRouting(run); // Outside the commit/cancellation gate and map mutation.
         return new BeginResult(contextFor(run, owner.get()), owner.get());
+    }
+
+    private static boolean validOwnerHash(String hash) {
+        return hash != null && hash.matches("[a-f0-9]{64}");
+    }
+
+    /** Private process-local carry; only the new exact execution owner can read it. */
+    public List<dev.langchain4j.rag.content.Content> priorWebEvidence(ChatRunExecutionContext context, String ownerHash) {
+        Run run = exactRun(context);
+        if (!isOwner(run, context)) return List.of();
+        synchronized (run.gate) {
+            if (runs.get(run.sessionId) != run || !isInFlight(run.status) || run.deletionFence || !leaseValid(run)
+                    || !validOwnerHash(ownerHash)) return List.of();
+            if (run.verifiedOwnerHash == null) run.verifiedOwnerHash = ownerHash;
+            return ownerHash.equals(run.verifiedOwnerHash) && ownerHash.equals(run.priorEvidenceOwnerHash)
+                    ? run.priorWebEvidence : List.of();
+        }
+    }
+
+    /** Stage final citable passages; they cannot be reused before normal final delivery. */
+    public boolean stageWebEvidence(ChatRunExecutionContext context, String ownerHash,
+            List<dev.langchain4j.rag.content.Content> documents) {
+        Run run = exactRun(context);
+        if (!isOwner(run, context)) return false;
+        var bounded = new java.util.ArrayList<dev.langchain4j.rag.content.Content>();
+        int chars = 0;
+        for (var doc : documents == null ? List.<dev.langchain4j.rag.content.Content>of() : documents) {
+            if (doc == null || doc.textSegment() == null || bounded.size() == 8) continue;
+            String body = doc.textSegment().text();
+            String url = doc.textSegment().metadata().getString("url");
+            if (body == null || body.isBlank() || body.length() > 8000 || chars + body.length() > 48000
+                    || url == null || !url.matches("(?i)^https?://[^\\s]+$") || url.length() > 1000) continue;
+            bounded.add(dev.langchain4j.rag.content.Content.from(dev.langchain4j.data.segment.TextSegment.from(body,
+                    dev.langchain4j.data.document.Metadata.from(Map.of("url",url,"kind","WEB")))));
+            chars += body.length();
+        }
+        synchronized (run.gate) {
+            if (runs.get(run.sessionId) != run || !isInFlight(run.status) || run.deletionFence || !leaseValid(run)
+                    || !validOwnerHash(ownerHash) || !ownerHash.equals(run.verifiedOwnerHash)) return false;
+            run.finalWebEvidence = List.copyOf(bounded);
+            return true;
+        }
     }
 
     /** Attach to one current in-flight run using one map snapshot. */
@@ -1328,6 +1387,7 @@ public class ChatRunRegistry {
                 return;
             }
             expectedRun.terminalEvictionScheduled = true;
+            expectedRun.evidenceExpiresAtMillis = clock.getAsLong() + Math.max(0L, ttlSeconds) * 1000L;
         }
         finishClusterOwner(expectedRun);
         long delaySeconds = expectedRun.deletionFence

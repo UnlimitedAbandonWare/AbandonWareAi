@@ -113,6 +113,12 @@ final class ChatSessionMetaMerger {
             }
         }
 
+        if (uiReq.getGoogleSearchRescueEnabled() != null) {
+            meta.put("googleSearchRescueEnabled", uiReq.getGoogleSearchRescueEnabled());
+        } else if (meta.get("googleSearchRescueEnabled") instanceof Boolean enabled) {
+            uiReq.setGoogleSearchRescueEnabled(enabled);
+        }
+
         if (uiReq.getPrecisionSearch() != null) {
             meta.put("precisionSearch", uiReq.getPrecisionSearch());
         } else if (meta.containsKey("precisionSearch")) {

@@ -97,7 +97,7 @@ public class TraceHtmlBuilder {
                 webEnabled ? webTopK : null,
                 vectorEnabled ? vectorTopK : null));
         sb.append(TraceHtmlCitableEvidenceRenderer.render(safeExtraMeta));
-        sb.append(renderOrchestrationPanel(safeExtraMeta, webTopK, vectorTopK, risk));
+        sb.append(renderOrchestrationPanel(safeExtraMeta, webTopK, vectorTopK, risk, true));
 
         sb.append("</div>");
         sb.append("</details>");
@@ -183,7 +183,8 @@ public class TraceHtmlBuilder {
         sb.append("</div>");
 
         // Reuse the existing orchestration panel to show grouped breadcrumbs.
-        sb.append(renderOrchestrationPanel(extraMeta, null, null, risk));
+        // Snapshots preserve diagnostics, not the live context-list OFF signal.
+        sb.append(renderOrchestrationPanel(extraMeta, null, null, risk, false));
 
         // Raw dump for completeness.
         sb.append("<details class='trace-fold'>");
@@ -685,10 +686,10 @@ public class TraceHtmlBuilder {
     }
 
     private String renderOrchestrationPanel(Map<String, Object> extraMeta, List<Content> webTopK,
-            List<Content> vectorTopK, RiskLevel risk) {
+            List<Content> vectorTopK, RiskLevel risk, boolean finalContextObserved) {
         if (extraMeta == null || extraMeta.isEmpty())
             return "";
-        String summary = buildOrchestrationSummary(extraMeta, webTopK, vectorTopK);
+        String summary = buildOrchestrationSummary(extraMeta, webTopK, vectorTopK, finalContextObserved);
         StringBuilder sb = new StringBuilder();
         sb.append("<div class='trace-section'>");
         sb.append(TraceHtmlLayout.renderPanelHeader("C) Orchestration State (aux / guard)", "Problem tracking and diagnostics"));
@@ -871,7 +872,7 @@ public class TraceHtmlBuilder {
     }
 
     private static String buildOrchestrationSummary(Map<String, Object> extraMeta, List<Content> webTopK,
-            List<Content> vectorTopK) {
+            List<Content> vectorTopK, boolean finalContextObserved) {
         java.util.List<String> parts = new java.util.ArrayList<>();
 
         // Bubble up STRIKE/BYPASS/... to the collapsed summary so it's visible without
@@ -887,8 +888,9 @@ public class TraceHtmlBuilder {
                 getString(extraMeta, "plan.retrievalOrder"));
         if (isNonBlank(order))
             parts.add("order " + order);
-        parts.add("web " + (webTopK != null ? webTopK.size() : "disabled"));
-        parts.add("vector " + (vectorTopK != null ? vectorTopK.size() : "disabled"));
+        String absentContext = finalContextObserved ? "disabled" : "NOT_OBSERVED";
+        parts.add("web " + (webTopK != null ? webTopK.size() : absentContext));
+        parts.add("vector " + (vectorTopK != null ? vectorTopK.size() : absentContext));
         return parts.isEmpty() ? "diagnostics" : String.join(" / ", parts);
     }
 

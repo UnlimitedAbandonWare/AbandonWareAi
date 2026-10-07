@@ -1,3 +1,8 @@
+---
+name: dot-brief-save
+description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF] 태그와 함께 들어온 경우 Downloads + agent-prompts 저장 경로 실행."
+---
+
 # dot-brief-save
 
 점(dot)이 Codex에 지시서 작성을 위임할 때 **첫 요청 메시지에 `[DOT-BRIEF]` 태그와
@@ -30,6 +35,10 @@
   + 작업 폴더 경로만 남긴다(카드는 보조 — Downloads MATCH면 완료 유지).
   Windows `os.setxattr` AttributeError는 `METADATA_SKIPPED_WINDOWS`로 기록하고
   재시도하지 않는다.
+- 입력 쪽(사용자가 첨부한 Library 파일 읽기) materialization 실패도 같은
+  방향: 재시도·우회 스크립트 없이 Downloads 동명 파일(없으면 같은 stem 최신
+  mtime 순)을 입력 원본으로 쓰고 `INPUT_FALLBACK_DOWNLOADS`를 기록한다 —
+  상세: `docs/agents-rules/DEMO1-DOT-FILE-CARD.md` "입력 쪽".
 - `BLOCKED_SECRET`·거부·승인 요청이 나오면 **재시도·우회 없이** 이 한 줄만 남긴다:
 
   ```

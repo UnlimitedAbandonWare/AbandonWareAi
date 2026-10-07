@@ -5,6 +5,8 @@ trigger: always_on
 # demo-1 hard constraints
 
 - Project Root: this workspace (`demo-1/src`) — same default for every session, auto-created Grokbot/Codex/Devin chats included; do not re-derive it from launch cwd. Attachments (`%USERPROFILE%\.codex\attachments\*`), Downloads, and ZIP `main/` dirs are read-only inputs, never the root.
+- Before starting work or judging deadlines and added scope, READ the shared [guard-deadline-scope](../../docs/agents-rules/DEMO1-DEADLINE-SCOPE-JUDGMENT.md) body.
+  Planning margin covers the whole task; preserve existing authority, verification, and the user hard cap.
 - Java 17 + Gradle/Spring Boot; prefer existing Start-RAG/DevWatch/smoke|verify. No spring-boot-devtools drive-by.
 - Minimal diff. Do not delete unrelated code. No secret values in logs/commits (env names only).
 - openssl-related key name/value/format/structure: immutable.

@@ -37,7 +37,7 @@ public class SourceAnalyzerService {
 
     // --- 텍스트 단서 패턴 (두 버전의 키워드 통합 및 강화) ---
     private static final Pattern CONFLICT_TXT = Pattern.compile(
-            "(?i)(상반|엇갈|모순|상충|논란|서로\\s*다르|반박|conflict|contradict)");
+            "(?i)(상반|엇갈|모순|상충|서로\\s*다르|반박|conflict|contradict)");
     private static final Pattern FAN_CUE = Pattern.compile(
             "(?i)(fan-?made|추측|루머|유출|소문|카더라|predicted|예상 스펙|추정|확정 아님|datamine|rumor|leak|unconfirmed|speculation)");
 
@@ -116,8 +116,7 @@ public class SourceAnalyzerService {
         // 내용에 루머 키워드가 있거나, URL 대부분이 커뮤니티/블로그면 FAN_MADE_SPECULATION
         boolean hasFanCue = FAN_CUE.matcher(context).find();
         if (hasFanCue) {
-            // 단, 공식 출처가 명확히 있으면 충돌로 판단
-            if (tally.official > 0) return SourceCredibility.CONFLICTING;
+            // Authority and speculation describe source trust, not contradictory claims.
             return SourceCredibility.FAN_MADE_SPECULATION;
         }
 

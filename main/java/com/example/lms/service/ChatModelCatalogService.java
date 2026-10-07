@@ -95,6 +95,22 @@ public class ChatModelCatalogService {
     public List<Choice> choices() {
         return choices(com.example.lms.llm.RequestedModelSelection.ownerHash());
     }
+    /** Exact selectable metadata membership; never probes server inventory or creates a model. */
+    public boolean isRegisteredOAuthModel(String id, String ownerHash) {
+        return com.example.lms.llm.ChatGptOAuthRegistration.isRoute(id) && chatGptOAuth != null
+                && chatGptOAuth.models(ownerHash).contains(com.example.lms.llm.ChatGptOAuthRegistration.model(id));
+    }
+    /** A request-local proposal, using the same account metadata as the picker without inventory probes. */
+    public java.util.Map<String, Object> firstSessionDefaults(java.util.Map<String, Object> factory, String ownerHash) {
+        String luna = "gpt-5.6-luna";
+        if (!"preferred".equals(factory.get("modelSelectionMode"))
+                || chatGptOAuth == null || !chatGptOAuth.isRegisteredOwner(ownerHash)
+                || !isRegisteredOAuthModel(com.example.lms.llm.ChatGptOAuthRegistration.route(luna), ownerHash))
+            return factory;
+        var proposed = new java.util.LinkedHashMap<>(factory);
+        proposed.put("model", com.example.lms.llm.ChatGptOAuthRegistration.route(luna));
+        return java.util.Map.copyOf(proposed);
+    }
     public List<Choice> choices(String ownerHash) {
         List<Choice> serverRows = serverChoices();
         List<String> oauthModels = chatGptOAuth == null ? List.of() : chatGptOAuth.models(ownerHash);

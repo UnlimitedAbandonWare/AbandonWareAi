@@ -54,6 +54,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Answers.CALLS_REAL_METHODS;
 import static org.mockito.ArgumentMatchers.any;
@@ -75,7 +76,7 @@ import static org.mockito.Mockito.when;
 class ChatWorkflowFinalVerificationReleaseGateTest {
 
     @ParameterizedTest
-    @ValueSource(strings = {"concept", "force-light", "force-deep", "evidence-only", "attachment",
+    @ValueSource(strings = {"concept", "concept-reference", "force-light", "force-deep", "evidence-only", "attachment",
             "current", "medical", "medication", "scope-no-search", "evidence-needed", "constitutional"})
     void explicitGeneralConceptWithoutExternalSearchPreservesDraftAndSkipsUnrelatedEvidence(String variant) {
         MemoryHoldFixture fixture = memoryHoldFixture();
@@ -123,6 +124,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                     .mode("FACT").memoryMode("FULL").searchMode(SearchMode.AUTO)
                     .useWebSearch(true).useRag(true).useVerification(true).build();
             switch (variant) {
+                case "concept-reference" -> request.setMessage("RAG에서 키워드 검색과 벡터 검색의 차이를 일반 개념으로 세 문장 정도 설명해줘. 최신 정보나 외부 검색이 꼭 필요한 질문은 아니야.");
                 case "force-light" -> request.setSearchMode(SearchMode.FORCE_LIGHT);
                 case "force-deep" -> request.setSearchMode(SearchMode.FORCE_DEEP);
                 case "evidence-only" -> request.setRagAnswerPolicy("evidence_only");
@@ -150,7 +152,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 verify(hybrid, never()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
                 verify(retriever, never()).retrieve(any());
             }
-            if (!"concept".equals(variant)) {
+            if (!"concept".equals(variant) && !"concept-reference".equals(variant)) {
                 assertFalse("retrieval_off_direct".equals(TraceStore.get("chat.disambiguation.skipReason")),
                         "a protected request must not enter the general-concept direct route: " + variant);
                 return;
@@ -167,8 +169,9 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
 
 
     @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void unresolvedPriorComparisonAsksBeforeFreshRetrieval(boolean resolved) {
+    @ValueSource(strings = {"unresolved", "resolved", "dictionary-seed", "unchanged-high"})
+    void unresolvedPriorComparisonAsksBeforeFreshRetrieval(String variant) {
+        boolean resolved = "resolved".equals(variant);
         MemoryHoldFixture fixture = memoryHoldFixture();
         ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 5);
         for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
@@ -185,6 +188,11 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         var clarification = new com.example.lms.service.disambiguation.DisambiguationResult();
         clarification.setScore(resolved ? 0.9 : 0.0);
         clarification.setRewrittenQuery(resolved ? "원신 자료 A와 자료 B의 확인 가능한 갱신일 비교" : null);
+        if ("dictionary-seed".equals(variant) || "unchanged-high".equals(variant)) {
+            clarification.setScore(1.0);
+            clarification.setDetectedCategory("dictionary-seed".equals(variant) ? "DICTIONARY_TERM" : "GENERAL");
+            clarification.setRewrittenQuery("앞에서 확인한 원신 자료 두 개를 비교해줘. 어느 두 자료인지 또는 비교 기준이 불명확하면 먼저 확인 질문을 해줘.");
+        }
         var disambiguation = mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class);
         when(disambiguation.clarify(anyString(), anyList())).thenReturn(clarification);
         ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService", disambiguation);
@@ -208,10 +216,12 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                     .model("release-gate-recording-fake").maxTokens(256)
                     .mode("FACT").memoryMode("FULL").searchMode(SearchMode.AUTO)
                     .useWebSearch(true).useRag(true).useVerification(true).build();
-            List<String> history = resolved
-                    ? List.of("USER: 비교 기준은 확인 가능한 갱신일", "ASSISTANT: 자료 A https://example.org/a 자료 B https://example.org/b")
-                    : List.of("USER: 비교 기준은 확인 가능한 갱신일", "ASSISTANT: 자료 A https://example.org/a");
-            ChatResult result = fixture.workflow().continueChat(request, ignored -> history);
+            var context = new ChatConversationContext(List.of(new ChatConversationContext.Turn(
+                    "비교 기준은 확인 가능한 갱신일",
+                    resolved ? "자료 A https://example.org/a 자료 B https://example.org/b"
+                            : "자료 A https://example.org/a")), "", List.of());
+            ChatResult result = fixture.workflow().continueChat(request, ignored -> List.of(), context);
+            verify(disambiguation).clarify(eq(request.getMessage()), eq(context.interpretationHistory()));
             if (resolved) {
                 verify(hybrid, atLeastOnce()).retrieveAll(anyList(), anyInt(), nullable(Long.class), anyMap());
                 assertFalse("clarification:prior-comparison".equals(result.modelUsed()));
@@ -319,6 +329,42 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
         assertEquals("HOLD", decision.releaseStatus());
         assertEquals("verification_insufficient", decision.reasonCode());
         assertFalse(decision.releaseAllowed());
+    }
+
+    @Test
+    void ordinaryInsufficientEvidenceGetsBoundedGuidanceWithoutTheUnsupportedDraft() {
+        var base = decide("Invented signature weapon: SECRET_UNSUPPORTED", true, "insufficient", true, false);
+        var decision = recoverInsufficient(base,
+                "그럼 합성 캐릭터의 전무가 뭐냐?", List.of(), List.of(), false, false);
+        assertTrue(decision.releaseAllowed());
+        assertEquals("UNVERIFIED", decision.releaseStatus());
+        assertEquals("verification_insufficient_guidance", decision.reasonCode());
+        assertFalse(decision.knowledgeWriteAllowed());
+        assertFalse(decision.content().contains("SECRET_UNSUPPORTED"));
+        assertTrue(decision.content().contains("출처"));
+        assertTrue(decision.releasedEvidence().isEmpty());
+    }
+
+    @Test
+    void insufficientRecoveryPreservesRejectedExplicitEvidenceAndOwnerScope() {
+        for (String status : List.of("rejected", "unknown", "inconsistent")) {
+            var base = decide("unsupported draft", true, status, true, false);
+            assertSame(base, recoverInsufficient(base,
+                    "ordinary question", List.of(), List.of(), false, false));
+        }
+        var held = decide("unsupported draft", true, "insufficient", true, false);
+        assertSame(held, recoverInsufficient(held,
+                "ordinary question", List.of(), List.of(), true, false));
+        assertSame(held, recoverInsufficient(held,
+                "ordinary question", List.of(), List.of(), false, true));
+    }
+
+    private static ChatWorkflow.FinalVerificationReleaseDecision recoverInsufficient(
+            ChatWorkflow.FinalVerificationReleaseDecision base, String query,
+            List<dev.langchain4j.rag.content.Content> raw, List<RagEvidenceMetadata> evidence,
+            boolean required, boolean scoped) {
+        return ReflectionTestUtils.invokeMethod(ChatWorkflow.class, "applyInsufficientVerificationRelease",
+                base, query, raw, evidence, required, scoped);
     }
 
     @Test
@@ -1732,12 +1778,198 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 assertEquals("verification_unknown_release", TraceStore.get("finalAnswer.releaseReason"));
                 assertTrue(result.content().contains(left)); assertTrue(result.content().contains(right));
                 assertFalse(result.content().contains(originalDraft));
+            } else if ("insufficient".equals(subsetStatus)) {
+                assertEquals(true, TraceStore.get("finalAnswer.releaseAllowed"));
+                assertEquals("insufficient", TraceStore.get("finalAnswer.verificationStatus"));
+                assertEquals("verification_insufficient_excerpt", TraceStore.get("finalAnswer.releaseReason"));
+                assertTrue(result.content().contains(left)); assertTrue(result.content().contains(right));
+                assertEquals(List.of("W1", "W2"), result.evidenceMetadata().stream().map(RagEvidenceMetadata::marker).toList());
+                assertFalse(result.content().contains(originalDraft));
             } else {
                 assertEquals(false, TraceStore.get("finalAnswer.releaseAllowed"));
                 assertFalse(result.content().contains(left)); assertFalse(result.content().contains(right));
                 assertFalse(String.valueOf(TraceStore.get("finalAnswer.releaseReason")).startsWith("verification_unavailable"));
             }
         } finally { clearWorkflowState(); }
+    }
+
+    @Test
+    void twoTurnEvidenceIdentitySurvivesFinalFit() throws Exception {
+        MemoryHoldFixture fixture = memoryHoldFixture();
+        ReflectionTestUtils.setField(fixture.workflow(), "hybridTopK", 2);
+        for (String field : List.of("keepNBrief", "keepNStd", "keepNDeep", "keepNUltra"))
+            ReflectionTestUtils.setField(fixture.workflow(), field, 2);
+        var plate = mock(com.example.lms.artplate.ArtPlateSpec.class);
+        when(plate.webTopK()).thenReturn(2);
+        when(plate.webBudgetMs()).thenReturn(2_000);
+        var plateGate = mock(com.example.lms.artplate.NineArtPlateGate.class);
+        when(plateGate.decide(any())).thenReturn(plate);
+        ReflectionTestUtils.setField(fixture.workflow(), "nineArtPlateGate", plateGate);
+        ReflectionTestUtils.setField(fixture.workflow(), "disambiguationService", mock(com.example.lms.service.disambiguation.QueryDisambiguationService.class));
+        ReflectionTestUtils.setField(fixture.workflow(), "cancelFlags", new java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.atomic.AtomicBoolean>());
+        ReflectionTestUtils.setField(fixture.workflow(), "chatHistoryService", mock(ChatHistoryService.class));
+        ReflectionTestUtils.setField(fixture.workflow(), "rescueCount", new java.util.concurrent.atomic.AtomicLong());
+        ReflectionTestUtils.setField(fixture.workflow(), "env", new MockEnvironment());
+        String bodyA = "Synthetic Alpha is the fixture character.";
+        String bodyB = "Synthetic Bravo is the recommended fixture weapon.";
+        String locatorA = "https://example.org/identity-alpha";
+        String locatorB = "https://example.org/weapon-bravo";
+        var draftInputs = new java.util.ArrayList<List<dev.langchain4j.data.message.ChatMessage>>();
+        var verifierInputs = new java.util.ArrayList<List<String>>();
+        var appendixInputs = new java.util.ArrayList<List<RagEvidenceMetadata>>();
+        when(fixture.model().chat(anyList())).thenAnswer(invocation -> {
+            draftInputs.add(List.copyOf(invocation.getArgument(0)));
+            return ChatResponse.builder().aiMessage(AiMessage.from(
+                    (draftInputs.size() == 1 ? bodyA : bodyB) + " [W1]")).build();
+        });
+        when(fixture.verifier().verifyDetailed(anyString(), nullable(String.class), nullable(String.class),
+                anyString(), anyString(), anyBoolean())).thenAnswer(invocation -> {
+            verifierInputs.add(List.of(invocation.getArgument(0), invocation.getArgument(1),
+                    java.util.Objects.toString(invocation.getArgument(2), ""), invocation.getArgument(3)));
+            return new FactVerifierService.DetailedVerificationResult(invocation.getArgument(3), "pass", true, true);
+        });
+        when(fixture.attribution().appendFinalEvidenceAppendix(anyString(), anyList())).thenAnswer(invocation -> {
+            List<RagEvidenceMetadata> evidence = List.copyOf(invocation.getArgument(1));
+            appendixInputs.add(evidence);
+            return invocation.<String>getArgument(0) + "\n[W1](" + evidence.get(0).source() + ")";
+        });
+        var preprocessor = (QueryContextPreprocessor) ReflectionTestUtils.getField(fixture.workflow(), "qcPreprocessor");
+        when(preprocessor.inferIntent(anyString())).thenReturn("GENERAL");
+        var specs = mock(com.example.lms.llm.spec.ModelSpecRegistry.class);
+        ReflectionTestUtils.setField(fixture.workflow(), "focusModelSpecs", specs);
+        var results = new java.util.ArrayList<ChatResult>();
+        clearWorkflowState();
+        try {
+            for (int turn = 0; turn < 2; turn++) {
+                String body = turn == 0 ? bodyA : bodyB;
+                String locator = turn == 0 ? locatorA : locatorB;
+                var currentEvidence = List.of(evidence("W1", "WEB", locator, null));
+                when(fixture.attribution().promoteForPromptDetailed(anyString(), nullable(List.class),
+                        nullable(List.class), anyList(), any(), anyBoolean()))
+                        .thenReturn(promoted(currentEvidence, 1, 1, 0, 0, 0, 0));
+                var rawWeb = List.of(dev.langchain4j.rag.content.Content.from(
+                        dev.langchain4j.data.segment.TextSegment.from(body,
+                                dev.langchain4j.data.document.Metadata.from(Map.of("url", locator, "kind", "WEB")))));
+                var request = ChatRequestDto.builder().sessionId(910392L)
+                        .message(turn == 0 ? "Describe Synthetic Alpha." : "Which fixture weapon is recommended?")
+                        .model("release-gate-recording-fake").maxTokens(256).mode("FACT")
+                        .memoryMode("FULL").polish(false).searchMode(SearchMode.AUTO)
+                        .useWebSearch(true).useRag(false).useVerification(true).build();
+                ChatConversationContext history = turn == 0 ? ChatConversationContext.empty()
+                        : new ChatConversationContext(List.of(new ChatConversationContext.Turn(
+                                "Describe Synthetic Alpha.", bodyA)), "old summary ".repeat(49), List.of());
+                if (turn == 1) {
+                    int cap = Math.toIntExact(ChatConversationContext.conservativeInput(draftInputs.get(0))) + 768;
+                    when(specs.snapshots()).thenReturn(List.of(com.example.lms.llm.spec.ModelSpecSnapshot.of(
+                            "synthetic", "release-gate-recording-fake", "example.org", cap, null, List.of(), Map.of())));
+                }
+                results.add(fixture.workflow().continueChat(request, (ChatWorkflow.WebEvidenceSupplier) ignored -> rawWeb, history));
+            }
+            assertEquals(2, draftInputs.size(), "both turns must reach the actual draft model");
+            assertEquals(2, verifierInputs.size(), "both turns must reach the sole verifier");
+            assertEquals(2, appendixInputs.size(), "both turns must bind their own citations");
+            String promptA = draftInputs.get(0).stream().map(Object::toString).collect(java.util.stream.Collectors.joining("\n"));
+            String promptB = draftInputs.get(1).stream().map(Object::toString).collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(promptA.contains(bodyA) && promptA.contains(locatorA));
+            assertTrue(promptB.contains(bodyB) && promptB.contains(locatorB), "B must survive final context fitting");
+            assertFalse(promptB.contains("old summary"), "the fixture must exercise actual fitting");
+            assertNotNull(TraceStore.get("focus.context.modelCap"));
+            assertTrue(verifierInputs.get(1).get(1).contains(bodyB));
+            assertFalse(verifierInputs.get(1).get(1).contains(bodyA), "history A cannot become current verifier evidence");
+            assertEquals("Which fixture weapon is recommended?", verifierInputs.get(1).get(0));
+            assertTrue(verifierInputs.get(1).get(3).contains(bodyB), "the judge must receive the same current draft");
+            assertEquals(locatorB, appendixInputs.get(1).get(0).source());
+            assertEquals(List.of(locatorB), results.get(1).evidenceMetadata().stream().map(RagEvidenceMetadata::source).toList());
+            assertTrue(results.get(1).content().contains("[W1](" + locatorB + ")"));
+            assertFalse(results.get(1).content().contains(locatorA));
+
+            // Consume those actual workflow results at the existing controller persistence seam.
+            var persisted = mock(ChatHistoryService.class);
+            var chat = mock(ChatService.class);
+            var settings = mock(SettingsService.class);
+            var owners = mock(com.example.lms.web.ClientOwnerKeyResolver.class);
+            var runs = new com.example.lms.service.chat.ChatRunRegistry();
+            var renderer = mock(com.example.lms.service.trace.TraceHtmlBuilder.class);
+            var beans = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+            beans.registerSingleton("traceHtmlBuilder", renderer);
+            var snapshots = new com.example.lms.trace.TraceSnapshotStore(
+                    beans.getBeanProvider(com.example.lms.service.trace.TraceHtmlBuilder.class));
+            for (var entry : Map.<String, Object>of("enabled", true, "htmlEnabled", true, "maxSize", 5,
+                    "maxValueLen", 1000, "maxEntries", 100, "maxPerTrace", 10, "captureSample", 1.0d).entrySet())
+                ReflectionTestUtils.setField(snapshots, entry.getKey(), entry.getValue());
+            ReflectionTestUtils.setField(snapshots, "budgetWindowMs", 600000L);
+            for (String name : List.of("allowReasonsCsv", "denyReasonsCsv", "allowKeysCsv", "denyKeysCsv"))
+                ReflectionTestUtils.setField(snapshots, name, "");
+            ReflectionTestUtils.setField(snapshots, "allowKeysMode", "any");
+            ReflectionTestUtils.setField(runs, "replayCapacity", 32);
+            ReflectionTestUtils.setField(runs, "ttlSeconds", 60);
+            var controller = new com.example.lms.api.ChatApiController(persisted, chat, null, settings, null,
+                    null, null, null, null, null, null, null, null, null, null, null,
+                    new com.fasterxml.jackson.databind.ObjectMapper(), null, runs, owners);
+            ReflectionTestUtils.setField(controller, "traceHtmlBuilder", renderer);
+            ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshots);
+            var session = new com.example.lms.domain.ChatSession("synthetic", "synthetic-owner", "ANON");
+            session.setId(910392L);
+            when(persisted.getSessionForRequest(910392L)).thenReturn(session);
+            when(persisted.getSessionWithMessages(910392L, 1)).thenReturn(session);
+            when(settings.getAllSettings()).thenReturn(Map.of());
+            when(owners.ownerKey()).thenReturn("synthetic-owner");
+            when(persisted.appendMessageReturningId(eq(910392L), eq("user"), anyString())).thenReturn(39201L, 39204L);
+            when(persisted.appendMessageReturningId(eq(910392L), eq("assistant"), anyString())).thenReturn(39202L, 39205L);
+            when(persisted.appendMessageReturningId(eq(910392L), eq("system"), anyString())).thenReturn(39203L, 39206L);
+            var persistedTurn = new java.util.concurrent.atomic.AtomicInteger();
+            when(chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(invocation -> {
+                int turn = persistedTurn.getAndIncrement();
+                ChatRequestDto intercepted = invocation.getArgument(0);
+                assertEquals(turn == 0 ? "Describe Synthetic Alpha." : "Which fixture weapon is recommended?",
+                        intercepted.getMessage(), "the persisted result must belong to this exact request");
+                assertEquals(910392L, intercepted.getSessionId());
+                TraceStore.put("rag.evidence.public", List.of(Map.of("source", turn == 0 ? locatorA : locatorB,
+                        "snippet", turn == 0 ? bodyA : bodyB)));
+                return results.get(turn);
+            });
+            try {
+                for (int turn = 0; turn < 2; turn++) {
+                    var request = ChatRequestDto.builder().message(turn == 0 ? "Describe Synthetic Alpha." :
+                            "Which fixture weapon is recommended?").sessionId(910392L).useRag(false).useWebSearch(false).build();
+                    var response = controller.chatSync(request, null, new org.springframework.mock.web.MockHttpServletRequest());
+                    assertNotNull(response.getBody());
+                    assertEquals(results.get(turn).content(), response.getBody().getContent());
+                    assertEquals(List.of(turn == 0 ? locatorA : locatorB),
+                            response.getBody().getEvidence().stream().map(RagEvidenceMetadata::source).toList());
+                }
+                var texts = org.mockito.ArgumentCaptor.forClass(String.class);
+                verify(persisted, org.mockito.Mockito.times(2)).appendMessageReturningId(eq(910392L), eq("assistant"), texts.capture());
+                assertEquals(results.stream().map(ChatResult::content).toList(), texts.getAllValues());
+                var pointers = org.mockito.ArgumentCaptor.forClass(String.class);
+                verify(persisted, org.mockito.Mockito.times(2)).appendMessageReturningId(eq(910392L), eq("system"), pointers.capture());
+                var restorer = Class.forName("com.example.lms.api.ChatTraceMetaMessageRestorer");
+                var ids = new java.util.HashSet<String>();
+                for (int turn = 0; turn < 2; turn++) {
+                    java.util.Optional<?> parsed = ReflectionTestUtils.invokeMethod(restorer, "parseSnapshotPointer",
+                            pointers.getAllValues().get(turn), turn == 0 ? 39203L : 39206L);
+                    assertNotNull(parsed);
+                    Object pointer = parsed.orElseThrow();
+                    assertEquals(turn == 0 ? 39202L : 39205L,
+                            ReflectionTestUtils.<Long>invokeMethod(pointer, "assistantMessageId"));
+                    String id = ReflectionTestUtils.invokeMethod(pointer, "snapshotId");
+                    assertTrue(ids.add(id), "each assistant must own a different snapshot");
+                    assertTrue(snapshots.get(id).isPresent());
+                    Map<?, ?> diagnostics = ReflectionTestUtils.invokeMethod(pointer, "diagnostics");
+                    assertNotNull(diagnostics);
+                    assertFalse(diagnostics.containsKey("rag.evidence.public"));
+                    String decoded = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(diagnostics);
+                    for (String rawIdentity : List.of(bodyA, bodyB, locatorA, locatorB))
+                        assertFalse(decoded.contains(rawIdentity), "typed durable diagnostics must omit raw evidence identity");
+                }
+                verifyNoInteractions(renderer);
+            } finally {
+                ReflectionTestUtils.invokeMethod(runs, "shutdown");
+                com.example.lms.trace.TraceContext.cleanupCurrentThread();
+            }
+        } finally {
+            clearWorkflowState();
+        }
     }
 
     private static void clearWorkflowState() {

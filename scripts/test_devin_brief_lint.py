@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -82,10 +83,95 @@ class BriefLintTests(unittest.TestCase):
         result = lint.lint_text(text)
         self.assertIn("set_location_first", result["missing"])
 
+    def test_lease_hold_without_wait_warns(self):
+        text = GOOD + "\nHOLD\n- live lease 충돌 시 HOLD로 종료.\n"
+        result = lint.lint_text(text)
+        self.assertIn("LEASE_HOLD_WITHOUT_WAIT", result["warnings"])
+        self.assertEqual("GOOD", result["fit"])  # WARN은 차단이 아니다
+
+    def test_lease_hold_with_wait_no_warn(self):
+        text = GOOD + ("\nHOLD\n- live lease 충돌 시 lease-wait "
+                       "--max-min auto 실행 후 재개.\n")
+        result = lint.lint_text(text)
+        self.assertNotIn("LEASE_HOLD_WITHOUT_WAIT",
+                         result.get("warnings") or [])
+
     def test_phrase_with_file_list_is_not_handoff(self):
         text = GOOD.replace("한 줄 목표", "한 줄 목표\n전체를 다 고쳐 달라는 말은 쓰지 않습니다.", 1)
         result = lint.lint_text(text)
         self.assertEqual(result["fit"], "GOOD")
+
+    # --- add-only: ADMIN_CHECK_UNDER_VIBE_OPEN (devin-admin-login-no-ask) ---
+
+    def _enabled_vibe_cfg(self):
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8")
+        tmp.write("enabled: true\n")
+        tmp.close()
+        return Path(tmp.name)
+
+    def _disabled_vibe_cfg(self):
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8")
+        tmp.write("enabled: false\n")
+        tmp.close()
+        return Path(tmp.name)
+
+    def test_admin_check_in_acceptance_warns_under_vibe_open(self):
+        cfg = self._enabled_vibe_cfg()
+        try:
+            text = GOOD.replace(
+                "A1 PASS 조건. 안 돌린 것은 NOT_RUN.",
+                "A1 관리자 로그인 성공과 로그아웃 후 차단을 실제 계정으로 검증.\n"
+                "A2 PASS 조건. 안 돌린 것은 NOT_RUN.")
+            result = lint.lint_text(text, vibe_open_path=cfg)
+        finally:
+            cfg.unlink(missing_ok=True)
+        self.assertIn("ADMIN_CHECK_UNDER_VIBE_OPEN", result["warnings"])
+        self.assertTrue(any("DEFERRED_SECURITY" in s for s in result["suggestions"]))
+
+    def test_admin_check_outside_acceptance_no_warn(self):
+        cfg = self._enabled_vibe_cfg()
+        try:
+            text = GOOD + ("\n참고\n- 상용구의 admin 로그인·로그아웃 차단 줄은 "
+                           "관찰용 메모다 (Acceptance 아님).\n")
+            result = lint.lint_text(text, vibe_open_path=cfg)
+        finally:
+            cfg.unlink(missing_ok=True)
+        self.assertNotIn("ADMIN_CHECK_UNDER_VIBE_OPEN",
+                         result.get("warnings") or [])
+
+    def test_admin_check_no_warn_when_vibe_disabled(self):
+        cfg = self._disabled_vibe_cfg()
+        try:
+            text = GOOD.replace(
+                "A1 PASS 조건. 안 돌린 것은 NOT_RUN.",
+                "A1 관리자 로그인 성공과 로그아웃 후 차단을 실제 계정으로 검증.\n"
+                "A2 PASS 조건. 안 돌린 것은 NOT_RUN.")
+            result = lint.lint_text(text, vibe_open_path=cfg)
+        finally:
+            cfg.unlink(missing_ok=True)
+        self.assertNotIn("ADMIN_CHECK_UNDER_VIBE_OPEN",
+                         result.get("warnings") or [])
+
+    def test_vibe_open_boilerplate_rule_consistent_across_docs(self):
+        # W1 일치 검사: 두 문서의 VIBE-OPEN-BOILERPLATE-RULE 블록 문장 동일.
+        root = Path(__file__).resolve().parent.parent
+        docs = (root / "docs/security/VIBE_OPEN.md",
+                root / ".agents/skills/demo1-codex-plugin-roles/SKILL.md")
+        blocks = []
+        for doc in docs:
+            text = doc.read_text(encoding="utf-8")
+            start = text.find("<!-- VIBE-OPEN-BOILERPLATE-RULE v1 -->")
+            end = text.find("<!-- /VIBE-OPEN-BOILERPLATE-RULE v1 -->")
+            self.assertGreater(start, -1, doc.name)
+            self.assertGreater(end, start, doc.name)
+            block = " ".join(text[start:end].split())
+            blocks.append(block)
+        self.assertEqual(blocks[0], blocks[1])
+        self.assertIn("TEMPLATE_BOILERPLATE", blocks[0])
+        self.assertIn("DEFERRED_SECURITY", blocks[0])
+        self.assertIn("다시 묻지 않는다", blocks[0])
 
 
 if __name__ == "__main__":

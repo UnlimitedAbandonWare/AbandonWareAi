@@ -8,9 +8,9 @@ const root=path.resolve(__dirname,'../../..');
 const key='awx.settings.v1.preferences';
 const cacheKey='awx.settings.v2.preferences';
 const preferences=(revision,overrides)=>({
- overrides:{...overrides},effective:{model:'fixture:a',modelSelectionMode:'preferred',searchMode:'OFF',useRag:true,...overrides},
- factoryDefaults:{model:'fixture:a',modelSelectionMode:'preferred',searchMode:'OFF',useRag:true},sources:{},
- revision,hash:String(revision).repeat(64),defaultsVersion:'1'
+ overrides:{...overrides},effective:{model:'fixture:a',modelSelectionMode:'preferred',executionMode:'AUTO',searchMode:'OFF',useRag:true,googleSearchRescueEnabled:false,...overrides},
+ factoryDefaults:{model:'fixture:a',modelSelectionMode:'preferred',executionMode:'AUTO',searchMode:'OFF',useRag:true,googleSearchRescueEnabled:false},sources:{},
+ revision,hash:String(revision).repeat(64),defaultsVersion:'1',ownerScopeId:'a'.repeat(64)
 });
 const empty=()=>({schemaVersion:1,enabled:false,bindings:{},additionalPaidAllowed:false,additionalCostCapUsd:0});
 const binding=target=>({role:'MAIN_DEFAULT',selection:'registered-route',target,orderedFallbacks:[],maxExtraFallbackCalls:0});
@@ -164,7 +164,7 @@ test('settings reuses searchable model picker without applying the server chat d
 test('new chat changes affect only conversation until explicit verified owner API save',async t=>{
  const context=await browser.newContext();t.after(()=>context.close());
  const page=await context.newPage();
- const html='<select id="modelSelect"><option value="fixture:a">A</option></select><select id="modelSelectionMode"><option value="preferred">preferred</option></select><select id="searchModeSelect"><option value="OFF">OFF</option><option value="AUTO">AUTO</option></select><input id="useRagToggle" type="checkbox"><button id="chat-save-defaults">Save</button><p id="chat-defaults-status"></p>';
+ const html='<select id="modelSelect"><option value="fixture:a">A</option></select><select id="modelSelectionMode"><option value="preferred">preferred</option></select><select id="executionModeSelect"><option value="AUTO">AUTO</option></select><select id="searchModeSelect"><option value="OFF">OFF</option><option value="AUTO">AUTO</option></select><input id="useRagToggle" type="checkbox"><input id="googleSearchRescueToggle" type="checkbox"><button id="chat-save-defaults">Save</button><p id="chat-defaults-status"></p>';
  let personal=preferences(1,{}),patches=0;
  await page.route('http://127.0.0.1:18180/api/settings/preferences',route=>{
   if(route.request().method()==='PATCH'){patches++;personal=preferences(personal.revision+1,route.request().postDataJSON().set);}
@@ -176,16 +176,21 @@ test('new chat changes affect only conversation until explicit verified owner AP
  await page.evaluate(()=>document.dispatchEvent(new CustomEvent('chat:model-catalog',{detail:{ready:true,hydrated:true}})));
  await page.waitForFunction(()=>document.querySelector('#modelSelect').dataset.awxSettingsReady==='ready');
  await page.locator('#searchModeSelect').selectOption('AUTO');
+ await page.locator('#googleSearchRescueToggle').check();
  assert.equal(await page.evaluate(key=>localStorage.getItem(key),key),null);
  assert.equal(patches,0);
  await page.locator('#chat-save-defaults').click();
  await page.waitForFunction(()=>document.querySelector('#chat-defaults-status').textContent.includes('저장됨'));
  assert.equal(personal.overrides.searchMode,'AUTO');assert.equal(patches,1);
+ assert.equal(personal.overrides.googleSearchRescueEnabled,true);
  await page.reload();
  await page.addScriptTag({content:fs.readFileSync(path.join(root,'main/resources/static/js/chat-settings-bridge.js'),'utf8')});
  await page.evaluate(()=>document.dispatchEvent(new CustomEvent('chat:model-catalog',{detail:{ready:true,hydrated:true}})));
  await page.waitForFunction(()=>document.querySelector('#modelSelect').dataset.awxSettingsReady==='ready');
  await page.locator('#searchModeSelect').selectOption('OFF');
+ assert.equal(await page.locator('#googleSearchRescueToggle').isChecked(),true);
+ await page.locator('#googleSearchRescueToggle').uncheck();
+ assert.equal(personal.overrides.googleSearchRescueEnabled,true);
  assert.equal(personal.overrides.searchMode,'AUTO');assert.equal(patches,1);
 });
 test('cross-tab reset undo cannot overwrite newly saved values',async t=>{

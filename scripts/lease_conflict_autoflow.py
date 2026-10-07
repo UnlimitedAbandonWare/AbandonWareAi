@@ -823,6 +823,8 @@ def cmd_plan(root: Path, args) -> int:
                                "ownerTaskId": row.get("ownerTaskId"),
                                "status": row["status"],
                                "lifecycle": row.get("lifecycle"),
+                               "heartbeatState": row.get("heartbeatState"),
+                               "releasePending": row.get("releasePending"),
                                "expiresAtUtc": row.get("expiresAtUtc"),
                                "overlappingTargets": row["overlappingTargets"]})
     fingerprint = conflict_fingerprint(blocked_pairs) if blocked_pairs else None
@@ -847,9 +849,35 @@ def cmd_plan(root: Path, args) -> int:
     auto_actions = [{"action": "stale-reclaim", **r} for r in reclaimed]
     auto_actions += [{"action": "stale-reclaim", **r} for r in reclaim_skipped]
     if blocked_pairs:
+        # journal 문구는 기존 값 유지(호환), nextAction만 WAIT/HOLD로 간다
         action_kind = "continue_partial" if proceed else "await_release"
+        blocked_sorted = sorted({p for p, _ in blocked_pairs})
+        wait_command = ("python -B scripts/codex_auto_unblock.py lease-wait "
+                        "--paths " + " ".join(blocked_sorted)
+                        + " --max-min auto --enqueue")
+        if args.task:
+            wait_command += " --task " + str(args.task)
+        resume_when = [{"leaseId": d["leaseId"], "topic": d["topic"],
+                        "expiresAtUtc": d["expiresAtUtc"]}
+                       for d in sorted(blocked_detail,
+                                       key=lambda x: x.get("expiresAtUtc")
+                                       or "")]
+        next_action = "HOLD" if args.waited else "WAIT"
     else:
         action_kind = "proceed"
+        wait_command = None
+        resume_when = None
+        next_action = "RESUME" if args.waited else "proceed"
+    resume_checks = None
+    if next_action == "RESUME":
+        resume_checks = [
+            "record-sha12: 대상 파일 현재 sha12를 기록 — 처음 본 sha와 "
+            "다르면 EXTERNAL_DRIFT 기록 후 최신 파일 위에 다시 패치"
+            "(상대 hunk 덮어쓰기 금지)",
+            "rerun-red: 내 RED 테스트를 다시 실행해 여전히 실패하는지 확인",
+            "begin: 재확인·재계획 뒤 source_edit_session -Action begin/lease "
+            "claim을 다시 획득하고 편집",
+        ]
     if args.execute and blocked_pairs:
         refs = []
         for owner in sorted(blocked_by_owner):
@@ -887,7 +915,10 @@ def cmd_plan(root: Path, args) -> int:
                          "staleReclaimOnExecute": True,
                          "staleGraceSeconds": args.stale_grace,
                          "promptOncePerFingerprint": True},
-              "nextAction": action_kind}
+              "waitCommand": wait_command,
+              "resumeWhen": resume_when,
+              "resumeChecks": resume_checks,
+              "nextAction": next_action}
     print(json.dumps(result, ensure_ascii=True))
     return 7 if blocked_pairs and not proceed else 0
 
@@ -975,6 +1006,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stale-grace-seconds", dest="stale_grace", type=int,
                    default=DEFAULT_STALE_GRACE_SECONDS,
                    help="min seconds past effective expiry before stale reclaim")
+    p.add_argument("--waited", action="store_true",
+                   help="lease-wait를 이미 돌린 뒤의 재계획 — free면 RESUME, "
+                        "여전히 live면 HOLD+resumeWhen")
     p.set_defaults(func=cmd_plan)
 
     p = sub.add_parser("reclaim",

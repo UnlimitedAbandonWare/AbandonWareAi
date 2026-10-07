@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import subprocess
 import sys
 import uuid
 
@@ -187,11 +188,19 @@ def touch_status_doc(root, journal):
                 "retry": "python -B scripts/status_doc.py append-row --file docs/PROJECT_STATUS.md --after-key \"| 시각(UTC) | taskId |\" --expect-sha256 <fresh-sha256> --line-file <row-file>"}
 
 
-def close_journal(root, task_id, result, summary, touch_status=True):
+def close_journal(root, task_id, result, summary, touch_status=True,
+                  check_evidence=False, idempotent=False):
     root = ck.root_path(root)
     directory, journal = load(root, task_id)
-    ck.require(journal["status"] == "in_progress", "journal-already-closed")
     ck.require(result in RESULTS, "invalid-close-result allowed:" + ",".join(sorted(RESULTS)))
+    if journal["status"] == "closed" and idempotent:
+        ck.require(journal.get("result") == result, "journal-close-result-mismatch")
+        if check_evidence and result == "verified":
+            check_close_evidence(root, task_id)
+        return {**journal, "alreadyClosed": True}
+    ck.require(journal["status"] == "in_progress", "journal-already-closed")
+    if check_evidence and result == "verified":
+        check_close_evidence(root, task_id)
     journal["events"].append({
         "at": utcnow(),
         "kind": "report",
@@ -209,38 +218,115 @@ def close_journal(root, task_id, result, summary, touch_status=True):
     return journal
 
 
-def handoff(root, task_id, out=None):
+def check_close_evidence(root, task_id):
+    """Opt-in final source check; it neither releases leases nor changes receipts."""
+    packet = handoff(root, task_id, write=False)
+    evidence = packet["sourceCloseEvidence"]
+    ck.require(evidence["status"] == "PASS", "journal-close-evidence-" + evidence["status"])
+    paths = sorted(row["path"] for row in evidence["files"])
+    ck.require(0 < len(paths) <= MAX_SCOPE, "journal-close-target-set")
+    command = [sys.executable, "-B", str(Path(__file__).with_name("agent_scope_lease.py")),
+               "--root", str(root), "check", "--strict", "--task", task_id]
+    for path in paths:
+        command += ["--path", path]
+    try:
+        checked = subprocess.run(command, capture_output=True, text=True,
+                                 encoding="utf-8", errors="replace", timeout=90)
+    except (OSError, subprocess.TimeoutExpired):
+        raise ck.CheckpointError("journal-close-guard-unavailable") from None
+    rows = []
+    for line in checked.stdout.splitlines():
+        try:
+            value = json.loads(line)
+            if isinstance(value, dict):
+                rows.append(value)
+        except ValueError:
+            pass
+    ck.require(checked.returncode == 0 and rows and rows[-1].get("allowed") is True,
+               "journal-close-guard-rejected")
+    current = handoff(root, task_id, write=False)["sourceCloseEvidence"]
+    ck.require(current == evidence, "journal-close-evidence-changed")
+
+
+def _current_evidence(state, manifest, manifest_bytes, root, target):
+    name = target["path"]
+    posts = state.get("postimages")
+    posts = posts if isinstance(posts, dict) else {}
+    post_recorded = name in posts
+    expected = posts[name] if post_recorded else target.get("preimageSha256")
+    current = ck.digest(ck.contents(ck.relative_path(root, name)))
+    manifest_matches = (state.get("manifestSha256") == ck.digest(manifest_bytes)
+                        and manifest.get("version") == 1 and manifest.get("root") == str(root))
+    binding_matches = manifest_matches and current == expected
+    status = state.get("status")
+    exit_code = state.get("verificationExitCode")
+    if status in ("hold", "restoring") or not manifest_matches:
+        verdict = "HOLD"
+    elif type(exit_code) is int and exit_code != 0:
+        verdict = "FAIL"
+    elif not binding_matches:
+        verdict = "INVALIDATED"
+    elif (status == "verified" and post_recorded and type(exit_code) is int
+          and exit_code == 0 and isinstance(state.get("commandId"), str)
+          and state["commandId"].strip()
+          and state.get("verificationEvidenceMode") == "caller-observed"):
+        verdict = "PASS"
+    else:
+        verdict = "NOT_RUN"
+    return {"postimageRecorded": post_recorded, "postimageSha256": posts.get(name),
+            "currentSha256": current, "sourceBindingBasis": "postimage" if post_recorded else "preimage",
+            "sourceBindingMatches": binding_matches, "manifestBindingMatches": manifest_matches,
+            "verificationStatus": verdict}
+
+
+def handoff(root, task_id, out=None, write=True):
     """Compact handoff packet (awx.handoff.v1): goal, approved scope, files with
     current hashes, verification runs, unresolved holds, recovery locations.
     A receiving agent re-verifies current bytes before acting — the packet is a
     map, not proof. Never carries raw conversation or secret values."""
     root = ck.root_path(root)
     directory, journal = load(root, task_id)
-    files, runs, unresolved = [], [], []
+    files, runs, unresolved, latest = [], [], [], {}
     for cycle in sorted(directory.glob("*/checkpoint.json")):
         try:
-            state = json.loads(cycle.read_bytes())
-            manifest = json.loads((cycle.parent / "manifest.json").read_bytes())
+            checkpoint_bytes = cycle.read_bytes()
+            state = json.loads(checkpoint_bytes)
+            manifest_bytes = (cycle.parent / "manifest.json").read_bytes()
+            manifest = json.loads(manifest_bytes)
         except (OSError, ValueError):
+            unresolved.append({"cycle": cycle.parent.name, "status": "hold",
+                               "blocking": "checkpoint-unreadable", "targets": []})
             continue
         rel = str(cycle.parent.relative_to(directory)).replace("\\", "/")
         for target in manifest.get("targets", []):
-            path = ck.relative_path(root, target["path"])
-            files.append({
+            evidence = _current_evidence(state, manifest, manifest_bytes, root, target)
+            row = {
                 "path": target["path"], "cycle": rel,
                 "preimageSha256": target.get("preimageSha256"),
-                "postimageSha256": (state.get("postimages") or {}).get(target["path"]),
-                "currentSha256": ck.digest(ck.contents(path)),
                 "cycleStatus": state.get("status"),
-            })
+                "checkpointSha256": ck.digest(checkpoint_bytes),
+                **evidence,
+            }
+            files.append(row)
+            key = str(target["path"]).casefold()
+            order = (str(state.get("updatedAtUtc") or ""), rel)
+            if key not in latest or order > latest[key][0]:
+                latest[key] = (order, row)
         if "verificationExitCode" in state:
             runs.append({"cycle": rel, "commandId": state.get("commandId"),
                          "exitCode": state.get("verificationExitCode"),
                          "failureClass": state.get("failureClass")})
-        if state.get("status") in ("hold", "restoring", "sealed"):
+        if state.get("status") in ("prepared", "hold", "restoring", "sealed"):
             unresolved.append({"cycle": rel, "status": state.get("status"),
                                "blocking": state.get("firstBlockingRule"),
                                "targets": [t["path"] for t in manifest.get("targets", [])]})
+    latest_files = [entry[1] for _, entry in sorted(latest.items())]
+    statuses = {row["verificationStatus"] for row in latest_files}
+    if unresolved:
+        statuses.add("HOLD" if any(row["status"] in ("hold", "restoring")
+                                  for row in unresolved) else "NOT_RUN")
+    close_status = next((status for status in ("HOLD", "INVALIDATED", "FAIL", "NOT_RUN")
+                         if status in statuses), "PASS" if latest_files else "NOT_RUN")
     packet = {
         "schemaVersion": "awx.handoff.v1",
         "taskId": journal["taskId"], "agent": journal["agent"],
@@ -249,14 +335,16 @@ def handoff(root, task_id, out=None):
         "generatedAtUtc": utcnow(),
         "files": files, "verificationRuns": runs,
         "unresolved": unresolved,
+        "sourceCloseEvidence": {"status": close_status, "files": latest_files},
         "events": [{"at": e["at"], "kind": e["kind"],
                     "text": e["text"][:500]} for e in journal.get("events", [])[-40:]],
         "recovery": {"taskDir": str(directory.relative_to(root)).replace("\\", "/"),
                      "restore": "codex_work_checkpoint.py restore --run <cycle>"},
         "receiverMust": "re-read files and compare currentSha256 before editing",
     }
-    out_path = ref_path(root, out) if out else directory / "handoff.json"
-    ck.write_json(out_path, packet)
+    if write:
+        out_path = ref_path(root, out) if out else directory / "handoff.json"
+        ck.write_json(out_path, packet)
     return packet
 
 
@@ -308,6 +396,10 @@ def main():
     parser.add_argument("--no-status-doc", action="store_true",
                         help="close: skip the PROJECT_STATUS §4 row append")
     parser.add_argument("--out", help="handoff: optional repo-relative output path")
+    parser.add_argument("--check-evidence", action="store_true",
+                        help="close: require current verified checkpoint targets and strict scope check")
+    parser.add_argument("--idempotent", action="store_true",
+                        help="close: accept an already closed journal with the same result without writing")
     args = parser.parse_args()
     try:
         if args.action == "open":
@@ -335,7 +427,8 @@ def main():
         elif args.action == "close":
             ck.require(args.task and args.result and args.summary, "task-result-summary-required")
             result = close_journal(args.root, args.task, args.result, args.summary,
-                                   touch_status=not args.no_status_doc)
+                                   touch_status=not args.no_status_doc,
+                                   check_evidence=args.check_evidence, idempotent=args.idempotent)
         elif args.action == "status":
             ck.require(args.task, "task-required")
             _, result = load(ck.root_path(args.root), args.task)

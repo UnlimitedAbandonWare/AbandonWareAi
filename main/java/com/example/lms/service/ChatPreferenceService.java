@@ -15,8 +15,8 @@ import java.util.*;
 @Service
 public class ChatPreferenceService {
     public static final Set<String> KEYS = Set.of("model", "modelSelectionMode", "executionMode", "temperature", "topP",
-            "frequencyPenalty", "presencePenalty", "maxTokens", "useRag", "useWebSearch", "searchMode", "ragAnswerPolicy",
-            "customInstructions", "responseTone", "responseLength", "responseLanguage", "memoryMode");
+            "frequencyPenalty", "presencePenalty", "maxTokens", "useRag", "useWebSearch", "googleSearchRescueEnabled", "searchMode", "ragAnswerPolicy",
+            "customInstructions", "responseTone", "responseLength", "responseLanguage", "memoryMode", "chatTraceEnabled");
     public record State(Map<String, Object> overrides, long revision, String hash) {}
     public static final class Conflict extends RuntimeException {
         public Conflict() { super("revision_conflict"); }
@@ -112,7 +112,7 @@ public class ChatPreferenceService {
                 case "responseLength" -> valid = Set.of("brief", "standard", "deep").contains(value);
                 case "responseLanguage" -> valid = Set.of("auto", "ko", "en").contains(value);
                 case "memoryMode" -> valid = Set.of("hybrid", "ephemeral", "full").contains(value);
-                case "useRag", "useWebSearch" -> valid = value instanceof Boolean;
+                case "useRag", "useWebSearch", "googleSearchRescueEnabled", "chatTraceEnabled" -> valid = value instanceof Boolean;
                 default -> {
                     if (value instanceof Number number && Double.isFinite(number.doubleValue())) {
                         double v = number.doubleValue();

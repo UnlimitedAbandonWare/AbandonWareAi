@@ -235,16 +235,19 @@
     }
     async function endVoice({finish:drain=false}={}) {
       if (!voice) return; const bound = connection(); voice = null; voiceStopping = true; state.voiceActive = false;
-      const stamp = ++generation; pollGeneration++; notify();
-      try { const view = await post('audio/stop', drain ? {...bound,finish:true} : bound); if (stamp === generation) apply(view); return view; }
+      const stamp = ++generation, pollStamp = ++pollGeneration; notify();
+      try { const view = await post('audio/stop', drain ? {...bound,finish:true} : bound); if (stamp === generation && pollStamp === pollGeneration) apply(view); return view; }
       catch (error) {
+        if (stamp !== generation || pollStamp !== pollGeneration) throw error;
         if (['stale_epoch','assist_paused'].includes(error.message)) {
-          try { const ready = await connect(); session = { assistId: ready.assistId, epoch: ready.epoch };
+          try { const ready = await connect();
+            if (stamp !== generation || pollStamp !== pollGeneration) throw error;
+            session = { assistId: ready.assistId, epoch: ready.epoch };
             const view = await post('audio/stop', drain ? {...connection(),finish:true} : connection());
-            if (stamp === generation) apply(view); return view; } catch {}
+            if (stamp === generation && pollStamp === pollGeneration) apply(view); return view; } catch {}
         }
-        state.connection = 'RECONNECTING'; throw error; }
-      finally { voiceStopping = false; notify(); schedule(1000); }
+        if (stamp === generation && pollStamp === pollGeneration) state.connection = 'RECONNECTING'; throw error; }
+      finally { voiceStopping = false; notify(); if (stamp === generation && pollStamp === pollGeneration) schedule(1000); }
     }
     async function action(route,extra={}){const view=await post(route,{...connection(),...extra});apply(view);return view;}
     async function pairingCode(){return post('link/code',connection());}
@@ -306,7 +309,7 @@
       if(['open','input','close'].includes(route)){applyFocus(view);notify();}
       return view;
     }
-    async function reconnect({preserveSession=true}={}){pause();if(!preserveSession){claimPending=options.standalone===true;session=null;}try{const view=await connect();apply(view);return view;}finally{start();}}
+    async function reconnect({preserveSession=true}={}){pause();const stamp=pollGeneration;if(!preserveSession){claimPending=options.standalone===true;session=null;}try{const view=await connect();if(stamp===pollGeneration)apply(view);return view;}finally{if(stamp===pollGeneration)start();}}
     function acknowledge(version,phase){return post('ack',{...connection(),version,phase});}
     async function stopAudio(){apply(await connect());return action('audio/stop');}
     function clearDraft() { if (flight) cancel(); generation++; restored = false; revision++; submittedRevision = -1; state.message = ''; state.phase = 'IDLE'; state.result = null; state.error = null; notify(); schedule(0); }

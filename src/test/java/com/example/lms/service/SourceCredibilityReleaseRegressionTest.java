@@ -79,6 +79,61 @@ class SourceCredibilityReleaseRegressionTest {
     }
 
     @Test
+    void unrelatedControversyIsNotAClaimContradiction() {
+        assertEquals(SourceCredibility.UNKNOWN, analyzer().analyze(QUESTION,
+                MIXED + "The fixture article also describes an unrelated historical 논란."));
+    }
+
+    @Test
+    void officialSourceAndSpeculationCueDoNotEstablishContradiction() {
+        assertEquals(SourceCredibility.FAN_MADE_SPECULATION, analyzer().analyze(QUESTION,
+                MIXED + "A separate unconfirmed speculation remains unverified."));
+    }
+
+    @Test
+    void historicalDisclaimerDoesNotRejectCurrentSupportedClaim() {
+        ClaimVerifierService claims = claims(true);
+        var result = verifier(claims).verifyDetailed(QUESTION, MIXED,
+                "Earlier answer: unconfirmed speculation; requires independent confirmation.",
+                DRAFT, "fixture", true);
+        verify(claims).verifyClaims(anyString(), eq(DRAFT), eq("fixture"));
+        assertEquals("pass", result.status());
+        assertTrue(result.outcomeKnown());
+    }
+
+    @Test
+    void speculativeSourceReachesClaimsButCannotEnterMemory() {
+        ClaimVerifierService claims = claims(true);
+        var result = verifier(claims).verifyDetailed(QUESTION,
+                MIXED + "A separate unconfirmed speculation remains unverified.", "", DRAFT, "fixture", false);
+        verify(claims).verifyClaims(anyString(), eq(DRAFT), eq("fixture"));
+        assertEquals("insufficient", result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+        assertFalse(result.verificationUnavailable());
+    }
+
+    @Test
+    void negativeClaimStillRejectsDespiteSpeculativeSource() {
+        ClaimVerifierService claims = claims(false);
+        var result = verifier(claims).verifyDetailed(QUESTION,
+                MIXED + "A separate unconfirmed speculation remains unverified.", "", DRAFT, "fixture", false);
+        verify(claims).verifyClaims(anyString(), eq(DRAFT), eq("fixture"));
+        assertEquals("rejected", result.status());
+        assertTrue(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+    }
+
+    @Test
+    void unavailableClassifierRemainsUnknownDespiteSpeculativeSourceAndPositiveClaims() {
+        var result = verifier(claims(true), true).verifyDetailed(QUESTION,
+                MIXED + "A separate unconfirmed speculation remains unverified.", "", DRAFT, "fixture", false);
+        assertEquals("unknown", result.status());
+        assertFalse(result.outcomeKnown());
+        assertFalse(result.acceptedForMemory());
+    }
+
+    @Test
     void mixedAuthorityReachesClaimVerificationInsteadOfAutomaticRejection() {
         ClaimVerifierService claims = claims(true);
         var result = verifier(claims).verifyDetailed(QUESTION, MIXED, "", DRAFT, "fixture", false);
@@ -134,6 +189,10 @@ class SourceCredibilityReleaseRegressionTest {
     }
 
     private static FactVerifierService verifier(ClaimVerifierService claims) {
+        return verifier(claims, false);
+    }
+
+    private static FactVerifierService verifier(ClaimVerifierService claims, boolean classifierUnavailable) {
         ChatModel model = new ChatModel() {
             @Override
             public ChatResponse chat(List<ChatMessage> messages) {
@@ -146,7 +205,12 @@ class SourceCredibilityReleaseRegressionTest {
         };
         FactStatusClassifier classifier = mock(FactStatusClassifier.class);
         when(classifier.classify(anyString(), anyString(), anyString(), anyString()))
-                .thenReturn(FactVerificationStatus.PASS);
+                .thenAnswer(invocation -> {
+                    if (classifierUnavailable) {
+                        TraceStore.put("factStatusClassifier.judge.disabledReason", "judge_call_failed");
+                    }
+                    return FactVerificationStatus.PASS;
+                });
         EvidenceGate gate = mock(EvidenceGate.class);
         when(gate.hasSufficientCoverage(anyString(), any(), any(), any(), anyBoolean())).thenReturn(true);
         PromptBuilder builder = mock(PromptBuilder.class);

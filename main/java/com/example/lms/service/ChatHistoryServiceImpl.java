@@ -147,6 +147,8 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     private static final String USUM_META_PREFIX = "⎔USUM⎔";
     // Prefix for rolling summary meta.
     private static final String RSUM_META_PREFIX = "⎔RSUM⎔";
+    private static final java.util.regex.Pattern SESSION_ASSIGNMENT_LINE = java.util.regex.Pattern.compile(
+            "(?iu)^User:.*(?:기억\\s*해\\s*(?:줘|주세요)|정정\\s*해\\s*(?:줘|주세요))");
     private static final Set<String> ANCHOR_STOPWORDS = Set.of(
             "user", "assistant", "system", "this", "that", "with", "from", "have", "will",
             "질문", "답변", "내용", "사용자", "이전", "대화", "그리고", "하지만", "대한", "대해",
@@ -667,9 +669,9 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         if (sessionId == null) {
             return ConversationMemorySnapshot.empty();
         }
-        return loadRollingSummary(sessionId)
-                .map(RollingSummarySnapshot::toConversationMemorySnapshot)
-                .orElseGet(ConversationMemorySnapshot::empty);
+        return rehydrateSessionAssignments(sessionId,
+                loadRollingSummary(sessionId).orElseGet(RollingSummarySnapshot::empty))
+                .toConversationMemorySnapshot();
     }
 
     @Override
@@ -773,6 +775,70 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
             log.debug("[History] rolling summary update failed sessionHash={} errorHash={} errorLength={}",
                     hash12(String.valueOf(sessionId)),
                     SafeRedactor.hashValue(messageOf(e)), messageLength(e));
+        }
+    }
+
+    private RollingSummarySnapshot rehydrateSessionAssignments(Long sessionId, RollingSummarySnapshot snapshot) {
+        if (snapshot.summary() == null) return snapshot;
+        try {
+            // Read only a bounded part of this session; old snapshots may have
+            // lost assignments that are still present in its stored transcript.
+            int limit = ChatHistoryService.clampSessionDetailLimit(128);
+            List<ChatMessage> window = messageRepository.findNewestWindowBySessionId(
+                    sessionId, org.springframework.data.domain.PageRequest.of(0, limit)).stream()
+                    .limit(limit)
+                    .filter(m -> m != null && m.getId() != null && m.getSession() != null
+                            && sessionId.equals(m.getSession().getId()) && isConversationMessage(m))
+                    .toList();
+            // Durable-memory opt-out can legitimately leave this session without
+            // RSUM. Project its explicit assignments from this read's own window.
+            Long watermark = snapshot.lastMessageId();
+            if (watermark == null) {
+                watermark = window.stream().map(ChatMessage::getId).max(Long::compareTo).orElse(null);
+            }
+            if (watermark == null) return snapshot;
+            long cutoff = watermark;
+            List<String> assignmentLines = window.stream()
+                    .filter(m -> m.getId() <= cutoff
+                            && "user".equalsIgnoreCase(Objects.toString(m.getRole(), "").trim()))
+                    .sorted(Comparator.comparing(ChatMessage::getCreatedAt,
+                            Comparator.nullsLast(Comparator.naturalOrder()))
+                            .thenComparing(ChatMessage::getId))
+                    .map(ChatHistoryServiceImpl::formatSummaryLine)
+                    .filter(line -> SESSION_ASSIGNMENT_LINE.matcher(line).find())
+                    .toList();
+            // A repeated statement can be the latest correction (A → B → A).
+            var latestAssignments = new java.util.LinkedHashSet<String>();
+            for (String line : assignmentLines) {
+                latestAssignments.remove(line);
+                latestAssignments.add(line);
+            }
+            List<String> recovered = List.copyOf(latestAssignments);
+            List<String> existing = java.util.Arrays.stream(snapshot.summary().split("\\R"))
+                    .map(ChatHistoryServiceImpl::normalizeWhitespace).filter(line -> !line.isBlank()).toList();
+            List<String> existingPins = existing.stream()
+                    .filter(line -> SESSION_ASSIGNMENT_LINE.matcher(line).find()).toList();
+            boolean currentOrder = existingPins.size() >= recovered.size()
+                    && existingPins.subList(existingPins.size() - recovered.size(), existingPins.size()).equals(recovered);
+            if (recovered.isEmpty() || currentOrder) return snapshot;
+            List<String> pins = new java.util.ArrayList<>(existingPins.stream()
+                    .filter(line -> !recovered.contains(line)).toList());
+            pins.addAll(recovered);
+            List<String> recent = existing.stream()
+                    .filter(line -> !SESSION_ASSIGNMENT_LINE.matcher(line).find()).toList();
+            String merged = mergeSummary(String.join("\n", pins), recent, rollingSummaryMaxChars);
+            if (merged.equals(snapshot.summary())) return snapshot;
+            List<String> anchors = extractAnchors(merged, rollingSummaryAnchorCount);
+            List<String> important = selectImportantSentences(merged, anchors, rollingSummaryImportantSentenceCount);
+            int rawChars = Math.max(snapshot.rawCharCount(), merged.length());
+            // This read projection is not the previously promoted stored hash.
+            return new RollingSummarySnapshot(watermark, merged, anchors, important,
+                    snapshot.turns(), splitSentences(merged).size(), estimateTokens(merged), rawChars,
+                    merged.length(), ratio(merged.length(), rawChars), false, "");
+        } catch (Exception error) {
+            log.debug("[History] assignment rehydrate failed sessionHash={} errorHash={} errorLength={}",
+                    hash12(String.valueOf(sessionId)), SafeRedactor.hashValue(messageOf(error)), messageLength(error));
+            return snapshot;
         }
     }
 
@@ -909,8 +975,7 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
         }
         // Explicit user assignments and corrections belong to this session's
         // summary, even after ordinary replies leave the recent-history window.
-        var assignment = java.util.regex.Pattern.compile(
-                "(?iu)^User:.*(?:기억\\s*해\\s*(?:줘|주세요)|정정\\s*해\\s*(?:줘|주세요))");
+        var assignment = SESSION_ASSIGNMENT_LINE;
         List<String> allLines = java.util.Arrays.asList(combined.split("\\R"));
         String pinned = allLines.stream().filter(line -> assignment.matcher(line).find())
                 .collect(Collectors.joining("\n"));
@@ -1022,6 +1087,22 @@ public class ChatHistoryServiceImpl implements ChatHistoryService {
     }
 
     private static List<String> selectImportantSentences(String text, List<String> anchors, int maxSentences) {
+        // Preserve the complete user statement and its correction order. Splitting
+        // a recall-plus-correction statement can rank its stale first sentence above
+        // the actual correction and echo that stale value after the summary.
+        var latestAssignments = new java.util.LinkedHashSet<String>();
+        for (String line : normalizeMultiline(text).split("\\R")) {
+            if (SESSION_ASSIGNMENT_LINE.matcher(line).find()) {
+                latestAssignments.remove(line);
+                latestAssignments.add(line);
+            }
+        }
+        List<String> assignments = List.copyOf(latestAssignments);
+        if (!assignments.isEmpty()) {
+            int limit = Math.max(1, maxSentences);
+            return assignments.subList(Math.max(0, assignments.size() - limit), assignments.size());
+        }
+
         List<String> sentences = splitSentences(text);
         if (sentences.isEmpty()) {
             return List.of();

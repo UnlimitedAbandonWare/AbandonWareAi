@@ -68,12 +68,31 @@ fingerprint for live owners. Live leases are never force-released.
 6. `blocked` targets wait for the owner's normal release; re-run `plan`
    later — the same fingerprint never re-prompts. `finishing` = owner
    journal closed or a release request already pending.
-   **live lease → 대기 후 이어서 (D32):** BLOCKED로 끝내지 말고
-   `python -B scripts/codex_auto_unblock.py lease-wait --paths <files>
-   [--max-min 20] [--interval 60] [--dry-run]`로 겹침이 풀릴 때까지
-   재확인만 한다(해제·reclaim 없음, JSON `free|live|stale`). 풀리면 같은
-   턴에 이어서 진행하고, 20분 후에도 live면 release 요청 1회 + partial
-   종료 + handoff에 "재개 조건: lease <id> 해제 후 S<n>부터" 한 줄.
+   **live lease → 대기 후 이어서 (D32):** BLOCKED로 끝내지 않는다.
+   `plan`이 `nextAction: "WAIT"`와 `waitCommand`를 내면 그 명령을 그대로
+   실행한다:
+   `python -B scripts/codex_auto_unblock.py lease-wait --paths <blocked>
+   --max-min auto --enqueue --task <myTaskId>`
+   - `--max-min auto`: 막은 lease의 상태로 예산 결정 — finishing/
+     releasePending+heartbeat 정상이면 상대 만료+5분, active면 20분,
+     stale이면 기다리지 않음(상한 60분). 숫자 `--max-min N`도 그대로 동작.
+   - `--enqueue`: `__patch_drop__/source-edit-locks/waiters/<sha12>/
+     <UTC>-<task>.json` 대기표 — 같은 파일을 기다리는 세션은 순번대로만
+     진행(만료 대기표는 무시, 내 것만 생성·삭제).
+   - `--task`: 대기 중 interval마다 내 lease heartbeat 갱신.
+   - `--dry-run`은 1회 스캔만(대기표도 안 만든다, 완전 읽기 전용).
+   대기 중에는 사용자에게 "기다릴까요?"를 묻지 않고, 막히지 않은 파일
+   작업·테스트 준비·막힌 파일용 패치를 ledger 아래 `.diff`로 미리 작성
+   (실제 파일엔 안 씀)까지만 한다. 대기 시작·끝에 journal `LEASE_WAIT_START`/
+   `LEASE_WAIT_END` 1줄씩.
+   풀리면(result=free) `plan --waited`로 재계획 → `nextAction: "RESUME"` +
+   `resumeChecks` 3개(① 대상 sha12 재기록, 바뀌었으면 EXTERNAL_DRIFT 기록 후
+   최신 위에 다시 패치 ② 내 RED 테스트 재실행 ③ begin/재claim). 예산이 끝났는데
+   live면 `plan --waited`는 `nextAction: "HOLD"` + `resumeWhen:
+   [{leaseId,topic,expiresAtUtc}]`를 낸다 — 이때만 release 요청 1회 + partial +
+   handoff에 그 resumeWhen을 그대로 기록.
+   여러 Devin/Codex를 동시에 돌릴 때 ChatWorkflow.java처럼 자주 겹치는 파일은
+   쓰는 에이전트 1개만 배정하고, 나머지는 읽기·테스트·`.diff` 준비 역할로 둔다.
 7. While holding a lease, renew at progress boundaries so your owner state
    stays alive and release requests reach the real owner:
    `python -B scripts/lease_conflict_autoflow.py heartbeat --task <myTaskId>`

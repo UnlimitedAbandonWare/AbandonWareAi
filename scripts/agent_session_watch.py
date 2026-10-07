@@ -499,7 +499,7 @@ def scan_codex(path: Path, stale_ms: int, max_lines: int) -> dict:
                             "apply_patch verification failed" in s:
                         patch_malformed += 1
                         ok = False
-                    if "unfinished goal" in s:
+                    if "unfinished goal" in s or "has an active goal" in s:
                         goal_conflicts += 1
                         ok = False
                     if soft_fail_hit(s):
@@ -580,7 +580,11 @@ def scan_codex(path: Path, stale_ms: int, max_lines: int) -> dict:
     if goal_conflicts:
         add("P7", "goal-conflict", "warn",
             "create_goal rejected: unfinished goal still open",
-            {"count": goal_conflicts})
+            {"count": goal_conflicts,
+             "next_action": "Call update_goal or close previous active goal "
+                            "first, never retry create_goal",
+             "remedy_cmd": "python -B scripts/"
+                           "demo1_goal_switch_barrier.py check-goal"})
     if outside_edits:
         add("P8", "edit-outside-cwd", "warn",
             "patch targets outside the session cwd root",

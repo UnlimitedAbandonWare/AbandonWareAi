@@ -7,13 +7,14 @@
   const errorMessages={pair_code_invalid:'연결 번호가 만료됐거나 맞지 않습니다.',pair_same_browser:'서로 다른 기기에서 연결해 주세요.',link_exists:'기존 연결을 먼저 해제해 주세요.',pair_expired:'승인 시간이 지났습니다. 새 연결 번호를 만드세요.',link_pending:'안경에서 확인 번호를 승인해 주세요.',asr_capacity:'다른 수음이 진행 중입니다.',asr_disabled:'전사 서버가 준비되지 않았습니다.',asr_unavailable:'전사에 연결하지 못했습니다. 잠시 후 다시 시작해 주세요.',display_rate_limited:'요청 한도에 도달했습니다. 잠시 후 다시 시도하세요.'};
   Object.assign(errorMessages,{phone_test_disabled:'단독 전사 테스트가 서버에서 꺼져 있습니다.',phone_test_transcription_only:'단독 테스트에서는 전사만 표시합니다.',asr_budget_exhausted:'전사 테스트 예산에 도달했습니다. 새 연결을 시작하지 않았습니다.',asr_budget_unavailable:'전사 예산을 확인할 수 없습니다. 서버 상태를 확인해 주세요.',asr_budget_invalid:'전사 예산 설정을 확인해 주세요.',asr_budget_busy:'전사 예산 확인이 진행 중입니다. 잠시 후 다시 시도하세요.',asr_budget_ledger_limit:'전사 예산 기록을 확인해 주세요.'});
   Object.assign(errorMessages,{context_limit:'UTF-8 TXT 파일을 8,000자 이하로 선택해 주세요.',capture_active:'수음을 중지한 후 배경을 바꿔 주세요.',lens_seconds_range:'전사·힌트 유지와 자동 넘김은 1~100초 정수로 입력해 주세요. 자동 넘김만 0으로 끌 수 있습니다.',context_range:'참조 범위는 0 또는 5~300초, 글자는 0 또는 200~8192, 토큰은 0 또는 50~4096으로 입력해 주세요.'});
-  function reportError(error){const code=error?.message||error?.code||'request_failed';$('error').textContent=(errorMessages[code]||'연결 상태를 확인하고 다시 시도해 주세요.');}
+  Object.assign(errorMessages,{microphone_device_missing:'입력 장치를 찾을 수 없습니다. 연결·입력 설정에서 장치를 다시 확인해 주세요.',microphone_device_changed:'저장된 입력 장치가 바뀌었습니다. 기본 입력으로 다시 시도해 주세요.',microphone_device_busy:'다른 앱이 마이크를 사용 중입니다. 해당 앱을 닫고 다시 시작해 주세요.',microphone_device_ended:'마이크 연결이 종료됐습니다. 다시 시작해 주세요.',microphone_start_failed:'마이크를 시작하지 못했습니다. 다시 연결 후 수음을 시작해 주세요.',microphone_permission_required:'마이크 권한을 확인한 뒤 수음을 다시 시작해 주세요.',microphone_permission_revoked:'마이크 권한이 해제됐습니다. 사이트 권한을 확인해 주세요.',microphone_permission_timeout:'마이크 권한 응답이 없습니다. 권한을 확인하고 다시 시작해 주세요.',paired_phone_required:'휴대폰 연결이 필요합니다. 연결 후 다시 시작해 주세요.',assist_not_found:'서버 세션이 초기화됐습니다. 다시 연결 후 수음을 시작해 주세요.',event_owner_required:'다른 기기가 이벤트 권한을 가지고 있습니다. 다시 연결로 권한을 확인해 주세요.',display_audio_disabled:'서버에서 음성 수음이 꺼져 있습니다. 다시 연결 후 확인해 주세요.',display_http:'서버 요청이 거부됐습니다. 다시 연결해 주세요.',invalid_output_client:'출력 화면 권한이 없습니다. 다시 연결해 주세요.'});
+  function reportError(error){const code=error?.message||error?.code||'request_failed',shown=/^[a-z_][a-z0-9_-]{0,63}$/.test(code)?code:'request_failed';$('error').textContent=(errorMessages[shown]||'연결 상태를 확인하고 다시 시도해 주세요.')+' (코드: '+shown+')';}
   function debug(){
     const out=$('debug-state');if(!out)return;const s=client.state,v=voice?.state||{},d=s.testStatus||{};
     out.textContent=JSON.stringify({connection:s.connection,microphone:v.permission,capture:v.phase,audioContext:v.audioContext,inputLevel:v.level,frames:v.frames,bytes:v.bytes,
       sttPausedReason:v.sttPausedReason||null,droppedAudioMs:v.droppedAudioMs||0,captureEvents:v.events||[],lastFrameAt:v.lastFrameAt||null,lastSendAt:v.lastSendAt||null,transcript:d.transcript||{},transcription:s.audioState,path:d.asr||'not_observed',hintsEnabled:s.hintsEnabled,processing:d.processing,relay:d.relay||'not_observed',reconnects:s.reconnects,segments:v.segments||0,lastTranscriptReceivedAt:d.lastTranscriptReceivedAt,lastAudioReceivedAt:d.lastAudioReceivedAt,
       focus:d.focus||'not_observed',displayRuntime:d.displayRuntime||'not_observed',audio:d.audio||'not_observed',asrUsage:d.asrUsage||'not_observed',pipeline:d.pipeline||'not_observed',lensDisplay:d.lensDisplay||'not_observed',roundTripMs:s.roundTripMs,processingMs:d.processingMs,backgroundChars:d.backgroundChars,
-      error:v.errorCode||s.error?.code||null},null,2);
+      error:v.errorCode||s.error?.code||null,errorStage:v.errorStage||null},null,2);
   }
   const settingsKey='awx.display.settings.'+(testChannel||'live');let settings={},settingsApplied=false;
   try{const saved=JSON.parse(localStorage.getItem(settingsKey)||'{}');if(saved&&typeof saved==='object')settings=saved;}catch{}
@@ -122,12 +123,12 @@
   }
   const client=window.DisplayConversate.createClient({transcription:true,standalone,testChannel,onChange:render});
   focusControls=window.NovaFocusControls?.mount({host:window,document,client});
-  voice=window.DisplayVoice.createCapture({client,continuous:true,sttPolicy:()=>settings.sttPolicy||null,segmentSeconds:()=>standalone?(client.state.testStatus?.relay?.segmentSeconds??0):0,deviceId:()=>$('input-device').value,onChange(s){
+  voice=window.DisplayVoice.createCapture({client,continuous:true,sttPolicy:()=>settings.sttPolicy||null,segmentSeconds:()=>standalone?(client.state.testStatus?.relay?.segmentSeconds??0):0,deviceId:()=>$('input-device').value,onDeviceFallback:()=>{saveSetting('device',undefined);$('input-device').value='';$('input-label').textContent='저장된 입력 장치를 찾을 수 없어 시스템 기본 입력으로 시작했습니다.';},onChange(s){
     $('microphone').textContent=voice.isActive()?'즉시 수음 중지':'폴드6 수음 시작';$('microphone').setAttribute('aria-pressed',String(voice.isActive()));
     $('microphone').disabled=s.phase==='FINISHING'||!voice.isActive()&&!canCapture(client.state);
     $('finish').hidden=!voice.isActive();$('finish').disabled=!voice.isActive();
     $('microphone-status').textContent=s.permission==='denied'?'마이크 권한을 확인해 주세요.':({STARTING:'마이크 권한을 확인하고 있습니다.',LISTENING:'녹음 중 · 언제든 중지할 수 있습니다.',RECONNECTING:'연결을 다시 확인하고 있습니다.',FINISHING:'녹음을 중지하고 마지막 전사를 기다립니다.',OFF:'녹음 중지',ERROR:'수음이 중지됐습니다. 권한과 연결을 확인하고 다시 시작해 주세요.',STALLED:'수음이 중단됐습니다. 휴대폰을 확인해 주세요.'})[s.phase];
-    if(standalone){$('microphone-status').textContent=s.message;$('input-level').hidden=!voice.isActive();$('input-level').value=s.level;}
+    if(standalone){$('microphone-status').textContent=s.message+(s.phase==='ERROR'&&/^[a-z_][a-z0-9_-]{0,63}$/.test(s.errorCode||'')?' (코드: '+s.errorCode+')':'');$('input-level').hidden=!voice.isActive();$('input-level').value=s.level;}
     debug();
     if(s.deviceLabel)$('input-label').textContent='선택 장치: '+s.deviceLabel+' · 장치명은 내장 마이크 증명이 아닙니다. 가까이 말하기 비교로 확인하세요.';
     if(s.errorCode){if(s.permission==='denied')$('error').textContent='마이크 권한을 확인해 주세요.';else reportError({code:s.errorCode});}
@@ -301,9 +302,8 @@
     else{client.pause();client.start();if(voice.isActive())void voice.resume();}
   });
   window.addEventListener('online',()=>{void voice.reconnect();});
-  // bfcache hide is not a user stop: remember an active capture and restart it on restore.
-  let frozenCapture=false;
-  window.addEventListener('pagehide',()=>{frozenCapture=voice.isActive();voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
-  window.addEventListener('pageshow',event=>{if(event.persisted){client.start();if(frozenCapture){frozenCapture=false;void voice.start();}}});
+  // Page exit stops capture; restoring the connection still requires an explicit microphone start.
+  window.addEventListener('pagehide',()=>{voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
+  window.addEventListener('pageshow',event=>{if(event.persisted)client.start();});
   $('caption-card').focus();client.start();
 })();

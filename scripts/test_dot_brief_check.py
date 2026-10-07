@@ -136,6 +136,108 @@ class BriefCase(unittest.TestCase):
         self.assertEqual(payload["verdict"], "PASS")
         self.assertEqual(payload["targets"]["total"], 3)
 
+    # --- add-only: W3 지시문 가독성 lint (F3, 2026-10-06) ---
+
+    def test_dispatch_glued_tokens_warn(self):
+        glued = ("raw3→finalcontextweb0/vector0·officialOnlytrue/"
+                 "highRisktrue·failsoftNOFILTER_SAFE2후단탈락")
+        bad = GOOD_BRIEF + (
+            "\n### 6. 비고\n"
+            f"- {glued}\n- {glued}B\n"
+            "- 인계시미적용partialrelease제품Java는직전" + "9" * 30 + "\n")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertIn("DISPATCH_GLUED", payload["dispatch"]["warnings"])
+        self.assertEqual(1, r.returncode)  # WARN만 — 차단 아님
+
+    def test_dispatch_wall_paragraph_warn(self):
+        wall = "벽" * 450  # 마침표·줄바꿈 없는 400자+ 문단
+        bad = GOOD_BRIEF + f"\n### 6. 비고\n{wall}\n"
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertIn("DISPATCH_WALL", payload["dispatch"]["warnings"])
+
+    def test_dispatch_multi_goal_warn(self):
+        bad = GOOD_BRIEF + (
+            "\n### 6. 역할 전환\n"
+            "모든 지원 패치도 중단. 지금부터 새 요청: 지시서 작성만 한다.\n")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertIn("DISPATCH_MULTI_GOAL", payload["dispatch"]["warnings"])
+
+    def test_lease_hold_without_wait_warn_code(self):
+        bad = GOOD_BRIEF.replace("- foreign live lease 충돌 시 중단.",
+                                 "- foreign live lease 충돌 시 HOLD로 종료.")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertTrue(payload["leaseHoldWithoutWait"])
+        self.assertIn("LEASE_HOLD_WITHOUT_WAIT", payload["action"])
+        self.assertEqual(1, r.returncode)  # WARN만 — 차단 아님
+
+    def test_lease_hold_with_wait_no_code(self):
+        good = GOOD_BRIEF.replace(
+            "- foreign live lease 충돌 시 중단.",
+            "- foreign live lease 충돌 시 lease-wait --max-min auto 실행.")
+        r = self.run_check(good, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertFalse(payload["leaseHoldWithoutWait"])
+        self.assertNotIn("LEASE_HOLD_WITHOUT_WAIT", payload["action"])
+
+    def test_normal_brief_zero_dispatch_warnings(self):
+        r = self.run_check(GOOD_BRIEF, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertEqual([], payload["dispatch"]["warnings"])
+        self.assertEqual(0, payload["dispatch"]["gluedTokens"])
+        self.assertEqual(0, payload["dispatch"]["wallParagraphs"])
+
+    def test_structured_blocks_are_not_walls(self):
+        rows = "\n".join(f"| cell{i} | 내용 채움 |" for i in range(30))
+        bad = GOOD_BRIEF + f"\n### 6. 표\n{rows}\n"
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertNotIn("DISPATCH_WALL", payload["dispatch"]["warnings"])
+
+    # --- add-only: ADMIN_CHECK_UNDER_VIBE_OPEN (devin-admin-login-no-ask) ---
+
+    def _vibe_cfg(self, enabled: bool):
+        cfg_dir = self.repo / "configs"
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / "vibe-open.yaml").write_text(
+            "enabled: %s\n" % ("true" if enabled else "false"),
+            encoding="utf-8")
+
+    def test_admin_check_in_acceptance_warns_under_vibe_open(self):
+        self._vibe_cfg(True)
+        bad = GOOD_BRIEF.replace(
+            "- gradle testClasses exit 0.",
+            "- gradle testClasses exit 0.\n"
+            "- A2 관리자 로그인 성공과 로그아웃 후 차단을 실제 계정으로 검증.")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertTrue(payload["adminCheckUnderVibeOpen"])
+        self.assertIn("ADMIN_CHECK_UNDER_VIBE_OPEN", payload["action"])
+        self.assertIn("DEFERRED_SECURITY", payload["action"])
+        self.assertEqual(1, r.returncode)  # WARN만 — 차단 아님
+
+    def test_admin_check_no_warn_when_vibe_disabled(self):
+        self._vibe_cfg(False)
+        bad = GOOD_BRIEF.replace(
+            "- gradle testClasses exit 0.",
+            "- gradle testClasses exit 0.\n"
+            "- A2 관리자 로그인 성공과 로그아웃 후 차단을 실제 계정으로 검증.")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertFalse(payload["adminCheckUnderVibeOpen"])
+        self.assertNotIn("ADMIN_CHECK_UNDER_VIBE_OPEN", payload["action"])
+
+    def test_admin_check_outside_acceptance_no_warn(self):
+        self._vibe_cfg(True)
+        bad = GOOD_BRIEF + ("\n### 6. 참고\n- 상용구의 admin 로그인·로그아웃 "
+                            "차단 줄은 관찰용 메모다.\n")
+        r = self.run_check(bad, "--no-lease", "--json")
+        payload = json.loads(r.stdout)
+        self.assertFalse(payload["adminCheckUnderVibeOpen"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

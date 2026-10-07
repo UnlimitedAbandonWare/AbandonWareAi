@@ -252,6 +252,10 @@ class AgentPortLease:
         return "sigterm"
 
     def holds_port(self, lease, now=None):
+        # An interrupted verify has no proven shutdown. Keep its reservation
+        # until the recorded owner explicitly resolves it, regardless of TTL.
+        if lease.get("state") == "cleanup_pending":
+            return True
         if lease.get("state") not in ACTIVE_STATES:
             return False
         expires = parse_iso(lease.get("expiresAt"))
@@ -354,6 +358,11 @@ class AgentPortLease:
             now = utc_now()
             taken = set()
             for lease in self.list_leases():
+                if (lease.get("state") == "cleanup_pending"
+                        and self._owned(lease, owner, session)
+                        and lease.get("service") == service):
+                    return result(False, "cleanup-pending", 3,
+                                  lease=self._public_lease(lease))
                 if self.holds_port(lease, now):
                     taken.add(int(lease["port"]))
             skipped = []
@@ -452,6 +461,8 @@ class AgentPortLease:
     def _release_owned(self, owner, session, lease_id):
         with self.allocation_lock():
             lease = self._require_owned(lease_id, owner, session)
+            if lease.get("state") == "cleanup_pending":
+                return result(False, "cleanup-pending", 3, lease=self._public_lease(lease))
             if lease.get("state") in {"running", "starting", "unhealthy"} and lease.get("pid"):
                 return result(False, "process-still-running", 3, lease=self._public_lease(lease))
             if lease.get("state") == "released":
@@ -478,6 +489,9 @@ class AgentPortLease:
             return result(True, lease=self._public_lease(lease))
 
     def _stop_locked(self, lease, owner, session):
+        # Pending verification cleanup must never enter the force-stop path.
+        if lease.get("state") == "cleanup_pending":
+            return result(False, "cleanup-pending", 3, lease=self._public_lease(lease))
         pid = lease.get("pid")
         if not pid:
             lease["state"] = "stopped" if lease.get("state") != "released" else lease["state"]
@@ -957,6 +971,86 @@ class AgentPortLease:
             })
         return result(True, closed=closed, skipped=skipped)
 
+    def _record_cleanup_pending(self, owner, session, snapshot, exception_type=None,
+                                cause="verify-interrupted", phase="verify"):
+        with self.allocation_lock():
+            lease = self._require_owned(snapshot["leaseId"], owner, session)
+            if snapshot.get("state") not in {"running", "unhealthy"}:
+                raise LeaseError("lease-changed", 3)
+            identity_fields = ("leaseId", "owner", "session", "service", "port",
+                               "processCreateTime")
+            if any(lease.get(key) != snapshot.get(key) for key in identity_fields):
+                raise LeaseError("lease-changed", 3)
+            if lease.get("state") in {"running", "unhealthy"}:
+                if lease.get("pid") != snapshot.get("pid"):
+                    raise LeaseError("lease-changed", 3)
+            elif (phase != "close" or lease.get("state") not in {"stopped", "released"}
+                  or lease.get("pid") is not None):
+                raise LeaseError("lease-changed", 3)
+            if phase == "close":
+                # A partial close may already have cleared the live PID. Keep
+                # its original identity as evidence, never as a stop target.
+                lease["cleanupSnapshot"] = {
+                    "pid": snapshot.get("pid"),
+                    "processCreateTime": snapshot.get("processCreateTime"),
+                }
+            lease["state"] = "cleanup_pending"
+            lease["cause"] = cause
+            self.save_lease(lease)
+            self.append_trace(self._trace(
+                lease, owner, session, lease.get("service"), lease.get("port"),
+                lease.get("pid"), phase, "cleanup_pending", cause,
+                exception_type=exception_type,
+            ))
+            return self._public_lease(lease)
+
+    def _close_for_retry(self, owner, session, snapshot):
+        error = None
+        cause = "cleanup-unconfirmed"
+        try:
+            closed = self.close(owner, session, snapshot["leaseId"])
+            if isinstance(closed, dict) and closed.get("ok") is True:
+                returned = closed.get("lease")
+                current = self._require_owned(snapshot["leaseId"], owner, session)
+                fields = ("leaseId", "owner", "session", "service", "port")
+                if (isinstance(returned, dict)
+                        and returned.get("state") == current.get("state") == "released"
+                        and "pid" in returned and "pid" in current
+                        and returned.get("pid") is None and current.get("pid") is None
+                        and all(returned.get(k) == current.get(k) == snapshot.get(k) for k in fields)
+                        and current.get("processCreateTime") == snapshot.get("processCreateTime")):
+                    return closed
+            elif isinstance(closed, dict) and closed.get("ok") is False:
+                # Only known reason codes can enter the persisted diagnostic.
+                reason = closed.get("cause")
+                cause = reason if isinstance(reason, str) and reason in {
+                    "stop-failed", "pid-reused", "identity-unproven", "owner-mismatch",
+                    "process-still-running", "cleanup-pending", "lease-not-found",
+                } else "cleanup-failed"
+        except BaseException as exc:
+            error = exc
+            cause = "cleanup-exception"
+        pending = None
+        recorded = False
+        try:
+            pending = self._record_cleanup_pending(
+                owner, session, snapshot, None if error is None else type(error).__name__,
+                cause=cause, phase="close",
+            )
+            recorded = True
+        except BaseException as record_error:
+            try:
+                print("cleanup-pending-record-failed: " + type(record_error).__name__, file=sys.stderr)
+            except BaseException:
+                pass  # Preserve the original close exception even with closed output.
+            if error is None and not isinstance(record_error, Exception):
+                raise
+        if error is not None:
+            raise error
+        # Even a failed pending write must not fall through to another spawn.
+        return result(False, "cleanup-pending", 4, lease=pending,
+                      cleanupCause=cause, cleanupRecorded=recorded)
+
     def run(self, owner, session, service, argv, port_range=DEFAULT_RANGE, attempts=3,
             health_url="http://127.0.0.1:{port}/", health_timeout=5, verify_argv=None,
             verify_timeout=5, keep=False, ttl_seconds=1800, cwd=None):
@@ -997,16 +1091,38 @@ class AgentPortLease:
                 if started.get("cause") in RETRYABLE and number < attempts:
                     continue
                 break
-            verified = self.verify(
-                owner, session, lease_id, argv=verify_argv, health_url=health_url,
-                timeout=verify_timeout,
-            )
+            snapshot = self._require_owned(lease_id, owner, session)
+            try:
+                verified = self.verify(
+                    owner, session, lease_id, argv=verify_argv, health_url=health_url,
+                    timeout=verify_timeout,
+                )
+            except BaseException as exc:
+                try:
+                    self._record_cleanup_pending(owner, session, snapshot, type(exc).__name__)
+                except Exception as record_error:
+                    # Preserve the original exception, without logging either
+                    # exception message or issuing any process stop/release.
+                    try:
+                        print("cleanup-pending-record-failed: " + type(record_error).__name__,
+                              file=sys.stderr)
+                    except Exception:
+                        pass  # Closed diagnostic output must not mask the original.
+                raise
             verified["attempt"] = number
             verified["phase"] = "verify"
             attempt_rows.append(verified)
             last = verified
             if not verified["ok"]:
-                self.close(owner, session, lease_id)
+                cleanup_snapshot = self._require_owned(lease_id, owner, session)
+                closed = self._close_for_retry(owner, session, cleanup_snapshot)
+                if not closed["ok"]:
+                    return result(
+                        False, closed.get("cause"), closed.get("exitCode", 4),
+                        attempts=attempt_rows, kept=False, lease=closed.get("lease"),
+                        cleanupCause=closed.get("cleanupCause"),
+                        cleanupRecorded=closed.get("cleanupRecorded"),
+                    )
                 if number < attempts:
                     continue
                 break

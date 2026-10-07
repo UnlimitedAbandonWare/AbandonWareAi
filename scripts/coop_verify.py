@@ -142,6 +142,20 @@ def save_state(directory: Path, state: dict):
     ck.write_json(directory / "state.json", state)
 
 
+def ticket_record(state: dict, directory: Path, ticket_id: str):
+    ticket_id = clean_name(ticket_id, "ticket-id")
+    if ticket_id in state["tickets"]:
+        return state["tickets"][ticket_id]
+    raw = ck.contents(directory / "closed-tickets" / (ticket_id + ".json"))
+    if raw is None:
+        return None
+    ticket = json.loads(raw)
+    ck.require(ticket.get("ticketId") == ticket_id and
+               ticket.get("state") in TICKET_CLOSED - {"BLOCKED_UNKNOWN_OWNER"},
+               "ticket-archive-invalid")
+    return ticket
+
+
 def _holder_pid(lock: Path):
     try:
         holder = json.loads(lock.read_bytes() or b"{}")
@@ -339,8 +353,8 @@ def read_token_file(directory: Path, batch_id):
 
 def cmd_status(root, directory, args, cfg) -> int:
     now = datetime.now(timezone.utc)
-    state = load_state(directory)
     with exclusive_lock(directory, ".coop.lock", "coordination-locked"):
+        state = load_state(directory)
         refresh_ticket_states(state, now, cfg)
         save_state(directory, state)
     active, suspect, blocked = classify_writers(state, now, cfg)
@@ -348,7 +362,8 @@ def cmd_status(root, directory, args, cfg) -> int:
                for k, w in state["writers"].items()}
     tickets = state["tickets"]
     if args.ticket:
-        tickets = {k: v for k, v in tickets.items() if k == args.ticket}
+        ticket = ticket_record(state, directory, args.ticket)
+        tickets = {args.ticket: ticket} if ticket is not None else {}
     payload = {
         "schemaVersion": SCHEMA, "action": "status", "root": str(root),
         "generatedAtUtc": now.isoformat(),
@@ -583,6 +598,19 @@ def cmd_request(root, directory, args, cfg) -> int:
                                  "state": ticket["state"],
                                  "requestedAtUtc": ticket["requestedAtUtc"],
                                  "note": "exit 0 = ticket stored, not verified"})
+        # Preserve terminal history before reclaiming only the slots needed.
+        # Pending, inflight and unresolved ownership records remain indexed.
+        closed = sorted(
+            (t for t in state["tickets"].values()
+             if t.get("state") in TICKET_CLOSED - {"BLOCKED_UNKNOWN_OWNER"}),
+            key=lambda t: (t.get("updatedAtUtc") or "", t["ticketId"]))
+        needed = max(0, len(state["tickets"]) - MAX_TICKETS + 1)
+        ck.require(len(closed) >= needed, "ticket-cap")
+        for old in closed[:needed]:
+            old_id = clean_name(old["ticketId"], "ticket-id")
+            (directory / "closed-tickets").mkdir(exist_ok=True)
+            ck.write_json(directory / "closed-tickets" / (old_id + ".json"), old)
+            state["tickets"].pop(old_id)
         ck.require(len(state["tickets"]) < MAX_TICKETS, "ticket-cap")
         ticket_id = "cv-" + uuid.uuid4().hex[:16]
         ticket = {
@@ -631,7 +659,9 @@ def run_once(root, directory, args, cfg):
         refresh_ticket_states(state, now, cfg)
         open_tickets = [t for t in state["tickets"].values()
                         if t.get("state") in TICKET_OPEN | TICKET_INFLIGHT]
-        if not open_tickets:
+        archived_ticket = (ticket_record(state, directory, args.ticket)
+                           if args.ticket and args.ticket not in state["tickets"] else None)
+        if not open_tickets and archived_ticket is None:
             save_state(directory, state)
             return EXIT_NO_TICKET, {"schemaVersion": SCHEMA, "action": "run-once",
                                     "state": "NO_PENDING_TICKET"}
@@ -640,7 +670,7 @@ def run_once(root, directory, args, cfg):
             ticket = next((t for t in open_tickets
                            if t["ticketId"] == args.ticket), None)
             if ticket is None:
-                closed = state["tickets"].get(args.ticket)
+                closed = state["tickets"].get(args.ticket) or archived_ticket
                 ck.require(closed is not None, "ticket-unknown")
                 closed_exit = {"VERIFIED_PASS": EXIT_PASS, "FAILED": EXIT_FAILED,
                                "INVALIDATED": EXIT_INVALIDATED,

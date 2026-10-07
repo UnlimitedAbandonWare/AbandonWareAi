@@ -5,7 +5,7 @@ codex_question_classifier.py
 Codex가 사용자에게 묻기 직전의 "질문 문장"을 분류해 기본 판정을 JSON으로 출력.
 
   verdict : AUTO | ASK_ONCE | HOLD
-  rule    : D1..D37 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
+  rule    : D1..D40 (기본 답 표) | ask-* 범주 | SELFASK | ask-compound
   default_answer / log_line
 
 SSOT 표: .agents/skills/demo1-codex-auto-decide/SKILL.md
@@ -280,6 +280,37 @@ D36_SUBAGENT_SPAWN = (
 )
 
 # ---------------------------------------------------------------------------
+# D38 (F1, 2026-10-06): 사용자가 첨부한 Library 파일의 "입력" materialization
+# 실패(Windows os.setxattr 미지원 포함) → Downloads 동명 파일 폴백. 출력(카드
+# 업로드) 쪽이 아니라 입력 읽기 쪽이다 — 두 패턴이 함께 매치돼야 발동해 카드
+# 업로드 재시도 질문을 가로채지 않는다. 규칙: DEMO1-DOT-FILE-CARD "입력 쪽".
+# ---------------------------------------------------------------------------
+D38_INPUT_CTX = (
+    r"materializ|os\.setxattr|\bsetxattr\b|"
+    r"(library|라이브러리).{0,24}(file|파일|attach|첨부)|"
+    r"(첨부|attach).{0,16}(file|파일)|"
+    r"입력.{0,4}원본|input.{0,12}(source|file)"
+)
+D38_FAIL_OR_FALLBACK = (
+    r"실패|막혔|막혀|미지원|unsupported|fail|error|안\s*돼|"
+    r"downloads.{0,32}(입력|원본|input|source|폴백|fallback|쓰|사용)|"
+    r"(입력|input).{0,8}원본.{0,16}(써도|사용|downloads|폴백|fallback)"
+)
+# 비밀 파일(.env/.secrets/토큰·키·자격 증명 파일)을 입력으로 쓰자는 질문은
+# D38 폴백 대상이 아니다 — 기존 판정을 그대로 탄다.
+D38_SECRET_INPUT = (
+    r"\.env(?![0-9a-zA-Z])|\.secrets|\bsecrets?|비밀|토큰|\btokens?\b|"
+    r"credential|자격\s*증명|password|비밀번호|패스워드|"
+    r"\.pem(?![0-9a-zA-Z])|\.key(?![0-9a-zA-Z])|api[_\s-]?key"
+)
+D38_ANSWER = (
+    "Downloads에서 같은 파일명(없으면 같은 stem 최신 mtime 순)을 입력 원본으로 "
+    "사용 — INPUT_FALLBACK_DOWNLOADS + 이름/크기/sha12/mtime(KST)/후보 수 기록, "
+    "재시도·저장소 밖 helper 사본 없음; 후보 0개면 '입력 파일 없음' HOLD "
+    "(DEMO1-DOT-FILE-CARD 입력 쪽)"
+)
+
+# ---------------------------------------------------------------------------
 # D37 VIBE_OPEN (2026-10-06 사용자 결정): 바이브코딩 단계 — 보호형 검증 환경
 # URL·관리자 로그인/로그아웃 차단·CSRF·PROTO_OPEN 유지·Display/Fold6/interview/
 # debug studio 접근 인증·내부 도구 토큰 같은 "보안 검증·접근 인증" 질문은 묻지
@@ -347,6 +378,57 @@ VIBE_OPEN_ANSWER = (
     "VIBE_OPEN — 현재 개방 상태 유지, 보안 검증은 DEFERRED_SECURITY로 "
     "기록하고 계속 진행 (관측 HTTP status만 근거, PASS/FAIL 집계 제외; "
     "docs/security/VIBE_OPEN.md)")
+
+# ---------------------------------------------------------------------------
+# D39 (lease-patient, 2026-10-06): lease/잠금 때문에 멈춤·기다릴까·재개할까·
+# 강제 해제할까 류 질문 — D37 VIBE_OPEN의 `잠금` 범용 패턴에 가로채이기 전에
+# 잡는다(실측 오분류: "다른 세션의 잠금 때문에 막혔는데 재개할까요?" → D37).
+# ASK_ONCE 범주가 섞인 문장에는 발동하지 않는다(기존 ask 경로 유지).
+# ---------------------------------------------------------------------------
+D39_LEASE_RESUME = (
+    r"(lease|리스|잠금|예약).{0,32}"
+    r"(멈|막|대기|기다|재개|풀|해제|강제|이어|종료|끝|계속)|"
+    r"(멈|막|대기|기다|재개|풀|해제|강제|이어|종료|끝|계속).{0,24}"
+    r"(lease|리스|잠금|예약)"
+)
+D39_ANSWER = (
+    "lease/잠금 막힘은 묻지 않고 기다린다 — `python -B scripts/"
+    "codex_auto_unblock.py lease-wait --paths <files> --max-min auto "
+    "--enqueue --task <task>` 뒤 `lease_conflict_autoflow.py plan --waited`"
+    "(free면 RESUME 체크 3개로 이어서, 계속 live면 release 요청 1회 + "
+    "partial + resumeWhen). 남의 live lease 강제 해제는 계속 금지")
+
+# ---------------------------------------------------------------------------
+# D40 (admin-login-no-ask, 2026-10-06): VIBE_OPEN 동안 "유효 계정 필요·직접
+# 로그인해 주세요·테스트 계정 주입 경로·보호형 테스트 환경 URL을 알려" 류
+# 자격 증명·접근 정보 요청은 묻지 않는다. 붙여넣은 플러그인 역할 상용구 안의
+# admin 검사 줄이나 그 안에 인용된 "live request"/"상용구가 요구했다" 문구는
+# 사용자 직접 요구가 아니라 TEMPLATE_BOILERPLATE다 — 판정은 동일하게
+# DEFERRED_SECURITY (docs/security/VIBE_OPEN.md 상용구 vs 직접 요구).
+# D37보다 먼저 검사해 자격 증명 요청에는 더 구체적인 자동 답을 돌려준다.
+# 가드는 D37과 동일 — 비밀값 열람·기존 통제 해제 질문은 기존 판정 유지.
+# ---------------------------------------------------------------------------
+D40_ADMIN_CRED_ASK = (
+    r"유효한?\s*계정|유효.{0,8}(계정|자격\s*증명)|"
+    r"계정.{0,10}(주입|필요|없|알려|제공|요청|만들|생성)|"
+    r"(주입|필요|제공|요청).{0,10}계정|"
+    r"자격\s*증명.{0,8}(필요|제공|주입|없)|"
+    r"테스트.{0,4}(계정|사용자).{0,12}(주입|경로|필요|제공|알려)|"
+    r"로그인.{0,16}(해\s*주|해주|할\s*수\s*있|가능한가|가능합니까|해\s*줘|부탁)|"
+    r"직접\s*로그인|"
+    r"(환경|env).{0,6}(url|주소).{0,10}(알려|필요|제공|주세|주십|공유)|"
+    r"(url|주소).{0,10}(알려|제공|필요).{0,12}(환경|env)|"
+    r"valid.{0,8}(account|credentials?)|"
+    r"test.{0,8}account.{0,12}(inject|provision|path|needed|share)|"
+    r"log\s?in.{0,16}(for\s*me|yourself|directly|please)|"
+    r"protected.{0,16}(env|test)?.{0,8}url.{0,12}(share|provide|need|tell)"
+)
+D40_ANSWER = (
+    "DEFERRED_SECURITY 기록(관측 HTTP status만 남김) 후 남은 작업 계속 — "
+    "사용자에게 로그인·계정·URL·비밀번호를 묻지 않는다; 확인이 필요하면 "
+    "scripts/agent_isolated_auth_verify.py 격리 검증(사람 없음·합성 자격·"
+    "18180 무접촉)을 먼저. 상용구·'live request' 인용은 직접 요구가 아님 "
+    "(docs/security/VIBE_OPEN.md 상용구 vs 직접 요구)")
 
 
 def _vibe_open_enabled(cfg_path=None):
@@ -460,9 +542,11 @@ D_RULES = [
      "settings_defaults_sse_observe.py로 phase/terminal/final-response 판정; "
      "로그도 없을 때만 그 항목 NOT_RUN (질문 없이)"),
     ("D32", D32_LEASE_WAIT,
-     "live lease 겹침은 BLOCKED 종료 금지 — 겹치지 않는 일 먼저, 최대 20분 "
-     "60초 간격 재확인(lease-wait), 풀리면 같은 턴 이어서; 계속 live면 "
-     "autoflow release 요청 1회 + partial + 재개 조건 한 줄 (강제 해제 금지)"),
+     "live lease 겹침은 BLOCKED 종료 금지 — 겹치지 않는 일 먼저, "
+     "lease-wait --max-min auto로 상대 잔여 시간에 맞춰 대기(상한 60분, "
+     "--enqueue), 풀리면 plan --waited의 RESUME 체크로 이어서; 계속 live면 "
+     "autoflow release 요청 1회 + partial + resumeWhen 한 줄 "
+     "(강제 해제 금지)"),
     ("D33", D33_SUPERSEDED,
      "codex_auto_unblock.py superseded 확인 → 더 새 ledger가 Acceptance "
      "핵심 PASS면 새 작업 없이 `SUPERSEDED by <ledger>`로 report/journal "
@@ -565,16 +649,19 @@ PICK_HINTS = {
     "D22": ["1회", "합성"],
     "D23": ["승인", "수정", "허용"],
     "D37": ["개방", "유지", "현재", "나중", "defer"],
+    "D40": ["개방", "유지", "현재", "나중", "defer", "관측", "기록"],
 }
 
-# D37 VIBE_OPEN 카드: 개방 유지 쪽만 고른다 — 잠그는 옵션·보호 환경 URL·
+# D37/D40 VIBE_OPEN 카드: 개방 유지 쪽만 고른다 — 잠그는 옵션·보호 환경 URL·
 # 자격 증명을 요구하는 옵션은 자동 선택하지 않는다.
 OPT_VIBE_EXCLUDE = (
     r"(url|주소).{0,8}(제공|입력|알려|필요)|"
     r"자격\s*증명|credentials?|비밀번호|"
     r"잠금|lock\s*down|fail.?close|"
     r"인증\s*(추가|설정|붙이|적용|요구)|보호형?.{0,8}(전환|설정|적용)|"
-    r"proto.?open.{0,8}(끄|off|해제|비활성|false)"
+    r"proto.?open.{0,8}(끄|off|해제|비활성|false)|"
+    r"직접\s*로그인|로그인.{0,10}(직접|계정|사용자)|계정.{0,8}로그인|"
+    r"log\s?in.{0,12}(yourself|manually|directly)|user.{0,8}log\s?in"
 )
 
 
@@ -602,7 +689,7 @@ def pick_option(options, verdict="AUTO", rule=None):
             if hint in text and not k["irrev"]:
                 return text, "rule-hint:" + hint
     reversible = [(t, k) for t, k in info if not k["irrev"]]
-    if rule == "D37":
+    if rule in ("D37", "D40"):
         reversible = [(t, k) for t, k in reversible
                       if not re.search(OPT_VIBE_EXCLUDE, t, re.IGNORECASE)]
     if not reversible:
@@ -641,21 +728,44 @@ def classify(text, vibe_open_path=None):
     """질문 문장 -> 판정 dict(verdict, rule, default_answer, log_line)."""
     excerpt = re.sub(r"\s+", " ", (text or "").strip())[:80]
     ask_hits = _hits(ASK_ONCE_RULES, text)
-    # D37 VIBE_OPEN: ask-auth-policy·ask-admin-scope·NARROW_GUARD보다 먼저.
+    # D39: lease/잠금 멈춤·재개·강제해제 질문 — D37 `잠금` 패턴 오분류를 막기
+    # 위해 VIBE_OPEN보다 먼저. D32가 이미 잡는 문구는 D32 판정을 유지하고,
+    # ASK_ONCE 범주가 섞이면 기존 경로를 탄다.
+    if not ask_hits and re.search(D39_LEASE_RESUME, text, re.IGNORECASE) \
+            and not re.search(D32_LEASE_WAIT, text, re.IGNORECASE):
+        return {
+            "verdict": "AUTO",
+            "rule": "D39",
+            "default_answer": D39_ANSWER,
+            "log_line": f"AUTO_DECISION: D39 | {excerpt} → {D39_ANSWER} | "
+                        f"evidence: codex_question_classifier",
+        }
+    # D40/D37 VIBE_OPEN: ask-auth-policy·ask-admin-scope·NARROW_GUARD보다 먼저.
     # 인증 계열 ASK 범주만 섞인 보안 검증 질문 + 비밀값 가드 통과 시에만 AUTO.
+    # 자격 증명·직접 로그인·환경 URL 요청은 D40이 먼저 잡아 재질문 금지·격리
+    # 검증 경로가 담긴 답을 준다 — "live request"/상용구 인용이 붙어도 동일.
     if _vibe_open_enabled(vibe_open_path) \
-            and re.search(D37_VIBE_OPEN, text, re.IGNORECASE) \
             and not any(r not in _VIBE_AUTH_CATS for r, _ in ask_hits) \
             and not re.search(D37_SECRET_GUARD, text, re.IGNORECASE) \
             and not re.search(D37_WEAKEN_GUARD, text, re.IGNORECASE):
-        return {
-            "verdict": "AUTO",
-            "rule": "D37",
-            "default_answer": VIBE_OPEN_ANSWER,
-            "log_line": f"AUTO_DECISION: D37 | VIBE_OPEN | {excerpt} → "
-                        f"{VIBE_OPEN_ANSWER} | evidence: "
-                        f"codex_question_classifier",
-        }
+        if re.search(D40_ADMIN_CRED_ASK, text, re.IGNORECASE):
+            return {
+                "verdict": "AUTO",
+                "rule": "D40",
+                "default_answer": D40_ANSWER,
+                "log_line": f"AUTO_DECISION: D40 | VIBE_OPEN | {excerpt} → "
+                            f"{D40_ANSWER} | evidence: "
+                            f"codex_question_classifier",
+            }
+        if re.search(D37_VIBE_OPEN, text, re.IGNORECASE):
+            return {
+                "verdict": "AUTO",
+                "rule": "D37",
+                "default_answer": VIBE_OPEN_ANSWER,
+                "log_line": f"AUTO_DECISION: D37 | VIBE_OPEN | {excerpt} → "
+                            f"{VIBE_OPEN_ANSWER} | evidence: "
+                            f"codex_question_classifier",
+            }
     if len(ask_hits) >= 2:
         cats = ",".join(r for r, _ in ask_hits)
         return {
@@ -720,6 +830,18 @@ def classify(text, vibe_open_path=None):
             "log_line": f"AUTO_DECISION: D35 | {excerpt} → session-state "
                         f"checkpoint | evidence: codex_question_classifier",
         }
+    # D38: Library/첨부 "입력" 파일 materialization 실패 → Downloads 폴백을
+    # picked로 고정한다. 비밀 파일 입력 질문에는 발동하지 않는다.
+    if re.search(D38_INPUT_CTX, text, re.IGNORECASE) and \
+            re.search(D38_FAIL_OR_FALLBACK, text, re.IGNORECASE) and \
+            not re.search(D38_SECRET_INPUT, text, re.IGNORECASE):
+        return {
+            "verdict": "AUTO",
+            "rule": "D38",
+            "default_answer": D38_ANSWER,
+            "log_line": f"AUTO_DECISION: D38 | {excerpt} → {D38_ANSWER} "
+                        f"| evidence: codex_question_classifier",
+        }
     d_hits = _hits(D_RULES, text)
     if d_hits:
         rule, answer = d_hits[0]
@@ -766,6 +888,12 @@ def session_checkpoint_advisory(session_tokens):
 
 
 def main(argv=None):
+    for s in (sys.stdout, sys.stderr):
+        if hasattr(s, "reconfigure"):
+            try:
+                s.reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
     parser = argparse.ArgumentParser(description="Codex question classifier")
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--text", help="question text")

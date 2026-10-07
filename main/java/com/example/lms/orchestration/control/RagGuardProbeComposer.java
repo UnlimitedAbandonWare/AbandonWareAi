@@ -112,13 +112,20 @@ public final class RagGuardProbeComposer {
                 finding.stage() == RagControlFinding.Stage.LLM
                         && isBoundNonModelFinding(finding)
                         && approval.reasonCode().equals(finding.reasonCode())
-                        && approval.evidence().equals(finding.evidence())) ? approval : null;
+                        // Verification may carry additional terminal diagnostics. Compare the
+                        // body/request binding, rather than requiring identical diagnostic maps.
+                        && List.of("nonModelReleaseKind", "nonModelReleaseBodyHash",
+                                "nonModelReleaseRequestHash", "nonModelReleaseBound").stream()
+                                .allMatch(key -> java.util.Objects.equals(
+                                        approval.evidence().get(key), finding.evidence().get(key)))) ? approval : null;
     }
 
     private boolean isBoundNonModelFinding(RagControlFinding finding) {
         String kind = switch (finding.reasonCode()) {
             case "verification_unavailable_excerpt" -> "SUPPORTED_EXCERPT";
             case "verification_unavailable_guidance" -> "VERIFICATION_GUIDANCE";
+            case "verification_insufficient_excerpt" -> "INSUFFICIENT_EXCERPT";
+            case "verification_insufficient_guidance" -> "INSUFFICIENT_GUIDANCE";
             default -> "";
         };
         return !kind.isEmpty()

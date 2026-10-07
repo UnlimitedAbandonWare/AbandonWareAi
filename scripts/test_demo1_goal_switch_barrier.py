@@ -389,5 +389,111 @@ class RejectComplete(unittest.TestCase):
         self.assertIn("tool-preamble", out["matched"])
 
 
+class CheckGoal(unittest.TestCase):
+    """check-goal — create_goal 전 안전 등록 판정(P7 방어) advisory 계약."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _goal(self, *extra):
+        return run_cli(self.root, "check-goal", "--root", str(self.root),
+                       *extra)
+
+    def test_bare_check_goal_is_conservative_advisory(self):
+        # 목표 상태 미확인 = 충돌 가능 — blind create_goal을 권하지 않는다
+        code, out = self._goal()
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertEqual("unknown", out["goalState"])
+        self.assertFalse(out["safeToCreate"])
+        self.assertIn("get_goal", out["recoverySnippet"])
+        self.assertIn("update_goal", out["recoverySnippet"])
+        self.assertTrue(out["safeRegistrationProtocol"])
+        self.assertIn("never retry create_goal", out["nextAction"])
+
+    def test_active_goal_reports_update_existing(self):
+        code, out = self._goal("--has-active-goal")
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertEqual("active", out["goalState"])
+        self.assertEqual("active-goal-reported", out["decisionBasis"])
+
+    def test_active_goal_id_implies_active(self):
+        code, out = self._goal("--active-goal-id", "goal-9")
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertEqual("goal-9", out["activeGoalId"])
+
+    def test_no_active_goal_allows_create_new(self):
+        code, out = self._goal("--no-active-goal")
+        self.assertEqual(0, code, out)
+        self.assertEqual("CREATE_NEW", out["action"])
+        self.assertEqual("none", out["goalState"])
+        self.assertTrue(out["safeToCreate"])
+        self.assertIsNone(out["nextAction"])
+
+    def test_p7_observed_forces_update_existing(self):
+        code, out = self._goal("--p7-observed")
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertEqual("p7-rejection-observed", out["decisionBasis"])
+        self.assertTrue(out["p7Observed"])
+
+    def test_session_scan_detects_unfinished_goal(self):
+        session = self.root / "rollout-test.jsonl"
+        session.write_text(
+            '{"payload":{"output":"unfinished goal"}}\nunfinished goal\n',
+            encoding="utf-8")
+        code, out = self._goal("--session", str(session))
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertEqual("ok", out["sessionScan"]["status"])
+        self.assertEqual(2, out["sessionScan"]["goalConflictMarkers"])
+        self.assertTrue(out["p7Observed"])
+
+    def test_session_clean_keeps_unknown_state(self):
+        session = self.root / "rollout-clean.jsonl"
+        session.write_text('{"payload":{"output":"ok"}}\n', encoding="utf-8")
+        code, out = self._goal("--session", str(session))
+        self.assertEqual(0, code, out)
+        self.assertEqual("unknown", out["goalState"])
+        self.assertFalse(out["p7Observed"])
+        self.assertEqual(0, out["sessionScan"]["goalConflictMarkers"])
+
+    def test_missing_session_is_io_error_not_fatal(self):
+        code, out = self._goal("--session", str(self.root / "absent.jsonl"))
+        self.assertEqual(0, code, out)
+        self.assertEqual("io-error", out["sessionScan"]["status"])
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+
+    def test_conflicting_signals_stay_conservative(self):
+        code, out = self._goal("--has-active-goal", "--no-active-goal")
+        self.assertEqual(0, code, out)
+        self.assertEqual("UPDATE_EXISTING", out["action"])
+        self.assertTrue(out["conflictingSignals"])
+
+    def test_objective_and_thread_echoed(self):
+        code, out = self._goal("--objective", "ship WP1",
+                               "--thread-id", "t-123")
+        self.assertEqual(0, code, out)
+        self.assertEqual("ship WP1", out["objective"])
+        self.assertEqual("t-123", out["threadId"])
+
+    def test_agent_adds_local_journal_summary(self):
+        _journal(self.root, "mine-1", "devin", updated_at=ago(hours=2))
+        code, out = self._goal("--agent", "devin")
+        self.assertEqual(0, code, out)
+        self.assertEqual(["mine-1"], out["localOwnedInProgress"])
+
+    def test_unknown_flag_is_usage_error(self):
+        with self.assertRaises(SystemExit) as caught:
+            g.main(["check-goal", "--root", str(self.root), "--bogus"])
+        self.assertEqual(2, caught.exception.code)
+
+
 if __name__ == "__main__":
     unittest.main()

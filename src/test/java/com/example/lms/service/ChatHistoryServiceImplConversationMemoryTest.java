@@ -15,6 +15,8 @@ import com.example.lms.service.rag.overdrive.OverdriveGuard;
 import com.example.lms.web.ClientOwnerKeyResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -41,8 +43,12 @@ import static org.mockito.Mockito.when;
 
 class ChatHistoryServiceImplConversationMemoryTest {
 
-    @Test
-    void sessionAssignmentsAndCorrectionsSurviveTenLaterExchangesWithinTheSummaryBudget() {
+    @ParameterizedTest
+    @ValueSource(strings = {"current", "legacy", "missing-summary", "current-small-importance", "legacy-small-importance", "missing-summary-small-importance", "current-long-correction", "legacy-long-correction", "missing-summary-long-correction", "current-repeated", "legacy-repeated", "missing-summary-repeated", "current-recall-overflow", "legacy-recall-overflow", "missing-summary-recall-overflow"})
+    void sessionAssignmentsAndCorrectionsSurviveTenLaterExchangesWithinTheSummaryBudget(String snapshotKind) {
+        boolean legacy = snapshotKind.startsWith("legacy");
+        boolean missingSummary = snapshotKind.startsWith("missing-summary");
+        boolean recallOverflow = snapshotKind.endsWith("-recall-overflow");
         ChatSessionRepository sessions = mock(ChatSessionRepository.class);
         ChatMessageRepository messages = mock(ChatMessageRepository.class);
         Map<Long, ChatSession> sessionById = new HashMap<>();
@@ -84,39 +90,189 @@ class ChatHistoryServiceImplConversationMemoryTest {
             return newest.subList(start, Math.min(newest.size(), start + page.getPageSize()));
         });
         ChatHistoryServiceImpl history = newService(sessions, messages);
+        if (!snapshotKind.endsWith("-small-importance")) {
+            ReflectionTestUtils.setField(history, "rollingSummaryAnchorCount", 12);
+            ReflectionTestUtils.setField(history, "rollingSummaryImportantSentenceCount", 6);
+        }
         try {
             Long first = history.appendMessageReturningId(41L, "user",
                     "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, 비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. 계정의 장기 기억에 저장할 필요는 없어.");
-            history.updateRollingSummary(41L, first);
+            if (!legacy && !missingSummary) history.updateRollingSummary(41L, first);
             Long correction = history.appendMessageReturningId(41L, "user",
-                    "방금 정한 프로젝트 이름·색상·비교 기준을 다시 말하고, 색상만 남색으로 정정해줘.");
-            history.updateRollingSummary(41L, correction);
+                    (snapshotKind.endsWith("-long-correction") ? "추가 설명은 정정값보다 우선하지 않습니다. ".repeat(9) : "")
+                    + "방금 정한 프로젝트 이름·색상·비교 기준을 다시 말해줘. 그리고 이 대화의 색상은 남색으로 정정해줘.");
+            if (!legacy && !missingSummary) history.updateRollingSummary(41L, correction);
+            if (snapshotKind.endsWith("-repeated")) {
+                Long repeated = history.appendMessageReturningId(41L, "user",
+                        "이 대화에서만 시험 프로젝트 이름 해솔-42, 색상 청록, 비교 기준 공식 자료 우선·확인 가능한 갱신일을 기억해줘. 계정의 장기 기억에 저장할 필요는 없어.");
+                if (!legacy && !missingSummary) history.updateRollingSummary(41L, repeated);
+            }
             for (int turn = 0; turn < 10; turn++) {
                 history.appendMessageReturningId(41L, "user",
-                        "Explain climate change in general terms, without storing anything. Question " + turn);
+                        recallOverflow ? "이 대화의 시험 프로젝트 이름, 마지막으로 정정된 색상, 처음 정한 비교 기준을 정확히 다시 말해줘. 외부 검색은 필요 없어." : "Explain climate change in general terms, without storing anything. Question " + turn);
                 Long last = history.appendMessageReturningId(41L, "assistant",
-                        ("보통의 설명 문장으로 최근 맥락을 채웁니다. ").repeat(18) + turn);
-                history.updateRollingSummary(41L, last);
+                        recallOverflow ? "시험 프로젝트 이름: 해솔-42. 마지막으로 정정된 색상: 청록. 처음 정한 비교 기준: 공식 자료 우선·확인 가능한 갱신일." : ("보통의 설명 문장으로 최근 맥락을 채웁니다. ").repeat(18) + turn);
+                if (!legacy && !missingSummary) history.updateRollingSummary(41L, last);
+            }
+            if (legacy) {
+                long watermark = rows.get(41L).stream().mapToLong(ChatMessage::getId).max().orElseThrow();
+                // A pre-pinning snapshot has already evicted the assignments.
+                history.appendMessageReturningId(41L, "system",
+                        "⎔RSUM⎔{\"lastMessageId\":" + watermark
+                                + ",\"turns\":22,\"rawCharCount\":12000,\"promoted\":true,\"promotionHash\":\"legacy-snapshot\"}\n"
+                                + "Assistant: 최근의 일반 설명만 남아 있습니다.");
             }
             history.appendMessageReturningId(42L, "user", "독립 세션의 일반 질문입니다.");
             MemoryHandler loader = new MemoryHandler(history);
             ReflectionTestUtils.setField(loader, "maxTurns", 8);
+            int storedRowCount = rows.get(41L).size();
             String memory = loader.loadForSession(41L);
+            assertEquals(storedRowCount, rows.get(41L).size(), "read recovery must not persist or promote memory");
             ContextOrchestrator orchestrator = new ContextOrchestrator(new StandardPromptBuilder());
             NovaOrchestrationProperties properties = new NovaOrchestrationProperties();
-            properties.getRagCompressor().setMemoryMaxLines(3);
+            properties.getRagCompressor().setMemoryMaxLines(12);
+            properties.getRagCompressor().setMemoryMaxChars(1400);
             ReflectionTestUtils.setField(orchestrator, "promptContextCompressor",
                     new DynamicContextCompressor(properties));
-            String prompt = orchestrator.orchestrate("이 대화의 프로젝트 이름·색상·비교 기준을 다시 말해줘.",
-                    List.of(), List.of(), Map.of(), null, memory);
+            String compressedMemory = new DynamicContextCompressor(properties).compressMemoryForPrompt(
+                    "이 대화의 시험 프로젝트 이름, 마지막으로 정정된 색상, 처음 정한 비교 기준을 정확히 다시 말해줘. 외부 검색은 필요 없어.", memory);
+            assertEquals(Boolean.TRUE, TraceStore.get("prompt.memory.compressor.activated"));
+            assertTrue(compressedMemory.length() < memory.length(), "the real workflow compression boundary must be exercised");
+            String prompt = orchestrator.orchestrate("이 대화의 시험 프로젝트 이름, 마지막으로 정정된 색상, 처음 정한 비교 기준을 정확히 다시 말해줘. 외부 검색은 필요 없어.",
+                    List.of(), List.of(), Map.of(), null, compressedMemory);
             assertTrue(prompt.contains("해솔-42"), "the initial session assignment must survive recent-history eviction");
             assertTrue(prompt.contains("공식 자료 우선·확인 가능한 갱신일"));
             assertTrue(prompt.contains("남색으로 정정"), "the later correction must survive with its ordering");
-            assertTrue(prompt.indexOf("해솔-42") < prompt.indexOf("남색으로 정정"));
+            if (!snapshotKind.endsWith("-repeated")) {
+                assertTrue(prompt.indexOf("해솔-42") < prompt.indexOf("남색으로 정정"));
+            }
+            assertTrue(recallOverflow || (snapshotKind.endsWith("-repeated")
+                            ? prompt.lastIndexOf("청록") > prompt.lastIndexOf("남색")
+                            : prompt.lastIndexOf("남색") > prompt.lastIndexOf("청록")),
+                    "derived memory must not repeat the superseded color after its latest correction");
+            if (recallOverflow) {
+                assertTrue(prompt.contains("### SESSION VALUE PRECEDENCE"),
+                        "real compression must retain assignment authority despite repeated stale assistant guesses");
+                assertTrue(compressedMemory.length() <= 1400);
+                assertTrue(compressedMemory.lines().count() <= 12);
+            }
             assertTrue(history.getConversationMemorySnapshot(41L).summary().length() <= 1200);
             String other = loader.loadForSession(42L);
             assertFalse(other.contains("해솔-42"));
             assertFalse(other.contains("남색"));
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"complete", "legacy", "read-failure"})
+    void sessionAssignmentReadProjectionIsBoundedIsolatedAndPreservesStoredPromotion(String kind) {
+        ChatSessionRepository sessions = mock(ChatSessionRepository.class);
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        ChatHistoryServiceImpl history = newService(sessions, messages);
+        ChatSession session = new ChatSession("synthetic projection");
+        session.setId(41L);
+        session.setOwnerKey("synthetic-owner-A");
+        ChatSession other = new ChatSession("synthetic independent projection");
+        other.setId(42L);
+        other.setOwnerKey("synthetic-owner-B");
+        String initial = "시험 프로젝트 이름 해솔-42, 색상 청록, 비교 기준 공식 자료 우선을 기억해줘.";
+        String correction = "색상만 남색으로 정정해줘.";
+        String summary = "complete".equals(kind)
+                ? "User: " + initial + "\nUser: " + correction + "\nAssistant: 최근 설명"
+                : "Assistant: 최근 설명";
+        ChatMessage stored = message(session, 7L, "system",
+                "⎔RSUM⎔{\"lastMessageId\":4,\"rawCharCount\":1000,\"promoted\":true,"
+                        + "\"promotionHash\":\"synthetic-promotion\"}\n" + summary);
+        when(messages.findTopBySession_IdAndRoleAndContentStartingWithOrderByIdDesc(
+                eq(41L), eq("system"), eq("⎔RSUM⎔"))).thenReturn(Optional.of(stored));
+        when(messages.findNewestWindowBySessionId(eq(41L), any(Pageable.class))).thenAnswer(call -> {
+            if ("read-failure".equals(kind)) throw new IllegalStateException("synthetic-recovery-read-failure");
+            return List.of(message(session, 9L, "user", "future-value 기억해줘."),
+                    message(other, 3L, "user", "foreign-value 기억해줘."),
+                    message(session, 4L, "user", correction),
+                    message(session, 2L, "assistant", "assistant-value 기억해줘."),
+                    message(session, 1L, "user", initial));
+        });
+        try {
+            var first = history.getConversationMemorySnapshot(41L);
+            var second = history.getConversationMemorySnapshot(41L);
+            assertEquals(first, second, "reads must be stable without persisting a projection");
+            assertFalse(first.summary().contains("future-value"));
+            assertFalse(first.summary().contains("foreign-value"));
+            assertFalse(first.summary().contains("assistant-value"));
+            assertTrue(first.summary().length() <= 1200);
+            if ("legacy".equals(kind)) {
+                assertTrue(first.summary().contains("해솔-42"));
+                assertTrue(first.summary().contains("남색으로 정정"));
+                assertTrue(first.summary().indexOf("해솔-42") < first.summary().indexOf("남색으로 정정"));
+                assertFalse(first.promoted(), "a changed projection must not claim the old stored promotion");
+                assertEquals("", first.promotionHash());
+            } else {
+                assertEquals(summary, first.summary());
+                assertTrue(first.promoted(), "an unchanged stored snapshot keeps its promotion");
+                assertEquals("synthetic-promotion", first.promotionHash());
+            }
+            if ("complete".equals(kind)) assertEquals(1, first.summary().split("해솔-42", -1).length - 1);
+            ArgumentCaptor<Pageable> pages = ArgumentCaptor.forClass(Pageable.class);
+            org.mockito.Mockito.verify(messages, org.mockito.Mockito.times(2))
+                    .findNewestWindowBySessionId(eq(41L), pages.capture());
+            assertTrue(pages.getAllValues().stream().allMatch(p -> p.getPageNumber() == 0 && p.getPageSize() == 128));
+            org.mockito.Mockito.verify(messages, org.mockito.Mockito.never()).save(any(ChatMessage.class));
+            org.mockito.Mockito.verify(messages, org.mockito.Mockito.never()).findBySessionIdOrderByCreatedAtAsc(anyLong());
+            assertTrue(stored.getContent().endsWith(summary), "the stored metadata is read only");
+        } finally {
+            TraceStore.clear();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"lost-tail", "stale-pins", "complete"})
+    void legacyReadProjectionKeepsTheLatestRepeatedCorrectionInTheRealPrompt(String kind) {
+        ChatSessionRepository sessions = mock(ChatSessionRepository.class);
+        ChatMessageRepository messages = mock(ChatMessageRepository.class);
+        ChatHistoryServiceImpl history = newService(sessions, messages);
+        ChatSession session = new ChatSession("synthetic repeated correction");
+        session.setId(41L);
+        String teal = "색상은 청록으로 정정해줘.";
+        String navy = "색상은 남색으로 정정해줘.";
+        String old = "complete".equals(kind) ? "User: " + teal + "\nUser: " + navy + "\nUser: " + teal
+                : "stale-pins".equals(kind) ? "User: " + teal + "\nUser: " + navy : "Assistant: 최근 설명";
+        ChatMessage metadata = message(session, 5L, "system",
+                "⎔RSUM⎔{\"lastMessageId\":3}\n" + old);
+        when(messages.findTopBySession_IdAndRoleAndContentStartingWithOrderByIdDesc(
+                eq(41L), eq("system"), eq("⎔RSUM⎔"))).thenReturn(Optional.of(metadata));
+        when(messages.findNewestWindowBySessionId(eq(41L), any(Pageable.class))).thenAnswer(call -> {
+            Pageable page = call.getArgument(1);
+            return page.getPageSize() == 128
+                    ? List.of(message(session, 3L, "user", teal), message(session, 2L, "user", navy),
+                            message(session, 1L, "user", teal))
+                    : List.of(message(session, 4L, "assistant", "最近の説明だけです。"));
+        });
+        MemoryHandler loader = new MemoryHandler(history);
+        ReflectionTestUtils.setField(loader, "maxTurns", 1);
+        ContextOrchestrator orchestrator = new ContextOrchestrator(new StandardPromptBuilder());
+        NovaOrchestrationProperties properties = new NovaOrchestrationProperties();
+        properties.getRagCompressor().setMemoryMaxLines(12);
+        properties.getRagCompressor().setMemoryMaxChars(1400);
+        ReflectionTestUtils.setField(orchestrator, "promptContextCompressor", new DynamicContextCompressor(properties));
+        try {
+            String projected = history.getConversationMemorySnapshot(41L).summary();
+            assertTrue(projected.lastIndexOf(teal) > projected.indexOf(navy),
+                    "summary order must retain the latest repeated correction, independently of anchor echoes");
+            String memory = loader.loadForSession(41L) + "\nAssistant: 일반 후속 설명입니다.".repeat(15);
+            String compressed = new DynamicContextCompressor(properties).compressMemoryForPrompt(
+                    "이 대화의 마지막으로 정정된 색상을 말해줘.", memory);
+            assertEquals(Boolean.TRUE, TraceStore.get("prompt.memory.compressor.activated"));
+            String prompt = orchestrator.orchestrate("이 대화의 마지막으로 정정된 색상을 말해줘.",
+                    List.of(), List.of(), Map.of(), null, compressed);
+            assertTrue(prompt.contains(navy));
+            assertTrue(prompt.lastIndexOf(navy) < prompt.lastIndexOf(teal),
+                    "the bounded delivered summary must place the latest unique correction last");
+            assertTrue(prompt.lastIndexOf(teal) > prompt.lastIndexOf(navy),
+                    "the latest repeated correction must follow the intervening correction in the delivered prompt");
+            org.mockito.Mockito.verify(messages, org.mockito.Mockito.never()).save(any(ChatMessage.class));
         } finally {
             TraceStore.clear();
         }
@@ -225,7 +381,12 @@ class ChatHistoryServiceImplConversationMemoryTest {
         assertTrue(memory.contains("Remember the blue fixture."));
         assertTrue(memory.contains("The fixture is blue."));
         assertFalse(memory.contains("Conversation summary:"));
-        org.mockito.Mockito.verify(messages).findNewestWindowBySessionId(eq(42L), any(Pageable.class));
+        var pages = org.mockito.ArgumentCaptor.forClass(Pageable.class);
+        org.mockito.Mockito.verify(messages, org.mockito.Mockito.times(2))
+                .findNewestWindowBySessionId(eq(42L), pages.capture());
+        assertEquals(List.of(2, 128), pages.getAllValues().stream()
+                .map(Pageable::getPageSize).sorted().toList());
+        assertTrue(pages.getAllValues().stream().allMatch(page -> page.getPageNumber() == 0));
         org.mockito.Mockito.verify(messages, org.mockito.Mockito.never()).save(any(ChatMessage.class));
     }
 

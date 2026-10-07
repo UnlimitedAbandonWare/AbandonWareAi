@@ -7,13 +7,18 @@ Project Root, 금지 목록 핵심어, 비밀값 패턴. FAIL이면 저장을 �
 
 사용:
   python -B scripts/brief_save.py save --draft <파일> --agent DEVIN|CODEX|GROK|CLEAN|GPTPRO \
-      --topic <kebab> [--date yyyymmdd] [--author agy] [--downloads-dir D] [--repo-root R]
+      --topic <kebab> [--date yyyymmdd] [--author agy] [--downloads-dir D] [--repo-root R] [--repo-copy]
   python -B scripts/brief_save.py lint <파일> --agent X [--repo-root R]
   python -B scripts/brief_save.py list|latest|search <단어> [--registry R.jsonl]
   python -B scripts/brief_save.py backfill [--downloads-dir D] [--registry R.jsonl]
+  python -B scripts/brief_save.py cover --topic <주제> --terms "t1|t2|t3" \
+      [--prefix PASTE_] [--topics-file <json>] [--json]
+      주제 커버리지: Downloads 실제 PASTE_* 파일과 기록부 경로를 내용 검색해
+      파일:줄 근거와 verdict(COVERED/PARTIAL/NONE)를 낸다 (F2 SKIP 근거 표용).
 
-저장 경로: Downloads/PASTE_<AGENT>_<topic>_<date>.txt (같은 이름이면 _R2,_R3) +
-          <repo>/agent-prompts/<agent-lower>-<topic>-<date>/BRIEF.txt (UTF-8 no BOM).
+저장 경로: Downloads/PASTE_<AGENT>_<topic>_<date>.txt (같은 이름이면 _R2,_R3; UTF-8 no BOM).
+          <repo>/agent-prompts/<agent-lower>-<topic>-<date>/BRIEF.txt 사본은
+          --repo-copy 지정 시에만 쓴다 (2026-10-03 R6 결정: 기본 생성 폐기).
 기록부:    <repo>/data/agent-handoff/brief-registry/briefs.jsonl
 backfill은 Downloads의 기존 PASTE_*.txt에 대해 이름·크기·mtime 메타데이터만 쓴다
 (파일 내용을 읽지 않는다 — sha12는 null).
@@ -61,6 +66,11 @@ EXTRA_SECRET_RES = (
 )
 
 PASTE_NAME_RE = re.compile(r"^PASTE_(?P<agent>[A-Za-z]+)_(?P<topic>.+)_(?P<date>\d{8})(?:_R(?P<rev>\d+))?\.txt$")
+
+# cover: Downloads PASTE_* 내용 검색 — .txt와 .md 둘 다 본다(F2).
+COVER_FILE_SUFFIXES = (".txt", ".md")
+COVER_LINE_MAX = 120
+COVER_MAX_LINES_PER_FILE = 20
 
 
 def _finding(check_id: str, severity: str, message: str, lines: list[int] | None = None) -> dict:
@@ -241,27 +251,31 @@ def cmd_save(args: argparse.Namespace) -> int:
     downloads.mkdir(parents=True, exist_ok=True)
     paste = _unique_path(downloads / f"PASTE_{agent}_{topic}_{date}.txt")
     paste.write_bytes(data)
-    repo_dir = repo_root / "agent-prompts" / f"{agent.lower()}-{topic}-{date}"
-    repo_dir.mkdir(parents=True, exist_ok=True)
-    rev = re.search(r"_R(\d+)$", paste.stem)
-    repo_copy = _unique_path(repo_dir / ("BRIEF.txt" if not rev else f"BRIEF_R{rev.group(1)}.txt"))
-    repo_copy.write_bytes(data)
+    repo_copy: Path | None = None
+    if args.repo_copy:
+        repo_dir = repo_root / "agent-prompts" / f"{agent.lower()}-{topic}-{date}"
+        repo_dir.mkdir(parents=True, exist_ok=True)
+        rev = re.search(r"_R(\d+)$", paste.stem)
+        repo_copy = _unique_path(repo_dir / ("BRIEF.txt" if not rev else f"BRIEF_R{rev.group(1)}.txt"))
+        repo_copy.write_bytes(data)
     sha12, nbytes = sha12_of(data), len(data)
-    match = paste.read_bytes() == repo_copy.read_bytes()
+    match = repo_copy is not None and paste.read_bytes() == repo_copy.read_bytes()
     registry = _registry_path(repo_root, args.registry)
     summary = next((l.strip() for l in text.splitlines() if l.strip()), topic)
     prior = [r for r in _read_registry(registry)
              if r.get("agent") == agent and r.get("topic") == topic]
     row = {"atKst": _kst_now(), "author": args.author, "agent": agent,
-           "topic": topic, "downloadsPath": str(paste), "repoPath": str(repo_copy),
+           "topic": topic, "downloadsPath": str(paste),
+           "repoPath": str(repo_copy) if repo_copy is not None else None,
            "bytes": nbytes, "sha12": sha12,
            "supersedes": [r.get("downloadsPath") for r in prior if r.get("downloadsPath")],
            "summaryKo": summary[:120]}
     _append_registry(registry, row)
-    _write_utf8(
-        f"{'WARN' if res['verdict'] == 'WARN' else 'PASS'} 저장 완료\n"
-        f"Downloads: {paste} / 레포: {repo_copy}\n"
-        f"바이트 {nbytes} / sha12 {sha12} / 두 사본 일치: {'예' if match else '아니오'}\n")
+    out = [f"{'WARN' if res['verdict'] == 'WARN' else 'PASS'} 저장 완료",
+           f"Downloads: {paste}" + (f" / 레포: {repo_copy}" if repo_copy is not None else ""),
+           f"바이트 {nbytes} / sha12 {sha12}" + (
+               f" / 두 사본 일치: {'예' if match else '아니오'}" if repo_copy is not None else "")]
+    _write_utf8("\n".join(out) + "\n")
     return 0
 
 
@@ -289,6 +303,134 @@ def cmd_backfill(args: argparse.Namespace) -> int:
     return 0
 
 
+def _decode_lossy(data: bytes) -> str:
+    """UTF-8 우선, CP949 폴백 — 혼재 인코딩 파일도 깨지지 않게."""
+    for enc in ("utf-8-sig", "cp949"):
+        try:
+            return data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="replace")
+
+
+def _cover_candidates(downloads: Path, prefix: str,
+                      registry_rows: list[dict]) -> list[Path]:
+    """Downloads의 PASTE_<prefix>*.{txt,md} + 기록부 downloadsPath(존재하는 것)."""
+    seen: set[str] = set()
+    out: list[Path] = []
+    if downloads.is_dir():
+        for f in sorted(downloads.iterdir()):
+            if (f.is_file() and f.name.startswith(prefix)
+                    and f.suffix.lower() in COVER_FILE_SUFFIXES):
+                seen.add(str(f).casefold())
+                out.append(f)
+    for row in registry_rows:
+        p = row.get("downloadsPath")
+        if not p:
+            continue
+        f = Path(p)
+        key = str(f).casefold()
+        if f.is_file() and key not in seen:
+            seen.add(key)
+            out.append(f)
+    return out
+
+
+def cover_topic(topic: str, terms: list[str], files: list[Path]) -> dict:
+    """한 주제의 커버리지. verdict: 파일 1개가 모든 term을 맞으면 COVERED."""
+    term_res = [re.compile(t, re.IGNORECASE) for t in terms]
+    matched_tis: set[int] = set()
+    covered = False
+    entries = []
+    for f in files:
+        try:
+            data = f.read_bytes()
+        except OSError:
+            continue
+        hits: dict[int, list[list]] = {}
+        for ln, line in enumerate(_decode_lossy(data).splitlines(), 1):
+            for ti, pat in enumerate(term_res):
+                if pat.search(line):
+                    matched_tis.add(ti)
+                    hits.setdefault(ti, []).append(
+                        [ln, line.strip()[:COVER_LINE_MAX]])
+        if not hits:
+            continue
+        covered = covered or len(hits) == len(terms)
+        m = re.search(r"(\d{8})(?:_R\d+)?$", f.stem)
+        date = m.group(1) if m else datetime.fromtimestamp(
+            f.stat().st_mtime,
+            timezone(timedelta(hours=9))).strftime("%Y%m%d")
+        tag = next((l.strip() for l in _decode_lossy(data).splitlines()
+                    if l.strip()), "")
+        flat = [h for _, ls in sorted(hits.items()) for h in ls]
+        entries.append({
+            "file": f.name, "path": str(f), "sha12": sha12_of(data),
+            "date": date, "tag": tag[:60],
+            "termsMatched": len(hits),
+            "coversAll": len(hits) == len(terms),
+            "hits": [{"term": terms[ti],
+                      "lines": hits[ti][:COVER_MAX_LINES_PER_FILE]}
+                     for ti in sorted(hits)],
+            "excerptLines": flat[:COVER_MAX_LINES_PER_FILE]})
+    entries.sort(key=lambda e: (-e["termsMatched"], e["file"]))
+    matched = {terms[ti] for ti in matched_tis}
+    verdict = ("COVERED" if covered
+               else "PARTIAL" if matched else "NONE")
+    return {"topic": topic, "verdict": verdict, "terms": terms,
+            "missing": [t for t in terms if t not in matched],
+            "files": entries}
+
+
+def _cover_text(results: list[dict], scanned: int) -> str:
+    out = []
+    for r in results:
+        miss = ", ".join(r["missing"]) or "-"
+        out.append(f"topic={r['topic']} verdict={r['verdict']} "
+                   f"terms={len(r['terms'])} missing=[{miss}]")
+        for e in r["files"]:
+            out.append(f"  {e['file']} sha12={e['sha12']} date={e['date']} "
+                       f"cover={e['termsMatched']}/{len(r['terms'])}"
+                       f"{' ALL' if e['coversAll'] else ''} tag={e['tag']}")
+            for ln, txt in e["excerptLines"]:
+                out.append(f"    {e['file']}:{ln}: {txt}")
+    hits = sum(len(r["files"]) for r in results)
+    out.append(f"files_scanned={scanned} files_with_hits={hits}")
+    return "\n".join(out) + "\n"
+
+
+def cmd_cover(args: argparse.Namespace) -> int:
+    repo_root = Path(args.repo_root)
+    registry = _read_registry(_registry_path(repo_root, args.registry))
+    files = _cover_candidates(Path(args.downloads_dir), args.prefix, registry)
+    topics: list[tuple[str, list[str]]] = []
+    if args.topics_file:
+        spec = json.loads(
+            Path(args.topics_file).read_bytes().decode("utf-8-sig"))
+        for k, v in spec.items():
+            terms = v.split("|") if isinstance(v, str) else list(v)
+            topics.append((str(k), [t for t in terms if t.strip()]))
+    else:
+        terms = [t for t in (args.terms or "").split("|") if t.strip()]
+        if not args.topic or not terms:
+            _write_utf8("FAIL --topic과 --terms(또는 --topics-file)가 필요하다\n")
+            return 2
+        topics = [(args.topic, terms)]
+    try:
+        results = [cover_topic(t, ts, files) for t, ts in topics]
+    except re.error as e:
+        _write_utf8(f"FAIL term 정규식 오류: {e}\n")
+        return 2
+    if args.json:
+        _write_utf8(json.dumps({"schema": "brief_cover.v1",
+                                "filesScanned": len(files),
+                                "results": results},
+                               ensure_ascii=False, indent=2) + "\n")
+    else:
+        _write_utf8(_cover_text(results, len(files)))
+    return 0
+
+
 def cmd_query(args: argparse.Namespace) -> int:
     registry = _registry_path(Path(args.repo_root), args.registry)
     rows = _read_registry(registry)
@@ -306,7 +448,8 @@ def cmd_query(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="brief_save.py")
     sub = ap.add_subparsers(dest="action", required=True)
-    for name in ("save", "lint", "list", "latest", "search", "backfill"):
+    for name in ("save", "lint", "list", "latest", "search", "backfill",
+                 "cover"):
         p = sub.add_parser(name)
         p.add_argument("--repo-root", default=str(repo_root_default()))
         p.add_argument("--registry", default=None)
@@ -317,14 +460,22 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--topic", required=True)
             p.add_argument("--date", default=None)
             p.add_argument("--author", default="agy")
+            p.add_argument("--repo-copy", action="store_true",
+                           help="agent-prompts/<agent>-<topic>-<date>/BRIEF.txt 사본도 쓴다 (기본: 쓰지 않음)")
         if name == "lint":
             p.add_argument("file")
             p.add_argument("--agent", required=True, choices=AGENTS)
         if name == "search":
             p.add_argument("query")
+        if name == "cover":
+            p.add_argument("--topic", default=None)
+            p.add_argument("--terms", default=None)
+            p.add_argument("--topics-file", default=None)
+            p.add_argument("--prefix", default="PASTE_")
+            p.add_argument("--json", action="store_true")
     args = ap.parse_args(argv)
-    return {"save": cmd_save, "lint": cmd_lint, "backfill": cmd_backfill}.get(
-        args.action, cmd_query)(args)
+    return {"save": cmd_save, "lint": cmd_lint, "backfill": cmd_backfill,
+            "cover": cmd_cover}.get(args.action, cmd_query)(args)
 
 
 if __name__ == "__main__":

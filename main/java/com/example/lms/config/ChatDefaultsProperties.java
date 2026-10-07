@@ -23,6 +23,7 @@ public class ChatDefaultsProperties {
     @NotNull @Min(1) private Integer maxTokens;
     @NotNull private Boolean useRag;
     @NotNull private Boolean useWebSearch;
+    @NotNull private Boolean googleSearchRescueEnabled = false;
     @NotBlank @Pattern(regexp = "AUTO|OFF|FORCE_LIGHT|FORCE_DEEP") private String searchMode;
     @NotBlank @Pattern(regexp = "adaptive|evidence_only") private String ragAnswerPolicy;
     @NotBlank private String defaultsVersion;
@@ -46,6 +47,7 @@ public class ChatDefaultsProperties {
         values.put("frequencyPenalty", frequencyPenalty); values.put("presencePenalty", presencePenalty);
         values.put("maxTokens", maxTokens); values.put("useRag", useRag);
         values.put("useWebSearch", useWebSearch); values.put("searchMode", searchMode);
+        values.put("googleSearchRescueEnabled", googleSearchRescueEnabled);
         values.put("ragAnswerPolicy", ragAnswerPolicy);
         values.put("customInstructions", customInstructions); values.put("responseTone", responseTone);
         values.put("responseLength", responseLength); values.put("responseLanguage", responseLanguage);

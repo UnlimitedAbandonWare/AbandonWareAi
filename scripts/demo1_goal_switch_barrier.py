@@ -4,6 +4,9 @@
 목표가 로테이트/재라우팅될 때 한 곳에서 처리한다:
 
   check            소유 in_progress journal + 소유 lease 요약, switch 필요 여부 JSON
+  check-goal       Codex 목표 등록 전 안전 판정 (advisory, 항상 exit 0) —
+                   활성 목표/P7 흔적이 감지되면 action=UPDATE_EXISTING, 호출자가
+                   활성 목표 없음을 보고할 때만 CREATE_NEW + get_goal 회복 스니펫
   switch           소유 in_progress를 superseded|abandoned로 닫고, 소유 lease를
                    end 하며, allowedOpen 신호 + 새 ask의 router resolve를 출력
   reject-complete  "Read ... before continuing" 같은 지시문/도구 서문이 완료
@@ -102,6 +105,25 @@ EVIDENCE = [
     ("verified-marker", re.compile(
         r"\bverified\b[^\n]{0,60}?(?:exit|pass|통과)|(?:통과|pass(?:ed)?)[^\n]{0,40}?verified",
         re.I)),
+]
+
+# P7 goal-conflict 방어 — Codex 플랫폼 목표 등록 안전 프로토콜.
+# action 판정은 UPDATE_EXISTING vs CREATE_NEW 둘뿐이며, 목표 상태가 미확인이면
+# 충돌 가능으로 보아 보수적으로 UPDATE_EXISTING을 고른다 (blind create_goal 금지).
+GOAL_CONFLICT_MARKERS = ("unfinished goal", "has an active goal")
+GOAL_SESSION_SCAN_BYTES = 2_000_000
+P7_NEXT_ACTION = ("Call update_goal or close previous active goal first, "
+                  "never retry create_goal")
+P7_REMEDY_CMD = "python -B scripts/demo1_goal_switch_barrier.py check-goal"
+P7_RECOVERY_SNIPPET = (
+    'const g = await tools.get_goal(); '
+    'if (g && g.id) { await tools.update_goal({status: "completed"}); } '
+    'await tools.create_goal({objective: <new objective>});'
+)
+SAFE_REGISTRATION_PROTOCOL = [
+    "create_goal 호출 전 반드시 get_goal로 현재 스레드의 활성/미완료 목표를 확인한다",
+    "활성 목표가 있으면 update_goal로 목표를 덮어쓰거나 status=completed 처리 후 create_goal한다",
+    "'unfinished goal'(P7) 거절 관측 시 create_goal 재시도 금지 — 즉시 update_goal로 전환한다",
 ]
 
 
@@ -541,6 +563,66 @@ def cmd_reject_complete(args) -> int:
     return 5 if rejected else 0
 
 
+def scan_session_goal_conflict(session: Path) -> dict:
+    """session/rollout 파일 끝부분(GOAL_SESSION_SCAN_BYTES)에서 P7 흔적을 센다.
+    읽기 실패는 치명이 아니라 io-error로만 기록한다 (advisory 도구)."""
+    try:
+        size = session.stat().st_size
+        with session.open("rb") as handle:
+            if size > GOAL_SESSION_SCAN_BYTES:
+                handle.seek(-GOAL_SESSION_SCAN_BYTES, os.SEEK_END)
+            data = handle.read().decode("utf-8", errors="replace")
+    except OSError as error:
+        return {"status": "io-error", "reason": str(error)[:160]}
+    markers = sum(data.count(marker) for marker in GOAL_CONFLICT_MARKERS)
+    return {"status": "ok", "file": str(session), "scannedBytes": len(data),
+            "goalConflictMarkers": markers}
+
+
+def cmd_check_goal(root: Path, args) -> int:
+    scan = None
+    if args.session:
+        session = Path(args.session)
+        if not session.is_absolute():
+            session = root / session
+        scan = scan_session_goal_conflict(session)
+    p7_seen = bool(args.p7_observed) or bool(
+        scan and scan.get("goalConflictMarkers"))
+    has_active = bool(args.has_active_goal or args.active_goal_id)
+    if p7_seen or has_active:
+        action, goal_state = "UPDATE_EXISTING", "active"
+        basis = "p7-rejection-observed" if p7_seen else "active-goal-reported"
+    elif args.no_active_goal:
+        action, goal_state = "CREATE_NEW", "none"
+        basis = "no-active-goal-reported"
+    else:
+        action, goal_state = "UPDATE_EXISTING", "unknown"
+        basis = "goal-state-unknown-conservative"
+    out = {
+        "schemaVersion": SCHEMA, "command": "check-goal",
+        "action": action, "goalState": goal_state, "decisionBasis": basis,
+        "safeToCreate": action == "CREATE_NEW",
+        "conflictingSignals": bool(has_active and args.no_active_goal) or None,
+        "activeGoalId": args.active_goal_id,
+        "threadId": args.thread_id,
+        "objective": args.objective,
+        "p7Observed": p7_seen,
+        "safeRegistrationProtocol": SAFE_REGISTRATION_PROTOCOL,
+        "recoverySnippet": P7_RECOVERY_SNIPPET,
+        "nextAction": P7_NEXT_ACTION if action == "UPDATE_EXISTING" else None,
+        "remedyCmd": P7_REMEDY_CMD,
+        "protocolDoc": "docs/agents-rules/DEMO1-CODEX-GOAL-INTAKE-CONTINUE.md",
+    }
+    if scan is not None:
+        out["sessionScan"] = scan
+    if args.agent:
+        state = collect(root, args.agent, True, PROTECT_MINUTES)
+        out["localOwnedInProgress"] = [j["taskId"] for j in state["journals"]]
+        out["localOwnedLeaseCount"] = len(state["leases"])
+    print(json.dumps(out, ensure_ascii=True))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
@@ -571,6 +653,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--include-recent", action="store_true",
                    help="보호 창/활성 lease 보호를 무시 (운영자 확정 시에만)")
     p.set_defaults(func=lambda r, a: cmd_switch(r, a))
+
+    p = sub.add_parser("check-goal",
+                       help="create_goal 전 안전 등록 판정 — UPDATE_EXISTING vs "
+                            "CREATE_NEW + P7 회복 스니펫 (advisory, exit 0)")
+    p.add_argument("--root", default=str(DEFAULT_ROOT))
+    p.add_argument("--agent",
+                   help="로컬 소유 journal/lease 요약을 붙일 에이전트명 (선택)")
+    p.add_argument("--has-active-goal", action="store_true",
+                   help="get_goal이 활성/미완료 목표를 반환했다고 호출자가 보고")
+    p.add_argument("--no-active-goal", action="store_true",
+                   help="get_goal이 활성 목표 없음을 반환했다고 호출자가 보고")
+    p.add_argument("--active-goal-id",
+                   help="활성 목표 id — has-active-goal과 동일 효과")
+    p.add_argument("--thread-id", help="현재 스레드/세션 id (출력 echo)")
+    p.add_argument("--p7-observed", action="store_true",
+                   help="이 스레드에서 'unfinished goal' 거절을 이미 관측")
+    p.add_argument("--session",
+                   help="session/rollout 파일 경로 — 끝부분을 스캔해 P7 흔적 감지")
+    p.add_argument("--objective", help="등록하려는 새 목표 한 줄 (출력 echo)")
+    p.set_defaults(func=lambda r, a: cmd_check_goal(r, a))
 
     p = sub.add_parser("reject-complete",
                        help="증거 없는 지시문/도구 서문이면 exit!=0 (instructional-not-acceptance)")

@@ -7,7 +7,7 @@ const css = fs.readFileSync('main/resources/static/css/chat-style.css', 'utf8');
 const template = fs.readFileSync('main/resources/templates/chat-ui.html', 'utf8');
 
 test('pending bubble has one compact waiting label and a decorative spinner', () => {
-  assert.match(css, /content:\s*"답변 준비 중"/);
+  assert.match(css, /content:\s*"Planning"/);
   assert.match(css, /\.message\.assistant\[data-state="pending"\]::after\s*\{[^}]*animation:/s);
   assert.doesNotMatch(css, /content:\s*"Assistant is preparing"/);
 });
@@ -47,10 +47,10 @@ test('client wait is immediate and elapsed is excluded from live announcements',
   h.markAssistantClientWait(node, 0);
   const label = node.querySelector('[data-wait-label]');
   assert.ok(label, 'pending bubble needs a visible request-local status line');
-  assert.equal(label.textContent, '답변 준비 중');
+  assert.equal(label.textContent, 'Planning');
   assert.equal(label.attrs['aria-live'], 'polite');
   h.markAssistantClientWait(node, 1250);
-  assert.equal(label.textContent, '답변 준비 중');
+  assert.equal(label.textContent, 'Planning');
   assert.equal(node.querySelector('[data-wait-elapsed]').textContent, '대기 1초');
   assert.equal(node.querySelector('[data-wait-elapsed]').attrs['aria-hidden'], 'true');
 });
@@ -59,12 +59,12 @@ test('wait uses actual stage codes and completed retrieval cannot regress', () =
   h.markAssistantClientWait(node, 0);
   assert.equal(typeof h.updateAssistantWaitProgress, 'function');
   h.updateAssistantWaitProgress(node, {code:'model_wait'});
-  assert.equal(node.querySelector('[data-wait-label]').textContent, '답변 준비 중');
+  assert.equal(node.querySelector('[data-wait-label]').textContent, 'Planning');
   h.updateAssistantWaitProgress(node, {code:'web_search_running'});
   assert.equal(node.querySelector('[data-wait-label]').textContent, '검색 중');
   h.updateAssistantWaitProgress(node, {code:'retrieval_completed_empty'});
   h.updateAssistantWaitProgress(node, {code:'web_search_running'});
-  assert.equal(node.querySelector('[data-wait-label]').textContent, '검색 종료 · 자료 미확보 · 답변 준비 중');
+  assert.equal(node.querySelector('[data-wait-label]').textContent, '검색 종료 · 자료 미확보 · Planning');
   h.updateAssistantWaitProgress(node, {code:'answer_generation_started'});
   assert.equal(node.querySelector('[data-wait-label]').textContent, '검색 종료 · 자료 미확보 · 답변 작성 중');
 });

@@ -64,6 +64,15 @@ class NoEvidenceChatFallbackTest {
     }
 
     @Test
+    void generalConceptSearchDisclaimerDoesNotTurnIntoAFreshnessRequest() {
+        String query = "RAG에서 키워드 검색과 벡터 검색의 차이를 일반 개념으로 세 문장 정도 설명해줘. 최신 정보나 외부 검색이 꼭 필요한 질문은 아니야.";
+        assertTrue(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(query));
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(query.replace("RAG에서", "최신 원신 공식 공지에서")));
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(query + " 오늘의 버전도 확인해줘."));
+        assertFalse(NoEvidenceChatFallback.isExplicitGeneralConceptOnly(query.replace("키워드 검색과 벡터 검색", "아스피린과 와파린 복용")));
+    }
+
+    @Test
     void sessionAssignmentsAndCorrectionsNeedConversationContextOnly() throws Exception {
         var classifier = NoEvidenceChatFallback.class.getDeclaredMethod("isSessionMemoryOnly", String.class);
         classifier.setAccessible(true);

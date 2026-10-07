@@ -21,6 +21,23 @@
 
 인계 시 `intent/scope/identity`, E-ID와 관찰 경계, mechanismStages, 비활성 후보를 포함한 hypotheses, activeProbe 조건·coverage, 남은 acceptance를 보존한다. 기존 문서에 있으면 내용을 복제하지 않고 식별 가능한 참조로 넘긴다. 수신자가 결정에 필요한 제약을 표현할 수 없으면 해당 인계를 보류하고 누락을 명시한다. 해시는 바이트 동일성을 보여주며 원인·권한·검증 통과를 대신하지 않는다.
 
+## 첫 두 턴 컨텍스트·근거 조립
+
+이 증상이 있는 사건의 `reproduction/evidence/acceptance`에 아래 슬롯을 붙인다. 기존 사건·검사 결과를 재사용하며 모든 슬롯에 새 도구 실행을 할당하지 않는다.
+
+| 슬롯 | A와 즉시 후속 B에서 기록할 증거 |
+|---|---|
+| turnPair | 같은 owner 참조·sessionId에서 A→B 순서, 각 assistantMessageId/runId/requestId/snapshotId와 실제 join 근거. sourceId는 각 본문·단계에 연결한다. 없는 ID는 `NOT_OBSERVED`, UI로만 얻은 session 연결은 `UI_JOIN_ONLY`; timestamp·모델명·checksum은 join을 대신하지 않는다. |
+| intentAndSupport | A의 기대 의미·유용한 답변과 근거, B의 대명사/별칭→대상 해석, B가 새로 묻는 사실→직접 지지 본문/span을 별도로 기록한다. A 본문 재사용은 B의 사실도 지지하는 span이 확인될 때만 근거가 된다. 대상 해석 성공은 신규 질문 근거 확보 성공이 아니다. |
+| evidenceStages | A/B별 `candidate → sourceBody → afterFilter → packing → actualProviderDispatch → citation → stored/reload`의 관측 결과·E-ID/sourceId·count/hash/locator 참조. dispatch는 해당 run/request의 실제 전송 메시지 안 본문 포함을 입증하는 기존 receipt/참조가 필요하다. packing count는 실제 전송의 증명이 아니다. citation은 주장/span 연결, 저장·reload는 같은 owner/session/message의 연결·의미 보존을 확인한다. |
+| acceptance | A의 유용한 답변·실제 근거 전달과 B의 대상 해석·질문별 본문 전달을 같은 두 턴에서 재현할 인수 조건, 현재 증명 범위, 남은 검사 하나. 첫 턴·fixture/test PASS와 실제 A→B 성공은 별도다. 저장·reload 증상이 포함되면 해당 슬롯을 검증한다. 새 세션 시작은 별도 사례이며 타세션 기억을 자동 공유하지 않는다. |
+
+단계의 count/URL/Sources 표시/HTTP200/ctx·memory 길이는 그 관측만 증명한다. 단계 이름이 붙은 count만 있으면 `countReported`로 기록하고 본문 포함은 미관측으로 남긴다. 본문 ID/receipt 없이 이를 packing 본문 주입 PASS로 쓰지 않는다. Sources append와 모델 본문 주입은 다른 경로일 수 있다. `actualProviderDispatch=NOT_OBSERVED`를 미실행·검색 미지원·모델이 못 읽음으로 바꾸지 않는다. `disabled`는 해당 단계의 명시적 실행 상태·reason이 있을 때만 쓰고, `no_citable_locator`를 전체 provider 비활성으로 확대하지 않는다. `executed_empty`와 filter starvation, metadata 미완성·scope 미결속도 구별한다.
+
+검증 서비스 장애로 관측된 unknown, 일반 관측 부족, known rejected/contradicted를 따로 기록한다. `releaseAllowed/evidenceGatePassed`는 공개 정책 판정일 수 있으며 근거 존재·인용·검증 성공을 뜻하지 않는다. 공개/검증/knowledge write 판단은 [기존 정책](../../../../docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md)을 따른다. 유용한 일반 설명을 보존하고 미지원 신규 구체 수치·사실은 제외하여 미확인 범위를 밝힌다. 단순히 unverified라고 붙여 추측성 구체 주장을 재공개하거나 rejected 초안을 fail-soft로 재공개하지 않는다. 검증 assert를 약화하거나 허위로 안전한 답변을 강제하지 않는다.
+
+실행 접점은 기존 snapshot/answer bundle·요청별 trace·focused tests다. `scripts/session413_evidence_answer_recovery_assist.py proof-gap --root . --file <기존 proof-gaps.json>`의 dispatch-messages/response-body/run-request-join/judge-executed/live-replay 슬롯은 위 미확인 경계에 연결할 수 있다. 도구의 `NOT_PROVEN/NOT_RUN` 의미와 receipt 요구를 유지한다. shape 검사 exit0은 제품 PASS가 아니며 합성 GREEN은 역사적 세션 복구가 아니다. 허용된 기록이 부족하면 그 슬롯과 다음 관찰을 남기고 접근거부 저장소를 우회하지 않는다.
+
 ## 증거 상태와 단계 전환
 
 - `proposed`: 실행할 검사만 정했다. 실행 증거로 세지 않는다.

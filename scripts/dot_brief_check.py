@@ -18,6 +18,10 @@ Codex에 붙여 넣기 전, 지시서가 live repo와 맞는지 1초 검사한�
                     (scripts/lease_conflict_autoflow.py scan; --no-lease 시 skipped).
   4) ANTI_PATTERNS  git push/commit -a/add -A/reset --hard, 비밀값 노출 패턴,
                     무조건 전체 원복 유도.
+  5) DISPATCH       지시문 가독성(F3, 2026-10-06) — WARN만, 차단 아님:
+                    DISPATCH_GLUED 한글+영숫자 붙은 ≥25자 토큰 3개 이상,
+                    DISPATCH_WALL 마침표·줄바꿈 없이 400자 넘는 문단,
+                    DISPATCH_MULTI_GOAL 역할 전환 표지+이전 목표 문단 잔존.
 
 판정: FAIL = 핵심 섹션(목표/HOLD/수용) 결손, 미존재 대상, 하드 안티패턴.
       WARN = 부속 섹션 결손, lease-blocked 대상, 추출 대상 0건, 소프트 안티패턴.
@@ -66,6 +70,72 @@ HARD_ANTI = [
 SOFT_ANTI = [
     ("revert-all", re.compile(r"전체\s*원복|전부\s*되돌|revert\s+all", re.I)),
 ]
+# W3 (F3, 2026-10-06): 하위 지시문 가독성 — WARN 전용, verdict를 FAIL로 만들지 않는다.
+DISPATCH_TOKEN_MIN = 25
+DISPATCH_GLUE_MIN = 3
+DISPATCH_WALL_MIN = 400
+DISPATCH_SWITCH_RE = re.compile(
+    r"모든\s*\S{0,12}(중단|폐기)|패치\s*\S{0,4}중단|지금부터|이제부터|"
+    r"새\s*요청|역할\s*전환|지시서는?\s*폐기|대신\s*지시", re.I)
+DISPATCH_GOAL_RE = re.compile(
+    r"한\s*줄\s*목표|목표\s*[:：]|지원\s*패치|작업\s*단계", re.I)
+# lease 충돌에 HOLD만 적고 lease-wait 대기 명령이 없으면 WARN (차단 아님).
+LEASE_HOLD_RE = re.compile(
+    r"(lease|리스|잠금)[^\n]{0,80}(?<![0-9A-Za-z_])HOLD(?![0-9A-Za-z_])|"
+    r"(?<![0-9A-Za-z_])HOLD(?![0-9A-Za-z_])[^\n]{0,80}(lease|리스|잠금)",
+    re.I)
+LEASE_WAIT_RE = re.compile(r"lease[-_ ]?wait", re.I)
+# VIBE_OPEN 동안 admin 로그인·로그아웃 차단 검사는 Acceptance 완료 조건이
+# 아니다 — 지시서의 Acceptance 섹션에 그런 줄이 있으면 WARN (차단 아님).
+ADMIN_CHECK_WARN = "ADMIN_CHECK_UNDER_VIBE_OPEN"
+ADMIN_CHECK_SUGGEST = (
+    "관리자·로그인·로그아웃 검사는 VIBE_OPEN이므로 HTTP status만 기록하고 "
+    "DEFERRED_SECURITY, 계정·URL을 묻지 마.")
+ADMIN_CHECK_LINE = re.compile(
+    r"(관리자|admin).{0,20}(로그인|로그아웃|차단|login|logout|block)|"
+    r"(로그인|로그아웃).{0,16}(후|뒤)?.{0,8}차단|"
+    r"잘못된.{0,8}(계정|credential).{0,8}차단|"
+    r"invalid.{0,16}(account|credential|login)|"
+    r"logout.{0,20}(block|re-?block|deny)|"
+    r"저장.{0,8}(인증|로그인).{0,8}상태", re.I)
+ACCEPT_HEAD = re.compile(
+    r"(?im)^\s*#{0,4}\s*\**\s*\d{0,2}[.\)]?\s*"
+    r"(acceptance|수용\s*조건|수용\s*기준|완료\s*기준)\b")
+_NEXT_HEAD = re.compile(
+    r"(?m)^\s*#{1,4}\s|^\s*(HOLD|절대\s*금지|변경\s*금지|금지\s*목록|"
+    r"수정\s*허용|변경\s*허용|보고\s*형식|참고|공통\s*규칙|작업\s*단계|"
+    r"한\s*줄\s*목표|사실|ASK_ONCE)\s*[:：]?\s*$")
+# A1·수용 … 형식으로 시작하는 줄은 Acceptance 항목으로 본다(헤딩 없는 브리프).
+_ACCEPT_ITEM = re.compile(
+    r"^\s*[-*]?\s*(A\d{1,2}|수용|완료\s*조건|acceptance)\b", re.I)
+
+
+def _vibe_open_enabled(root: Path) -> bool:
+    """root/configs/vibe-open.yaml `enabled: true`일 때만 True."""
+    try:
+        body = (root / "configs" / "vibe-open.yaml").read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return bool(re.search(r"(?im)^\s*enabled\s*:\s*(true|yes|on)\b", body))
+
+
+def _acceptance_region(text: str) -> str:
+    """Acceptance/수용 조건 헤딩부터 다음 섹션 헤더까지의 본문."""
+    head = ACCEPT_HEAD.search(text)
+    if not head:
+        return ""
+    tail = text[head.end():]
+    nxt = _NEXT_HEAD.search(tail)
+    return tail[:nxt.start()] if nxt else tail
+
+
+def admin_check_in_acceptance(text: str) -> bool:
+    """admin 로그인·로그아웃 차단 검사가 Acceptance 완료 조건으로 쓰였는지."""
+    if ADMIN_CHECK_LINE.search(_acceptance_region(text)):
+        return True
+    return any(_ACCEPT_ITEM.match(line) and ADMIN_CHECK_LINE.search(line)
+               for line in text.splitlines())
+_STRUCTURED_LINE_RE = re.compile(r"^\s*(?:[|>#\-*`]|\d+[.)])")
 CREATION_HINT = re.compile(
     r"신규|new\s*file|create|생성|추가|기록|작성|쓰기|write|output|new\b", re.I)
 # 금지/부정 문맥에서 나온 금지 명령 언급은 위반이 아니다.
@@ -187,6 +257,64 @@ def lease_scan(root: Path, paths):
             "leaseCount": len(data.get("leases", []))}
 
 
+def _glued_token(word: str) -> bool:
+    """한글과 영숫자가 공백 없이 붙은 ≥25자 토큰 (경로·URL 같은 순 ASCII 제외)."""
+    return (len(word) >= DISPATCH_TOKEN_MIN
+            and re.search(r"[가-힣]", word)
+            and re.search(r"[A-Za-z0-9]", word))
+
+
+def dispatch_lint(text: str) -> dict:
+    """F3 지시문 가독성 lint. 반환 warnings = [DISPATCH_GLUED, DISPATCH_WALL,
+    DISPATCH_MULTI_GOAL] 중 해당하는 것."""
+    glued = 0
+    walls = 0
+    in_fence = False
+    para: list[str] = []
+    switch_lines: list[int] = []
+    goal_lines: list[int] = []
+
+    def flush_para() -> None:
+        nonlocal walls
+        if para:
+            blob = "\n".join(para)
+            if (len(re.sub(r"\s", "", blob)) > DISPATCH_WALL_MIN
+                    and not re.search(r"[.。!?？！]", blob)):
+                walls += 1
+            para.clear()
+
+    for i, line in enumerate(text.splitlines(), 1):
+        if line.strip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        if not line.strip():
+            flush_para()
+            continue
+        glued += sum(1 for t in line.split() if _glued_token(t))
+        if DISPATCH_SWITCH_RE.search(line):
+            switch_lines.append(i)
+        if DISPATCH_GOAL_RE.search(line):
+            goal_lines.append(i)
+        if _STRUCTURED_LINE_RE.match(line):
+            # 구조화 줄(표·목록·제목)은 문단 경계 — 벽 판정에 넣지 않는다.
+            flush_para()
+            continue
+        para.append(line)
+    flush_para()
+    warnings = []
+    if glued >= DISPATCH_GLUE_MIN:
+        warnings.append("DISPATCH_GLUED")
+    if walls:
+        warnings.append("DISPATCH_WALL")
+    if switch_lines and any(g < min(switch_lines) for g in goal_lines):
+        warnings.append("DISPATCH_MULTI_GOAL")
+    return {"warnings": warnings, "gluedTokens": glued,
+            "wallParagraphs": walls,
+            "roleSwitch": bool(warnings and "DISPATCH_MULTI_GOAL" in warnings)}
+
+
 def check_brief(text: str, root: Path, do_lease: bool):
     hard_missing = [k for k, rx in REQUIRED_HARD.items() if not rx.search(text)]
     soft_missing = [k for k, rx in REQUIRED_SOFT.items() if not rx.search(text)]
@@ -223,10 +351,17 @@ def check_brief(text: str, root: Path, do_lease: bool):
                        {t["display"] for t in targets
                         if t["kind"] == "path" and (root / t["display"]).is_file()})
         lease = lease_scan(root, paths)
+    dispatch = dispatch_lint(text)
+    hold_without_wait = bool(LEASE_HOLD_RE.search(text)
+                             and not LEASE_WAIT_RE.search(text))
+    admin_check_vibe = bool(_vibe_open_enabled(root)
+                            and admin_check_in_acceptance(text))
     verdict = "PASS"
     if hard_missing or missing or hard_anti:
         verdict = "FAIL"
-    elif soft_missing or lease.get("blocked") or soft_anti or not targets:
+    elif (soft_missing or lease.get("blocked") or soft_anti
+          or not targets or dispatch["warnings"] or hold_without_wait
+          or admin_check_vibe):
         verdict = "WARN"
     actions = []
     if hard_missing:
@@ -239,6 +374,14 @@ def check_brief(text: str, root: Path, do_lease: bool):
         actions.append(f"lease 충돌 {len(lease['blocked'])}건 — 소유 세션 종료 후 적용")
     if soft_missing:
         actions.append("권장 섹션 보강:" + ",".join(soft_missing))
+    if dispatch["warnings"]:
+        actions.append("지시문 가독성:" + ",".join(dispatch["warnings"])
+                       + " — 새 지시문으로 분리·토큰 띄어쓰기 권고")
+    if hold_without_wait:
+        actions.append("LEASE_HOLD_WITHOUT_WAIT — lease 충돌 HOLD 대신 "
+                       "lease-wait --max-min auto 대기 명령 줄 추가 권고")
+    if admin_check_vibe:
+        actions.append(ADMIN_CHECK_WARN + " — " + ADMIN_CHECK_SUGGEST)
     if not actions:
         actions.append("ready — Codex/실행 세션에 붙여넣기 가능")
     return {
@@ -248,6 +391,9 @@ def check_brief(text: str, root: Path, do_lease: bool):
                     "missing": missing, "informational": informational},
         "lease": lease,
         "antiPatterns": {"hard": hard_anti, "soft": soft_anti},
+        "dispatch": dispatch,
+        "leaseHoldWithoutWait": hold_without_wait,
+        "adminCheckUnderVibeOpen": admin_check_vibe,
         "action": " | ".join(actions),
     }
 
@@ -289,7 +435,8 @@ def main(argv=None) -> int:
         line1 = f"VERDICT: {result['verdict']}"
         line2 = (f"checks: targets={t['existing']}/{t['total']} "
                  f"sections={hard_n + soft_n}/{len(REQUIRED_HARD) + len(REQUIRED_SOFT)} "
-                 f"lease={lease_s} antiPatterns={anti_n}")
+                 f"lease={lease_s} antiPatterns={anti_n} "
+                 f"dispatch={len(result['dispatch']['warnings'])}")
         line3 = f"action: {result['action']}"
         for ln in (line1, line2, line3):
             txt, _ = redact_text(ln)
@@ -299,6 +446,8 @@ def main(argv=None) -> int:
                 print(f"  missing: {m['kind']} {m['target']} (line {m['line']})")
             for b in lease.get("blocked", []):
                 print(f"  lease-blocked: {b}")
+            for w in result["dispatch"]["warnings"]:
+                print(f"  dispatch: {w}")
     return {"PASS": EXIT_PASS, "WARN": EXIT_WARN, "FAIL": EXIT_FAIL}[result["verdict"]]
 
 

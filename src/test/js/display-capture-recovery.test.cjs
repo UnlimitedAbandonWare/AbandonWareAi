@@ -5,9 +5,9 @@ const flush=()=>new Promise(setImmediate);
 const deferred=()=>{let resolve,reject;const promise=new Promise((a,b)=>{resolve=a;reject=b;});return{promise,resolve,reject};};
 const id='12345678-1234-4234-8234-123456789abc';
 const view=(extra={})=>({assistId:id,epoch:1,version:1,ready:true,state:'RUNNING',audioAvailable:true,audioState:'READY',...extra});
-function transport(handler){
+function transport(handler,options={}){
   const calls=[],timers=new Map();let n=0;
-  const client=createClient({uuid:()=>id,setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:k=>timers.delete(k),
+  const client=createClient({...options,uuid:()=>id,setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:k=>timers.delete(k),
     fetchImpl:async(url,options)=>{const route=url.replace('/api/assist/display/','');calls.push({route,body:JSON.parse(options.body)});
       return{ok:true,headers:{get:()=>null},json:async()=>handler(route,JSON.parse(options.body))};}});
   return{client,calls,timers};
@@ -148,3 +148,116 @@ test('failed readiness after epoch renewal cleans only the returned audio epoch'
    assert.equal(f.calls.find(c=>c.route==='audio/stop').body.epoch,2);assert.equal(f.client.state.voiceActive,false);
  }finally{await f.client.endVoice();f.client.dispose();}
 });
+
+test('assist_not_found on capture start reconnects once and retries the handshake',async()=>{
+ let reconnects=0;
+ const f=capture(attempt=>{if(attempt===1)throw Object.assign(Error('assist_not_found'),{status:404});});
+ f.client.reconnect=async options=>{assert.equal(options.preserveSession,true);reconnects++;};
+ try{assert.equal(await f.voice.start(),true);
+   assert.equal(f.starts,2);assert.equal(reconnects,1);
+   assert.equal(f.voice.state.phase,'LISTENING');assert.equal(f.voice.state.errorCode,null);assert.equal(f.voice.state.errorStage,null);
+ }finally{await f.voice.stop();}
+});
+test('assist_not_found surviving the reconnect stops with its code and stage',async()=>{
+ const f=capture(()=>{throw Object.assign(Error('assist_not_found'),{status:404});});
+ f.client.reconnect=async()=>{};
+ try{assert.equal(await f.voice.start(),false);
+   assert.equal(f.voice.state.phase,'ERROR');assert.equal(f.voice.state.errorCode,'assist_not_found');
+   assert.equal(f.voice.state.errorStage,'server_begin');
+   assert.equal(f.voice.state.events.find(e=>e.event==='MIC_SESSION_STOP').stage,'server_begin');
+ }finally{await f.voice.stop();}
+});
+
+
+for(const terminal of ['pause','dispose']){
+ test(`pending reconnect late success cannot resume or apply a view after ${terminal}`,async()=>{
+  const gate=deferred(),f=transport(route=>route==='bootstrap'?gate.promise:view());
+  const reconnecting=f.client.reconnect();reconnecting.catch(()=>{});
+  try{
+   await flush();f.client[terminal]();assert.equal(f.client.state.connection,'PAUSED');
+   gate.resolve(view({epoch:2}));await reconnecting;await flush();await flush();
+   assert.equal(f.client.state.connection,'PAUSED','late success must preserve '+terminal);
+   assert.equal(f.client.state.assistId,undefined,'cancelled view must not be applied');
+   assert.equal(f.calls.filter(c=>c.route==='poll').length,0,'no restarted transport after '+terminal);
+   assert.equal(f.timers.size,0);
+  }finally{gate.resolve(view());await reconnecting.catch(()=>{});f.client.dispose();}
+ });
+
+ test(`pending reconnect late failure cannot restart polling after ${terminal}`,async()=>{
+ const gate=deferred(),f=transport(route=>route==='bootstrap'?gate.promise:view());
+ const reconnecting=f.client.reconnect();reconnecting.catch(()=>{});
+ try{
+  await flush();f.client[terminal]();gate.reject(Error('synthetic_reconnect_failure'));
+  await assert.rejects(reconnecting,/synthetic_reconnect_failure/);await flush();await flush();
+  assert.equal(f.client.state.connection,'PAUSED');
+  assert.equal(f.calls.length,1,'no new bootstrap or poll after terminal disposal');
+  assert.equal(f.timers.size,0);
+ }finally{gate.reject(Error('synthetic_cleanup'));await reconnecting.catch(()=>{});f.client.dispose();}
+ });
+}
+
+test('pending reconnect matching lifecycle still resumes normal polling',async()=>{
+ const gate=deferred(),f=transport(route=>route==='bootstrap'?gate.promise:view());
+ const reconnecting=f.client.reconnect();
+ try{
+  await flush();gate.resolve(view({epoch:2}));await reconnecting;await flush();await flush();
+  assert.equal(f.client.state.assistId,id);
+  assert.equal(f.calls.filter(c=>c.route==='poll').length,1);
+  assert.ok(f.timers.size>0,'live matching reconnect keeps its existing poll schedule');
+ }finally{gate.resolve(view());await reconnecting.catch(()=>{});f.client.dispose();}
+});
+
+const phoneView=(extra={})=>view({role:'STANDALONE',caption:null,captionTtlMs:0,cardTtlMs:0,...extra});
+for(const terminal of ['pause','dispose']){
+ for(const outcome of ['success','stale_epoch','assist_paused','synthetic_network']){
+  test(`late audio stop ${outcome} preserves ${terminal} without reconnecting`,async()=>{
+   const gate=deferred();let stops=0;
+   const f=transport(route=>route==='audio/stop'&&++stops===1?gate.promise:phoneView(),{transcription:true,standalone:true});
+   await f.client.beginVoice();
+   const stopping=f.client.endVoice().catch(error=>error);
+   try{
+    await flush();f.client[terminal]();const callsAtStop=f.calls.length;
+    if(outcome==='success')gate.resolve(phoneView({epoch:2}));else gate.reject(Error(outcome));
+    await stopping;await flush();
+    assert.equal(f.calls.length,callsAtStop,'a stopped lifecycle must not send phone-test or a second stop');
+    assert.equal(f.client.state.connection,'PAUSED','late stop must not apply READY or RECONNECTING');
+    assert.equal(f.client.state.epoch,1,'the late response must not replace the displayed epoch');
+    assert.equal(f.timers.size,0);
+    await assert.doesNotReject(()=>f.client.beginVoice(),'an explicit new Start must release the stop latch');
+    assert.equal(f.client.state.voiceActive,true);
+   }finally{gate.resolve(phoneView());await stopping;await f.client.endVoice();f.client.dispose();}
+  });
+ }
+ test(`stop recovery pending phone-test cannot send a second stop after ${terminal}`,async()=>{
+  const gate=deferred();let connects=0,stops=0;
+  const f=transport(route=>{
+   if(route==='phone-test'&&++connects===2)return gate.promise;
+   if(route==='audio/stop'&&++stops===1)throw Error('stale_epoch');
+   return phoneView();
+  },{transcription:true,standalone:true});
+  await f.client.beginVoice();const stopping=f.client.endVoice().catch(error=>error);
+  try{
+   await flush();assert.equal(connects,2,'exercise the already pending recovery connection');
+   f.client[terminal]();const callsAtStop=f.calls.length;
+   gate.resolve(phoneView({epoch:2}));await stopping;await flush();
+   assert.equal(f.calls.length,callsAtStop,'cancelled recovery must not send another stop');
+   assert.equal(f.client.state.connection,'PAUSED');assert.equal(f.client.state.epoch,1);
+   assert.equal(f.timers.size,0);
+  }finally{gate.resolve(phoneView());await stopping;f.client.dispose();}
+ });
+}
+for(const reason of ['stale_epoch','assist_paused']){
+ test(`matching stop lifecycle still recovers ${reason} once and permits the next Start`,async()=>{
+  let stops=0;
+  const f=transport(route=>{if(route==='audio/stop'&&++stops===1)throw Error(reason);return phoneView({epoch:stops?2:1});},
+   {transcription:true,standalone:true});
+  try{
+   await f.client.beginVoice();await f.client.endVoice({finish:true});
+   assert.equal(f.calls.filter(c=>c.route==='phone-test').length,2);
+   const stopCalls=f.calls.filter(c=>c.route==='audio/stop');
+   assert.equal(stopCalls.length,2);assert.equal(stopCalls[0].body.epoch,1);assert.equal(stopCalls[1].body.epoch,2);
+   assert.equal(stopCalls[0].body.finish,true);assert.equal(stopCalls[1].body.finish,true);
+   await f.client.beginVoice();assert.equal(f.client.state.voiceActive,true);
+  }finally{await f.client.endVoice();f.client.dispose();}
+ });
+}

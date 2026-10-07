@@ -619,15 +619,19 @@ public class BraveSearchService implements WebSearchProvider {
     }
 
     private BraveSearchResult requestBudgetExhaustedResult(String query, int requestedCount, long t0Ns) {
+        return requestBudgetExhaustedResult(query, requestedCount, t0Ns, "request_budget_exhausted");
+    }
+
+    private BraveSearchResult requestBudgetExhaustedResult(String query, int requestedCount, long t0Ns, String reason) {
         long elapsedMs = Math.max(0L, (System.nanoTime() - t0Ns) / 1_000_000L);
-        TraceStore.put("web.brave.requestBudgetExhausted", true);
-        traceBraveFailure(query, requestedCount, -1, "request_budget_exhausted", false, false, null, elapsedMs);
+        if ("request_budget_exhausted".equals(reason)) TraceStore.put("web.brave.requestBudgetExhausted", true);
+        traceBraveFailure(query, requestedCount, -1, reason, false, false, null, elapsedMs);
         return new BraveSearchResult(
                 java.util.List.of(),
                 BraveSearchResult.Status.EXCEPTION,
                 null,
                 0L,
-                "request_budget_exhausted",
+                reason,
                 elapsedMs);
     }
 
@@ -1066,7 +1070,7 @@ public class BraveSearchService implements WebSearchProvider {
 
     private BraveSearchResult searchWithMetaSingle(String query, int limit, long t0Ns) {
         String safeQuery = sanitizeQuery(query);
-        if (!com.example.lms.service.rag.SelfAskSearchBudget.tryQueryAlias(query, safeQuery)) return requestBudgetExhaustedResult(safeQuery, Math.max(1, limit), t0Ns);
+        if (!com.example.lms.service.rag.SelfAskSearchBudget.tryQueryAlias(query, safeQuery)) return requestBudgetExhaustedResult(safeQuery, Math.max(1, limit), t0Ns, "query_alias_denied");
         int requestedTopK = (limit > 0 ? limit : 5);
         int topK = Math.min(requestedTopK, BRAVE_MAX_TOPK);
         if (safeQuery.isBlank()) {

@@ -25,8 +25,78 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class DynamicChatModelFactoryRequestTimelineTest {
+
+    @Test
+    void oauthCompletionIsRecordedOnTheCurrentRequestWithoutClaimingWireEvidence() {
+        var tracker = new ModelRuntimeHealthTracker();
+        String route = "chatgpt-oauth:synthetic";
+        String timeline = pendingTimeline(tracker, "oauth-request", "oauth-session", route);
+        var registration = mock(ChatGptOAuthRegistration.class);
+        ChatModel delegate = new ChatModel() {
+            @Override
+            public dev.langchain4j.model.chat.response.ChatResponse chat(
+                    List<dev.langchain4j.data.message.ChatMessage> messages) {
+                return dev.langchain4j.model.chat.response.ChatResponse.builder()
+                        .aiMessage(dev.langchain4j.data.message.AiMessage.from("synthetic answer"))
+                        .build();
+            }
+        };
+        when(registration.modelFor(route, 5_000L)).thenReturn(delegate);
+        var factory = configuredFactory(tracker);
+        ReflectionTestUtils.setField(factory, "chatGptOAuth", registration);
+
+        ChatModel model = factory.lcWithTimeout(route, 0.8d, 0.9d, 0.1d, 0.2d, 64, 5);
+        assertEquals(route, DynamicChatModelFactory.configuredModelIdentity(model).modelId());
+        assertEquals("synthetic answer", model.chat(List.of(UserMessage.from("synthetic prompt"))).aiMessage().text());
+        verify(registration).modelFor(route, 5_000L);
+        var attempts = tracker.redactedRequestAttemptLedger(timeline);
+        assertEquals(1, attempts.size());
+        var attempt = attempts.get(0);
+        assertEquals("primary", attempt.get("role"));
+        assertEquals("success", attempt.get("outcome"));
+        assertEquals("openai_responses", attempt.get("protocol"));
+        assertEquals(Boolean.TRUE, attempt.get("responseObserved"));
+        assertEquals(Boolean.FALSE, attempt.get("clientHttpExchangeObserved"));
+        assertEquals(Boolean.FALSE, attempt.get("providerAttemptObserved"));
+        assertEquals(Boolean.FALSE, attempt.get("wireAttemptObserved"));
+        assertEquals(optionHash(tracker, ChatGptOAuthRegistration.PROVIDER, route, "openai_responses",
+                Map.of("timeoutMs", 5_000L)), attempt.get("optionsHash"));
+        assertEquals(13, attempt.get("optionItemCount"));
+    }
+
+    @Test
+    void oauthFailureIsRecordedAndPropagatedWithoutACompletionClaim() {
+        var tracker = new ModelRuntimeHealthTracker();
+        String route = "chatgpt-oauth:synthetic";
+        String timeline = pendingTimeline(tracker, "oauth-failure", "oauth-session", route);
+        var registration = mock(ChatGptOAuthRegistration.class);
+        var failure = new IllegalStateException("synthetic failure");
+        ChatModel delegate = new ChatModel() {
+            @Override
+            public dev.langchain4j.model.chat.response.ChatResponse chat(
+                    List<dev.langchain4j.data.message.ChatMessage> messages) {
+                throw failure;
+            }
+        };
+        when(registration.modelFor(route, 5_000L)).thenReturn(delegate);
+        var factory = configuredFactory(tracker);
+        ReflectionTestUtils.setField(factory, "chatGptOAuth", registration);
+        ChatModel model = factory.lcWithTimeout(route, null, null, null, null, null, 5);
+
+        assertSame(failure, assertThrows(IllegalStateException.class,
+                () -> model.chat(List.of(UserMessage.from("synthetic prompt")))));
+        var attempts = tracker.redactedRequestAttemptLedger(timeline);
+        assertEquals(1, attempts.size());
+        assertEquals("failed", attempts.get(0).get("outcome"));
+        assertEquals(Boolean.FALSE, attempts.get(0).get("responseObserved"));
+        assertEquals(Boolean.FALSE, attempts.get(0).get("wireAttemptObserved"));
+    }
 
     @Test
     void contextPreparationUsesOneWireAttemptAndCannotOverwritePrimarySelection() throws Exception {

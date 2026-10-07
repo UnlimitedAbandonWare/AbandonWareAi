@@ -1,3 +1,8 @@
+---
+name: demo1-dot-control-tower
+description: "dot(사용자의 ChatGPT UnlimitedAbandon) = 지시서 작성 + Downloads 배달 역할. 각 에이전트 세션에서 수신·충돌·원복 방지 관점으로 실행."
+---
+
 # demo1 dot control tower
 
 dot(사용자의 ChatGPT "UnlimitedAbandon") = **지시서 작성 + Downloads 배달**
@@ -65,6 +70,17 @@ dot(사용자의 ChatGPT "UnlimitedAbandon") = **지시서 작성 + Downloads �
   식별자 또는 작성 역할 마커가 나오면 `assistPairBreach:true` + 기존
   `MULTI_GOAL_CONTAMINATION`/`ROLE_SWITCH_MID_SESSION` 유지. 잠금:
   dot-tower-ratchet `INV-P1~P4`.
+
+## SUB_REPORT_V1 (하위 에이전트 1회 완결 보고)
+
+하위 에이전트의 첫 보고는 6칸(전체 상태·항목별 표·입력 원본·쓰기 장부·own
+lease 잔존·NOT_RUN)을 갖춘다. 칸 누락 시 되묻지 말고 검사 결과를 돌려보낸다:
+
+- 계약: `references/sub-report-contract.md`
+- 검사: `python -B scripts/dot_card_check.py --sub-report <보고 파일>`
+  (PASS일 때만 사용자에게 올린다)
+- SKIP 근거 표: `python -B scripts/brief_save.py cover --topic <주제>
+  --terms "t1|t2"` 출력을 그대로 붙인다.
 
 ## 위계 (한 줄)
 

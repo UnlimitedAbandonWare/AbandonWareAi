@@ -34,12 +34,23 @@ Findings:
   ASSIST_PAIR_OK         [DOT-ASSIST-PAIR] lanes=<idA>,<idB> 선언이 있고
                          등장 PASTE 식별자가 선언 레인 이내 + 작성 역할
                          마커가 없음 — 위반이 아니라 count만 남긴다.
+  DATED_SKILL_NO_EXPIRY  .agents\\skills\\<이름이 -YYYYMMDD로 끝남> 또는
+                         scripts\\*_assist.py인데 frontmatter/헤드에
+                         `retire_after:`가 없음 — 일회용 assist 스킬 수명
+                         계약(F5, 2026-10-06). 삭제·이동은 하지 않는다.
+  DATED_SKILL_STALE      위 대상 중 이름의 날짜가 3일 넘게 지났고 대응
+                         journal(taskId 토큰 겹침)이 closed 계열 —
+                         archiveCandidate:true로 archive 후보 목록에
+                         올린다(실제 이동·삭제는 사용자 결정).
 
 환경 오버라이드(테스트 격리용):
   DOT_HYGIENE_SESSIONS_ROOT   기본 ~\\.codex\\sessions
   DOT_HYGIENE_CODEX_DOCS      기본 ~\\Documents\\Codex
   DOT_HYGIENE_DOWNLOADS       기본 ~\\Downloads
   DOT_HYGIENE_AGENT_PROMPTS   기본 <repo>\\agent-prompts
+  DOT_HYGIENE_SKILLS_ROOT     기본 <repo>\\.agents\\skills
+  DOT_HYGIENE_SCRIPTS_ROOT    기본 <repo>\\scripts
+  DOT_HYGIENE_HANDOFF_ROOT    기본 <repo>\\data\\agent-handoff
   DOT_HYGIENE_LARGE_MB        기본 5
   DOT_HYGIENE_NEAR_MB         기본 3 — ROLLOUT_NEAR_CAPACITY 임계
                               (0 이하 또는 LARGE 이상이면 비활성)
@@ -57,6 +68,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 EXIT_OK = 0
@@ -106,6 +118,27 @@ def agent_prompts_dir() -> Path:
     if env:
         return Path(env).expanduser()
     return repo_root() / "agent-prompts"
+
+
+def skills_root() -> Path:
+    env = os.environ.get("DOT_HYGIENE_SKILLS_ROOT", "").strip()
+    if env:
+        return Path(env).expanduser()
+    return repo_root() / ".agents" / "skills"
+
+
+def scripts_root() -> Path:
+    env = os.environ.get("DOT_HYGIENE_SCRIPTS_ROOT", "").strip()
+    if env:
+        return Path(env).expanduser()
+    return repo_root() / "scripts"
+
+
+def handoff_root() -> Path:
+    env = os.environ.get("DOT_HYGIENE_HANDOFF_ROOT", "").strip()
+    if env:
+        return Path(env).expanduser()
+    return repo_root() / "data" / "agent-handoff"
 
 
 def large_threshold() -> int:
@@ -334,6 +367,101 @@ def scan_serial_lane(cutoff: float, cap: int):
     return out
 
 
+# --- W5 (F5, 2026-10-06): 날짜 붙은 일회용 assist 스킬 수명 탐침 ------------
+# 읽기 전용 — 이름·frontmatter만 보고, 삭제·이동은 절대 하지 않는다.
+DATED_SKILL_RE = re.compile(r"-(\d{8})$")
+DATED_ASSIST_PY_RE = re.compile(r"(\d{8})$")
+RETIRE_AFTER_RE = re.compile(r"^\s*retire_after\s*:", re.M)
+DATED_SKILL_STALE_DAYS = 3
+LEDGER_CLOSED_STATES = {"closed", "verified", "done", "completed",
+                        "superseded"}
+RETIRE_HEAD_BYTES = 8192
+
+
+def _retire_declared(path: Path) -> bool | None:
+    """frontmatter/헤드에 retire_after: 가 있으면 True. 읽기 실패는 None."""
+    try:
+        head = path.read_bytes()[:RETIRE_HEAD_BYTES].decode(
+            "utf-8-sig", errors="replace")
+    except OSError:
+        return None
+    return bool(RETIRE_AFTER_RE.search(head))
+
+
+def _ledger_closed(core: str) -> tuple[str | None, str | None]:
+    """taskId 토큰이 skill core와 겹치는 closed 계열 journal을 찾는다."""
+    tokens = {t for t in core.split("-")
+              if t and t not in ("demo1", "assist")}
+    root = handoff_root()
+    if not tokens or not root.is_dir():
+        return None, None
+    for j in sorted(root.rglob("journal.json")):
+        try:
+            data = json.loads(j.read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        tid = str(data.get("taskId") or "")
+        if (str(data.get("status") or "").lower() in LEDGER_CLOSED_STATES
+                and tokens & set(tid.split("-"))):
+            return str(j), str(data.get("status"))
+    return None, None
+
+
+def _date_age_days(date8: str) -> int | None:
+    try:
+        d = datetime.strptime(date8, "%Y%m%d").date()
+    except ValueError:
+        return None
+    today = datetime.now(timezone(timedelta(hours=9))).date()
+    return (today - d).days
+
+
+def scan_dated_skills() -> list[dict]:
+    """-YYYYMMDD로 끝나는 스킬 디렉터리와 scripts/*_assist.py 수명 탐침."""
+    out = []
+    # (표시 경로, retire_after를 읽을 파일, 이름 속 날짜, core 토큰 원본)
+    entries: list[tuple[Path, Path, str | None, str]] = []
+    sroot = skills_root()
+    if sroot.is_dir():
+        for d in sorted(sroot.iterdir()):
+            if not d.is_dir():
+                continue
+            m = DATED_SKILL_RE.search(d.name)
+            if not m:
+                continue
+            entries.append((d, d / "SKILL.md", m.group(1), d.name))
+    proot = scripts_root()
+    if proot.is_dir():
+        for f in sorted(proot.glob("*_assist.py")):
+            m = DATED_ASSIST_PY_RE.search(f.stem)
+            entries.append((f, f, m.group(1) if m else None, f.stem))
+    for disp, src, date8, core in entries:
+        declared = _retire_declared(src)
+        if declared is None:
+            continue  # 읽기 실패 — 판단 보류, 경고하지 않는다
+        st = stat_entry(disp) if disp.is_file() else {
+            "path": str(disp), "sizeBytes": 0,
+            "mtime": time.strftime("%Y-%m-%dT%H:%M:%S%z",
+                                   time.localtime(disp.stat().st_mtime))}
+        if not declared:
+            f = dict(st)
+            f["type"] = "DATED_SKILL_NO_EXPIRY"
+            out.append(f)
+        if date8:
+            age = _date_age_days(date8)
+            if age is not None and age > DATED_SKILL_STALE_DAYS:
+                ledger, status = _ledger_closed(core)
+                if ledger:
+                    f = dict(st)
+                    f["type"] = "DATED_SKILL_STALE"
+                    f["ageDays"] = age
+                    f["archiveCandidate"] = True
+                    f["ledger"] = ledger
+                    f["ledgerStatus"] = status
+                    out.append(f)
+    return out
+
+
 def scan(since_hours: float) -> dict:
     cutoff = time.time() - since_hours * 3600
     findings = []
@@ -343,6 +471,7 @@ def scan(since_hours: float) -> dict:
     findings += scan_brief_not_in_downloads(cutoff)
     findings += scan_bare_auto(cutoff)
     findings += scan_serial_lane(cutoff, scan_cap())
+    findings += scan_dated_skills()
     counts = {}
     for f in findings:
         counts[f["type"]] = counts.get(f["type"], 0) + 1
@@ -354,6 +483,8 @@ def scan(since_hours: float) -> dict:
             "codexDocs": str(codex_docs_root()),
             "downloads": str(downloads_dir()),
             "agentPrompts": str(agent_prompts_dir()),
+            "skills": str(skills_root()),
+            "scripts": str(scripts_root()),
         },
         "counts": counts,
         "findings": sorted(findings, key=lambda f: (f["type"], f["path"])),
@@ -393,7 +524,9 @@ def main(argv=None) -> int:
               f"BARE_AUTO_SUSPECT={c.get('BARE_AUTO_SUSPECT', 0)} "
               f"MULTI_GOAL_CONTAMINATION={c.get('MULTI_GOAL_CONTAMINATION', 0)} "
               f"ROLE_SWITCH_MID_SESSION={c.get('ROLE_SWITCH_MID_SESSION', 0)} "
-              f"ASSIST_PAIR_OK={c.get('ASSIST_PAIR_OK', 0)}")
+              f"ASSIST_PAIR_OK={c.get('ASSIST_PAIR_OK', 0)} "
+              f"DATED_SKILL_NO_EXPIRY={c.get('DATED_SKILL_NO_EXPIRY', 0)} "
+              f"DATED_SKILL_STALE={c.get('DATED_SKILL_STALE', 0)}")
         for f in res["findings"]:
             print(f"  [{f['type']}] {f['path']} ({f['sizeBytes']}B)")
         if args.verbose:

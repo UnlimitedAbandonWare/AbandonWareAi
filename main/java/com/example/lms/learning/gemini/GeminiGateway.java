@@ -201,6 +201,8 @@ public class GeminiGateway {
         var credential = credentialResolver.resolve(ProviderCredentialResolver.Provider.GEMINI);
         if (!enabled() || !purposeEnabled(Purpose.SEARCH_RESCUE) || !groundingEnabled())
             return Mono.just(SearchRescueResult.skipped("PROVIDER_DISABLED", model));
+        if (!supportsNativeGoogleSearch(model))
+            return Mono.just(SearchRescueResult.skipped("SEARCH_CAPABILITY_UNKNOWN", model));
         if (!credential.enabled() || credential.valueOrNull() == null)
             return Mono.just(SearchRescueResult.skipped("MISSING_CREDENTIAL", model));
         // Public getAll() omits the internal shared HTTP budget.
@@ -330,13 +332,19 @@ public class GeminiGateway {
         var reasons=new java.util.ArrayList<>(routerReadiness().reasons());
         if(!groundingEnabled())reasons.add("focus_search_disabled");
         if(spec==null||spec.model()==null||spec.model().isBlank())reasons.add("focus_search_model_required");
-        else if(!java.util.Set.of("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash",
-                "gemini-3.5-flash-lite","gemini-3.5-flash","gemini-3.1-flash-lite",
-                "gemini-3.1-pro-preview","gemini-3-flash-preview","gemini-3.1-flash-lite-preview",
-                "gemini-2.5-pro","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash").contains(spec.model()))
+        else if(!supportsNativeGoogleSearch(spec.model()))
             reasons.add("focus_search_capability_unknown");
         if(spec==null||!nativeRouteMatches(spec.baseUrl()))reasons.add("focus_search_route_mismatch");
         return new RouterReadiness(reasons.isEmpty(),reasons);
+    }
+
+    /** Native generateContent Google Search support; shared by Focus and main-chat rescue.
+        Rechecked against Google's generate-content/google-search table on 2026-10-06. */
+    private static boolean supportsNativeGoogleSearch(String model) {
+        return java.util.Set.of("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash",
+                "gemini-3.5-flash-lite","gemini-3.5-flash","gemini-3.1-flash-lite",
+                "gemini-3.1-pro-preview","gemini-3-flash-preview","gemini-3.1-flash-lite-preview",
+                "gemini-2.5-pro","gemini-2.5-flash","gemini-2.5-flash-lite","gemini-2.0-flash").contains(model);
     }
 
     public ChatModel buildOpenAiCompatibleChatModel(RouterSpec spec, boolean cueJson,

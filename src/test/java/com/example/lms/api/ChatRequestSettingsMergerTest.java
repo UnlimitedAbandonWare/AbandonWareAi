@@ -21,6 +21,25 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChatRequestSettingsMergerTest {
+    @Test
+    void googleSearchRescuePreservesOmissionNullAndExplicitBoolean() throws Exception {
+        var mapper = new ObjectMapper();
+        for (String json : List.of("{}", "{\"googleSearchRescueEnabled\":null}")) {
+            var dto = mapper.readValue(json, ChatRequestDto.class);
+            assertFalse(ChatRequestSettingsMerger.requestValues(dto).containsKey("googleSearchRescueEnabled"));
+            assertFalse(dto.isGoogleSearchRescueEnabled());
+        }
+        for (boolean enabled : List.of(true, false)) {
+            var dto = mapper.readValue("{\"googleSearchRescueEnabled\":" + enabled + "}", ChatRequestDto.class);
+            assertEquals(enabled, ChatRequestSettingsMerger.requestValues(dto).get("googleSearchRescueEnabled"));
+            assertEquals(enabled, dto.isGoogleSearchRescueEnabled());
+            assertEquals(enabled, dto.toBuilder().build().isGoogleSearchRescueEnabled());
+            assertEquals(enabled, mapper.readTree(mapper.writeValueAsString(dto)).get("googleSearchRescueEnabled").booleanValue());
+            assertEquals(Map.of("googleSearchRescueEnabled", enabled),
+                    com.example.lms.service.ChatPreferenceService.validate(Map.of("googleSearchRescueEnabled", enabled)));
+        }
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({"gpt-5.6-sol,256,4096", "chatgpt-oauth:gpt-5.6-sol,2048,4096",
             "gpt-5.6-sol,6000,6000", "gemma4:26b,256,256"})

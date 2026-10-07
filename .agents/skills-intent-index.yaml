@@ -164,7 +164,10 @@ intents:
       - codex-selfask-triad
       - selfask triad
       - self-ask triad
-      - codex selfask
+      - 're:(?i)codex\s+selfask(?![a-z0-9_])'
+      - 're:(?i)(?:3-way|three-way)\s+long[- ]tail\s+(?:query|question)(?:\s+branch)?'
+      - 're:(?i)(?:3-way|three-way)\s+long[- ]tail\s+self-?ask(?![a-z0-9_])'
+      - 're:(?i)codex\s+long[- ]?tail\s+(?:query|question)\s+branch'
       - selfask_definer
       - selfask_aliaser
       - selfask_challenger
@@ -402,7 +405,7 @@ intents:
 
   - intent: vibe-selfask-judge-auto
     match:
-      - selfask
+      - 're:(?i)(?<![a-z0-9_])selfask(?![a-z0-9_])'
       - self-ask judge
       - selfask-judge
       - 승인 퀴즈
@@ -1556,6 +1559,26 @@ intents:
     optional_skill: demo1-agy-directive-writer
     forbid_families: []
     notes: 스킬 생성·개편 요청을 SKILL.md 단독이 아니라 S/M/L 팩(스킬+intent+companion+검사기)으로 산출; SSOT docs/agents-rules/DEMO1-AGY-SKILL-PACK.md
+
+  - intent: deadline-scope-guard
+    match:
+      - guard-deadline-scope
+      - deadline scope
+      - deadline-scope
+      - 마감 판단
+      - 마감일
+      - 범위 판단
+      - 스코프 판단
+      - 시간 예산
+      - 스코프 크립
+      - 데드라인
+      - 자동 반려
+      - 동적 예산
+      - deadline_scope_guard
+    primary_skill: demo1-deadline-scope-guard
+    optional_skill: positive-negative-neutral-judge
+    forbid_families: []
+    notes: 마감·범위 판단 정량 가드 — scripts/deadline_scope_guard.py 5대 판정; SSOT docs/agents-rules/DEMO1-DEADLINE-SCOPE-JUDGMENT.md
 
 fallback:
   primary_skill: demo1-vibe-max-agency

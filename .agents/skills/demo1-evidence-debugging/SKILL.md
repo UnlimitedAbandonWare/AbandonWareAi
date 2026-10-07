@@ -1,6 +1,6 @@
 ---
 name: demo1-evidence-debugging
-description: Use when demo-1 debugging starts from logs or a reproducible symptom
+description: Use when demo-1 debugging starts from logs or a reproducible symptom, including first-answer or immediate-follow-up context and evidence assembly failures
 ---
 
 # Demo1 Evidence Debugging
@@ -21,8 +21,16 @@ description: Use when demo-1 debugging starts from logs or a reproducible sympto
 2. **현재 경계를 확인한다.** 활성 sourceSet과 owner/call path, 소스·빌드 식별을 확인한다. 소스 존재 → 빌드 포함 → 호출·활성 조건 → 실행 → 인과를 구분한다. 현재 플래그와 초기화 당시 평가값·순서·재평가 여부는 별개다. 모든 단계에 신규 검사를 할당하지 않는다.
 3. **후보와 실험을 분리한다.** 원인이 불명확하면 보통 2–4개 후보에 지지·충돌 증거, 예측, 반증 조건을 붙인다. 관측 오류와 강한 대안, 공존 가능한 원인을 보존한다. 활성 실험은 하나이며 결과는 모든 후보 행을 갱신한다.
 4. **구별 검사 하나를 실행한다.** 현재 결정을 바꿀 수 있는 가장 이른 미확인 경계에서 고정 조건·변경 변수·관찰 단위·누락 가능성·제한 시간을 정한다. 기존 증거를 먼저 재사용한다. 가설들이 같은 결과를 예측하면 아직 구별되지 않은 것으로 남긴다.
-5. **기존 수정 경계에 넘긴다.** 의미적 RED 또는 기존에 확인된 재현과 원인 증거를 묶는다. 애플리케이션 수정 직전에는 [기존 세 역할 심사](../demo1-source-edit-three-way-preflight/SKILL.md)와 현재 owner·대상 lease·preimage·검증·복원 절차를 따른다. 심사나 쓰기 권한은 가설의 지지도와 별개다. 하나의 원인에 필요한 최소 변경을 한다.
+5. **기존 수정 경계에 넘긴다.** 의미적 RED 또는 기존에 확인된 재현과 원인 증거를 묶는다. 애플리케이션 수정 직전에는 현재 owner·대상 lease·preimage·검증·복원 절차를 따른다. [기존 세 역할 심사](../demo1-source-edit-three-way-preflight/SKILL.md)는 `AGENTS.md`에 따른 선택적 검토이며 일상적인 수정의 선행 요건이 아니다. 사용자나 적용되는 작업 계약이 심사를 명시하면 기존 증거를 재사용해 수행한다. 심사나 쓰기 권한은 가설의 지지도와 별개다. 하나의 원인에 필요한 최소 변경을 한다.
 6. **같은 증상을 검증한다.** 원래 입력·기대 의미의 집중 검증 후 영향받은 회귀와 명시된 인수 조건을 확인한다. 실패를 관찰했을 때만 실패 경계를 갱신한다. 새 실패가 있으면 해당 증거로 진단을 다시 연다.
+
+챗 컨텍스트·근거 조립 사건의 인계·인수 계획에는 [첫 두 턴 슬롯](references/case-contract.md#첫-두-턴-컨텍스트근거-조립)을 넣는다. P0는 같은 owner/session의 첫 질문 A에 대한 유용한 답변·실제 근거 전달과 즉시 후속 질문 B의 맥락 해석·질문에 맞는 본문 근거다. A만의 PASS나 서로 다른 새 세션의 두 질문은 이 조건을 충족하지 않는다. 관측된 슬롯·미관측 슬롯과 다음 구별 검사 하나를 기록하고 기존 검사에 연결한다. 일반 디버깅에 추가 전역 게이트나 3턴 이후 압축 검사를 만들지 않는다.
+
+**해당 사건 인계의 필수 출력 양식**은 다음 다섯 항목이다. 각 항목을 짧게 채우고 관측이 없으면 미관측으로 남긴다. 판단 문장만으로 슬롯을 대신하지 않는다.
+
+`turnPair` → `intentAndSupport` → `evidenceStages` → `acceptance` → `nextProbe`
+
+`evidenceStages`는 `candidate → sourceBody → afterFilter → packing → actualProviderDispatch → citation → stored/reload`의 관측/미관측을 A/B별로 표시한다. `acceptance`에는 A의 유용한 의미·근거 전달과 B의 대상 해석·새 질문 본문 전달을 함께 검사할 같은 owner/session A→B 재현 계획을 넣는다. A의 snippet 존재만으로 유용한 첫 답변을 PASS로 표시하지 않는다. `nextProbe`는 가장 이른 결정 관련 미확인 경계의 기존 검사 하나다.
 
 ## 진단과 인수 검증의 구별
 

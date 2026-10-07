@@ -53,3 +53,6 @@
 `/chat` 200 · `/admin` 404(라우트 없음, 관문만 존재) · `/assets/display/index.html` 200 · `/assets/interview/index.html` 200 · `/debug/studio` 200 · `/agent/db-context` 404.
 개발 접근을 막는 화면은 발견되지 않았다(관측 범위 기준); 내부 도구 API는
 `admin_token_required` 잠금 1건(FOR_CODEX F1 참조).
+
+## 보류된 실검증
+- 2026-10-06 · devin-admin-login-no-ask-c08ade43: admin 로그인·로그아웃 차단 실검증 = 보안 일괄 강화 때 W3 격리 스크립트(`scripts/agent_isolated_auth_verify.py`)로 수행 — VIBE_OPEN 동안 사용자에게 계정·URL을 묻지 않음.

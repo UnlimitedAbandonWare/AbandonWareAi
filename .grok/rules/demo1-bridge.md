@@ -14,6 +14,8 @@ pointer bridge, not a rule duplicate. Verify loading with `grok inspect`
 
 - Read `docs/PROJECT_STATUS.md` first, then `python -B scripts/work_journal.py list --active`
   to see in-flight journals before starting work.
+- Before starting work or judging deadlines and added scope, READ the shared [guard-deadline-scope](../../docs/agents-rules/DEMO1-DEADLINE-SCOPE-JUDGMENT.md) body.
+  Planning margin covers the whole task; preserve existing authority, verification, and the user hard cap.
 - `python -B scripts/agent_preflight.py --root .` gives the canonical
   root/lease/journal report.
 

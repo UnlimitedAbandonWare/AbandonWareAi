@@ -203,7 +203,55 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         proc = run_tool(self.fx.root, "plan", "--goal-files",
                         "main/java/x/llmrouteraspect.java")
         self.assertEqual(proc.returncode, 7)
-        self.assertEqual(last_json(proc)["nextAction"], "await_release")
+        self.assertEqual(last_json(proc)["nextAction"], "WAIT")
+
+    def test_plan_blocked_emits_wait_command(self):
+        # W3: blocked 입력 → nextAction WAIT + 정확한 lease-wait 명령
+        proc = run_tool(self.fx.root, "plan", "--goal-files",
+                        "main/java/x/llmrouteraspect.java", "other.txt",
+                        "--task", self.my_task)
+        row = last_json(proc)
+        self.assertEqual(row["nextAction"], "WAIT")
+        self.assertEqual(row["waitCommand"],
+                         "python -B scripts/codex_auto_unblock.py lease-wait "
+                         "--paths main/java/x/llmrouteraspect.java "
+                         "--max-min auto --enqueue --task "
+                         + self.my_task)
+
+    def test_plan_waited_free_emits_resume_checks(self):
+        # W3: 기다린 뒤 free → RESUME + 재개 체크 3개
+        proc = run_tool(self.fx.root, "plan", "--waited", "--goal-files",
+                        "other.txt", "--task", self.my_task)
+        row = last_json(proc)
+        self.assertEqual(row["nextAction"], "RESUME")
+        checks = row["resumeChecks"]
+        self.assertEqual(len(checks), 3)
+        blob = " ".join(checks)
+        self.assertIn("sha12", blob)
+        self.assertIn("RED", blob)
+        self.assertIn("begin", blob)
+
+    def test_plan_waited_live_emits_hold_resume_when(self):
+        # W3: 기다린 뒤에도 live → HOLD + machine-readable resumeWhen
+        proc = run_tool(self.fx.root, "plan", "--waited", "--goal-files",
+                        "main/java/x/llmrouteraspect.java",
+                        "--task", self.my_task)
+        self.assertEqual(proc.returncode, 7)
+        row = last_json(proc)
+        self.assertEqual(row["nextAction"], "HOLD")
+        self.assertEqual(len(row["resumeWhen"]), 1)
+        rw = row["resumeWhen"][0]
+        self.assertEqual(rw["topic"], "exact-model-selection")
+        self.assertTrue(rw["leaseId"])
+        self.assertTrue(rw["expiresAtUtc"])
+
+    def test_plan_no_waited_free_stays_proceed(self):
+        proc = run_tool(self.fx.root, "plan", "--goal-files", "other.txt",
+                        "--task", self.my_task)
+        row = last_json(proc)
+        self.assertEqual(row["nextAction"], "proceed")
+        self.assertIsNone(row["waitCommand"])
+        self.assertIsNone(row["resumeWhen"])
 
     def test_request_release_idempotent(self):
         args = ("request-release", "--task", self.owner_task,

@@ -40,3 +40,14 @@ main 관계 `mainRelation`은 `SNAPSHOT_UNRELATED`가 정상이며 실패가 아
 `configs/git-branch-context.json`의 `workBranch`/`remote`/`snapshotBranch`가
 유일한 값 출처다. `scripts/git_ship.py`의 범위 해석과
 `scripts/baseline_sync_probe.py`의 보고 필드도 같은 파일을 읽는다.
+
+## 단일 유효 원격 (AGENTS.md DEMO1-GIT-REMOTE-SOLE 본문)
+
+<!-- moved-from: AGENTS.md L277-L284 sha256=ba598f278bf61452dbf6747956954852ab187c6d593b3e3f83f9d80831b8d9ef movedAt=2026-10-06T07:15:00+00:00 -->
+- Sole valid main remote: https://github.com/UnlimitedAbandonWare/AbandonWareAi
+- AbandonWare3 is fully discarded. Never treat as valid remote, temporary origin, migration keep, or backup upstream.
+- Do not add a second remote "for convenience." Dual remotes confuse vibe coding — prefer single-repo branch/tag.
+- Do not mutate remotes (`remote add/remove/set-url`) or push/merge until the user explicitly asks.
+- If local git still lists AbandonWare3: report it, never fetch/push to it, never prefer its SHA over C-root / AbandonWareAi.
+- Old docs/ZIP mentioning AbandonWare3 are historical only; C-root + AbandonWareAi win.
+- 작업 브랜치 = codex/owned-runtime-browser-restart(기준 @{u}), main = 역사가 끊긴 공개 스냅샷이라 비교·병합·기본 브랜치 변경 금지 → 위 "브랜치 역할" 절.
