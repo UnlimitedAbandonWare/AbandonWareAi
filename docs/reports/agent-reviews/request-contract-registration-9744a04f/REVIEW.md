@@ -36,25 +36,27 @@
 | Acceptance | 실행 결과 |
 |---|---|
 | 불완전 정보, 사실/추정 분리, stage dependency, stale 계약, 경로 경계 | doctor **40 PASS / 1 SKIP** |
-| 예정 argv/suite·실제 실행·소스/test·로그/XML·동시 변경 근거 | runner **25 PASS** |
+| 예정 argv/suite·실제 실행·소스/test·로그/XML·동시 변경 근거 | runner **26 PASS** |
 | 저장 전 진단·관련 중복·외부 변경 보존·나머지 소유 변경 rollback | catalog **16 PASS** |
 | 실제 focused RED/GREEN → 등록, stale/변조/정책 후보 거절, 중복·rollback | experiment **19 PASS** |
 | 실제 프로젝트 등록·재전송·잘못된 rollback 거절·recovery·재등록·로컬 검토 요청 | smoke **exit 0**, 결과 파일 보존 |
 
-최종 합산은 **100 PASS / 1 SKIP**, 실행 101개, exit 0입니다. SKIP은 Windows 합성 symlink 생성 권한 제한이며, 해당 시나리오를 PASS로 계산하지 않았습니다. 테스트는 네 개의 지정된 unittest 파일만 실행했습니다. Gradle/제품 부팅/OAuth 모델 실행은 이 개발 도구 범위의 acceptance가 아니며 NOT_RUN입니다.
+최종 합산은 **101 PASS / 1 SKIP**, 실행 102개, exit 0입니다. SKIP은 Windows 합성 symlink 생성 권한 제한이며, 해당 시나리오를 PASS로 계산하지 않았습니다. 테스트는 네 개의 지정된 unittest 파일만 실행했습니다. Gradle/제품 부팅/OAuth 모델 실행은 이 개발 도구 범위의 acceptance가 아니며 NOT_RUN입니다.
 
-최종 focused receipt: `data/agent-handoff/codex-autonomy/request-contract-registration-9744a04f/final-verification/run.json`, runId `45a28589-f1e5-4b60-81eb-e3dc5edff04c`. 실제 unittest 결과에서 만든 JUnit과 command.log를 보존했습니다. 최종 파일 해시는 receipt의 sourceIdentity와 현재 파일을 다시 비교했습니다.
+최종 focused receipt: `data/agent-handoff/codex-autonomy/request-contract-registration-9744a04f/whole-final-precision-verification/run.json`, runId `6d068fde-446b-4f0b-8a3a-d52a5b3ea74b`. 실제 unittest 결과에서 만든 JUnit과 command.log를 보존했습니다. 최종 파일 해시는 receipt의 sourceIdentity와 현재 파일을 다시 비교했습니다.
 
 등록에 사용한 동일 최종 테스트의 bound RED/GREEN:
 
-- RED `receipt-contract-red-final/run.json`, runId `0c6e2b93-b84e-4cbb-b30f-4ce69a8cb6bf`: 18 ERROR, 실제 exit 1.
-- GREEN `receipt-contract-green-final/run.json`, runId `d9f6647f-31b6-446b-bcb9-a2055750551f`: 18 PASS, 실제 exit 0.
+- RED `receipt-contract-red-precision/run.json`, runId `5c4b957a-f333-43bd-a752-e64d075cbd53`: 19 ERROR, 실제 exit 1.
+- GREEN `receipt-contract-green-precision/run.json`, runId `7c19a546-37e0-4669-ad5e-78567bf44b60`: 19 PASS, 실제 exit 0.
 - 계약 hash `74d4059db42eddd0333a157a5e8dfa22f3d0ebbf79380690fb39cbcb4e32f803`, 동일 예정 argv hash `ae35c7c8890bca992f9a8424df06bae5b4a7bdb3024fe8cd6a0536cfa7ad783d`.
 - 계약과 합성 입력 예시는 `lane-b/request-contract.json`, 후보 예시는 `technical-candidate.json`에 있습니다. 개인정보·비밀·원시 세션 없이 로컬 runner 회귀 계약을 사용합니다.
 
+중간 전체 재실행에서 1 ERROR가 나왔습니다. 원인은 datetime의 float 나노초 환산 오차였고, 25회 중 2회 동일 진단을 재현했습니다. 정수 timedelta 환산으로 수정하고 +999ns 통과 / +1000ns 거절 경계를 회귀로 검증했습니다. 허용 창을 늘리지 않았습니다. 그 후 최종 동일 테스트의 RED/GREEN과 전체 102개 검증, 실제 등록·롤백을 다시 수행했습니다.
+
 위 경로의 기준은 `data/agent-handoff/codex-autonomy/request-contract-registration-9744a04f/`입니다. 초기 중간 실행 실패와 잘못 전달된 finish 0은 journal에서 철회했습니다. 그것을 최종 성공 근거로 사용하지 않습니다. 카탈로그 추가 반례는 이전 구현에서 16개 중 1 ERROR로 재현됐고, 보강 후 전체 16개가 통과했습니다.
 
-실제 등록은 `data/agent-handoff/adaptive-rule-lab/project-guidance/request-contract-runner-receipts.json`입니다. SHA256은 `99c6cdcc84f34d127a109a6663094dce1c9e4d86588384ce77ac7bb981a91c80`; `authorityChanged:false`입니다. 예상 해시가 다른 rollback은 거절됐고, 올바른 rollback은 recovery bytes를 보존한 뒤 해당 참조만 제거했습니다. 재등록 후 같은 해시를 확인했습니다. 사용자 코드 삭제는 없습니다.
+실제 등록은 `data/agent-handoff/adaptive-rule-lab/project-guidance/request-contract-runner-receipts.json`입니다. SHA256은 `2d27342e80824ce9fb7dbf18b15d3d2871a84a57cf05812fa0fea899029dc7e9`; `authorityChanged:false`입니다. 예상 해시가 다른 rollback은 거절됐고, 올바른 rollback은 recovery bytes를 보존한 뒤 해당 참조만 제거했습니다. 재등록 후 같은 해시를 확인했습니다. 사용자 코드 삭제는 없습니다.
 
 합성 검토 요청은 `data/agent-handoff/adaptive-rule-lab/review-requests/request-contract-synthetic-review.json`입니다. `reviewRequestPrepared:true`, `reviewRequestDelivered:false`; 공식 규칙 도구 실행이나 승인 receipt 생성은 하지 않았습니다.
 
@@ -73,8 +75,8 @@
 |---|---|
 | `scripts/checkpoint_doctor.py` | `babdb4ce10f53d3e837b310d01c85ae2e98e99784d3d595bdf153163bdbb1846` |
 | `scripts/test_checkpoint_continuity_delivery.py` | `72ea0fae99544fa71f2609bbb1d422796e6ce5410c02d43471a1d30fdcb1b73b` |
-| `scripts/run_verified_command.py` | `986df78d1a1967af32922f5d516f0617a7dbc2ca10bfd99a56018142d54dcec7` |
-| `scripts/test_run_verified_command.py` | `be5ba988cbd0ee36971c571f459f35c232bd6cecd02a115e0e129682e94e053b` |
+| `scripts/run_verified_command.py` | `4903389d7698f95bb87e33c102cc02fc66f2b27a5370f05895d7b100bab10663` |
+| `scripts/test_run_verified_command.py` | `bd4767d2989c712e1a2d7e61f990004915ca76bfa86cc52300233bbee93e51c1` |
 | `catalog.py` | `a6ef20f4fac5cccae8f149d73a836a4108a1dd8878e46f15401a68827f473014` |
 | `test_catalog.py` | `d92ccf4560a369c5add8ed6d079a5a745c0082afa4da73efbcd67792501ca5dc` |
 | `experiment.py` | `af395b109b62db43a6f46844ba77b67d2a0e4ebd907c0a160b3f2904b70697cd` |
@@ -82,7 +84,7 @@
 
 마지막 네 파일의 기준은 `.agents/skills/demo1-adaptive-rule-lab/scripts/`입니다. 원본 preimage, task별 patch, 회귀 실패 근거, 최종 receipt와 recovery를 보존합니다. 리뷰 보고서는 이 파일 한 개이며 Downloads에 만들지 않았습니다.
 
-소유 레인은 A(doctor와 테스트), B(runner와 테스트), C(catalog/experiment와 각 테스트)입니다. 루트 소유자 `request-contract-impl`, topic `request-contract-registration`의 source lease와 coop writer `75df1018b289`는 종료했습니다. A/B도 종료를 확인했습니다. 조정자 `01a11e7a-cba1-77f5-833d-1fea770d602e` 연결 후에도 소유 범위를 이 8개로 유지했습니다. 다른 세션 기능은 수정하지 않았습니다. 최종 hash/receipt와 lease 종료 근거는 작업 디렉터리에 보존합니다.
+소유 레인은 A(doctor와 테스트), B(runner와 테스트), C(catalog/experiment와 각 테스트)입니다. 루트 소유자 `request-contract-impl`, topic `request-contract-registration` 및 최종 `request-contract-final-evidence`의 source lease와 coop writer `75df1018b289`는 종료했습니다. A/B도 종료를 확인했습니다. 조정자 `01a11e7a-cba1-77f5-833d-1fea770d602e` 연결 후에도 소유 범위를 이 8개로 유지했습니다. 다른 세션 기능은 수정하지 않았습니다. 최종 hash/receipt와 lease 종료 근거는 작업 디렉터리에 보존합니다.
 
 외부 API: 없음. 공식 문서 읽기와 앱 사용량 조회만 수행했습니다.
 <!-- Existing lint's legacy encoded API label; human-readable line is above.

@@ -21,7 +21,7 @@
     const $=id=>document.getElementById(id),panel=$('nova-fold');
     if(!panel||!host.NovaFocus)return null;
     let loaded='',loading=false,stored=null,settingsBusy=false,settingsEdits=0,cursor=null,historyBusy=false,pendingInput=null;
-    let cacheScope='',scopeEpoch=0,reconcileBusy=false,disposed=false,settingsAttempts=0,wasActive=false,memoryDraft=null,memoryBusy=false;
+    let cacheScope='',scopeEpoch=0,reconcileBusy=false,disposed=false,settingsAttempts=0,wasActive=false,memoryDraft=null,memoryBusy=false,projectionScope='';
     // OFF 의도는 서버 저장 성공과 무관하게 이 기기의 촬영을 즉시 차단한다. ON은 저장 성공 뒤에만 해제된다.
     let snapshotLocalBlocked=false,catalogLoaded=false,catalogBusy=false,catalogRows=[],catalogGeneration=0,catalogAbort=null;
     let fallbackPreference=false; // Stored general-mode preference; strict mode shows effective OFF.
@@ -29,7 +29,7 @@
     const captureJobs=new Map();
     const snapshotter=host.DisplaySnapshot?host.DisplaySnapshot.createSnapshotter({navigator:host.navigator,document}):null;
     $('nova-question').disabled=true;
-    const projection=host.NovaFocus.createProjection({host,document,target:'fold',panel,status:$('nova-fold-status'),draft:$('nova-fold-draft'),answer:$('nova-fold-answer'),receipt:host.NovaFocus.receiptSender(host)});
+    const projection=host.NovaFocus.createProjection({host,document,target:'fold',panel,status:$('nova-fold-status'),draft:$('nova-fold-draft'),answer:$('nova-fold-answer'),receipt:host.NovaFocus.receiptSender(host),reasonText:reason=>Object.prototype.hasOwnProperty.call(messages,reason)?messages[reason]:host.NovaFocus.closeReasonText?.(reason),keepClosed:()=>$('device-debug')?.open===true,diagnostic:(event,detail)=>host.console?.debug?.('[AWX][nova-focus]',event,{...detail,epoch:client.state?.epoch||0,connection:client.state?.connection||'UNKNOWN'})});
     const fields={enabled:'nf-enabled',recallEnabled:'nf-recall',rememberFactsEnabled:'nf-remember',wakeWord:'nf-wake',utteranceQuietMs:'nf-quiet',followupIdleMs:'nf-idle',wakeListenTimeoutMs:'nf-listen',answerLengthChars:'nf-answer-length',quickAnswerEnabled:'nf-quick'};
     const flags=new Set(['enabled','recallEnabled','rememberFactsEnabled','quickAnswerEnabled']);
     const length=$('nf-answer-length'),lengthPreset=$('nf-answer-length-preset');
@@ -39,6 +39,7 @@
     if($('nf-answer-length-reset'))$('nf-answer-length-reset').onclick=()=>{if(length){length.value=400;settingsEdits++;}syncLengthPreset();};
     const presentation={sequentialTextEnabled:'nf-sequential',charIntervalMs:'nf-speed',maxVisibleLines:'nf-lines',autoFadeEnabled:'nf-fade-on',tailHoldMs:'nf-hold',fadeMs:'nf-fade'};
     const messages={focus_settings_conflict:'다른 기기에서 설정이 바뀌었습니다. 서버 설정을 다시 불러와 주세요.',focus_busy:'앞선 질문을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.',focus_unavailable:'노바 응답 경로가 아직 준비되지 않았습니다.',focus_answer_unavailable:'응답을 확인하지 못했습니다. 기록에서 상태를 확인해 주세요.',focus_session_stale:'연결이 바뀌었습니다. 다시 연결된 뒤 시도해 주세요.',event_owner_required:'현재 수음을 보내는 기기에서 사용해 주세요.',display_rate_limited:'잠시 후 다시 시도해 주세요.'};
+    Object.assign(messages,host.NovaFocus.CLOSE_REASONS||{});
     messages.focus_model_selection_invalid='기본 모델과 대체 모델을 중복 없이 선택해 주세요.';
     messages.focus_next_question_full='다음 질문 하나가 대기 중입니다. 그 답변 뒤에 다시 질문해 주세요.';
     messages.focus_request_already_accepted='이미 접수된 질문입니다. 대화 기록에서 상태와 답변을 확인해 주세요.';
@@ -235,7 +236,7 @@
       captureJobs.clear();snapshotter?.stop?.();
       const preview=$('nf-snapshot-preview');if(preview){preview.hidden=true;preview.removeAttribute('src');}
     }
-    async function close(){scopeEpoch++;clearContent();cancelCaptureJobs();try{await client.focusRequest('close');}catch(error){notice(error);}}
+    async function close(){projection.dismiss?.();scopeEpoch++;clearContent();cancelCaptureJobs();try{await client.focusRequest('close');}catch(error){notice(error);}}
     $('nova-open').onclick=async()=>{try{await client.focusRequest('open',{renderTarget:$('nf-target').value});}catch(error){notice(error);}};
     $('nova-close').onclick=close;
     $('nova-pause').onclick=()=>{$('nova-pause').textContent=projection.togglePause()?'표시 계속':'표시 잠시 멈춤';};
@@ -429,6 +430,7 @@
       const owned=state.ready&&state.focusProducer===true;
       $('nova-open').disabled=!owned;$('nova-history-open').disabled=!owned;
       const key=state.assistId+':'+state.epoch;
+      if(state.assistId&&Number.isSafeInteger(state.epoch)&&state.epoch>0&&projectionScope!==key){projection.reset?.();projectionScope=key;}
       if((owned&&loaded!==key)||(!owned&&loaded)){
         clearContent();clearMemoryDraft();wasActive=false;
         scopeEpoch++;cacheScope='';pendingInput=null;$('nova-question').value='';$('nova-question').disabled=true;$('nova-history-list').replaceChildren();$('nova-history').hidden=true;
@@ -445,7 +447,7 @@
         &&!captureJobs.has(command.captureId)&&!command.claimed)void startSnapshotJob(command);
       if(wasActive&&!state.focus?.active){scopeEpoch++;clearContent();}
       wasActive=!!state.focus?.active;
-      projection.update(state.focus,state.ready&&state.connection==='READY');
+      projection.update(state.focus,state.ready&&state.connection==='READY',state.connection);
       if(state.focus?.reason&&messages[state.focus.reason])notice({message:state.focus.reason});
     }
     // 페이지가 숨겨지거나 닫히면 진행 중 촬영과 업로드를 취소한다. 돌아와도 자동 재촬영은 없다.

@@ -2,6 +2,26 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createClient}=require('../../../main/resources/static/assets/display/display-conversate.js');
 const {mount}=require('../../../main/resources/static/assets/display/display-focus-controls.js');
 const flush=()=>new Promise(setImmediate);
+test('Fold projection retains same-scope reconnect but clears old content on assist or epoch replacement',()=>{
+ const elements=new Map(),timers=new Map();let id=0;
+ const doc={hidden:false,getElementById:name=>name==='nova-fold-answer'?null:element(name),addEventListener(){},removeEventListener(){}};
+ function element(name){if(!elements.has(name))elements.set(name,{value:'',hidden:true,textContent:'',children:[],style:{},ownerDocument:doc,replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(name);}
+ const host={NovaFocus:require('../../../main/resources/static/assets/display/display-focus.js'),setTimeout(fn){timers.set(++id,fn);return id;},clearTimeout:id=>timers.delete(id),requestAnimationFrame:()=>0,cancelAnimationFrame(){}};
+ const client={state:{},focusRequest:async()=>({})};
+ const controls=mount({host,document:doc,client});
+ const focus={active:true,phase:'LISTENING',serverInstanceId:'server',activationId:'old',turnId:'',stateVersion:9,answerVersion:0,draftText:'previous scope',questionText:'',answerText:'',renderTarget:'fold',idleRemainingMs:0};
+ try{
+  controls.update({assistId:'A',epoch:1,ready:false,connection:'PREPARING',focus});assert.equal(element('nova-fold').hidden,false);
+  controls.update({assistId:'A',epoch:1,ready:false,connection:'RECONNECTING',focus:null});assert.equal(element('nova-fold').hidden,false);
+  controls.update({assistId:'B',epoch:2,ready:false,connection:'RECONNECTING',focus:null});assert.equal(element('nova-fold').hidden,true);assert.equal(element('nova-fold-draft').textContent,'');assert.equal(controls.active(),false);
+  controls.update({assistId:'B',epoch:2,ready:false,connection:'PREPARING',focus:{...focus,activationId:'new',stateVersion:1,draftText:'new scope'}});assert.equal(element('nova-fold').hidden,false);assert.equal(element('nova-fold-draft').textContent,'new scope');
+  const ended={...focus,active:false,phase:'ARMED',activationId:'',stateVersion:1,draftText:'',reason:'session_changed'};
+  controls.update({assistId:'C',epoch:1,ready:false,connection:'RECONNECTING',focus:ended});
+  assert.equal(element('nova-fold').hidden,false);assert.equal(element('nova-fold-draft').textContent,'');assert.match(element('nova-fold-status').textContent,/노바 종료됨.*연결 세션/);
+  controls.update({assistId:'C',epoch:1,ready:false,connection:'RECONNECTING',focus:ended});assert.equal(timers.size,1);
+  for(const fn of timers.values())fn();assert.equal(element('nova-fold').hidden,true);assert.equal(controls.active(),false);
+ }finally{controls.dispose();}
+});
 
 test('dedicated Gemini search is an explicit existing target option with a manual general-mode action',()=>{
  const html=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../../main/resources/static/assets/display/index.html'),'utf8');

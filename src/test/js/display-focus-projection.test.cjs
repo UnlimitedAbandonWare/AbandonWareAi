@@ -28,11 +28,48 @@ test('hidden phone waits for fresh visible projection before acknowledging groun
  f.doc.hidden=false;f.projection.visibility();f.projection.update({...f.value,stateVersion:2});await new Promise(setImmediate);
  assert.deepEqual(f.calls,['first_visible','presentation_done']);
 });
-function fixture(target='lens'){
- const frames=new Map(),calls=[],panel={},status={},draft={},doc={hidden:false};let id=0,time=0;
- const projection=createProjection({host:{},document:doc,target,panel,status,draft,requestFrame:fn=>{frames.set(++id,fn);return id;},cancelFrame:id=>frames.delete(id),fitsLine:()=>true,receipt:async(name,detail)=>calls.push({name,detail})});
- return {projection,frames,calls,panel,status,draft,doc,advance(ms){for(let t=0;t<ms;t+=20){time+=20;const f=[...frames.values()];frames.clear();f.forEach(fn=>fn(time));}}};
+function fixture(target='lens',extra={}){
+ const frames=new Map(),timers=new Map(),diagnostics=[],calls=[],panel={},status={},draft={},doc={hidden:false};let id=0,time=0;
+ const projection=createProjection({host:{setTimeout(fn,ms){timers.set(++id,{fn,at:time+ms});return id;},clearTimeout:id=>timers.delete(id)},document:doc,target,panel,status,draft,diagnostic:(name,detail)=>diagnostics.push({name,detail}),...extra,requestFrame:fn=>{frames.set(++id,fn);return id;},cancelFrame:id=>frames.delete(id),fitsLine:()=>true,receipt:async(name,detail)=>calls.push({name,detail})});
+ return {projection,frames,timers,diagnostics,calls,panel,status,draft,doc,advance(ms){for(let t=0;t<ms;t+=20){time+=20;for(const [key,timer] of timers)if(timer.at<=time){timers.delete(key);timer.fn();}const f=[...frames.values()];frames.clear();f.forEach(fn=>fn(time));}}};
 }
+test('fold keeps active panel and draft during reconnect and resumes the same answer once',async()=>{
+ const f=fixture('fold'),value={...base,renderTarget:'fold',answerText:'가'.repeat(40)};
+ f.projection.update(value);f.advance(400);await new Promise(setImmediate);
+ f.projection.update(value,false,'RECONNECTING');assert.equal(f.panel.hidden,false);assert.match(f.status.textContent,/재연결 중/);assert.equal(f.frames.size,0);
+ f.projection.update(null,false,'RECONNECTING');assert.equal(f.panel.hidden,false);assert.equal(f.draft.textContent,value.questionText);
+ f.projection.update(value,true);f.advance(6000);await new Promise(setImmediate);
+ assert.equal(f.calls.filter(x=>x.name==='first_visible').length,1);assert.equal(f.calls.filter(x=>x.name==='presentation_done').length,1);
+ assert.equal(f.diagnostics.some(x=>x.detail.cause==='not_connected:RECONNECTING'),true);
+});
+test('fold shows terminal reason for four seconds without poll timer sliding or stale resurrection',()=>{
+ const f=fixture('fold',{reasonText:reason=>reason==='wake_no_question'?'질문이 들리지 않았습니다.':reason});
+ f.projection.update({...base,renderTarget:'fold'});
+ const ended={...base,active:false,phase:'ARMED',stateVersion:2,reason:'wake_no_question',answerText:''};
+ assert.equal(f.projection.update(ended),false);assert.equal(f.panel.hidden,false);assert.equal(f.projection.isActive(),true);assert.match(f.status.textContent,/노바 종료됨.*질문이 들리지/);assert.equal(f.frames.size,0);
+ f.advance(3000);f.projection.update(ended);f.advance(1000);assert.equal(f.panel.hidden,true);
+ f.projection.update(ended);f.projection.update(base);assert.equal(f.panel.hidden,true);
+ assert.equal(f.diagnostics.filter(x=>x.detail.cause==='server_inactive:wake_no_question'&&!x.detail.hidden).length,1);
+});
+test('fold contract error retains panel and last draft then recovers on valid snapshot',()=>{
+ const f=fixture('fold');f.projection.update(base);
+ assert.equal(f.projection.update({...base,phase:'bad'},false),true);assert.equal(f.panel.hidden,false);assert.match(f.status.textContent,/表示|표시 오류/);assert.equal(f.frames.size,0);
+ f.projection.update(base);assert.equal(f.panel.hidden,false);assert.doesNotMatch(f.status.textContent,/오류/);
+});
+test('fold unknown terminal code is safe and debug retention remains dismissible without reopening',()=>{
+ const f=fixture('fold',{keepClosed:()=>true});f.projection.update(base);
+ f.projection.update({...base,active:false,stateVersion:2,reason:'new_reason'});assert.match(f.status.textContent,/노바가 종료됐습니다.*new_reason/);
+ f.advance(10000);assert.equal(f.panel.hidden,false);f.projection.dismiss();assert.equal(f.panel.hidden,true);assert.equal(f.projection.isActive(),false);
+ f.projection.update({...base,active:false,stateVersion:3,reason:'new_reason'});assert.equal(f.panel.hidden,true);
+ f.projection.update({...base,activationId:'new',stateVersion:4});assert.equal(f.panel.hidden,false);
+});
+test('fold terminal explanation survives a missing snapshot and disappears on schedule',()=>{
+ const f=fixture('fold');f.projection.update(base);f.projection.update({...base,active:false,stateVersion:2,reason:'idle_timeout'});
+ f.advance(100);f.projection.update(null);assert.equal(f.panel.hidden,false);assert.equal(f.projection.isActive(),true);assert.match(f.status.textContent,/終了|종료됨/);
+ f.projection.update({...base,active:false,stateVersion:3,reason:''});assert.equal(f.panel.hidden,false);assert.equal(f.projection.isActive(),true);
+ f.projection.update({...base,stateVersion:2});assert.match(f.status.textContent,/종료됨/);
+ f.advance(3900);assert.equal(f.panel.hidden,true);assert.equal(f.projection.isActive(),false);
+});
 test('optional focus is backwards compatible and malformed focus is isolated',()=>{
  assert.equal(decode(null),null);assert.throws(()=>decode({...base,answerText:'가'.repeat(8001)}));const f=fixture();assert.equal(f.projection.update(null),false);assert.equal(f.projection.update({...base,phase:'untrusted'}),false);assert.equal(f.panel.hidden,true);
 });

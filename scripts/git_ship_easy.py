@@ -8,6 +8,7 @@ Git-Ship.bat의 인수 동작은 한 글자도 바꾸지 않는다.
   Enter = 자동 올리기(안전한 변경 전부 커밋 + push + 원격 일치 확인)
   1. 상태 보기   2. 커밋하기   3. 커밋 + push(올리기)   4. 원격 확인
   5. 올라간 파일 내리기(내용은 그대로)   0/q. 끝내기
+  6. main에 올릴 커밋 보기   7. main에 올리기(merge 커밋 + push)
 
 안전 규칙 (git_ship 규칙 그대로):
   - Enter는 안전한 것 전부, m은 내 파일만, q는 취소하는 한 번의 선택.
@@ -151,29 +152,7 @@ def _stdin_is_console():
 
 def load_active_lease_paths(root, timeout=LEASE_TIMEOUT_S):
     """활성(live/active) lease의 targetPaths 모음. 확인 불가면 빈 집합+상태."""
-    script = Path(root) / "scripts" / "agent_scope_lease.py"
-    if not script.is_file():
-        return set(), "missing", 0
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-B", str(script), "who"],
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=timeout, cwd=str(root))
-    except (OSError, subprocess.TimeoutExpired):
-        return set(), "error", 0
-    if proc.returncode != 0:
-        return set(), "error", 0
-    try:
-        data = json.loads(proc.stdout)
-    except ValueError:
-        return set(), "error", 0
-    paths, count = set(), 0
-    for lease in data.get("leases") or []:
-        if lease.get("lifecycle") == "live" or lease.get("status") == "active":
-            count += 1
-            for p in lease.get("targetPaths") or []:
-                paths.add(_norm(str(p)))
-    return paths, "ok", count
+    return git_ship.load_active_lease_paths(root, timeout)
 
 
 def collect_changes(g):
@@ -704,6 +683,63 @@ def verify_flow(g, out):
     return 0 if res["ok"] else git_ship.EXIT_VERIFY
 
 
+def pending_main_flow(g, out=print):
+    args = SimpleNamespace(source=git_ship.DEFAULT_MAIN_SOURCE, remote="origin")
+    result = git_ship.cmd_pending_main(g, args)
+    out(f"main에 올릴 코덱스 커밋: {result['pendingCount']}개")
+    out("공통 조상: " + ("있음" if result["commonAncestor"] else "없음/확인 불가"))
+    for commit in result["commits"][:5]:
+        out(f"  {commit['sha12']} {commit['date']} {commit['subject']}")
+    if not result["ok"]:
+        out(result.get("reason", "원격 상태 확인이 필요해요."))
+    return result
+
+
+def release_main_flow(g, root, input_fn=input, out=print, plan_only=False):
+    if not plan_only and collect_changes(g):
+        if _yes(_ask(input_fn, "커밋 안 된 변경이 있어요. 먼저 3번 커밋+push를 할까요? [y/N]> ") or ""):
+            code = commit_flow(g, root, input_fn, out, push=True)
+            if code:
+                return code
+    pending_main_flow(g, out)
+    args = SimpleNamespace(source=git_ship.DEFAULT_MAIN_SOURCE, remote="origin",
+                           apply=False, expect_main=None)
+    plan = git_ship.cmd_release_main(g, args)
+    for name, gate in plan["gates"].items():
+        out(f"{name}: {'통과' if gate['ok'] else '보류'} ({gate['reason']})")
+    out(f"확인한 main: {plan['mainSha']}")
+    if plan_only:
+        out("비대화 환경: 계획만 표시했어요. 반영하려면 콘솔에서 7번을 선택하세요.")
+        return 2
+    if not plan["ok"]:
+        out("게이트가 통과하지 않아 main 반영을 보류했어요.")
+        return git_ship.EXIT_POLICY
+    if not plan["pendingCount"]:
+        out("이미 main에 모두 반영되어 있어요.")
+        return 0
+    if (_ask(input_fn, "올리려면 main 이라고 입력> ") or "").strip() != "main":
+        out("취소했어요.")
+        return 0
+    previous = {key: os.environ.get(key) for key in ("AWX_PUBLISH_APPROVED", "AWX_RELEASE_MAIN_EXPECT")}
+    try:
+        os.environ["AWX_PUBLISH_APPROVED"] = "1"
+        os.environ["AWX_RELEASE_MAIN_EXPECT"] = plan["mainSha"]
+        args.apply = True
+        args.expect_main = plan["mainSha"]
+        result = git_ship.cmd_release_main(g, args)
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    if result.get("published"):
+        out(f"main 반영 완료: {result['oldMain']} → {result['newMain']}")
+        out("https://github.com/UnlimitedAbandonWare/AbandonWareAi/commits/main")
+        out(f"되돌리기: git revert -m 1 {result['newMain']} 후 7번으로 다시 올리기")
+    return 0
+
+
 def _commit_args(message, apply):
     return SimpleNamespace(
         message=message, message2=None, apply=apply,
@@ -1044,11 +1080,15 @@ def run_menu_action(g, root, ans, input_fn=input, out=print):
         return verify_flow(g, out)
     if ans == "5":
         return unstage_flow(g, input_fn, out)
+    if ans == "6":
+        return pending_main_flow(g, out)
+    if ans == "7":
+        return release_main_flow(g, root, input_fn, out)
     if ans == "":
         return auto_ship_flow(g, root, input_fn, out)
     if ans in ("0", "q"):
         return "quit"
-    out("0~5 중에서 고르세요.")
+    out("0~7 중에서 고르세요.")
     return None
 
 
@@ -1090,6 +1130,7 @@ def build_arg_parser():
     p.add_argument("--plan-only", action="store_true",
                    help="첫 화면과 기본 제외 목록만 출력하고 종료")
     p.add_argument("--auto", action="store_true", help="콘솔 없이 자동 올리기")
+    p.add_argument("--menu", choices=("6", "7"), help="6 조회 / 7 반영 (비대화 환경에서는 계획만)")
     return p
 
 
@@ -1098,6 +1139,15 @@ def main(argv=None):
     _force_utf8()
     root = os.path.abspath(args.root)
     git_exe = resolve_git_exe(args.git_exe)
+    if args.menu:
+        g = git_ship.Git(root, git_exe)
+        try:
+            if args.menu == "6":
+                return 0 if pending_main_flow(g)["ok"] else git_ship.EXIT_POLICY
+            return release_main_flow(g, root, plan_only=args.plan_only or not _stdin_is_console())
+        except git_ship.ShipError as e:
+            print(f"main 반영 확인 실패: {e.message}")
+            return e.code
     if args.plan_only:
         try:
             return plan_only(root, git_exe)
@@ -1120,6 +1170,7 @@ def main(argv=None):
         print("  Enter = 자동 올리기(커밋+push+확인)   0/q = 끝내기")
         print("  1. 상태 보기   2. 커밋하기   3. 커밋 + push(올리기)")
         print("  4. 원격과 맞는지 확인   5. 올라간 파일 내리기(내용은 그대로)")
+        print("  6. main에 올릴 커밋 보기   7. main에 올리기(merge 커밋 + push)")
         ans = (_ask(input, "선택> ") or "").strip()
         try:
             if run_menu_action(g, root, ans, input, print) == "quit":

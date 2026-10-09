@@ -1,0 +1,108 @@
+@objective-executor @demo1-devin-source-orchestrator @demo1-vibe-max-agency @demo1-core-request-router @meta-rayban-display @demo1-meta-display-simple-caption @demo1-meta-display-resume @frontend-display-debug @demo1-conversate-hint-context @demo1-evidence-debugging @demo1-repairing-from-live-evidence @rag-search-diagnosis @search-zero-result-recovery @safe-source-edit @compile-verify-smoke @start-rag-reload @positive-negative-neutral-judge @SKILL.md
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+[ANTI-STOP] WP0~WP3 + A1-A8 REPORT 완료 후 종료. 읽고 멈추지 말 것.
+
+# [PASTE_DEVIN] Codex 세션 마찰 TOP1 수리: truncated_output 계량 활성화
+작성: agy (GrokBot 대타) | 날짜: 2026-10-09 | 대상: Devin SWE-2
+
+## 한줄목표
+`codex_nightly_review.py` `run` 결과 JSON에 `truncated_output` 필드를 보장하고 p90>10000 시 WARN_OUTPUT_CAP을 출력한다.
+
+## 사실 (agy 측정, 2026-10-09 12:09 KST)
+- `codex_session_friction.py` 최근 3일 82세션: truncated_output **1,525건 / 21.2M 토큰** (max=831K, p90=19,390)
+- source_lease_drift 250건, goal_conflict 27건, applypatch_invalid_hunk 28건 — truncated_output이 이 모든 마찰의 뿌리 원인
+- `scripts/codex_nightly_review.py` 구현됨(`run` / `validate-stream` 액션), **스케줄러 미등록, output 필드 미보장**
+- 어시스트: `scripts/nightly_review_assist_20261008.py` 존재 (pin/cover/hold/guard/sched/agy-mock 등)
+- 라이브 리스: `codex-git-ship-main-auth-supplement-045c0b4d`(in_progress) — 대상 파일 겹침 없음 (scope: `evidence_supplement.md`, `state.md` 두 파일만)
+- 범위 4개 파일: `scripts/codex_nightly_review.py`, `scripts/test_codex_nightly_review.py`, `configs/codex-nightly-review.example.json`, `docs/agents-rules/DEMO1-CODEX-NIGHTLY-REVIEW.md`
+
+## 공통규칙
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+
+실행 못 한 항목은 NOT_RUN + 이유로 표기, PASS로 바꾸지 않는다.
+
+## WP0 — 사전 확인 (읽기 전용)
+```powershell
+python -B scripts/lease_conflict_autoflow.py scan
+python -B scripts/codex_nightly_review.py --help
+python -B scripts/codex_session_friction.py --pretty --json-out var/friction-baseline-20261009.json
+python -B scripts/nightly_review_assist_20261008.py pin --root .
+python -B scripts/nightly_review_assist_20261008.py cover --root .
+python -B scripts/nightly_review_assist_20261008.py hold --root .
+```
+통과 조건: pin/cover exit 0; hold 항목을 REPORT에 기록.
+
+## WP1 — truncated_output 원인 분류 (읽기 전용)
+```powershell
+python -B scripts/codex_session_friction.py --json-out var/friction-detailed-20261009.json
+# max 파일 첫 100줄만 열기 (출력 예산 준수)
+```
+유형: A=단건 tool-output dump | B=context overflow | C=spawn_agent 체인
+결과: `var/truncation-class-20261009.json`
+
+## WP2 — output-cap 필드 활성화 (소스 수정)
+대상: `scripts/codex_nightly_review.py` (+ `test_codex_nightly_review.py`)
+
+최소 패치 (3가지):
+1. `run` 결과 JSON에 `truncated_output {count, token_sum, median, p90, max}` 필드 보장
+2. `p90 > 10000` 이면 `WARN_OUTPUT_CAP: p90={값}` 행 출력
+3. 사용자 제약 준수: `--model` 배치 전용, AGENTS.md 추가 ≤5줄+"야간 배치 한정" 단어, logon delay 30분
+
+## HOLD
+- WP0 `hold` UNRESOLVED 항목 → evidence_needed 표기 후 우회 없이 보고
+- 스케줄러 Task Scheduler XML 등록: 이번 범위 밖
+
+## ASK_ONCE
+없음. 전 단계 자동 진행. FAIL이면 수리 후 재시도 1회, 그래도 FAIL이면 evidence_needed.
+
+## 절대금지
+- git push / git add -A / git add . / git commit -a / remote 추가 금지
+- `main/java`, `main/resources`, `chat.js`, `api-routing.yaml`, `.codex/`, `.antigravity/`, `settings.json` 수정 금지
+- agy 전역 설정(`useG1Credits`, overage, model auto-tracking) 쓰기 금지
+- AGENTS.md 5줄 초과 추가 금지
+- `--dangerously-skip-permissions` 금지
+- PROTO_OPEN 보안 질문 금지 (VIBE_OPEN 유지)
+- 외부 API 호출 0, 비밀값 출력 0
+
+## WP3 — 검증
+```powershell
+python -B -m py_compile scripts/codex_nightly_review.py
+python -B -m py_compile scripts/test_codex_nightly_review.py
+python -B -m pytest scripts/test_codex_nightly_review.py -v
+# diff 생성 후 guard (WP2 변경 있을 때만)
+# git diff --unified=5 scripts/codex_nightly_review.py > var/nightly-diff-20261009.patch
+python -B scripts/nightly_review_assist_20261008.py guard --diff var/nightly-diff-20261009.patch
+python -B scripts/codex_nightly_review.py run --sessions-dir %USERPROFILE%\.codex\sessions --days 1 --json-out var/nightly-test-run-20261009.json
+```
+
+## Acceptance
+| # | 조건 |
+|---|---|
+| A1 | py_compile 두 파일 exit 0 |
+| A2 | pytest test_codex_nightly_review.py ALL PASS (failures=0, errors=0) |
+| A3 | guard exit 0 (forbidden diff 없음) |
+| A4 | nightly_review run exit 0 + JSON에 truncated_output 필드 존재 |
+| A5 | p90>10000 시 WARN_OUTPUT_CAP 출력 관찰 |
+| A6 | 제품 소스 diff 0 (main/java, main/resources, chat.js, api-routing.yaml) |
+| A7 | guard forbidden 항목 없음 (agy global keys, AGENTS.md>5줄 위반 없음) |
+| A8 | 외부 API 0, git push 0, 종료 시 lease 0 |
+
+## 보고형식
+```
+## REPORT
+- 실호출 0, 비밀 열람 0, 제품 소스 diff 0, Gradle 0, 종료 시 lease 0
+- WP0: pin/cover/hold 결과 (NOT_RUN 항목 있으면 기재)
+- WP1: truncation 분류 유형 → var/truncation-class-20261009.json
+- WP2: 변경 파일 + 라인 수 (변경 없으면 "변경 없음 + 이유")
+- WP3: A1-A8 PASS/FAIL 표, WARN_OUTPUT_CAP 관찰 여부, p90 값
+- evidence_needed: [미확인 항목]
+```
+
+## 범위 밖 (동시 패치 금지)
+- source_lease_drift(250건), goal_conflict(27건), applypatch_invalid_hunk(28건) — 별도 세션
+- nova-focus-keepalive 리스 파일 — 절대 건드리지 말 것
+- Git push / main 릴리스 — codex-main-release 세션이 진행 중
+
+[ANTI-STOP] WP0~WP3 + A1-A8 REPORT 완료 후 종료. 읽고 멈추지 말 것.

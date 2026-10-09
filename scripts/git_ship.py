@@ -20,6 +20,7 @@ Exit codes: 0 ok | 2 real secret found | 3 index.lock timeout |
 from __future__ import annotations
 
 import argparse
+import datetime
 from contextlib import contextmanager
 import hashlib
 import json
@@ -30,6 +31,9 @@ import sys
 import time
 import tempfile
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+from build_error_secret_mask import SECRET_FRAGMENT_RE
 
 EXIT_OK = 0
 EXIT_SECRET = 2
@@ -52,6 +56,8 @@ DEFAULT_MAX_MB = 10.0
 WARN_BLOB_MB = 50.0
 BLOCK_BLOB_MB = 100.0
 LAST_COMMIT_JSON = Path("var/codex-assist-git-ship/last-commit.json")
+LAST_RELEASE_MAIN_JSON = Path("var/codex-assist-git-ship/last-release-main.json")
+DEFAULT_MAIN_SOURCE = "codex/owned-runtime-browser-restart"
 
 # --- secret patterns (loose: no left boundary; boundary applied in classify) ---
 PATTERNS = [
@@ -782,6 +788,217 @@ def ls_remote_sha(g: Git, remote: str, branch: str) -> str | None:
     return None
 
 
+def load_active_lease_paths(root, timeout=20):
+    """Shared lease query used by Easy selection and main release."""
+    script = Path(root) / "scripts" / "agent_scope_lease.py"
+    if not script.is_file():
+        return set(), "missing", 0
+    try:
+        proc = subprocess.run([sys.executable, "-B", str(script), "who"],
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=timeout, cwd=str(root))
+        if proc.returncode:
+            return set(), "error", 0
+        data = json.loads(proc.stdout)
+        if not isinstance(data, dict) or not isinstance(data.get("leases"), list) or len(data["leases"]) >= 512:
+            return set(), "error", 0
+        paths, count = set(), 0
+        for lease in data.get("leases") or []:
+            if lease.get("lifecycle") == "live" or lease.get("status") == "active":
+                count += 1
+                paths.update(_norm(str(p)) for p in lease.get("targetPaths") or [])
+            elif lease.get("lifecycle") in ("orphan", "corrupt"):
+                return paths, "error", count
+        return paths, "ok", count
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        return set(), "error", 0
+
+
+def _release_text(text):
+    text = SECRET_FRAGMENT_RE.sub("<secret>", text)
+    for _name, pattern in PATTERNS:
+        text = pattern.sub(lambda m: _preview(m.group(0)), text)
+    return sanitize(text)
+
+
+def cmd_pending_main(g: Git, args) -> dict:
+    """Read current remote tips; never fetch or update local refs/index."""
+    source, remote = args.source, args.remote
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", remote):
+        raise ShipError(EXIT_POLICY, "invalid remote name")
+    if source in PROTECTED_BRANCHES or g.run(["check-ref-format", "refs/heads/" + source])[0]:
+        raise ShipError(EXIT_POLICY, "invalid main source branch")
+    g.out(["remote", "get-url", remote])  # configured remote only; URL never emitted
+    rc, output, _err = g.run(["ls-remote", "--heads", remote,
+                             "refs/heads/main", "refs/heads/" + source], timeout=60)
+    if rc:
+        raise ShipError(EXIT_ERROR, "remote-query-failed")
+    refs = dict((parts[1], parts[0]) for ln in output.splitlines()
+                if len(parts := ln.split()) == 2)
+    main, tip = refs.get("refs/heads/main"), refs.get("refs/heads/" + source)
+    result = {"ok": bool(main and tip), "remote": remote, "source": source,
+              "mainSha": main, "sourceSha": tip, "pendingCount": None,
+              "commits": [], "commonAncestor": None, "summary": {}}
+    if not result["ok"]:
+        result["reason"] = "remote-ref-missing"
+        return result
+    if any(g.run(["cat-file", "-e", sha + "^{commit}"])[0] for sha in (main, tip)):
+        result.update(ok=False, reason="remote-objects-missing: fetch required before planning")
+        return result
+    base_rc, _out, _err = g.run(["merge-base", main, tip])
+    if base_rc not in (0, 1):
+        raise ShipError(EXIT_ERROR, "merge-base-query-failed")
+    result["commonAncestor"] = base_rc == 0
+    range_arg = main + ".." + tip
+    result["pendingCount"] = int(g.out(["rev-list", "--count", range_arg]).strip())
+    log = g.out(["log", "--format=%H%x09%cs%x09%ae%x09%s", range_arg])
+    for line in log.splitlines():
+        columns = line.split("\t", 3)
+        if len(columns) == 4:
+            result["commits"].append({"sha12": columns[0][:12], "date": columns[1],
+                                      "author": "<redacted>", "subject": _release_text(columns[3])})
+    stats = [line.split("\t", 2) for line in g.out(["diff", "--numstat", main, tip]).splitlines()]
+    result["summary"] = {"changedFiles": len(stats),
+                         "addedLines": sum(int(s[0]) for s in stats if s[0].isdigit()),
+                         "deletedLines": sum(int(s[1]) for s in stats if len(s) > 1 and s[1].isdigit())}
+    return result
+
+
+def _release_plan(g, args):
+    plan = cmd_pending_main(g, args)
+    expect = args.expect_main or os.environ.get("AWX_RELEASE_MAIN_EXPECT")
+    main, tip = plan["mainSha"], plan["sourceSha"]
+    local = g.try_out(["rev-parse", "--verify", "refs/heads/" + args.source])
+    gates = {"G1": {"ok": bool(main and (expect == main if expect else not args.apply)),
+                    "reason": "expected-main-mismatch" if expect != main else "ok"},
+             "G2": {"ok": bool(tip and local and local.strip() == tip),
+                    "reason": "ok" if tip and local and local.strip() == tip else "먼저 3번으로 커밋+push 하세요"},
+             "G3": {"ok": False, "reason": "evidence_needed"},
+             "G4": {"ok": False, "reason": "evidence_needed"}}
+    if not expect and not args.apply and main:
+        gates["G1"]["reason"] = "plan-main-pinned"
+    if plan["ok"]:
+        range_args = [main + ".." + tip]
+        scan = run_scan(g, staged=False, range_args=range_args)
+        complete = len(scan["findings"]) < MAX_FINDINGS
+        gates["G3"] = {"ok": scan["ok"] and complete, "counts": scan["counts"],
+                        "reason": "ok" if scan["ok"] and complete else "secret-or-scan-limit"}
+        big = _oversize_in_range(g, range_args)
+        gates["G4"] = {"ok": not any(size > BLOCK_BLOB_MB * 1024 * 1024 for _, size in big),
+                        "warnings": [{"path": _release_text(p), "bytes": size} for p, size in big],
+                        "reason": "blob-over-100MB" if any(size > BLOCK_BLOB_MB * 1024 * 1024 for _, size in big) else "ok"}
+    # Registry belongs to the shared checkout, also when --root is a subdir/worktree.
+    root = repo_root(g)
+    common = Path(g.out(["rev-parse", "--path-format=absolute", "--git-common-dir"]).strip())
+    if common.name == ".git":
+        root = common.parent
+    _paths, state, count = load_active_lease_paths(root)
+    lease_ok = count == 0 and state == "ok"
+    lock = index_lock_path(g).exists()
+    gates["G5"] = {"ok": lease_ok and not lock, "leaseState": state,
+                    "activeLeaseCount": count, "indexLock": lock,
+                    "reason": "ok" if lease_ok and not lock else "lease-or-index-lock"}
+    plan.update(gates=gates, dryRun=not args.apply, expectedMain=expect or main,
+                ok=plan["ok"] and all(gate["ok"] for gate in gates.values()))
+    return plan
+
+
+def _release_push(g, remote, sha, ref):
+    """Exact single-ref permission for existing hooks; no persistent config."""
+    config = []
+    url = _push_url(g, remote)
+    if not url:
+        raise ShipError(EXIT_ERROR, "push-url-missing")
+    if __package__:
+        from .git_publish_review import parse_target
+    else:
+        from git_publish_review import parse_target
+    try:
+        target = parse_target(url)
+        config = ["-c", "publish.allowTarget=" + "/".join(target[k] for k in ("host", "owner", "repo")),
+                  "-c", "publish.allowRef=" + ref]
+    except ValueError:
+        # Local bare fixtures have no HTTP host or hooks; remote is still configured.
+        if not Path(url).is_dir():
+            raise ShipError(EXIT_POLICY, "unsupported-push-target")
+    rc, _out, err = g.run(config + ["push", remote, sha + ":" + ref], timeout=PUSH_TIMEOUT_S)
+    if rc:
+        raise ShipError(EXIT_ERROR, "release-push-failed: " + _release_text(err))
+
+
+def cmd_release_main(g: Git, args) -> dict:
+    if args.apply and os.environ.get("AWX_PUBLISH_APPROVED") != "1":
+        raise ShipError(EXIT_POLICY, "release refused: AWX_PUBLISH_APPROVED!=1")
+    plan = _release_plan(g, args)
+    if not args.apply:
+        return plan
+    failed = [name for name, gate in plan["gates"].items() if not gate["ok"]]
+    if not plan["ok"]:
+        raise ShipError(EXIT_POLICY, "release refused: " + ",".join(failed), plan)
+    if not plan["pendingCount"]:
+        return dict(plan, published=False, reason="already-in-main")
+    old, tip = plan["mainSha"], plan["sourceSha"]
+    temp = Path(tempfile.mkdtemp(prefix="git-ship-main-"))
+    work = temp / "worktree"
+    added = False
+    try:
+        g.out(["worktree", "add", "--detach", str(work), old])
+        added = True
+        wg = Git(str(work), g.exe)
+        argv = ["merge", "--no-ff", "--no-edit", "-m",
+                f"merge: {args.source} into main ({tip[:8]}, {plan['pendingCount']} commits)"]
+        if not plan["commonAncestor"]:
+            argv += ["--allow-unrelated-histories", "-X", "theirs"]
+        rc, _out, err = wg.run(argv + [tip])
+        if rc:
+            conflicts = wg.out(["diff", "--name-only", "--diff-filter=U"]).splitlines()
+            wg.run(["merge", "--abort"])
+            raise ShipError(EXIT_POLICY, "merge-refused: " + _release_text(err),
+                            {"conflicts": [_release_text(p) for p in conflicts]})
+        new = head_sha(wg)
+        parents = wg.out(["show", "-s", "--format=%P", new]).strip().split()
+        if parents != [old, tip]:
+            raise ShipError(EXIT_POLICY, "unexpected-merge-parents")
+        # Check leases and remote tips again immediately before publication.
+        latest = _release_plan(g, args)
+        if not latest["ok"] or latest["mainSha"] != old or latest["sourceSha"] != tip:
+            raise ShipError(EXIT_POLICY, "release-state-changed-before-push")
+        if not plan["commonAncestor"]:
+            stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d")
+            for ref in ("refs/tags/archive/main-" + stamp + "-" + old[:8], "refs/heads/archive/main-old"):
+                if not g.out(["ls-remote", args.remote, ref]).strip():
+                    _release_push(g, args.remote, old, ref)
+        if ls_remote_sha(g, args.remote, "main") != old:
+            raise ShipError(EXIT_POLICY, "G1: main changed before push")
+        _release_push(wg, args.remote, new, "refs/heads/main")
+        plan.update(published=True, oldMain=old, newMain=new, parents=parents, dryRun=False)
+        if ls_remote_sha(g, args.remote, "main") != new:
+            raise ShipError(EXIT_VERIFY, "release-post-push-mismatch", {"newMain": new})
+        record = Path(g.root) / LAST_RELEASE_MAIN_JSON
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        return plan
+    finally:
+        if added:
+            # Never force cleanup. Abort restores only this isolated merge index.
+            Git(str(work), g.exe).run(["merge", "--abort"])
+            rc, _out, _err = g.run(["worktree", "remove", str(work)])
+            cleanup = {"ok": rc == 0}
+            if rc:
+                cleanup.update(reason="worktree-remove-failed", path=str(work))
+                active_error = sys.exc_info()[1]
+                if isinstance(active_error, ShipError):
+                    active_error.details["cleanup"] = cleanup
+                else:
+                    plan["cleanup"] = cleanup
+                    if plan.get("published"):
+                        record.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            else:
+                temp.rmdir()
+        else:
+            temp.rmdir()
+
+
 def _pr_url(g: Git, remote: str, branch: str) -> str | None:
     url = _push_url(g, remote)
     if not url:
@@ -992,6 +1209,15 @@ def build_parser() -> argparse.ArgumentParser:
     ph.add_argument("--max-mb", type=float, default=DEFAULT_MAX_MB)
     ph.add_argument("--lock-wait", type=float, default=DEFAULT_LOCK_WAIT_S)
     ph.add_argument("--lock-retries", type=int, default=DEFAULT_LOCK_RETRIES)
+    for name in ("pending-main", "release-main"):
+        pm = sub.add_parser(name, parents=[common], help="inspect or release pushed commits into main")
+        pm.add_argument("--source", default=DEFAULT_MAIN_SOURCE)
+        pm.add_argument("--remote", default="origin")
+        if name == "release-main":
+            mode = pm.add_mutually_exclusive_group()
+            mode.add_argument("--plan", action="store_true")
+            mode.add_argument("--apply", action="store_true")
+            pm.add_argument("--expect-main", default=None)
     return p
 
 
@@ -1003,6 +1229,8 @@ HANDLERS = {
     "push": (cmd_push, _pretty_push),
     "verify": (cmd_verify, _pretty_verify),
     "ship": (cmd_ship, _pretty_ship),
+    "pending-main": (cmd_pending_main, lambda r: print(json.dumps(r, ensure_ascii=True, indent=2))),
+    "release-main": (cmd_release_main, lambda r: print(json.dumps(r, ensure_ascii=True, indent=2))),
 }
 
 
@@ -1018,13 +1246,17 @@ def main(argv=None) -> int:
         if args.json:
             print(json.dumps({"ok": False, "error": exc.message,
                               "exit": exc.code,
-                              "details": exc.details}, ensure_ascii=False))
+                              "details": exc.details}, ensure_ascii=args.cmd in ("pending-main", "release-main")))
         else:
             print(f"error[{exc.code}]: {exc.message}", file=sys.stderr)
             for f in exc.details.get("hookFindings") or []:
                 print(f"  {f['path']}  {f['rule']}", file=sys.stderr)
         return exc.code
-    _emit(res, args.json, pretty)
+    if args.json and args.cmd in ("pending-main", "release-main"):
+        # JSON stays portable through Windows cp949 redirected consoles.
+        print(json.dumps(res, ensure_ascii=True, indent=2))
+    else:
+        _emit(res, args.json, pretty)
     if args.cmd == "scan" and not res["ok"]:
         return EXIT_SECRET
     if args.cmd == "verify" and not res["ok"] and res["remoteReachable"]:

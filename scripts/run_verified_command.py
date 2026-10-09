@@ -203,8 +203,12 @@ def validate_bound_receipt(output, binding=None, expected_phase=None, expected_r
             raise ValueError("receipt-junit-coverage-mismatch")
         totals = dict(tests=0, failures=0, errors=0, skipped=0)
         started_ns, ended_ns = report["commandStartedNs"], report["commandEndedNs"]
+        # ISO datetimes retain microseconds; float epoch conversion can lose ns.
+        offsets = [point - datetime(1970, 1, 1, tzinfo=timezone.utc) for point in (start, end)]
+        start_stamp_ns, end_stamp_ns = [(delta.days * 86400 + delta.seconds) * 1_000_000_000 +
+            delta.microseconds * 1000 for delta in offsets]
         if (type(started_ns) is not int or type(ended_ns) is not int or ended_ns < started_ns or
-                started_ns < int(start.timestamp() * 1e9) or ended_ns > int(end.timestamp() * 1e9) + 1000):
+                started_ns < start_stamp_ns or ended_ns > end_stamp_ns + 999):
             raise ValueError("receipt-command-times-invalid")
         before_rows = report["initialResultFiles"]
         if sorted(row["suite"] for row in before_rows) != suites:

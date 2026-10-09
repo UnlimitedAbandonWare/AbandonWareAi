@@ -266,6 +266,31 @@ class BoundReceiptTest(unittest.TestCase):
         self.assertFalse(checked["ok"])
         binding.assert_not_called()
 
+    def test_exact_clock_conversion_accepts_truncation_but_rejects_outside_boundary(self):
+        # Actual child outcome/artifact hashes; only time metadata is synthetic.
+        report, output = self.execute()
+        base = runner.datetime(2020, 1, 1, tzinfo=runner.timezone.utc)
+        epoch_ns = 1577836800000000000
+        for microsecond in range(1, 1000):
+            end = base.replace(microsecond=microsecond)
+            exact_end_ns = epoch_ns + microsecond * 1000
+            if exact_end_ns > int(end.timestamp() * 1e9) + 1:
+                break
+        else:
+            self.fail('Synthetic float precision counterexample unavailable')
+        report['startedAt'], report['endedAt'] = base.isoformat(), end.isoformat()
+        report['commandStartedNs'], report['commandEndedNs'] = epoch_ns, exact_end_ns + 999
+        for row in report['resultFiles']:
+            row['sourceModifiedNs'] = epoch_ns + 1
+        def checked():
+            (output / 'run.json').write_text(json.dumps(report))
+            return runner.validate_bound_receipt(output, expected_phase='GREEN')
+        self.assertTrue(checked()['ok'])
+        report['commandEndedNs'] = exact_end_ns + 1000
+        self.assertIn('receipt-command-times-invalid', checked()['diagnostics'])
+        report['commandEndedNs'], report['commandStartedNs'] = exact_end_ns + 999, epoch_ns - 1
+        self.assertIn('receipt-command-times-invalid', checked()['diagnostics'])
+
     def test_empty_or_incomplete_stability_cannot_reuse_receipt(self):
         for shape in ([], None, [{"path": "source.py"}]):
             with self.subTest(shape=shape):

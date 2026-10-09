@@ -1,0 +1,1686 @@
+{
+ "schemaVersion": "awx.release-to-main.v1",
+ "invocations": [
+  {
+   "at": "2026-10-09T02:27:24.308396+00:00",
+   "action": "plan",
+   "argv": [
+    "plan"
+   ],
+   "repo": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+   "remote": "origin",
+   "exit": 3,
+   "commands": [
+    {
+     "at": "2026-10-09T02:27:24.308396+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "refs/heads/codex/owned-runtime-browser-restart^{commit}"
+     ],
+     "rc": 0,
+     "ms": 38,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:25.015451+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "fetch",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 707,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:25.050602+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/main"
+     ],
+     "rc": 0,
+     "ms": 35,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:25.310767+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "sk-[A-Za-z0-9_-]{16,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 260,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:25.565951+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AIza[0-9A-Za-z_-]{20,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 254,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:25.815616+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "vck_[0-9A-Za-z]{10,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 249,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:26.055627+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "ghp_[0-9A-Za-z]{20,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 240,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:26.287236+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "github_pat_[0-9A-Za-z_]{20,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 231,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:26.505294+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "xox[baprs]-[0-9A-Za-z-]{10,}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 218,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:26.730350+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AKIA[0-9A-Z]{16}",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 224,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:26.974177+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "-----BEGIN [A-Z0-9 ]+-----",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 1,
+     "ms": 243,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:27.198041+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "client_secret",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 223,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:27.427439+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "NAVER_APIHUB_CLIENT_SECRET",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 229,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:27.467417+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 36,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:27.506956+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-list",
+      "a3754a3f8faad760e90c2c23409a4064f3ae09da..6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 40,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:27.784851+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "diff",
+      "--unified=0",
+      "a3754a3f8faad760e90c2c23409a4064f3ae09da..6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 276,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:28.195131+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-tree",
+      "-r",
+      "-l",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 100,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:27:29.026044+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "archive",
+      "--format=tar",
+      "6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 0,
+     "stderr": "(binary stdout -> tar file)"
+    },
+    {
+     "at": "2026-10-09T02:28:59.408888+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_AUTHOR_IDENT"
+     ],
+     "rc": 0,
+     "ms": 40,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:28:59.449511+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_COMMITTER_IDENT"
+     ],
+     "rc": 0,
+     "ms": 40,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:28:59.482102+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 32,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:28:59.525691+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "log",
+      "--format=%h|%ae|%s",
+      "a3754a3f8faad760e90c2c23409a4064f3ae09da..6a8d0cd2202609df887db499632674045c4524c0"
+     ],
+     "rc": 0,
+     "ms": 43,
+     "stderr": ""
+    }
+   ],
+   "results": {
+    "plan": {
+     "action": "plan",
+     "ok": false,
+     "rc": {
+      "sha": "6a8d0cd2202609df887db499632674045c4524c0",
+      "ref": "refs/heads/codex/owned-runtime-browser-restart"
+     },
+     "remoteMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "expectMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "gates": [
+      {
+       "id": "G1",
+       "status": "pass",
+       "actual": "b2eaba4679f70ded860b052faa59b29073d0c859"
+      },
+      {
+       "id": "G2",
+       "status": "fail",
+       "suspects": [
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_awx_mcp_oauth_restart.py",
+         "line": 24,
+         "masked": "secr***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "src/test/java/ai/abandonware/nova/orch/aop/EvidenceListTraceInjectionAspectTest.java",
+         "line": 570,
+         "masked": "secr***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "src/test/java/ai/abandonware/nova/orch/aop/EvidenceListTraceInjectionAspectTest.java",
+         "line": 614,
+         "masked": "secr***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "src/test/java/ai/abandonware/nova/orch/aop/EvidenceListTraceInjectionAspectTest.java",
+         "line": 675,
+         "masked": "secr***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/apikit/test_apikit_expand.py",
+         "line": 133,
+         "masked": "hsec***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/apikit/test_apikit_expand.py",
+         "line": 165,
+         "masked": "hsec***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/naver_apihub_hubmock_20261008.py",
+         "line": 8,
+         "masked": "synt***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "naver-secret",
+         "path": "scripts/naver_apihub_hubmock_20261008.py",
+         "line": 8,
+         "masked": "synt***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_naver_probe_mode_contract.py",
+         "line": 10,
+         "masked": "synt***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_naver_probe_mode_contract.py",
+         "line": 118,
+         "masked": "__MI***",
+         "where": "rc-tree"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/apikit/test_apikit_expand.py",
+         "line": 133,
+         "masked": "hsec***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/apikit/test_apikit_expand.py",
+         "line": 165,
+         "masked": "hsec***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/apikit/test_apikit_expand.py",
+         "line": 178,
+         "masked": "lsec***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/naver_apihub_hubmock_20261008.py",
+         "line": 8,
+         "masked": "synt***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "naver-secret",
+         "path": "scripts/naver_apihub_hubmock_20261008.py",
+         "line": 8,
+         "masked": "synt***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_naver_probe_mode_contract.py",
+         "line": 10,
+         "masked": "synt***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_naver_probe_mode_contract.py",
+         "line": 11,
+         "masked": "synt***",
+         "where": "unpushed-diff"
+        },
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_naver_probe_mode_contract.py",
+         "line": 118,
+         "masked": "__MI***",
+         "where": "unpushed-diff"
+        }
+       ],
+       "placeholderHits": 2,
+       "scanScope": {
+        "treeFiles": "git-grep",
+        "diffCommits": [
+         "6a8d0cd2202609df887db499632674045c4524c0",
+         "a95fc15ed7f90730cc54f56ddddde84e17821eed",
+         "1c57582e838d1bf2c7b44a0195328c8103c2178c"
+        ]
+       }
+      },
+      {
+       "id": "G3",
+       "status": "warn",
+       "failItems": [],
+       "warnCount": 78,
+       "warnSample": [
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/guard/AnswerSanitizer.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/onnx/OnnxCrossEncoderReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/auth/DomainWhitelist.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/overdrive/OverdriveGuard.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/rerank/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/strategy/RetrievalOrderService.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/trace/TraceContext.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/service/rag/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        }
+       ]
+      },
+      {
+       "id": "G4",
+       "status": "pass",
+       "detail": "\nBUILD SUCCESSFUL in 1m 15s\n1 actionable task: 1 executed\n\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.",
+       "surface": "C:\\Users\\nninn\\AppData\\Local\\Temp\\awx-rc-build-pxg4ugt1\\src",
+       "compileExit": 0
+      },
+      {
+       "id": "G5",
+       "status": "warn",
+       "authorIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791512939 +0900",
+       "committerIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791512939 +0900",
+       "unpushedCount": 3,
+       "unpushedSample": [
+        {
+         "sha": "6a8d0cd2",
+         "email": "105685783+UnlimitedAbandonWare@users.noreply.github.com",
+         "subject": "chore: 자동 올리기 2026-10-09 10:54"
+        },
+        {
+         "sha": "a95fc15e",
+         "email": "105685783+UnlimitedAbandonWare@users.noreply.github.com",
+         "subject": "chore: 자동 올리기 2026-10-07 23:38"
+        },
+        {
+         "sha": "1c57582e",
+         "email": "105685783+UnlimitedAbandonWare@users.noreply.github.com",
+         "subject": "chore: 자동 올리기 2026-10-07 19:06"
+        }
+       ]
+      }
+     ]
+    }
+   }
+  },
+  {
+   "at": "2026-10-09T02:35:42.449275+00:00",
+   "action": "plan",
+   "argv": [
+    "plan"
+   ],
+   "repo": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+   "remote": "origin",
+   "exit": 3,
+   "commands": [
+    {
+     "at": "2026-10-09T02:35:42.448757+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "refs/heads/codex/owned-runtime-browser-restart^{commit}"
+     ],
+     "rc": 0,
+     "ms": 41,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:43.097323+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "fetch",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 648,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:43.129708+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/main"
+     ],
+     "rc": 0,
+     "ms": 32,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:43.358851+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "sk-[A-Za-z0-9_-]{16,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 229,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:43.593220+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AIza[0-9A-Za-z_-]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 234,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:43.842825+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "vck_[0-9A-Za-z]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 249,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:44.082426+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "ghp_[0-9A-Za-z]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 239,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:44.309438+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "github_pat_[0-9A-Za-z_]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 227,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:44.538039+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "xox[baprs]-[0-9A-Za-z-]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 228,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:44.772393+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AKIA[0-9A-Z]{16}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 234,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.035486+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "-----BEGIN [A-Z0-9 ]+-----",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 262,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.261161+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "client_secret",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 226,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.502114+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "NAVER_APIHUB_CLIENT_SECRET",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 240,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.542624+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 37,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.583172+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-list",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 40,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:45.676703+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-tree",
+      "-r",
+      "-l",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 93,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:35:46.469710+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "archive",
+      "--format=tar",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 0,
+     "stderr": "(binary stdout -> tar file)"
+    },
+    {
+     "at": "2026-10-09T02:37:08.243932+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_AUTHOR_IDENT"
+     ],
+     "rc": 0,
+     "ms": 41,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:37:08.280200+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_COMMITTER_IDENT"
+     ],
+     "rc": 0,
+     "ms": 35,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:37:08.315208+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 34,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:37:08.357976+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "log",
+      "--format=%h|%ae|%s",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    }
+   ],
+   "results": {
+    "plan": {
+     "action": "plan",
+     "ok": false,
+     "rc": {
+      "sha": "62c833928506198558f57c223cece63a705f4ce6",
+      "ref": "refs/heads/codex/owned-runtime-browser-restart"
+     },
+     "remoteMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "expectMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "gates": [
+      {
+       "id": "G1",
+       "status": "pass",
+       "actual": "b2eaba4679f70ded860b052faa59b29073d0c859"
+      },
+      {
+       "id": "G2",
+       "status": "fail",
+       "suspects": [
+        {
+         "pattern": "client_secret",
+         "path": "scripts/test_awx_mcp_oauth_restart.py",
+         "line": 24,
+         "masked": "secr***",
+         "where": "rc-tree"
+        }
+       ],
+       "placeholderHits": 11,
+       "scanScope": {
+        "treeFiles": "git-grep",
+        "diffCommits": []
+       }
+      },
+      {
+       "id": "G3",
+       "status": "warn",
+       "failItems": [],
+       "warnCount": 78,
+       "warnSample": [
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/guard/AnswerSanitizer.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/onnx/OnnxCrossEncoderReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/auth/DomainWhitelist.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/overdrive/OverdriveGuard.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/rerank/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/strategy/RetrievalOrderService.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/trace/TraceContext.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/service/rag/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        }
+       ]
+      },
+      {
+       "id": "G4",
+       "status": "pass",
+       "detail": "\nBUILD SUCCESSFUL in 1m 8s\n1 actionable task: 1 executed\n\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.",
+       "surface": "C:\\Users\\nninn\\AppData\\Local\\Temp\\awx-rc-build-uzbzny63\\src",
+       "compileExit": 0
+      },
+      {
+       "id": "G5",
+       "status": "warn",
+       "authorIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791513428 +0900",
+       "committerIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791513428 +0900",
+       "unpushedCount": 0,
+       "unpushedSample": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "at": "2026-10-09T02:40:54.479911+00:00",
+   "action": "plan",
+   "argv": [
+    "plan"
+   ],
+   "repo": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+   "remote": "origin",
+   "exit": 0,
+   "commands": [
+    {
+     "at": "2026-10-09T02:40:54.479911+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "refs/heads/codex/owned-runtime-browser-restart^{commit}"
+     ],
+     "rc": 0,
+     "ms": 44,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:55.245139+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "fetch",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 765,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:55.284925+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/main"
+     ],
+     "rc": 0,
+     "ms": 39,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:55.540247+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "sk-[A-Za-z0-9_-]{16,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 255,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:55.799310+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AIza[0-9A-Za-z_-]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 258,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:56.075792+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "vck_[0-9A-Za-z]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 276,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:56.337278+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "ghp_[0-9A-Za-z]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 261,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:56.597082+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "github_pat_[0-9A-Za-z_]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 259,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:56.863204+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "xox[baprs]-[0-9A-Za-z-]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 266,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:57.149043+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AKIA[0-9A-Z]{16}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 285,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:57.404154+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "-----BEGIN [A-Z0-9 ]+-----",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 255,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:57.647850+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "client_secret",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 243,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:57.915490+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "NAVER_APIHUB_CLIENT_SECRET",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 267,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:58.023532+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 104,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:58.080867+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-list",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 56,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:58.189779+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-tree",
+      "-r",
+      "-l",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 108,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:40:59.055397+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "archive",
+      "--format=tar",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 0,
+     "stderr": "(binary stdout -> tar file)"
+    },
+    {
+     "at": "2026-10-09T02:42:33.829285+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_AUTHOR_IDENT"
+     ],
+     "rc": 0,
+     "ms": 43,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:33.872051+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_COMMITTER_IDENT"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:33.914758+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:33.966774+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "log",
+      "--format=%h|%ae|%s",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 53,
+     "stderr": ""
+    }
+   ],
+   "results": {
+    "plan": {
+     "action": "plan",
+     "ok": true,
+     "rc": {
+      "sha": "62c833928506198558f57c223cece63a705f4ce6",
+      "ref": "refs/heads/codex/owned-runtime-browser-restart"
+     },
+     "remoteMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "expectMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "gates": [
+      {
+       "id": "G1",
+       "status": "pass",
+       "actual": "b2eaba4679f70ded860b052faa59b29073d0c859"
+      },
+      {
+       "id": "G2",
+       "status": "pass",
+       "suspects": [],
+       "placeholderHits": 12,
+       "scanScope": {
+        "treeFiles": "git-grep",
+        "diffCommits": []
+       }
+      },
+      {
+       "id": "G3",
+       "status": "warn",
+       "failItems": [],
+       "warnCount": 78,
+       "warnSample": [
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/guard/AnswerSanitizer.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/onnx/OnnxCrossEncoderReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/auth/DomainWhitelist.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/DynamicRetrievalHandlerChain.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/handler/KnowledgeGraphHandler.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/overdrive/OverdriveGuard.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/service/rag/rerank/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/strategy/RetrievalOrderService.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/com/example/lms/trace/TraceContext.java",
+         "reason": "runtime/output-like path"
+        },
+        {
+         "path": "app/quarantine/java_clean_legacy/service/rag/DppDiversityReranker.java",
+         "reason": "runtime/output-like path"
+        }
+       ]
+      },
+      {
+       "id": "G4",
+       "status": "pass",
+       "detail": "\nBUILD SUCCESSFUL in 1m 17s\n1 actionable task: 1 executed\n\nNote: Some input files use or override a deprecated API.\nNote: Recompile with -Xlint:deprecation for details.\nNote: Some input files use unchecked or unsafe operations.\nNote: Recompile with -Xlint:unchecked for details.",
+       "surface": "C:\\Users\\nninn\\AppData\\Local\\Temp\\awx-rc-build-va1rahk0\\src",
+       "compileExit": 0
+      },
+      {
+       "id": "G5",
+       "status": "warn",
+       "authorIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791513753 +0900",
+       "committerIdent": "UnlimitedAbandonWare <105685783+UnlimitedAbandonWare@users.noreply.github.com> 1791513753 +0900",
+       "unpushedCount": 0,
+       "unpushedSample": []
+      }
+     ]
+    }
+   }
+  },
+  {
+   "at": "2026-10-09T02:42:51.547838+00:00",
+   "action": "apply",
+   "argv": [
+    "apply",
+    "--yes-main"
+   ],
+   "repo": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+   "remote": "origin",
+   "exit": 4,
+   "commands": [
+    {
+     "at": "2026-10-09T02:42:51.547838+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "refs/heads/codex/owned-runtime-browser-restart^{commit}"
+     ],
+     "rc": 0,
+     "ms": 43,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:52.313273+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "fetch",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 764,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:52.356971+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/main"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:52.667588+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "sk-[A-Za-z0-9_-]{16,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 309,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:52.961111+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AIza[0-9A-Za-z_-]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 293,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:53.254280+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "vck_[0-9A-Za-z]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 293,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:53.600156+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "ghp_[0-9A-Za-z]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 345,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:53.883136+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "github_pat_[0-9A-Za-z_]{20,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 282,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:54.188739+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "xox[baprs]-[0-9A-Za-z-]{10,}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 305,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:54.468388+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AKIA[0-9A-Z]{16}",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 279,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:54.724834+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "-----BEGIN [A-Z0-9 ]+-----",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 256,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:55.012709+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "client_secret",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 287,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:55.278913+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "NAVER_APIHUB_CLIENT_SECRET",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 266,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:55.324486+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 41,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:55.369083+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-list",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 44,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:55.490011+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-tree",
+      "-r",
+      "-l",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 120,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:42:56.436601+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "archive",
+      "--format=tar",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 0,
+     "stderr": "(binary stdout -> tar file)"
+    },
+    {
+     "at": "2026-10-09T02:44:26.581505+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_AUTHOR_IDENT"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:26.623270+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_COMMITTER_IDENT"
+     ],
+     "rc": 0,
+     "ms": 40,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:26.657540+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 34,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:26.700108+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "log",
+      "--format=%h|%ae|%s",
+      "62c833928506198558f57c223cece63a705f4ce6..62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:26.769416+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "diff",
+      "--quiet",
+      "b2eaba4679f70ded860b052faa59b29073d0c859",
+      "62c833928506198558f57c223cece63a705f4ce6"
+     ],
+     "rc": 1,
+     "ms": 69,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:26.818984+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "commit-tree",
+      "62c833928506198558f57c223cece63a705f4ce6^{tree}",
+      "-p",
+      "b2eaba4679f70ded860b052faa59b29073d0c859",
+      "-p",
+      "62c833928506198558f57c223cece63a705f4ce6",
+      "-m",
+      "release: codex/owned-runtime-browser-restart 62c83392 -> main (snapshot, history kept)",
+      "-m",
+      "content=RC tree; parents preserve both histories; created by scripts/release_to_main.py"
+     ],
+     "rc": 0,
+     "ms": 49,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:44:27.369719+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-remote",
+      "origin",
+      "refs/tags/archive/main-20260923-b2eaba46",
+      "refs/heads/archive/main-old",
+      "refs/heads/codex/owned-runtime-browser-restart",
+      "refs/heads/main"
+     ],
+     "rc": 0,
+     "ms": 550,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T02:48:28.634291+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "push",
+      "origin",
+      "b2eaba4679f70ded860b052faa59b29073d0c859:refs/tags/archive/main-20260923-b2eaba46"
+     ],
+     "rc": 1,
+     "ms": 241264,
+     "stderr": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+    }
+   ],
+   "results": {
+    "apply": {
+     "action": "apply",
+     "status": "error",
+     "failedStep": "archive-tag",
+     "steps": [
+      {
+       "step": "commit-tree",
+       "status": "ok",
+       "snapshot": "33086302345fc2863b1a57e9bdd591355b0e8d94",
+       "parents": [
+        "b2eaba4679f70ded860b052faa59b29073d0c859",
+        "62c833928506198558f57c223cece63a705f4ce6"
+       ]
+      },
+      {
+       "step": "archive-tag",
+       "status": "fail",
+       "ref": "archive/main-20260923-b2eaba46",
+       "pointsAt": "b2eaba4679f70ded860b052faa59b29073d0c859",
+       "err": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+      }
+     ],
+     "snapshot": "33086302345fc2863b1a57e9bdd591355b0e8d94"
+    }
+   }
+  }
+ ]
+}
