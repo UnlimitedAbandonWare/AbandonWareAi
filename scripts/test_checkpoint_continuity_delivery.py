@@ -385,7 +385,8 @@ class RequestContractTest(unittest.TestCase):
                         "inputs": [{"name": "items", "type": "string[]", "knowledgeRef": "contract"}],
                         "outputs": [{"name": "filtered", "type": "string[]", "knowledgeRef": "contract"}],
                         "api": {"applicable": False, "reason": "Local pure function", "knowledgeRef": "contract"},
-                        "errors": [], "successTests": [{"id": "dedup", "commandId": "focused-test",
+                        "errors": [], "successTests": [{"id": "dedup", "commandId": "focused",
+                            "argvSha256": "0" * 64, "expectedSuites": ["SyntheticSuite"],
                             "expectation": "Repeated input appears once", "knowledgeRef": "contract"}],
                         "steps": ["Write a focused failing fixture", "Patch the existing function"],
                         "sourceFiles": ["scripts/example.py"], "testFiles": ["scripts/test_example.py"]}]
@@ -454,6 +455,37 @@ class RequestContractTest(unittest.TestCase):
         self.assertEqual("REJECTED", self.check(latest_ref="user:other")["status"])
         self.assertEqual("REJECTED", self.check(expected_revision=2)["status"])
 
+    def test_planned_execution_missing_empty_holds_and_malformed_rejects(self):
+        for field in ("argvSha256", "expectedSuites"):
+            doc = self.contract()
+            doc["stages"][0]["successTests"][0].pop(field)
+            self.assertEqual("HOLD", self.check(doc)["status"], field)
+            doc = self.contract()
+            doc["stages"][0]["successTests"][0][field] = "" if field == "argvSha256" else []
+            self.assertEqual("HOLD", self.check(doc)["status"], field)
+        for value in ("not-a-hash", "A" * 64, 123, ["0" * 64]):
+            doc = self.contract()
+            doc["stages"][0]["successTests"][0]["argvSha256"] = value
+            self.assertEqual("REJECTED", self.check(doc)["status"])
+        for value in ("SyntheticSuite", [""], ["../suite"], ["same", "same"], [False]):
+            doc = self.contract()
+            doc["stages"][0]["successTests"][0]["expectedSuites"] = value
+            self.assertEqual("REJECTED", self.check(doc)["status"])
+
+    def test_importlib_without_scripts_import_path_uses_existing_sibling_scanner(self):
+        code = (
+            "import importlib.util,json,sys; "
+            "spec=importlib.util.spec_from_file_location('standalone_doctor',sys.argv[1]); "
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); "
+            "print(json.dumps(module.check_request_contract(json.loads(sys.stdin.read()))))"
+        )
+        with tempfile.TemporaryDirectory() as folder:
+            result = subprocess.run([sys.executable, "-B", "-c", code,
+                str(SCRIPTS / "checkpoint_doctor.py")], input=json.dumps(self.contract()),
+                cwd=folder, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("READY", json.loads(result.stdout)["status"])
+
     def test_canonical_paths_and_existing_link_boundaries(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -474,14 +506,40 @@ class RequestContractTest(unittest.TestCase):
 
     def test_bounded_secret_and_nonfinite_inputs_fail_closed(self):
         doc = self.contract()
-        doc["goal"] = "Authorization: Bearer " + ("fixture" * 6)
-        self.assertEqual("REJECTED", self.check(doc)["status"])
+        with patch.object(ck, "secret_free", side_effect=ValueError("secret-pattern")) as scanner:
+            self.assertEqual("REJECTED", self.check(doc)["status"])
+            scanner.assert_called_once()
         doc = self.contract()
         doc["revision"] = float("nan")
         self.assertEqual("REJECTED", self.check(doc)["status"])
         doc = self.contract()
         doc["knowledge"] *= 101
         self.assertEqual("REJECTED", self.check(doc)["status"])
+
+    def test_cli_duplicate_json_field_is_ambiguous_and_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "request.json"
+            body = json.dumps(self.contract()).replace('"revision": 1', '"revision": 1, "revision": 1')
+            source.write_text(body, encoding="utf-8")
+            result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "checkpoint_doctor.py"),
+                "--request-contract", str(source), "--root", folder], capture_output=True, text=True)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("REJECTED", json.loads(result.stdout)["status"])
+            self.assertEqual(body, source.read_text(encoding="utf-8"))
+
+    def test_cli_input_link_is_rejected_before_target_read(self):
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "request.json"
+            source.write_text(json.dumps(self.contract()), encoding="utf-8")
+            linked = Path(folder) / "linked.json"
+            try:
+                linked.symlink_to(source)
+            except OSError:
+                self.skipTest("Host does not permit creating a synthetic file link")
+            result = subprocess.run([sys.executable, "-B", str(SCRIPTS / "checkpoint_doctor.py"),
+                "--request-contract", str(linked), "--root", folder], capture_output=True, text=True)
+            self.assertEqual(2, result.returncode, result.stderr)
+            self.assertEqual("REJECTED", json.loads(result.stdout)["status"])
 
     def test_cli_ready_hold_rejected_are_read_only(self):
         with tempfile.TemporaryDirectory() as folder:

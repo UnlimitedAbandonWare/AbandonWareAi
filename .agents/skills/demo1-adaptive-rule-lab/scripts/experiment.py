@@ -3,6 +3,10 @@ import argparse
 import json
 import os
 import platform
+import re
+import sys
+import unicodedata
+from datetime import datetime
 import time
 from collections import Counter
 from contextlib import contextmanager
@@ -13,6 +17,8 @@ from labio import digest, file_hash, identifier, immutable, read_json, safe_path
 from metrics import DEFAULT_POLICY, compare, summarize, validate_policy
 
 BASE = 'data/agent-handoff/adaptive-rule-lab/campaigns'
+from catalog import GUIDANCE, guidance_scope, read_catalog, DEFAULT_CATALOG, guidance_evidence_path as evidence_path
+REVIEWS = 'data/agent-handoff/adaptive-rule-lab/review-requests'
 
 
 def directory(root, campaign):
@@ -228,11 +234,187 @@ def rollback(root, campaign, expected_pointer_hash, reason):
         return {'restored': state['active'], 'sharedRulesChanged': False}
 
 
+
+def guidance_id(value):
+    value = unicodedata.normalize('NFKC', identifier(value)).casefold()
+    if value.split('.')[0] in {'con', 'prn', 'aux', 'nul'} or re.fullmatch(r'(com|lpt)[1-9](\..*)?', value):
+        raise ValueError('reserved-guidance-id')
+    return value
+
+
+
+def register_guidance(root, packet, latest_ref, expected_revision, expected_catalog_hash=None, fault=None):
+    """Register a local technical reference from real receipts; never apply permission policy.
+
+    Agent-curated semantics and current human authority are caller obligations. The
+    deterministic gate proves structural/evidence consistency, not natural-language truth.
+    Permission candidates prepare a local review request; no notification or rule application.
+    """
+    root = Path(root).resolve()
+    if not isinstance(packet, dict) or len(json.dumps(packet, ensure_ascii=False, allow_nan=False)) > 64000:
+        raise ValueError('candidate-size-or-shape')
+    if packet.get('schemaVersion') != 'awx.guidance-candidate.v1' or packet.get('instructionRef') != latest_ref or not str(latest_ref).startswith('user:') or type(expected_revision) is not int or expected_revision < 1:
+        raise ValueError('current-instruction-required')
+    latest_ref = safe_note(latest_ref)
+    key = guidance_id(packet.get('candidateId'))
+    summary = safe_note(packet.get('summary'))
+    if re.search(r'(?i)(raw[- ]?(session|conversation)|private[- ]?reasoning|chain[- ]of[- ]thought)', summary):
+        raise ValueError('private-context-not-accepted')
+    kind = packet.get('kind')
+    if kind in {'permission', 'confirmation'}:
+        if set(packet) != {'schemaVersion', 'candidateId', 'kind', 'summary', 'instructionRef', 'sourceRefs'} or not isinstance(packet['sourceRefs'], list) or not 1 <= len(packet['sourceRefs']) <= 8 or any(not isinstance(ref, str) or not ref.startswith(('user:', 'repo:')) for ref in packet['sourceRefs']):
+            raise ValueError('review-candidate-shape')
+        record = {'schemaVersion': 'awx.rule-review-request.v1', 'candidateId': key, 'kind': kind,
+                  'summary': summary, 'instructionRef': latest_ref, 'taskRevision': expected_revision,
+                  'sourceRefs': [safe_note(ref) for ref in packet['sourceRefs']], 'status': 'AWAITING_USER_CONFIRMATION',
+                  'applicationAllowed': False, 'authorityChanged': False,
+                  'requiredApplicationEvidence': 'official-rule-tool-and-in-app-approval-receipt'}
+        relative = f'{REVIEWS}/{key}.json'
+        immutable(safe_path(root, relative), record)
+        return {'status': record['status'], 'path': relative, 'authorityChanged': False, 'reviewRequestPrepared': True, 'reviewRequestDelivered': False}
+    fields = {'schemaVersion', 'candidateId', 'kind', 'summary', 'instructionRef', 'contractPath',
+              'contractHash', 'taskRevision', 'stageId', 'redReceipt', 'greenReceipt', 'guidance', 'relatedIds'}
+    if kind != 'project-technical' or set(packet) != fields:
+        raise ValueError('technical-candidate-shape')
+    guidance = packet['guidance']
+    if not isinstance(guidance, dict) or set(guidance) != {'topic', 'steps', 'knowledgeRefs'} or not isinstance(guidance['steps'], list) or not 1 <= len(guidance['steps']) <= 20:
+        raise ValueError('technical-guidance-shape')
+    guidance = {'topic': safe_note(guidance['topic']), 'steps': [safe_note(step) for step in guidance['steps']], 'knowledgeRefs': guidance['knowledgeRefs']}
+    if re.search(r'(?i)(permission|approval|authorization|confirmation|권한|승인|영구.*삭제|코드.*삭제|삭제.*코드|private[- ]?reasoning)', summary + ' ' + guidance['topic'] + ' ' + ' '.join(guidance['steps'])):
+        raise ValueError('policy-content-requires-review')
+    helpers = Path(__file__).resolve().parents[4] / 'scripts'
+    if str(helpers) not in sys.path:
+        sys.path.insert(0, str(helpers))
+    from checkpoint_doctor import check_request_contract
+    from run_verified_command import validate_bound_receipt
+    contract_path = evidence_path(root, packet['contractPath'])
+    doc = read_json(contract_path)
+    checked = check_request_contract(doc, root=root, latest_ref=latest_ref, expected_revision=expected_revision)
+    stages = [stage for stage in checked.get('stages', []) if stage['id'] == packet['stageId']]
+    if checked['status'] == 'REJECTED' or len(stages) != 1 or stages[0]['status'] != 'READY':
+        raise ValueError('request-contract-held-or-rejected')
+    if packet['contractHash'] != checked['contractHash'] or packet['taskRevision'] != expected_revision:
+        raise ValueError('stale-contract-candidate')
+    stage = next(stage for stage in doc['stages'] if stage['id'] == packet['stageId'])
+    facts = {item['id'] for item in doc['knowledge'] if item['kind'] == 'fact'}
+    if not isinstance(guidance['knowledgeRefs'], list) or not guidance['knowledgeRefs'] or any(ref not in facts for ref in guidance['knowledgeRefs']):
+        raise ValueError('guidance-needs-factual-basis')
+    binding = {'taskId': doc['taskId'], 'revision': doc['revision'], 'instructionRef': latest_ref,
+               'contractHash': checked['contractHash'], 'stageId': packet['stageId'],
+               'sourceFiles': stage['sourceFiles'], 'testFiles': stage['testFiles']}
+    receipts = []
+    for phase, relative in [('RED', packet['redReceipt']), ('GREEN', packet['greenReceipt'])]:
+        output = evidence_path(root, relative)
+        receipt = validate_bound_receipt(output, binding=binding, expected_phase=phase, expected_root=root)
+        if not receipt['ok'] or Path(receipt['report']['cwd']).resolve() != root:
+            raise ValueError('invalid-' + phase.lower() + '-receipt')
+        receipts.append(receipt['report'])
+    red, green = receipts
+    if red['runId'] == green['runId'] or datetime.fromisoformat(red['endedAt']) > datetime.fromisoformat(green['startedAt']) or red['argvSha256'] != green['argvSha256'] or red['contractBinding']['commandId'] != green['contractBinding']['commandId']:
+        raise ValueError('red-green-command-or-order-mismatch')
+    if len(stage['successTests']) != 1 or green['contractBinding']['commandId'] != stage['successTests'][0]['commandId']:
+        raise ValueError('all-success-tests-must-be-covered-by-one-focused-command')
+    red_hashes = {item['path']: item['sha256'] for item in red['sourceIdentityEnd']}
+    hashes = {item['path']: item['sha256'] for item in green['sourceIdentityEnd']}
+    if any(red_hashes.get(path) != hashes.get(path) for path in stage['testFiles']):
+        raise ValueError('red-green-test-drift')
+    for path in stage['sourceFiles'] + stage['testFiles']:
+        if file_hash(evidence_path(root, path)) != hashes.get(path):
+            raise ValueError('final-source-or-test-drift')
+    catalog_path = safe_path(root, DEFAULT_CATALOG)
+    catalog_hash = file_hash(catalog_path) if catalog_path.exists() else None
+    if catalog_hash != expected_catalog_hash:
+        raise ValueError('catalog-preimage-required-or-changed')
+    annotations = read_catalog(catalog_path) if catalog_path.exists() else {'entries': [], 'relations': []}
+    if not isinstance(packet['relatedIds'], list) or len(packet['relatedIds']) > 50 or any(not isinstance(key, str) for key in packet['relatedIds']):
+        raise ValueError('related-entry-shape')
+    scope = guidance_scope(root, annotations, stage['sourceFiles'] + stage['testFiles'], packet['relatedIds'])
+    if scope['diagnostics']:
+        raise ValueError('scoped-catalog-diagnostics')
+    artifacts = {packet['contractPath']: file_hash(contract_path)}
+    for name, receipt in zip(('redReceipt', 'greenReceipt'), receipts):
+        for leaf in ['run.json', receipt['log']] + [item['path'] for item in receipt['resultFiles']]:
+            relative = packet[name] + '/' + leaf
+            artifacts[relative] = file_hash(evidence_path(root, relative))
+    content = digest({'guidance': guidance, 'sourceHashes': hashes})
+    record = {'schemaVersion': 'awx.project-guidance.v1', 'candidateId': key, 'kind': kind,
+              'scope': 'project', 'status': 'REGISTERED', 'authorityChanged': False,
+              'summary': summary, 'guidance': guidance, 'contentHash': content,
+              'contractPath': packet['contractPath'], 'contractFileHash': file_hash(contract_path),
+              'contractHash': checked['contractHash'], 'taskRevision': expected_revision,
+              'instructionRef': latest_ref, 'stageId': packet['stageId'],
+              'sourceFiles': stage['sourceFiles'], 'testFiles': stage['testFiles'], 'sourceHashes': hashes,
+              'receipts': [{'path': packet[name], 'runId': receipt['runId'], 'sha256': file_hash(safe_path(root, packet[name] + '/run.json'))} for name, receipt in zip(('redReceipt', 'greenReceipt'), receipts)],
+              'catalogScope': scope, 'relatedIds': packet['relatedIds'], 'evidenceHashes': artifacts}
+    base = safe_path(root, GUIDANCE)
+    base.mkdir(parents=True, exist_ok=True)
+    with owned_lock(base):
+        relative = f'{GUIDANCE}/{key}.json'
+        target = safe_path(root, relative)
+        if target.exists():
+            prior = read_json(target)
+            if {k: v for k, v in prior.items() if k != 'catalogScope'} != {k: v for k, v in record.items() if k != 'catalogScope'}:
+                raise ValueError('guidance-identity-collision')
+            return {'status': 'ALREADY_REGISTERED', 'path': relative, 'authorityChanged': False}
+        for existing in sorted(base.glob('*.json')):
+            prior = read_json(safe_path(root, existing.relative_to(root).as_posix()))
+            if prior.get('contentHash') == content:
+                return {'status': 'ALREADY_REGISTERED', 'path': existing.relative_to(root).as_posix(), 'authorityChanged': False}
+            if str(prior.get('guidance', {}).get('topic', '')).casefold() == guidance['topic'].casefold():
+                raise ValueError('guidance-topic-conflict')
+        # Recheck current bytes immediately before exclusive publication, after all validation.
+        if (file_hash(catalog_path) if catalog_path.exists() else None) != catalog_hash or file_hash(contract_path) != record['contractFileHash'] or any(file_hash(evidence_path(root, path)) != value for path, value in hashes.items()) or guidance_scope(root, annotations, stage['sourceFiles'] + stage['testFiles'], packet['relatedIds'])['snapshotHash'] != scope['snapshotHash']:
+            raise ValueError('concurrent-evidence-change')
+        for phase, name in [('RED', 'redReceipt'), ('GREEN', 'greenReceipt')]:
+            fresh = validate_bound_receipt(evidence_path(root, packet[name]), binding=binding, expected_phase=phase, expected_root=root)
+            if not fresh['ok'] or file_hash(safe_path(root, packet[name] + '/run.json')) != next(r['sha256'] for r in record['receipts'] if r['path'] == packet[name]):
+                raise ValueError('concurrent-receipt-change')
+        created = immutable(target, record)
+        post_hash = file_hash(target)
+        try:
+            if fault:
+                fault(target)
+            if read_json(target) != record or file_hash(target) != post_hash:
+                raise ValueError('registration-readback-drift')
+        except Exception:
+            if created and target.exists():
+                if file_hash(target) != post_hash:
+                    raise ValueError('rollback-postimage-drift')
+                target.unlink()  # This operation exclusively created the unchanged artifact.
+            raise
+    return {'status': 'REGISTERED', 'path': relative, 'sha256': post_hash, 'authorityChanged': False,
+            'globalDiagnosticCount': scope['globalDiagnosticCount'], 'scopedDiagnosticCount': 0}
+
+
+def rollback_guidance(root, candidate_id, expected_hash):
+    """Remove only the exact technical artifact named by an unchanged owned receipt."""
+    path = safe_path(root, f'{GUIDANCE}/{guidance_id(candidate_id)}.json')
+    if not path.is_file():
+        raise ValueError('technical-guidance-not-registered')
+    with owned_lock(path.parent):
+        if file_hash(path) != expected_hash:
+            raise ValueError('rollback-postimage-drift')
+        record = read_json(path)
+        if record.get('kind') != 'project-technical' or record.get('authorityChanged') is not False:
+            raise ValueError('policy-application-not-supported')
+        recovery = safe_path(root, f'{GUIDANCE}/recovery/{path.stem}-{expected_hash}.json')
+        immutable(recovery, record)
+        if file_hash(path) != expected_hash:
+            raise ValueError('rollback-postimage-drift')
+        path.unlink()
+    return {'status': 'ROLLED_BACK', 'recoveryPath': recovery.relative_to(root).as_posix(), 'authorityChanged': False}
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action', choices=['register', 'candidate', 'run', 'compare', 'status', 'promote', 'rollback'])
+    p.add_argument('action', choices=['register', 'candidate', 'run', 'compare', 'status', 'promote', 'rollback', 'register-guidance', 'rollback-guidance'])
     p.add_argument('--root', default=str(Path(__file__).resolve().parents[4]))
-    p.add_argument('--campaign', required=True)
+    p.add_argument('--campaign')
+    p.add_argument('--packet', help='Bounded agent-curated candidate JSON; no raw sessions')
+    p.add_argument('--instruction-ref')
+    p.add_argument('--expected-revision', type=int)
+    p.add_argument('--expected-catalog-hash')
+    p.add_argument('--expected-guidance-hash')
     p.add_argument('--cases')
     p.add_argument('--spec', help='Repo-relative JSON evaluator specification')
     p.add_argument('--policy', help='Optional frozen JSON metric policy')
@@ -247,7 +429,13 @@ def main():
     p.add_argument('--reason', default='')
     a = p.parse_args()
     root = Path(a.root).resolve()
-    if a.action == 'register':
+    if a.action not in {'register-guidance', 'rollback-guidance'} and not a.campaign:
+        p.error('--campaign is required for experiment actions')
+    if a.action == 'register-guidance':
+        result = register_guidance(root, read_json(evidence_path(root, a.packet)), a.instruction_ref, a.expected_revision, a.expected_catalog_hash)
+    elif a.action == 'rollback-guidance':
+        result = rollback_guidance(root, a.candidate, a.expected_guidance_hash)
+    elif a.action == 'register':
         result = register(root, a.campaign, a.cases, read_json(safe_path(root, a.spec)), a.hypothesis, read_json(safe_path(root, a.policy)) if a.policy else None)
     elif a.action == 'candidate':
         result = add_candidate(root, a.campaign, a.candidate, read_json(safe_path(root, a.spec)), a.hypothesis, a.changed_basis, a.parent)

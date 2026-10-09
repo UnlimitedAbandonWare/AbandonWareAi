@@ -93,6 +93,214 @@ def preference_default(events, scope, artifact_type, explicit_destination=None, 
     return out
 
 
+REQUEST_SCHEMA = "awx.request-contract.v1"
+REQUEST_FIELDS = {"schemaVersion", "taskId", "revision", "instructionRef", "goal", "knowledge", "stages"}
+STAGE_FIELDS = {"id", "dependsOn", "requiredKnowledge", "inputs", "outputs", "api", "errors",
+                "successTests", "steps", "sourceFiles", "testFiles"}
+
+
+def check_request_contract(doc, root=None, latest_ref=None, expected_revision=None):
+    """Check an agent-reconciled contract, not natural language or semantic fact truth.
+
+    Facts require provenance; assumptions/unknowns hold affected stages. This
+    read-only check neither grants authority nor changes continuity/policy state.
+    """
+    out = {"schemaVersion": REQUEST_SCHEMA, "status": "REJECTED", "taskId": None,
+           "revision": None, "contractHash": None, "stages": [], "errors": []}
+
+    def require(condition, code):
+        if not condition:
+            raise ValueError(code)
+
+    def identifier(value):
+        return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", value)
+
+    def text(value):
+        return isinstance(value, str) and bool(value.strip()) and len(value) <= 2048
+
+    def sequence(value, code, limit=100):
+        require(isinstance(value, list) and len(value) <= limit, code)
+        return value
+
+    def canonical_path(value):
+        require(isinstance(value, str) and text(value) and "\\" not in value and ":" not in value,
+                "request-path-invalid")
+        parts = value.split("/")
+        require(all(p and p not in {".", ".."} and p == p.strip() for p in parts), "request-path-invalid")
+        protected = {".secrets", ".auth", ".codex", ".git", "sessions", "rollouts"}
+        require(not any(p.lower() in protected or p.lower().startswith(".env") for p in parts)
+                and Path(value).suffix.lower() not in {".pem", ".key", ".pfx", ".p12", ".jks"},
+                "request-path-protected")
+        if root is not None:
+            base = Path(root).resolve()
+            candidate = base.joinpath(*parts)
+            for ancestor in (candidate, *candidate.parents):
+                if ancestor.is_symlink():
+                    raise ValueError("request-path-protected")
+                if ancestor.exists() and (getattr(ancestor.lstat(), "st_file_attributes", 0) & 0x400):
+                    raise ValueError("request-path-protected")
+                if ancestor == base:
+                    break
+            require(candidate.resolve().is_relative_to(base), "request-path-boundary")
+        return value.casefold()
+
+    try:
+        raw = json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                         allow_nan=False).encode("utf-8")
+        require(len(raw) <= MAX_STATE_BYTES, "request-contract-too-large")
+        scanner_path = Path(__file__).resolve().with_name("codex_work_checkpoint.py")
+        scanner = sys.modules.get("codex_work_checkpoint")
+        if scanner is None:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("codex_work_checkpoint", scanner_path)
+            require(spec is not None and spec.loader is not None, "request-guard-unavailable")
+            scanner = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(scanner)
+            sys.modules["codex_work_checkpoint"] = scanner
+        require(getattr(scanner, "__file__", None) and Path(scanner.__file__).resolve() == scanner_path,
+                "request-guard-identity-invalid")
+        scanner.secret_free(raw, "request-contract.json")
+        out["contractHash"] = hashlib.sha256(raw).hexdigest()
+        require(isinstance(doc, dict) and set(doc) == REQUEST_FIELDS and
+                doc.get("schemaVersion") == REQUEST_SCHEMA, "request-schema-invalid")
+        require(identifier(doc["taskId"]) and type(doc["revision"]) is int and doc["revision"] >= 1
+                and text(doc["instructionRef"]) and text(doc["goal"]), "request-identity-invalid")
+        out.update(taskId=doc["taskId"], revision=doc["revision"])
+        require(latest_ref is None or latest_ref == doc["instructionRef"], "latest-instruction-mismatch")
+        require(expected_revision is None or expected_revision == doc["revision"], "state-revision-conflict")
+        knowledge = {}
+        for item in sequence(doc["knowledge"], "request-knowledge-invalid"):
+            require(isinstance(item, dict) and set(item) == {"id", "kind", "summary", "sourceRef"}
+                    and identifier(item.get("id")) and item.get("kind") in {"fact", "assumption", "unknown"}
+                    and text(item.get("summary")) and (item.get("sourceRef") is None or text(item["sourceRef"])),
+                    "request-knowledge-invalid")
+            require(item["id"] not in knowledge, "request-knowledge-duplicate")
+            require(item["kind"] != "fact" or text(item["sourceRef"]), "request-fact-provenance-required")
+            knowledge[item["id"]] = item
+        stages = sequence(doc["stages"], "request-stages-invalid", 25)
+        require(bool(stages), "request-stages-empty")
+        rows, dependencies = {}, {}
+
+        for stage in stages:
+            require(isinstance(stage, dict) and not set(stage) - STAGE_FIELDS and identifier(stage.get("id")),
+                    "request-stage-invalid")
+            sid = stage["id"]
+            require(sid not in rows, "request-stage-duplicate")
+            row = {"id": sid, "status": "READY", "blockers": []}
+            rows[sid] = row
+
+            def hold(code):
+                row["blockers"].append(code)
+
+            def fields(item, allowed, label, string_fields=()):
+                require(isinstance(item, dict) and not set(item) - allowed, "request-slot-invalid")
+                for field in allowed:
+                    if field not in item or item[field] is None or item[field] == "":
+                        hold("missing-slot:" + label + "." + field)
+                    elif field in string_fields:
+                        require(isinstance(item[field], str) and len(item[field]) <= 2048, "request-slot-invalid")
+                        if not item[field].strip():
+                            hold("missing-slot:" + label + "." + field)
+                ref = item.get("knowledgeRef")
+                if ref is not None and ref != "":
+                    require(isinstance(ref, str) and ref in knowledge, "request-knowledge-ref-invalid")
+                    if knowledge[ref]["kind"] != "fact":
+                        hold("unconfirmed-knowledge:" + ref)
+
+            for field in STAGE_FIELDS - {"id", "api"}:
+                if field not in stage:
+                    hold("missing-slot:" + field)
+                else:
+                    sequence(stage[field], "request-slot-invalid")
+                    if field != "dependsOn" and field != "errors" and not stage[field]:
+                        hold("missing-slot:" + field)
+            deps = stage.get("dependsOn", [])
+            require(all(identifier(d) for d in deps) and len(set(deps)) == len(deps), "request-dependency-invalid")
+            dependencies[sid] = deps
+            refs = stage.get("requiredKnowledge", [])
+            require(all(isinstance(r, str) and r in knowledge for r in refs) and len(set(refs)) == len(refs),
+                    "request-knowledge-ref-invalid")
+            for ref in refs:
+                if knowledge[ref]["kind"] != "fact":
+                    hold("unconfirmed-knowledge:" + ref)
+            for field in ("inputs", "outputs"):
+                names = set()
+                for item in stage.get(field, []):
+                    fields(item, {"name", "type", "knowledgeRef"}, field, ("name", "type"))
+                    if text(item.get("name")):
+                        require(item["name"] not in names, "request-slot-duplicate")
+                        names.add(item["name"])
+            api = stage.get("api")
+            if api is None:
+                hold("missing-slot:api")
+            elif isinstance(api, dict) and "applicable" in api:
+                require(api.get("applicable") is False, "request-api-invalid")
+                fields(api, {"applicable", "reason", "knowledgeRef"}, "api", ("reason",))
+            else:
+                fields(api, {"method", "path", "knowledgeRef"}, "api", ("method", "path"))
+                if text(api.get("method")):
+                    require(api["method"] in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"},
+                            "request-api-invalid")
+                if text(api.get("path")):
+                    require(api["path"].startswith("/") and "://" not in api["path"], "request-api-invalid")
+                if not stage.get("errors"):
+                    hold("missing-slot:errors")
+            for item in stage.get("errors", []):
+                fields(item, {"status", "condition", "knowledgeRef"}, "errors", ("condition",))
+                if item.get("status") is not None:
+                    require(type(item["status"]) is int and 100 <= item["status"] <= 599, "request-error-invalid")
+            tests = set()
+            for item in stage.get("successTests", []):
+                fields(item, {"id", "commandId", "expectation", "knowledgeRef", "argvSha256", "expectedSuites"},
+                       "successTests", ("id", "commandId", "expectation", "argvSha256"))
+                if item.get("argvSha256") not in (None, ""):
+                    require(isinstance(item["argvSha256"], str) and
+                            re.fullmatch(r"[0-9a-f]{64}", item["argvSha256"]), "request-planned-argv-invalid")
+                if item.get("expectedSuites") is not None:
+                    suites = sequence(item["expectedSuites"], "request-planned-suites-invalid")
+                    require(all(isinstance(suite, str) and
+                                re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.$-]{0,199}", suite) for suite in suites),
+                            "request-planned-suites-invalid")
+                    require(len(suites) == len(set(suites)), "request-planned-suites-duplicate")
+                    if not suites:
+                        hold("missing-slot:successTests.expectedSuites")
+                if text(item.get("id")):
+                    require(identifier(item["id"]) and item["id"] not in tests, "request-test-duplicate")
+                    tests.add(item["id"])
+            for step in stage.get("steps", []):
+                require(isinstance(step, str) and len(step) <= 2048, "request-step-invalid")
+                if not step.strip():
+                    hold("missing-slot:steps")
+            for field in ("sourceFiles", "testFiles"):
+                paths = [canonical_path(p) for p in stage.get(field, [])]
+                require(len(paths) == len(set(paths)), "request-path-duplicate")
+        visiting, visited = set(), set()
+
+        def visit(sid):
+            require(sid in rows, "request-dependency-invalid")
+            require(sid not in visiting, "request-dependency-cycle")
+            if sid in visited:
+                return
+            visiting.add(sid)
+            for dep in dependencies[sid]:
+                visit(dep)
+                if rows[dep]["status"] == "HOLD":
+                    rows[sid]["blockers"].append("dependency-held:" + dep)
+            visiting.remove(sid)
+            visited.add(sid)
+            rows[sid]["blockers"] = sorted(set(rows[sid]["blockers"]))
+            rows[sid]["status"] = "HOLD" if rows[sid]["blockers"] else "READY"
+
+        for sid in rows:
+            visit(sid)
+        out["stages"] = list(rows.values())
+        out["status"] = "HOLD" if any(row["status"] == "HOLD" for row in out["stages"]) else "READY"
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, ImportError) as error:
+        code = str(error)
+        out["errors"] = [code if re.fullmatch(r"[a-z][a-z-]+", code) else "request-contract-input-refused"]
+    return out
+
+
 def timestamp(value):
     try:
         stamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -399,6 +607,7 @@ def main():
     ap.add_argument("--latest", action="store_true")
     ap.add_argument("--warn-seconds", type=int, default=600)
     ap.add_argument("--state", help="Exact existing task state.md; no newest-task selection")
+    ap.add_argument("--request-contract", help="Read-only check of a local agent-reconciled request contract")
     ap.add_argument("--check-complete", action="store_true", help="Reject missing current delivery proof (exit 5)")
     ap.add_argument("--write-contract", help="Local non-sensitive JSON input; updates the same state.md with CAS")
     ap.add_argument("--expected-revision", type=int)
@@ -408,6 +617,31 @@ def main():
     ap.add_argument("--artifact-type", choices=("report", "directive"), default="report")
     args = ap.parse_args()
     root = Path(args.root)
+
+    if args.request_contract:
+        if args.state or args.write_contract or args.check_complete or args.run or args.latest:
+            ap.error("--request-contract cannot be combined with continuity or checkpoint actions")
+        try:
+            path = Path(args.request_contract).absolute()
+            file_digest(path)  # Existing privacy/link gate before reading input.
+            if path.stat().st_size > MAX_STATE_BYTES:
+                raise ValueError("request-contract-too-large")
+            def unique_fields(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError("request-json-duplicate-field")
+                    value[key] = item
+                return value
+            doc = json.loads(path.read_bytes(), object_pairs_hook=unique_fields)
+            out = check_request_contract(doc, root=root, latest_ref=args.latest_instruction_ref,
+                                         expected_revision=args.expected_revision)
+        except (OSError, ValueError, TypeError):
+            out = {"schemaVersion": REQUEST_SCHEMA, "status": "REJECTED", "taskId": None,
+                   "revision": None, "contractHash": None, "stages": [],
+                   "errors": ["request-contract-input-refused"]}
+        print(json.dumps(out, ensure_ascii=True, allow_nan=False))
+        return {"READY": 0, "HOLD": 5, "REJECTED": 2}[out["status"]]
 
     if args.state:
         path = Path(args.state)

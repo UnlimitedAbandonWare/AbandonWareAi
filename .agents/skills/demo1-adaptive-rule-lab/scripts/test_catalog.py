@@ -5,6 +5,7 @@ from pathlib import Path
 
 from labio import safe_path, digest, write_json
 from catalog import inventory, build_index, search, validate_annotations, merge_assessment, record_usage
+import catalog
 
 
 class CatalogTests(unittest.TestCase):
@@ -99,6 +100,73 @@ class CatalogTests(unittest.TestCase):
         result = inventory(self.root, [{'scope': 'personal-test', 'path': str(personal)}])
         self.assertTrue(any(e.get('readOnlyOrigin') for e in result['entries']))
         self.assertTrue(any(e['source'] == 'docs/superpowers/specs/a.md' for e in result['entries']))
+
+    def test_publication_blocks_diagnostics_before_any_write(self):
+        self.reviewed()
+        self.annotations['entries'][0]['sourceHash'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, 'catalog-diagnostics'):
+            catalog.publish_index(self.root, self.annotations)
+        self.assertFalse((self.root / catalog.DEFAULT_INDEX).exists())
+        self.assertFalse((self.root / '.agents/skills/SEMANTIC_INDEX.md').exists())
+
+    def test_scoped_validation_preserves_unrelated_diagnostics(self):
+        probe = self.reviewed()
+        self.annotations['entries'].append({'id': 'repo|skill|removed-unrelated', 'sourceHash': '0' * 64})
+        scoped = catalog.guidance_scope(self.root, self.annotations, [probe['source']], [])
+        self.assertEqual(scoped['globalDiagnosticCount'], 1)
+        self.assertEqual(scoped['diagnostics'], [])
+        self.annotations['entries'][0]['sourceHash'] = '0' * 64
+        self.assertTrue(catalog.guidance_scope(self.root, self.annotations, [probe['source']], [])['diagnostics'])
+
+    def test_scope_rejects_missing_explicit_relation(self):
+        self.reviewed()
+        with self.assertRaisesRegex(ValueError, 'unknown-related-entry'):
+            catalog.guidance_scope(self.root, self.annotations, [], ['repo|skill|nonexistent'])
+
+    def test_valid_publication_checks_sources_and_readback(self):
+        self.reviewed()
+        result = catalog.publish_index(self.root, self.annotations)
+        self.assertEqual(result['diagnostics'], 0)
+        self.assertTrue((self.root / catalog.DEFAULT_INDEX).is_file())
+        self.assertTrue((self.root / '.agents/skills/SEMANTIC_INDEX.md').is_file())
+
+    def test_publication_failure_restores_only_owned_outputs(self):
+        self.reviewed()
+        def fail(path): raise RuntimeError('synthetic-publication-failure')
+        with self.assertRaises(RuntimeError):
+            catalog.publish_index(self.root, self.annotations, fault=fail)
+        self.assertFalse((self.root / catalog.DEFAULT_INDEX).exists())
+        human = self.root / '.agents/skills/SEMANTIC_INDEX.md'
+        human.write_text('prior view', encoding='utf-8')
+        def foreign(path):
+            human.write_text('foreign view', encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'preimage-drift'):
+            catalog.publish_index(self.root, self.annotations, fault=foreign)
+        self.assertFalse((self.root / catalog.DEFAULT_INDEX).exists())
+        self.assertEqual(human.read_text(), 'foreign view')
+
+    def test_second_output_foreign_drift_still_restores_own_first_output(self):
+        self.reviewed()
+        target = self.root / catalog.DEFAULT_INDEX
+        human = self.root / '.agents/skills/SEMANTIC_INDEX.md'
+        target.write_text('prior index', encoding='utf-8')
+        human.write_text('prior view', encoding='utf-8')
+        def foreign_second(path):
+            if path == human:
+                human.write_text('foreign view', encoding='utf-8')
+                raise RuntimeError('synthetic-second-output-failure')
+        with self.assertRaisesRegex(ValueError, 'rollback-postimage-drift'):
+            catalog.publish_index(self.root, self.annotations, fault=foreign_second)
+        self.assertEqual(target.read_text(), 'prior index')
+        self.assertEqual(human.read_text(), 'foreign view')
+
+    def test_scoped_mixed_case_duplicate_is_not_unrelated(self):
+        self.reviewed()
+        other = self.root / '.agents/skills/alias/SKILL.md'
+        other.parent.mkdir(parents=True)
+        other.write_text('---\nname: PROBE\ndescription: alias\n---\n', encoding='utf-8')
+        problems = catalog.guidance_scope(self.root, self.annotations, [other.relative_to(self.root).as_posix()], [])
+        self.assertTrue(any(item['reason'] == 'duplicate-identity' for item in problems['diagnostics']))
 
 
 if __name__ == '__main__':

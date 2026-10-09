@@ -1,6 +1,9 @@
 """Source-bound semantic sidecar: flexible facets, explicit evidence, no source moves."""
 import argparse
 import json
+import hashlib
+import os
+import tempfile
 import re
 import unicodedata
 from collections import Counter
@@ -13,6 +16,7 @@ FACETS = ('functions', 'purposes', 'inputs', 'outputs', 'constraints', 'dependen
 DEFAULT_CATALOG = '.agents/skills/semantic-catalog.yaml'
 DEFAULT_INDEX = '.agents/skills/semantic-index.json'
 USAGE = 'data/agent-handoff/adaptive-rule-lab/usage'
+GUIDANCE = 'data/agent-handoff/adaptive-rule-lab/project-guidance'
 
 
 def read_catalog(path):
@@ -95,9 +99,156 @@ def inventory(root, external_roots=()):
                 entries.append({'id': f'{scope}|skill|{canonical}', 'kind': 'skill', 'canonicalId': canonical, 'scope': scope, 'source': path.as_posix(), 'sourceHash': file_hash(path), 'title': canonical, 'description': desc.group(1).strip(' "\'') if desc else '', 'line': 1, '_text': text, 'readOnlyOrigin': True})
             except (OSError, ValueError, UnicodeError):
                 diagnostics.append({'scope': scope, 'source': path.name, 'reason': 'unreadable-or-unsafe'})
+    guidance_entries, guidance_diagnostics = registered_guidance(root)
+    entries.extend(guidance_entries)
+    diagnostics.extend(guidance_diagnostics)
     duplicates = [key for key, count in Counter(unicodedata.normalize('NFKC', e['id']).casefold() for e in entries).items() if count > 1]
     diagnostics.extend({'id': key, 'reason': 'duplicate-identity'} for key in duplicates)
     return {'entries': entries, 'diagnostics': diagnostics, 'scope': ['AGENTS*.md sections', '.agents/skills/**/*.md', 'agent-prompts/**/*.md', 'docs/superpowers/specs/**/*.md', 'explicit typed-index tool sources'] + [e['scope'] for e in external_roots]}
+
+
+
+def guidance_evidence_path(root, relative):
+    path = safe_path(root, relative)
+    if any(part.casefold().startswith(('.env', '.secrets')) or part.casefold() in
+           {'auth.json', 'credentials', 'credentials.json'} for part in path.parts) or path.suffix.lower() in {'.pem', '.key', '.pfx', '.p12', '.jks'}:
+        raise ValueError('sensitive-evidence-path')
+    if path.is_file() and path.stat().st_size > 128 * 1024:
+        raise ValueError('evidence-size-limit')
+    return path
+
+
+def registered_guidance(root):
+    """Technical reference artifacts only; review requests never become route authority."""
+    base = safe_path(root, GUIDANCE)
+    entries, diagnostics = [], []
+    paths = sorted(base.glob('*.json')) if base.exists() else []
+    if len(paths) > 1000:
+        return [], [{'reason': 'guidance-inventory-limit'}]
+    for path in paths:
+        relative = path.relative_to(root).as_posix()
+        key = 'repo|reference|guidance.' + path.stem
+        try:
+            record = read_json(safe_path(root, relative))
+            if (record.get('schemaVersion') != 'awx.project-guidance.v1' or
+                    record.get('status') != 'REGISTERED' or record.get('scope') != 'project' or
+                    record.get('kind') != 'project-technical' or record.get('authorityChanged') is not False or
+                    record.get('candidateId') != path.stem):
+                raise ValueError('invalid-guidance-record')
+            if not record.get('sourceHashes') or any(file_hash(guidance_evidence_path(root, name)) != value
+                    for name, value in record['sourceHashes'].items()):
+                raise ValueError('stale-guidance-evidence')
+            if (file_hash(guidance_evidence_path(root, record['contractPath'])) != record['contractFileHash'] or
+                    any(file_hash(guidance_evidence_path(root, item['path'] + '/run.json')) != item['sha256'] for item in record['receipts'])):
+                raise ValueError('stale-guidance-binding')
+            if not record.get('evidenceHashes') or any(file_hash(guidance_evidence_path(root, name)) != value for name, value in record['evidenceHashes'].items()):
+                raise ValueError('stale-guidance-artifact')
+            guidance = record['guidance']
+            text = guidance['topic'] + '\n' + '\n'.join(guidance['steps'])
+            entries.append({'id': key, 'kind': 'reference', 'canonicalId': 'guidance.' + path.stem,
+                'scope': 'repo', 'source': relative, 'sourceHash': file_hash(path), 'title': guidance['topic'],
+                'description': record['summary'], 'line': 1, '_text': text, 'registeredGuidance': True,
+                'functions': ['project-technical-guidance'], 'purposes': [guidance['topic']],
+                'inputs': record['sourceFiles'], 'outputs': record['testFiles'],
+                'constraints': ['technical-reference-only', 'no-authority', 'source-bound'], 'dependencies': []})
+        except (OSError, ValueError, KeyError, TypeError):
+            diagnostics.append({'id': key, 'source': relative, 'reason': 'invalid-or-stale-guidance'})
+    return entries, diagnostics
+
+
+def guidance_scope(root, annotations, sources, related_ids):
+    """Retain global diagnostics; select the candidate's source/dependency closure explicitly."""
+    snapshot = inventory(root, annotations.get('externalRoots', []))
+    all_ids = {entry['id'] for entry in snapshot['entries']}
+    if any(key not in all_ids for key in related_ids):
+        raise ValueError('unknown-related-entry')
+    affected = set(related_ids) | {e['id'] for e in snapshot['entries'] if e['source'] in sources}
+    relations = annotations.get('relations', [])
+    for _ in range(len(all_ids) + 1):
+        expanded = affected | {edge.get('to') for edge in relations if edge.get('from') in affected}
+        expanded |= {edge.get('from') for edge in relations if edge.get('to') in affected}
+        if expanded == affected:
+            break
+        affected = expanded
+    diagnostics = validate_annotations(snapshot, annotations)
+    normalize = lambda value: unicodedata.normalize('NFKC', str(value)).casefold()
+    affected_normalized = {normalize(key) for key in affected}
+    sources_normalized = {normalize(source) for source in sources}
+    scoped = [d for d in diagnostics if not any(k in d for k in ('id', 'from', 'to', 'source'))
+              or normalize(d.get('id')) in affected_normalized or normalize(d.get('from')) in affected_normalized or normalize(d.get('to')) in affected_normalized
+              or normalize(d.get('source')) in sources_normalized]
+    return {'globalDiagnosticCount': len(diagnostics), 'diagnostics': scoped,
+            'affectedIds': sorted(affected), 'snapshotHash': digest(snapshot)}
+
+
+def publish_index(root, annotations, fault=None):
+    """Fail closed, compare preimages, and recover only unchanged owned publications.
+
+    Cooperating writers use one publication lock. Snapshot/CAS checks do not claim
+    a transaction against arbitrary uncooperative filesystem writes.
+    """
+    index = build_index(root, annotations)
+    if index['diagnostics']:
+        raise ValueError('catalog-diagnostics')
+    target = safe_path(root, DEFAULT_INDEX)
+    human = safe_path(root, '.agents/skills/SEMANTIC_INDEX.md')
+    from labio import encoded
+    originals = {path: path.read_bytes() if path.exists() else None for path in (target, human)}
+    payloads = {target: encoded(index), human: markdown(index).encode('utf-8')}
+    hashes = {path: hashlib.sha256(raw).hexdigest() for path, raw in payloads.items()}
+    staged, written = {}, []
+    lock = safe_path(root, '.agents/skills/.semantic-publication.lock')
+    fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.close(fd)
+    try:
+        for path, raw in payloads.items():
+            with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(raw); stream.flush(); os.fsync(stream.fileno())
+                staged[path] = temporary
+        if build_index(root, annotations)['contentHash'] != index['contentHash']:
+            raise ValueError('catalog-source-drift')
+        for path in (target, human):
+            if (path.read_bytes() if path.exists() else None) != originals[path]:
+                raise ValueError('catalog-output-preimage-drift')
+            os.replace(staged[path], path)
+            staged.pop(path)
+            written.append(path)
+            if fault:
+                fault(path)
+        if any(file_hash(path) != hashes[path] for path in written):
+            raise ValueError('catalog-readback-drift')
+    except Exception:
+        rollback_drift = []
+        rollback_failed = []
+        for path in reversed(written):
+            if not path.exists() or file_hash(path) != hashes[path]:
+                rollback_drift.append(path)
+                continue
+            try:
+                if originals[path] is None:
+                    path.unlink()
+                else:
+                    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as stream:
+                        temporary = Path(stream.name)
+                        stream.write(originals[path]); stream.flush(); os.fsync(stream.fileno())
+                    try:
+                        os.replace(temporary, path)
+                    finally:
+                        temporary.unlink(missing_ok=True)
+            except OSError:
+                rollback_failed.append(path)
+        if rollback_drift:
+            raise ValueError('catalog-rollback-postimage-drift')
+        if rollback_failed:
+            raise ValueError('catalog-rollback-incomplete')
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+        lock.unlink(missing_ok=True)
+    return {'entries': len(index['entries']), 'relations': len(index['relations']),
+            'diagnostics': 0, 'contentHash': index['contentHash']}
 
 
 def validate_annotations(snapshot, annotations):
@@ -169,8 +320,8 @@ def build_index(root, annotations):
     for source in snapshot['entries']:
         entry = {k: v for k, v in source.items() if k != '_text'}
         annotation = reviewed.get(source['id'])
-        status = 'unreviewed' if annotation is None else ('current' if annotation['sourceHash'] == source['sourceHash'] else 'stale')
-        entry.update({facet: [] for facet in FACETS})
+        status = 'verified-technical' if source.get('registeredGuidance') else 'unreviewed' if annotation is None else ('current' if annotation['sourceHash'] == source['sourceHash'] else 'stale')
+        entry.update({facet: source.get(facet, []) if source.get('registeredGuidance') else [] for facet in FACETS})
         if status == 'current':
             entry.update({k: v for k, v in annotation.items() if k in FACETS or k in ('reviewStatus', 'evidenceLines', 'aliases')})
         entry['annotationStatus'] = status
@@ -272,11 +423,7 @@ def main():
         elif args.action == 'validate':
             result = {'valid': not index['diagnostics'], 'entries': len(index['entries']), 'relations': len(index['relations']), 'diagnostics': index['diagnostics']}
         elif args.write:
-            target = safe_path(root, DEFAULT_INDEX)
-            write_json(target, index, file_hash(target) if target.exists() else None)
-            human = safe_path(root, '.agents/skills/SEMANTIC_INDEX.md')
-            human.write_text(markdown(index), encoding='utf-8')
-            result = {'entries': len(index['entries']), 'relations': len(index['relations']), 'diagnostics': len(index['diagnostics']), 'contentHash': index['contentHash']}
+            result = publish_index(root, read_catalog(safe_path(root, args.catalog)))
     print(json.dumps(result, ensure_ascii=False, allow_nan=False))
     if args.action == 'validate' and not result['valid']:
         raise SystemExit(1)

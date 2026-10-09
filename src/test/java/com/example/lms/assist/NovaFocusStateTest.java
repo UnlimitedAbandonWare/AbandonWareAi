@@ -4,6 +4,27 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NovaFocusStateTest {
+    @Test void recentPartialInputSurvivesListeningDeadlineWithoutSubmittingUnconfirmedText() {
+        var s=state(true);s.open(0,"fold");
+        s.input(u("ongoing",0,false,"부분 질문"),7000);
+        assertNull(s.tick(8001));assertTrue(s.active());assertEquals("LISTENING",s.view(8001).phase());
+        s.input(u("ongoing",1,false,"부분 질문 계속"),9000);
+        assertNull(s.tick(16001));assertTrue(s.active());
+        assertNull(s.tick(69001));assertFalse(s.active());assertEquals("input_unconfirmed",s.view(69001).reason());
+    }
+    @Test void closeReasonIsPublishedInStateJsonAndContainsNoDraft() {
+        var s=state(true);s.open(0,"fold");s.close("wake_no_question");
+        var wire=new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(s.view(1));
+        assertFalse(wire.path("active").asBoolean());assertEquals("wake_no_question",wire.path("reason").asText());
+        assertEquals("",wire.path("draftText").asText());assertEquals("",wire.path("answerText").asText());
+    }
+    @Test void userCloseAndProviderFailurePublishDistinctReasons() {
+        var user=state(true);user.open(0,"fold");user.close("user_closed");
+        var error=state(true);error.input(u("failure",0,true,"노바 질문"),0);var request=error.tick(1200);
+        error.accepted(request,"turn");error.failed(request,"focus_answer_unavailable");
+        assertEquals("user_closed",user.view(1300).reason());assertEquals("focus_answer_unavailable",error.view(1300).reason());
+        assertFalse(error.active());assertNotEquals(user.view(1300).reason(),error.view(1300).reason());
+    }
     @Test void reasoningFreezesWithModelBeforeSnapshotAndNextQuestionUsesNewSetting() throws Exception {
         var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
         var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(NovaFocusSettings.defaults());

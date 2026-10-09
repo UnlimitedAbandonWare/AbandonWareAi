@@ -4,6 +4,7 @@ import java.util.*;
 
 /** Pure, clock-driven Focus state; callers serialize access per assist session. */
 final class NovaFocusState {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(NovaFocusState.class);
     record Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,
                    NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled,NovaFocusSettings.ReasoningPreset reasoningPreset) {
         Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version,int length,boolean quick,Boolean web){
@@ -109,7 +110,9 @@ final class NovaFocusState {
         grounding=null;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
     }
-    void close(String cause){phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+    void close(String cause){
+        log.info("[AWX][nova-focus] close reason={} phase={} version={}",cause!=null&&cause.matches("[a-z][a-z0-9_]{0,63}")?cause:"unknown",phase,version+1);
+        phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
         grounding=null;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
     private String key(ConversateQuestionPolicy.Utterance u){
