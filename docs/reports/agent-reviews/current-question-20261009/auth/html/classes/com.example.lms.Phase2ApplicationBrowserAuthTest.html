@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>
+<meta http-equiv="x-ua-compatible" content="IE=edge"/>
+<title>Test results - Phase2ApplicationBrowserAuthTest</title>
+<link href="../css/base-style.css" rel="stylesheet" type="text/css"/>
+<link href="../css/style.css" rel="stylesheet" type="text/css"/>
+<script src="../js/report.js" type="text/javascript"></script>
+</head>
+<body>
+<div id="content">
+<h1>Phase2ApplicationBrowserAuthTest</h1>
+<div class="breadcrumbs">
+<a href="../index.html">all</a> &gt; 
+<a href="../packages/com.example.lms.html">com.example.lms</a> &gt; Phase2ApplicationBrowserAuthTest</div>
+<div id="summary">
+<table>
+<tr>
+<td>
+<div class="summaryGroup">
+<table>
+<tr>
+<td>
+<div class="infoBox" id="tests">
+<div class="counter">1</div>
+<p>tests</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="failures">
+<div class="counter">0</div>
+<p>failures</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="ignored">
+<div class="counter">0</div>
+<p>ignored</p>
+</div>
+</td>
+<td>
+<div class="infoBox" id="duration">
+<div class="counter">3.731s</div>
+<p>duration</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+</td>
+<td>
+<div class="infoBox success" id="successRate">
+<div class="percent">100%</div>
+<p>successful</p>
+</div>
+</td>
+</tr>
+</table>
+</div>
+<div id="tabs">
+<ul class="tabLinks">
+<li>
+<a href="#tab0">Tests</a>
+</li>
+<li>
+<a href="#tab1">Standard output</a>
+</li>
+</ul>
+<div id="tab0" class="tab">
+<h2>Tests</h2>
+<table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Duration</th>
+<th>Result</th>
+</tr>
+</thead>
+<tr>
+<td class="success">freshBrowserUsesActualDaoLoginAndBlocksInvalidAccountAndLogout()</td>
+<td class="success">3.731s</td>
+<td class="success">passed</td>
+</tr>
+</table>
+</div>
+<div id="tab1" class="tab">
+<h2>Standard output</h2>
+<span class="code">
+<pre>2026-10-09T17:40:22.748+0900 WARN  [ ] o.s.b.t.j.DuplicateJsonObjectContextCustomizerFactory$DuplicateJsonObjectContextCustomizer - 
+
+Found multiple occurrences of org.json.JSONObject on the class path:
+
+	jar:file:/D:/gradle-cache/caches/modules-2/files-2.1/org.json/json/20231013/e22e0c040fe16f04ffdb85d851d77b07fc05ea52/json-20231013.jar!/org/json/JSONObject.class
+	jar:file:/D:/gradle-cache/caches/modules-2/files-2.1/com.vaadin.external.google/android-json/0.0.20131108.vaadin1/fa26d351fe62a6a17f5cda1287c1c6110dec413f/android-json-0.0.20131108.vaadin1.jar!/org/json/JSONObject.class
+
+You may wish to exclude one of them to ensure predictable runtime behavior
+
+2026-10-09T17:40:26.441+0900 INFO  [ ] o.s.d.r.c.RepositoryConfigurationDelegate - Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2026-10-09T17:40:26.900+0900 INFO  [ ] o.s.d.r.c.RepositoryConfigurationDelegate - Finished Spring Data repository scanning in 447 ms. Found 29 JPA repository interfaces.
+2026-10-09T17:40:27.449+0900 INFO  [ ] c.e.l.config.LocalLlmProcessManager - [AWX][runtime-config][keys] OPENAI_API_KEY.present=true LLM_API_KEY.present=false NAVER_CLIENT_ID.present=true NAVER_CLIENT_SECRET.present=true NAVER_KEYS.present=true NAVER_APIHUB_CLIENT_ID.present=true NAVER_APIHUB_CLIENT_SECRET.present=true
+2026-10-09T17:40:27.456+0900 INFO  [ ] c.e.l.config.LocalLlmProcessManager - [AWX][ollama][startup] enabled=false autostart=false status=skipped
+2026-10-09T17:40:29.497+0900 INFO  [ ] o.s.b.w.e.tomcat.TomcatWebServer - Tomcat initialized with port 18200 (http)
+2026-10-09T17:40:29.648+0900 INFO  [ ] o.s.b.w.s.c.ServletWebServerApplicationContext - Root WebApplicationContext: initialization completed in 6859 ms
+2026-10-09T17:40:30.915+0900 INFO  [ ] o.s.o.j.p.SpringPersistenceUnitInfo - No LoadTimeWeaver setup: ignoring JPA class transformer
+2026-10-09T17:40:30.967+0900 INFO  [ ] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Starting...
+2026-10-09T17:40:31.265+0900 INFO  [ ] com.zaxxer.hikari.pool.HikariPool - HikariPool-1 - Added connection conn0: url=jdbc:h2:mem:phase2-browser-25471118-2e28-4a5f-b57a-4c4d931ef99a user=SA
+2026-10-09T17:40:31.268+0900 INFO  [ ] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Start completed.
+2026-10-09T17:40:33.473+0900 INFO  [ ] o.s.o.j.LocalContainerEntityManagerFactoryBean - Initialized JPA EntityManagerFactory for persistence unit 'default'
+2026-10-09T17:40:35.617+0900 INFO  [ ] o.s.b.web.servlet.RegistrationBean - Filter adminTokenGuardFilterRegistration was not registered (disabled)
+2026-10-09T17:40:35.617+0900 INFO  [ ] o.s.b.web.servlet.RegistrationBean - Filter vectorAdminTokenFilterRegistration was not registered (disabled)
+2026-10-09T17:40:36.429+0900 INFO  [ ] c.e.lms.routing.ApiRoutingDebug - [AWX][api-route] credential purpose=llm provider=local endpointClass=llm.local keyPresent=true keySource=llm.api-key
+{&quot;ts&quot;:&quot;2026-10-09T08:40:36.432Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:2c679b8cb393&quot;,&quot;message&quot;:&quot;[AWX][api-route] credential resolved (lookup only)&quot;,&quot;where&quot;:&quot;api.credential.resolved&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;purpose&quot;:&quot;llm&quot;,&quot;provider&quot;:&quot;local&quot;,&quot;endpointClass&quot;:&quot;llm.local&quot;,&quot;keyPresent&quot;:true,&quot;keySource&quot;:&quot;llm.api-key&quot;,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:36.696+0900 INFO  [ ] o.s.d.j.r.query.QueryEnhancerFactory - Hibernate is in classpath; If applicable, HQL parser will be used.
+2026-10-09T17:40:37.550+0900 INFO  [ ] c.example.lms.config.LangChainConfig - [AWX2AF2][vector][backend] vectorStore=pinecone upstashMode={configured=false, disabledReason=disabled_by_config, readEnabled=false, writeRequested=false, readOnly=true, writeEnabled=false, namespace=rag, endpointHost=} writer=FingerprintAwareEmbeddingStore reader=FingerprintAwareEmbeddingStore
+2026-10-09T17:40:37.557+0900 INFO  [ ] c.e.l.v.c.FederatedVectorStorePatchConfig - [FederatedVectorStorePatchConfig] FederatedEmbeddingStore bridge initialised with 1 store(s): composite
+2026-10-09T17:40:37.577+0900 INFO  [ ] c.e.l.vector.FederatedEmbeddingStore - FederatedEmbeddingStore initialized with 1 store(s): [composite] timeoutMs=5000 maxParallelism=8
+2026-10-09T17:40:38.838+0900 INFO  [ ] c.e.lms.routing.ApiRoutingDebug - [AWX][api-route] credential purpose=llm provider=local endpointClass=llm.local keyPresent=true keySource=llm.api-key
+{&quot;ts&quot;:&quot;2026-10-09T08:40:38.839Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:2c679b8cb393&quot;,&quot;message&quot;:&quot;[AWX][api-route] credential resolved (lookup only)&quot;,&quot;where&quot;:&quot;api.credential.resolved&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;purpose&quot;:&quot;llm&quot;,&quot;provider&quot;:&quot;local&quot;,&quot;endpointClass&quot;:&quot;llm.local&quot;,&quot;keyPresent&quot;:true,&quot;keySource&quot;:&quot;llm.api-key&quot;,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+{&quot;ts&quot;:&quot;2026-10-09T08:40:39.163Z&quot;,&quot;probe&quot;:&quot;EXECUTOR&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:df4ce86d12f3&quot;,&quot;message&quot;:&quot;[Nova] CancelShield enabled for executor&quot;,&quot;where&quot;:&quot;CancelShieldExecutorServicePostProcessor&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;bulk.maxInflight&quot;:8,&quot;beanNameHash&quot;:&quot;hash:2b24c375d175&quot;,&quot;beanNameLength&quot;:15,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:39.906+0900 INFO  [ ] c.e.l.s.config.HyperparameterService - DB로부터 모든 하이퍼파라미터를 로딩합니다/* ... *&amp;#47;
+2026-10-09T17:40:40.021+0900 INFO  [ ] c.e.l.s.config.HyperparameterService - 0개의 하이퍼파라미터 로딩 완료.
+2026-10-09T17:40:40.061+0900 INFO  [ ] c.e.lms.routing.ApiRoutingDebug - [AWX][api-route] credential purpose=llm provider=local endpointClass=llm.local keyPresent=true keySource=llm.api-key
+{&quot;ts&quot;:&quot;2026-10-09T08:40:40.061Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:2c679b8cb393&quot;,&quot;message&quot;:&quot;[AWX][api-route] credential resolved (lookup only)&quot;,&quot;where&quot;:&quot;api.credential.resolved&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;purpose&quot;:&quot;llm&quot;,&quot;provider&quot;:&quot;local&quot;,&quot;endpointClass&quot;:&quot;llm.local&quot;,&quot;keyPresent&quot;:true,&quot;keySource&quot;:&quot;llm.api-key&quot;,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:40.099+0900 INFO  [ ] c.e.l.service.EmbeddingStoreManager - &#x1f5c2;️  Embedding Store 초기화를 시작합니다/* ... */
+2026-10-09T17:40:40.100+0900 INFO  [ ] c.e.l.service.EmbeddingStoreManager - &#x1f5c2;️  (startup bootstrap) disabled: vector.bootstrap.startup.enabled=false
+2026-10-09T17:40:40.118+0900 INFO  [ ] c.e.l.s.rag.LangChainRAGService - [RAG] EmbeddingStore initialized: FederatedEmbeddingStore
+2026-10-09T17:40:40.119+0900 INFO  [ ] c.e.l.s.rag.LangChainRAGService - [RAG] EmbeddingModel type: DecoratingEmbeddingModel
+2026-10-09T17:40:40.381+0900 WARN  [ ] c.e.l.g.ProviderCredentialResolver - [provider-credential] equal duplicate aliases provider=naver aliasCount=2
+2026-10-09T17:40:40.389+0900 WARN  [ ] c.e.lms.service.NaverSearchService - [AWX][search][naver] using client-id/secret bridge after naver.keys parse failure sourceName=naver.client-id/NAVER_CLIENT_ID keysPresent=true clientPairPresent=true parsedCount=1 fallbackUsed=true
+2026-10-09T17:40:40.399+0900 INFO  [ ] c.e.l.s.rag.auth.DomainProfileLoader - [DomainProfileLoader] loaded profiles: [official, docs, dev_community, community_blog, kr_company_disclosure, kr_company_startup, kr_company_hiring, kr_company_press, kr_company, jul14]
+2026-10-09T17:40:40.410+0900 INFO  [ ] c.e.lms.service.NaverSearchService - [NaverSearchConfig] policy='boost', enableDomainFilter=false, enableKeywordFilter=true, keywordMinHits=2, allowlistSample=&lt;empty&gt;
+2026-10-09T17:40:40.463+0900 INFO  [ ] c.e.l.service.web.BraveSearchService - [Brave] qpsLimit clamped from 1.0 to 0.8 to respect provider rate limits
+2026-10-09T17:40:40.489+0900 INFO  [ ] c.e.l.service.web.BraveSearchService - [Brave] API key loaded successfully laneFree=true laneBase=true
+2026-10-09T17:40:40.490+0900 INFO  [ ] c.e.l.service.web.BraveSearchService - [Brave] RestTemplate timeouts set: 2500ms (connect/read) [timeoutMs=1800, marginMs=120]
+2026-10-09T17:40:40.490+0900 INFO  [ ] c.e.l.service.web.BraveSearchService - [Brave] Local monthly quota initialized to 950
+{&quot;ts&quot;:&quot;2026-10-09T08:40:40.550Z&quot;,&quot;probe&quot;:&quot;EXECUTOR&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:df4ce86d12f3&quot;,&quot;message&quot;:&quot;[Nova] CancelShield enabled for executor&quot;,&quot;where&quot;:&quot;CancelShieldExecutorServicePostProcessor&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;bulk.maxInflight&quot;:8,&quot;beanNameHash&quot;:&quot;hash:9853f9065462&quot;,&quot;beanNameLength&quot;:16,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:40.670+0900 INFO  [ ] c.e.l.s.rag.auth.AuthorityScorer - [AuthorityScorer] Loaded 19 domain weight entries.
+2026-10-09T17:40:40.745+0900 INFO  [ ] c.example.lms.search.TypoNormalizer - TypoNormalizer loaded 0 entries
+2026-10-09T17:40:40.753+0900 INFO  [ ] c.e.lms.routing.ApiRoutingDebug - [AWX][api-route] credential purpose=llm provider=local endpointClass=llm.local keyPresent=true keySource=llm.api-key
+{&quot;ts&quot;:&quot;2026-10-09T08:40:40.753Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:2c679b8cb393&quot;,&quot;message&quot;:&quot;[AWX][api-route] credential resolved (lookup only)&quot;,&quot;where&quot;:&quot;api.credential.resolved&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;purpose&quot;:&quot;llm&quot;,&quot;provider&quot;:&quot;local&quot;,&quot;endpointClass&quot;:&quot;llm.local&quot;,&quot;keyPresent&quot;:true,&quot;keySource&quot;:&quot;llm.api-key&quot;,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:40.873+0900 INFO  [ ] c.e.l.g.web.impl.SerpApiProvider - [SerpApi] API key loaded successfully
+2026-10-09T17:40:40.874+0900 INFO  [ ] c.e.l.g.web.impl.SerpApiProvider - [SerpApi] RestTemplate timeouts set: 5000ms (connect/read)
+2026-10-09T17:40:40.916+0900 INFO  [ ] c.example.lms.config.LangChainConfig - [AWX][search][cached] supplementalProviders=0 disabledReason=supplemental_multi_search_providers_disabled primarySearch=hybrid multiSearch=no-op
+2026-10-09T17:40:41.147+0900 INFO  [ ] c.e.lms.service.rag.HybridRetriever - [AWX2AF2][gpu][reranker] backend=embedding-model bean=embeddingCrossEncoderReranker onnxRuntimeEnabled=false autoOnnx=false
+2026-10-09T17:40:41.829+0900 INFO  [ ] c.e.l.s.AdaptiveTranslationService - AdaptiveTranslation init → T=0.1, thr=0.85
+2026-10-09T17:40:43.051+0900 INFO  [ ] c.e.l.boot.StartupVersionPurityCheck - LangChain4j purity OK: []
+2026-10-09T17:40:43.058+0900 INFO  [ ] c.e.lms.boot.VersionPurityCheck - LangChain4j runtime version purity check OK. Modules: dev.langchain4j.data.document, dev.langchain4j.data.embedding, dev.langchain4j.data.message, dev.langchain4j.data.segment, dev.langchain4j.exception, dev.langchain4j.http.client, dev.langchain4j.http.client.jdk, dev.langchain4j.http.client.sse, dev.langchain4j.internal, dev.langchain4j.memory, dev.langchain4j.memory.chat, dev.langchain4j.model, dev.langchain4j.model.chat, dev.langchain4j.model.chat.request, dev.langchain4j.model.chat.request.json, dev.langchain4j.model.chat.response, dev.langchain4j.model.embedding, dev.langchain4j.model.openai, dev.langchain4j.model.openai.internal, dev.langchain4j.model.openai.internal.chat, dev.langchain4j.model.openai.internal.spi, dev.langchain4j.model.openai.spi, dev.langchain4j.model.output, dev.langchain4j.rag.content, dev.langchain4j.rag.content.retriever, dev.langchain4j.rag.query, dev.langchain4j.spi, dev.langchain4j.store.embedding, dev.langchain4j.store.embedding.filter
+{&quot;ts&quot;:&quot;2026-10-09T08:40:43.251Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;WARN&quot;,&quot;fingerprint&quot;:&quot;hash:459c82ea12e3&quot;,&quot;message&quot;:&quot;[LLM] OPENAI_API_KEY present but llm.provider!=openai (check for implicit fallback / legacy configs)&quot;,&quot;where&quot;:&quot;ModelGuard.verify&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;engine&quot;:{&quot;present&quot;:true,&quot;len&quot;:4,&quot;hash12&quot;:&quot;929260ad9b9e&quot;},&quot;provider&quot;:&quot;local&quot;,&quot;baseUrl.present&quot;:true,&quot;baseUrlHost&quot;:&quot;127.0.0.1&quot;,&quot;baseUrlHash&quot;:&quot;hash:9d7a1b946b33&quot;,&quot;chatModel&quot;:{&quot;present&quot;:true,&quot;len&quot;:10,&quot;hash12&quot;:&quot;9d75727911b9&quot;},&quot;apiKey.present&quot;:&quot;(redacted)&quot;,&quot;env.OPENAI_API_KEY.present&quot;:&quot;(redacted)&quot;,&quot;env.openai.api.key.present&quot;:&quot;(redacted)&quot;,&quot;env.GEMINI_API_KEY.present&quot;:&quot;(redacted)&quot;,&quot;env.gemini.api.key.present&quot;:&quot;(redacted)&quot;,&quot;embedding.fallback.enabled&quot;:false,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+{&quot;ts&quot;:&quot;2026-10-09T08:40:43.253Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:9c46add38ced&quot;,&quot;message&quot;:&quot;[LLM] ModelGuard verified&quot;,&quot;where&quot;:&quot;ModelGuard.verify&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;engine&quot;:{&quot;present&quot;:true,&quot;len&quot;:4,&quot;hash12&quot;:&quot;929260ad9b9e&quot;},&quot;provider&quot;:&quot;local&quot;,&quot;baseUrl.present&quot;:true,&quot;baseUrlHost&quot;:&quot;127.0.0.1&quot;,&quot;baseUrlHash&quot;:&quot;hash:9d7a1b946b33&quot;,&quot;chatModel&quot;:{&quot;present&quot;:true,&quot;len&quot;:10,&quot;hash12&quot;:&quot;9d75727911b9&quot;},&quot;apiKey.present&quot;:&quot;(redacted)&quot;,&quot;env.OPENAI_API_KEY.present&quot;:&quot;(redacted)&quot;,&quot;env.openai.api.key.present&quot;:&quot;(redacted)&quot;,&quot;env.GEMINI_API_KEY.present&quot;:&quot;(redacted)&quot;,&quot;env.gemini.api.key.present&quot;:&quot;(redacted)&quot;,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:43.542+0900 INFO  [ ] c.e.l.manifest.ModelPropertiesBridge - [ModelPropertiesBridge] bindings applied defaultPresent=true defaultHash12=9d75727911b9 defaultLength=10 moePresent=true moeHash12=9d75727911b9 moeLength=10
+2026-10-09T17:40:43.730+0900 INFO  [ ] c.e.l.r.ApiRoutingInventoryLogger - [AWX][api-route] inventory present=[BRAVE_API_KEY_FREE, BRAVE_API_KEY, TAVILY_API_KEY, SERPAPI_API_KEY, NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET, SONIOX_API_KEY, SONIOX_STT_ENABLED, SONIOX_STT_MODEL, SONIOX_STT_REGION, DEEPGRAM_API_KEY, DEEPGRAM_API_KEY_SECONDARY, OPENAI_API_KEY, PINECONE_API_KEY, UPSTASH_VECTOR_API_KEY, GROQ_API_KEY, GEMINI_API_KEY, ANTHROPIC_API_KEY, OPENCODE_API_KEY, OPENCODE_GO_API_KEY, ZAI_API_KEY] absent=[LLM_BASE_URL, EMBED_BASE_URL, OLLAMA_HOST, PINECONE_INDEX, PINECONE_ENV, UPSTASH_VECTOR_URL, UPSTASH_VECTOR_TOKEN, LLM_API_KEY, LLM_CHAT_MODEL, LLM_FAST_BASE_URL, LLM_FAST_MODEL, LLM_JUDGE_BASE_URL, LLM_JUDGE_MODEL, LLM_CODER_BASE_URL, LLM_CODER_MODEL, LLM_VISION_BASE_URL, LLM_VISION_MODEL, CHAT_REMOTE_MODEL_SELECTION_ROUTES]
+2026-10-09T17:40:43.730+0900 INFO  [ ] c.e.lms.routing.ApiRoutingDebug - [AWX][api-route] credential purpose=boot provider=inventory endpointClass=classpath:configs/api-routing.yaml keyPresent=true keySource=api-routing.yaml
+{&quot;ts&quot;:&quot;2026-10-09T08:40:43.731Z&quot;,&quot;probe&quot;:&quot;MODEL_GUARD&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:87e124e6d2a8&quot;,&quot;message&quot;:&quot;[AWX][api-route] inventory resolved (credential presence only)&quot;,&quot;where&quot;:&quot;api.credential.resolved&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;purpose&quot;:&quot;boot&quot;,&quot;provider&quot;:&quot;inventory&quot;,&quot;endpointClass&quot;:&quot;classpath:configs/api-routing.yaml&quot;,&quot;keyPresent&quot;:true,&quot;keySource&quot;:&quot;api-routing.yaml&quot;,&quot;parsedCount&quot;:39,&quot;presentCount&quot;:21,&quot;absentCount&quot;:18,&quot;kind&quot;:&quot;model_guard&quot;,&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:44.011+0900 INFO  [ ] c.e.lms.service.llm.RerankerSelector - [AWX2AF2][gpu][reranker] backendHash=hash:b6ef334de334 backendLength=15 onnxEnabled=false onnxRuntimeEnabled=false
+2026-10-09T17:40:44.012+0900 INFO  [ ] c.e.lms.service.llm.RerankerSelector - [AWX2AF2][gpu][onnx] runtimeEnabled=false backendHash=hash:b6ef334de334 backendLength=15 action=skip
+2026-10-09T17:40:44.045+0900 INFO  [ ] c.e.l.s.r.c.ConceptCatalogLoader - [ConceptCatalogLoader] Loaded 2 concept entries catalogHash=hash:f9a34e7991ec catalogLength=31
+2026-10-09T17:40:44.058+0900 INFO  [ ] c.e.l.s.rag.catalog.OrgCatalogLoader - [OrgCatalogLoader] Loaded 3 organisation entries catalogHash=hash:2849ffd81672 catalogLength=27
+2026-10-09T17:40:44.096+0900 INFO  [ ] c.e.l.s.r.k.UniversalLoreRegistry - [LoreRegistry] Loaded 3 lore entries from genshin_lore.yml
+2026-10-09T17:40:44.097+0900 INFO  [ ] c.e.l.s.r.k.UniversalLoreRegistry - [LoreRegistry] Total lore keywords: 8
+2026-10-09T17:40:44.281+0900 INFO  [ ] c.e.l.u.a.UawDatasetTrainingDataFilter - UAW dataset training-data filter initialized: enabled=true
+overridePolicy.strictAllowOverrides=true
+overridePolicy.allowOverridesSoftExcludeGroups=[modelUsed]
+overridePolicy.allowGroupOverrideMatrix={modelUsed=[modelUsed]}
+trace.enabled=false
+trace.includeSampleHash=false
+hardExcludes(2):
+  - hard_answer_degraded_banner [group=banner, scope=answer, priority=1000]
+  - hard_question_degraded_banner [group=banner, scope=prompt, priority=900]
+allowRules(0):
+softExcludes(1):
+  - soft_model_used_fallback [group=modelUsed, scope=modelUsed, priority=100]
+2026-10-09T17:40:44.501+0900 INFO  [ ] c.example.lms.web.ReactorMdcLifter - Reactor MDC lifter installed
+2026-10-09T17:40:44.754+0900 INFO  [ ] o.s.s.c.a.a.c.InitializeUserDetailsBeanManagerConfigurer$InitializeUserDetailsManagerConfigurer - Global AuthenticationManager configured with UserDetailsService bean with name customUserDetailsService
+2026-10-09T17:40:44.990+0900 INFO  [ ] com.example.lms.config.WebMvcConfig - [AWX][rulebreak] mvc-interceptor=registered tokenLogging=hash-only
+2026-10-09T17:40:45.514+0900 INFO  [ ] o.s.b.a.e.web.EndpointLinksResolver - Exposing 2 endpoints beneath base path '/actuator'
+{&quot;ts&quot;:&quot;2026-10-09T08:40:46.789Z&quot;,&quot;probe&quot;:&quot;CONTEXT_PROPAGATION&quot;,&quot;level&quot;:&quot;INFO&quot;,&quot;fingerprint&quot;:&quot;hash:073419a36c32&quot;,&quot;message&quot;:&quot;[Nova] Reactor schedule hook enabled (MDC/GuardContext/TraceStore propagation)&quot;,&quot;where&quot;:&quot;NovaReactorContextPropagationHook.afterPropertiesSet&quot;,&quot;sid&quot;:null,&quot;traceId&quot;:null,&quot;requestId&quot;:null,&quot;data&quot;:{&quot;hookKey&quot;:{&quot;present&quot;:true,&quot;len&quot;:20,&quot;hash12&quot;:&quot;d7c80c3950a8&quot;},&quot;ctx.sid.present&quot;:false,&quot;ctx.trace.present&quot;:false,&quot;ctx.requestId.present&quot;:false},&quot;error&quot;:null}
+2026-10-09T17:40:48.494+0900 INFO  [ ] o.s.b.w.e.tomcat.TomcatWebServer - Tomcat started on port 18200 (http) with context path '/'
+2026-10-09T17:40:48.577+0900 WARN  [ ] c.e.l.config.TrialAccountInitializer - ⚠️ 'trial' 관리자 계정이 없어 새로 생성합니다. 로그인에는 사용되지 않습니다.
+2026-10-09T17:40:48.703+0900 INFO  [ ] com.example.lms.LmsApplication - [AWX][runtime-config] bootstrap-admin skipped reason=missing_bootstrap_password
+2026-10-09T17:40:48.718+0900 INFO  [ ] com.example.lms.health.LlmHealth - [LLM Health] provider=local baseUrlHost=127.0.0.1 baseUrlHash=hash:9d7a1b946b33 modelHash=hash:9d75727911b9 modelLength=10 (startup ping skipped)
+2026-10-09T17:40:48.718+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] starting…
+2026-10-09T17:40:48.718+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: PromptBuilder -&gt; beanHash=hash:6fcac93995a9 beanLength=21 (com.example.lms.prompt.PromptBuilder)
+2026-10-09T17:40:48.719+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: HybridWebSearchProvider -&gt; beanHash=hash:feeb959f323d beanLength=23 (com.example.lms.search.provider.HybridWebSearchProvider)
+2026-10-09T17:40:48.719+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: DebugEventStore -&gt; beanHash=hash:6e2138d53436 beanLength=15 (com.example.lms.debug.DebugEventStore)
+2026-10-09T17:40:48.719+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: TraceSnapshotStore -&gt; beanHash=hash:09678279fdbf beanLength=18 (com.example.lms.trace.TraceSnapshotStore)
+2026-10-09T17:40:48.720+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: RequestIdHeaderFilter -&gt; beanHash=hash:e6450f03d41a beanLength=23 (com.example.lms.trace.RequestIdHeaderFilter)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: TraceFilter -&gt; beanHash=hash:b47057110594 beanLength=11 (com.example.lms.web.TraceFilter)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: ModelGuard -&gt; beanHash=hash:d9cc8b05679f beanLength=10 (com.example.lms.config.ModelGuard)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: NightmareBreaker -&gt; beanHash=hash:77b01cd442ae beanLength=16 (com.example.lms.infra.resilience.NightmareBreaker)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: QueryTransformer -&gt; beanHash=hash:031d70b3cdae beanLength=16 (com.example.lms.transform.QueryTransformer)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: NaverSearchService -&gt; beanHash=hash:303ceb46997b beanLength=18 (com.example.lms.service.NaverSearchService)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: BraveSearchService -&gt; beanHash=hash:9fe64857b541 beanLength=18 (com.example.lms.service.web.BraveSearchService)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: DynamicRetrievalHandlerChain -&gt; beanHash=hash:66361f1fc44b beanLength=28 (com.example.lms.service.rag.handler.DynamicRetrievalHandlerChain)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: KnowledgeGraphHandler -&gt; beanHash=hash:53c49be14fbd beanLength=21 (com.example.lms.service.rag.handler.KnowledgeGraphHandler)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: BrainStateService -&gt; beanHash=hash:07f57925916f beanLength=17 (com.example.lms.service.rag.graph.BrainStateService)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: RagGraphExecutor -&gt; beanHash=hash:0ef6e10ef83c beanLength=16 (com.example.lms.service.rag.langgraph.RagGraphExecutor)
+2026-10-09T17:40:48.721+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: EvidenceRepairHandler -&gt; beanHash=hash:83fbaf0b5948 beanLength=21 (com.example.lms.service.rag.handler.EvidenceRepairHandler)
+2026-10-09T17:40:48.722+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: WebFailSoftSearchAspect -&gt; beanHash=hash:87f28266d175 beanLength=23 (ai.abandonware.nova.orch.aop.WebFailSoftSearchAspect)
+2026-10-09T17:40:48.722+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: HybridWebSearchEmptyFallbackAspect -&gt; beanHash=hash:32b34aaa244d beanLength=34 (ai.abandonware.nova.orch.aop.HybridWebSearchEmptyFallbackAspect)
+2026-10-09T17:40:48.722+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] OK: CancelShieldExecutorServicePostProcessor -&gt; beanHash=hash:bb7fb1cb04c4 beanLength=40 (ai.abandonware.nova.boot.exec.CancelShieldExecutorServicePostProcessor)
+2026-10-09T17:40:48.723+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] HybridAwait: await.min-live-budget-ms=600, officialOnly.brave-full-join.max-wait-ms=2000
+2026-10-09T17:40:48.723+0900 INFO  [ ] c.e.lms.boot.WiringPrecheckRunner - [Precheck] done.
+2026-10-09T17:40:48.725+0900 INFO  [ ] c.e.l.d.AblationPenaltyBootDumper - [AblationPenalty] activeProfiles=local effective={default=0.12, websearch.base=0.35, websearch.starvation=0.28, websearch.domain-misroute=0.22, query-transformer=0.18, retrieval=0.2, rerank=0.15} rid=boot-fd9c5b9f sessionId=boot
+2026-10-09T17:40:49.362+0900 INFO  [ ] c.example.lms.service.AdminService - [bootstrap] admin account status=CREATED usernameHash=3a1dfe1a1b6a
+2026-10-09T17:40:50.270+0900 INFO  [ ] o.s.web.servlet.DispatcherServlet - Initializing Servlet 'dispatcherServlet'
+2026-10-09T17:40:50.274+0900 INFO  [ ] o.s.web.servlet.DispatcherServlet - Completed initialization in 4 ms
+2026-10-09T17:40:50.391+0900 INFO  [ 94d32e3a-7a85-49e4-a1e0-7ffcd5d354f0] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:50.486+0900 INFO  [ 6e683828-6de3-4cfc-9a80-6cd815dcded4] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:50.889+0900 INFO  [ 47605ee2-bc97-46ae-9dbb-2b255e7eab7b] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=true queryStringHash=hash:ca00fccfb408 queryStringLength=5
+2026-10-09T17:40:50.954+0900 INFO  [ 13f1e06d-3054-46c8-a5f6-ef1c04572290] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.155+0900 INFO  [ fc92d7c6-9c66-400e-9070-3f5a3bafbbeb] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.344+0900 INFO  [ 60cd8407-effd-4d53-af78-2efb7062d1e6] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=3f750c643c26} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.379+0900 INFO  [ 5de6eb99-5a9a-4c81-98d0-db87096352ee] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=42, hash12=46e952dbfc51} queryStringPresent=true queryStringHash=hash:a79faec4867b queryStringLength=8
+2026-10-09T17:40:51.379+0900 INFO  [ 22d56c0f-092f-4b7f-a6f0-a1ce1f2714ac] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=19, hash12=1fd0025e14c3} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.801+0900 INFO  [ aff6f627-6b83-44a7-95b0-c7c3e2df3255] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=35, hash12=1aa1eb86c650} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.873+0900 INFO  [ 1eec33f5-99a3-47cd-bcd2-ef029a3bea9e] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=3f750c643c26} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:51.874+0900 INFO  [ 6e266d15-e448-43c1-8976-81b332f1a900] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=34, hash12=767dfecf4d6f} queryStringPresent=true queryStringHash=hash:6fb055362203 queryStringLength=9
+2026-10-09T17:40:51.946+0900 INFO  [ 5dc6a2ee-a905-44a9-bb22-c3b15d17c3fb] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=42, hash12=46e952dbfc51} queryStringPresent=true queryStringHash=hash:a79faec4867b queryStringLength=8
+2026-10-09T17:40:52.074+0900 INFO  [ 233589d2-316d-4e29-825e-1503d1babd9c] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=true queryStringHash=hash:00270cf63f93 queryStringLength=6
+2026-10-09T17:40:52.122+0900 INFO  [ d2f6e271-e865-4ae0-8278-db85033ff730] c.e.lms.common.ReqLogInterceptor - [HTTP-IN] GET {present=true, len=6, hash12=7e93fba0bc7a} queryStringPresent=false queryStringHash=null queryStringLength=0
+2026-10-09T17:40:54.616+0900 INFO  [ ] c.e.l.config.LocalLlmProcessManager - [AWX][ollama][shutdown] status=not_owned reason=lifecycle_stop owned=false pidPresent=false capturedHandleCount=0 forcedHandleCount=0 aliveAfter=false interrupted=false
+2026-10-09T17:40:54.858+0900 INFO  [ ] o.s.o.j.LocalContainerEntityManagerFactoryBean - Closing JPA EntityManagerFactory for persistence unit 'default'
+2026-10-09T17:40:54.872+0900 INFO  [ ] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown initiated...
+2026-10-09T17:40:54.876+0900 INFO  [ ] com.zaxxer.hikari.HikariDataSource - HikariPool-1 - Shutdown completed.
+</pre>
+</span>
+</div>
+</div>
+<div id="footer">
+<p>
+<div>
+<label class="hidden" id="label-for-line-wrapping-toggle" for="line-wrapping-toggle">Wrap lines
+<input id="line-wrapping-toggle" type="checkbox" autocomplete="off"/>
+</label>
+</div>Generated by 
+<a href="http://www.gradle.org">Gradle 8.7</a> at 2026. 10. 9. 오후 5:40:55</p>
+</div>
+</div>
+</body>
+</html>

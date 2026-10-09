@@ -1,0 +1,99 @@
+{
+  "checkedAtUtc": "2026-10-09T11:08:12.731Z",
+  "freshContexts": true,
+  "restoredAuthState": false,
+  "hardwareRenderedObserved": false,
+  "scenarios": [
+    {
+      "scenario": "fixed-oauth-luna",
+      "requests": [
+        {
+          "endpoint": "/api/assist/display/phone-test",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/open",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/input",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/close",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/relay/settings",
+          "status": 200
+        }
+      ],
+      "consoleErrorCount": 0,
+      "requestFailureCount": 0,
+      "settingsVersion": 1,
+      "readSelection": {
+        "mode": "FIXED",
+        "modelId": "chatgpt-oauth:gpt-5.6-luna",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "elapsedMs": 5083,
+      "phase": "ANSWER_READY",
+      "reason": "",
+      "answerChars": 103,
+      "answerHash": "65b2af8fe85f",
+      "epoch": 1,
+      "sessionHash": "hash:97e0b75b7b0b",
+      "requestHash": "hash:97a7878055ff",
+      "isFallback": false,
+      "requestedModel": "chatgpt-oauth:gpt-5.6-luna",
+      "effectiveRoute": "chatgpt-oauth:gpt-5.6-luna",
+      "effectiveModel": "gpt-5.6-luna",
+      "fallbackReasonCode": "none",
+      "render": {
+        "bannerVisible": false,
+        "bannerCodeShown": false,
+        "answerVisible": false,
+        "renderedAnswerChars": 0
+      },
+      "diagnostics": [],
+      "verdict": "FAIL"
+    }
+  ]
+}

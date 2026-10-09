@@ -52,6 +52,7 @@ cd <repo>
 - python -B scripts/agent_scope_lease.py check --path <대상> → claim … → done
 - python -B scripts/work_journal.py open … note … close
 - lease 걸린 파일은 BLOCKED_LEASE로 표기하고 우회 금지
+- lease 대기는 세션 종료가 아니다 — $demo1-parallel-auto-resume(lease-wait→resume-check→exit별 자동 재개)
 
 7. 루프 · 이관
 - 자가 수정 ≤ 3회/원인 → 넘으면 TOSS Codex / FOR_GROK / FOR_CLEAN / FOR_DEVIN / ASK

@@ -1,0 +1,32 @@
+{
+  "runId": "b667f060-aa05-4416-9195-c76520c98212",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:29:19.147756+00:00",
+  "status": "failed",
+  "executable": "node",
+  "argumentCount": 3,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "--test-name-pattern=Luna preset",
+    "src/test/js/display-focus-client.test.cjs"
+  ],
+  "commandSha256": "a153eb76f5c290361619dc7161fd69d6d10476e94ddec4c76596cc0ff28ef0a5",
+  "sourceIdentity": [],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 53392,
+  "endedAt": "2026-10-09T10:29:19.316833+00:00",
+  "elapsedMs": 168,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -50,6 +50,26 @@ class NovaFocusHistoryTest {
     }
     @BeforeAll static void start(){context=new AnnotationConfigApplicationContext(Database.class);store=context.getBean(NovaFocusHistoryService.class);}
     @AfterAll static void stop(){if(context!=null)context.close();}
+    @Test void answerInstructionAndPresetRoundTripAndSurviveLegacyPayloads(){
+        String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"instruction").settings());
+        node.put("answerInstruction","짧은 존댓말 답변.");node.put("answerPreset","INTERVIEW");
+        var chosen=assertDoesNotThrow(()->mapper.treeToValue(node,NovaFocusSettings.class));
+        store.settings(owner,"instruction",0,chosen);
+        var saved=store.settings(owner,"instruction").settings();
+        assertEquals("짧은 존댓말 답변.",saved.answerInstruction());
+        assertEquals(NovaFocusSettings.AnswerPreset.INTERVIEW,saved.answerPreset());
+        assertEquals("짧은 존댓말 답변.",saved.effectiveAnswerInstruction());
+        node.remove("answerInstruction");node.remove("answerPreset");
+        var legacy=assertDoesNotThrow(()->mapper.treeToValue(node,NovaFocusSettings.class));
+        store.settings(owner,"instruction",1,legacy);
+        var merged=store.settings(owner,"instruction").settings();
+        assertEquals("짧은 존댓말 답변.",merged.answerInstruction());
+        assertEquals(NovaFocusSettings.AnswerPreset.INTERVIEW,merged.answerPreset());
+        var other=store.settings(owner+"other","instruction").settings();
+        assertEquals(NovaFocusSettings.AnswerPreset.GENERAL,other.effectiveAnswerPreset());
+        assertEquals("",other.effectiveAnswerInstruction());
+    }
     @Test void readsDoNotCreateRoomsAndSettingsUseCas(){
         String owner=UUID.randomUUID().toString();assertEquals(0,store.settings(owner,"c").settingsVersion());
         assertTrue(store.page(owner,"c",null,10).turns().isEmpty());
@@ -72,10 +92,13 @@ class NovaFocusHistoryTest {
         store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
         assertTrue(mapper.valueToTree(store.settings(owner,"c").settings()).path("webSearchEnabled").booleanValue());
     }
-    @Test void unsetDisplayDefaultIsGeminiAndExplicitChoicesAndOmittedLengthArePreserved() throws Exception {
+    @Test void unsetDisplayDefaultIsAutoWithApiFallbackAndExplicitChoicesArePreserved() throws Exception {
         String owner=UUID.randomUUID().toString();var fresh=store.settings(owner,"c");
-        assertEquals("llmrouter.gemini-pro",fresh.settings().answerSelection().modelId());
-        assertFalse(fresh.settings().answerSelection().routing().fallbackAllowed());
+        assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,fresh.settings().answerSelection().mode());
+        assertNull(fresh.settings().answerSelection().modelId());
+        assertEquals(NovaFocusSettings.ExecutionTarget.AUTO,fresh.settings().answerSelection().routing().executionTarget());
+        assertTrue(fresh.settings().answerSelection().routing().fallbackAllowed());
+        assertEquals(List.of("llmrouter.api3"),fresh.settings().answerSelection().routing().allowedFallbackIds());
         var mapper=new ObjectMapper();var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(fresh.settings());
         node.put("answerLengthChars",480);node.put("quickAnswerEnabled",true);
         node.set("answerSelection",mapper.valueToTree(new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"fixture-model-b")));
@@ -88,6 +111,31 @@ class NovaFocusHistoryTest {
         node.set("answerSelection",mapper.valueToTree(NovaFocusSettings.AnswerSelection.defaults()));
         store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
         assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,store.settings(owner,"c").settings().answerSelection().mode());
+    }
+    @Test void storedOldDefaultsMigrateOnReadAndDeliberateChoicesSurvive() {
+        String owner=UUID.randomUUID().toString();var d=NovaFocusSettings.defaults();
+        var legacySelection=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"llmrouter.gemini-pro",
+            new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of()));
+        var stored=new NovaFocusSettings(true,"노바",1200,20000,8000,d.presentation(),false,false,d.snapshot(),legacySelection,d.recentContext(),d.memory(),400,false);
+        store.settings(owner,"walk-mig",0,stored);
+        var migrated=store.settings(owner,"walk-mig").settings();
+        assertEquals(12000,migrated.wakeListenTimeoutMs());
+        assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,migrated.answerSelection().mode());
+        assertEquals(List.of("llmrouter.api3"),migrated.answerSelection().routing().allowedFallbackIds());
+        assertTrue(migrated.answerSelection().routing().fallbackAllowed());
+        String chosen=UUID.randomUUID().toString();
+        var deliberate=new NovaFocusSettings(true,"노바",1200,20000,8000,d.presentation(),false,false,d.snapshot(),
+            new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"llmrouter.openai-economy",
+                new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.API_ONLY,false,List.of())),
+            d.recentContext(),d.memory(),200,false,false);
+        store.settings(chosen,"walk-mig",0,deliberate);
+        var kept=store.settings(chosen,"walk-mig").settings();
+        assertEquals(12000,kept.wakeListenTimeoutMs());
+        assertEquals("llmrouter.openai-economy",kept.answerSelection().modelId());
+        assertEquals(NovaFocusSettings.ExecutionTarget.API_ONLY,kept.answerSelection().routing().executionTarget());
+        assertFalse(kept.answerSelection().routing().fallbackAllowed());
+        assertEquals(200,kept.answerLengthChars().intValue());
+        assertFalse(kept.webSearchAllowed());
     }
     @Test void reasoningIsIndependentPersistedAndLegacySavePreservesIt() throws Exception {
         String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();

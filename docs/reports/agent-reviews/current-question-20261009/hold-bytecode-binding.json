@@ -1,0 +1,15 @@
+{
+  "classFiles": [
+    {
+      "path": "build/classes/java/main/com/example/lms/assist/NovaFocusState.class",
+      "sha256": "14fea0b0f26dc1f32dbf48a0b6e1ddcfe69ed2767ee59a1661b3b394b17640a0",
+      "mtimeUtc": "2026-10-09T11:53:25.751732+00:00"
+    },
+    {
+      "path": "build/desktop-meta-display/classes/java/main/com/example/lms/assist/NovaFocusState.class",
+      "sha256": "14fea0b0f26dc1f32dbf48a0b6e1ddcfe69ed2767ee59a1661b3b394b17640a0",
+      "mtimeUtc": "2026-10-09T12:00:49.050792+00:00"
+    }
+  ],
+  "sameBytecode": true
+}

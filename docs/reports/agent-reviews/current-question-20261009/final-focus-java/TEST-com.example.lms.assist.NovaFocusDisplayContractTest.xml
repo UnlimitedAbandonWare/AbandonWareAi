@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusDisplayContractTest" tests="10" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:42:20" hostname="DESKTOP-M5NOV6K" time="0.331">
+  <properties/>
+  <testcase name="webCallFailureRetriesOnceParametricallyOnTheSameModel()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.014"/>
+  <testcase name="overflowKeepsTheFullAnswerTextWithoutANotice()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.077"/>
+  <testcase name="acceptedLengthSurvivesSettingsChangeDuringSnapshotWait()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.142"/>
+  <testcase name="unicodeCapAndFoldFullAnswerRemainIndependentOfRenderReceipt()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.002"/>
+  <testcase name="lengthReachesServerPromptPolicyAndQuickClosesSearchRetry()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.029"/>
+  <testcase name="defaultLengthIs400AndQuickIsOptIn()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.005"/>
+  <testcase name="numericLengthIsStrictAndRoundTrips()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.027"/>
+  <testcase name="registeredOAuthChoiceIsAdmittedAsApiAndNeverAsLocal()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.001"/>
+  <testcase name="autoTargetNeverAdmitsLocalButLocalOnlyStillDoes()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.002"/>
+  <testcase name="sharedPromptBoundaryHonorsFocusLengthAndLeavesOrdinaryChatAlone()" classname="com.example.lms.assist.NovaFocusDisplayContractTest" time="0.028"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

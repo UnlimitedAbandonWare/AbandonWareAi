@@ -70,6 +70,73 @@ import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 class ChatWorkflowPromptMessageRoleTest {
+    @ParameterizedTest
+    @CsvSource(value = {
+            "true|HP Reverb G2 2026 specs?|Even Realities G2 specs?|0.9",
+            "false|HP Reverb G2 2026 specs?|Even Realities G2 specs?|0.9",
+            "true|Meta Ray-Ban Display specs?|Ray-Ban Meta specs?|0.9",
+            "false|Meta Ray-Ban Display specs?|Ray-Ban Meta specs?|0.9",
+            "true|Ray-Ban Meta specs?|Meta Ray-Ban Display specs?|0.9",
+            "false|Ray-Ban Meta specs?|Meta Ray-Ban Display specs?|0.9",
+            "true|G2 specs?|Even Realities G2 specs?|0.1",
+            "false|G2 specs?|Even Realities G2 specs?|0.1",
+            "true|G2 specs?|Even Realities G2 specs?|NULL",
+            "false|G2 specs?|Even Realities G2 specs?|NULL"
+    }, delimiter = '|', nullValues = "NULL")
+    void confirmedFocusQuestionRemainsAuthoritativeAcrossRetrievalRewrite(
+            boolean focus, String question, String rewritten, Double score) {
+        clearWorkflowState();
+        try {
+            var captured = new java.util.ArrayList<List<ChatMessage>>();
+            var fixture = fixture(captured);
+            var context = focus ? new ChatConversationContext(List.of(
+                    new ChatConversationContext.Turn(rewritten, "Old unverified memory.")), "", List.of())
+                    : ChatConversationContext.empty();
+            var clarifier = (com.example.lms.service.disambiguation.QueryDisambiguationService)
+                    ReflectionTestUtils.getField(fixture.workflow(), "disambiguationService");
+            var rewrite = new com.example.lms.service.disambiguation.DisambiguationResult();
+            rewrite.setRewrittenQuery(rewritten);
+            rewrite.setScore(score);
+            when(clarifier.clarify(anyString(), anyList())).thenReturn(rewrite);
+            var promptAtBuild = new java.util.concurrent.atomic.AtomicReference<com.example.lms.prompt.PromptContext>();
+            var builder = org.mockito.Mockito.spy(new StandardPromptBuilder());
+            org.mockito.Mockito.doAnswer(call -> {
+                promptAtBuild.set(call.getArgument(0));
+                return call.callRealMethod();
+            }).when(builder).build(any(com.example.lms.prompt.PromptContext.class));
+            ReflectionTestUtils.setField(fixture.workflow(), "promptBuilder", builder);
+            var request = ChatRequestDto.builder().message(question).sessionId(null)
+                    .model("release-gate-recording-fake").maxTokens(256).memoryMode("EPHEMERAL")
+                    .searchMode(SearchMode.AUTO).useWebSearch(true).useRag(false)
+                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, false)).build();
+
+            fixture.workflow().continueChat(request, ignored -> List.of(), context);
+
+            verify(clarifier).clarify(org.mockito.ArgumentMatchers.eq(question),
+                    org.mockito.ArgumentMatchers.eq(context.interpretationHistory()));
+            var hybrid = (com.example.lms.service.rag.HybridRetriever)
+                    ReflectionTestUtils.getField(fixture.workflow(), "hybridRetriever");
+            String retrievalQuery = rewrite.isConfident() ? rewritten : question;
+            verify(hybrid).retrieveAll(org.mockito.ArgumentMatchers.argThat(queries -> queries.contains(retrievalQuery)),
+                    anyInt(), any(), any()); // Retrieval hints retain their existing contract.
+            assertEquals(question, request.getMessage(), "the DTO never changes the confirmed question");
+            assertEquals(1, captured.size(), "one actual fake-model boundary invocation");
+            var messages = captured.get(0);
+            assertEquals(question, assertInstanceOf(UserMessage.class,
+                    messages.get(messages.size() - 1)).singleText());
+            assertEquals(score, rewrite.getScore(), "unobserved clarify confidence remains null");
+            String authoritative = focus ? question : retrievalQuery;
+            assertEquals(authoritative, promptAtBuild.get().userQuery(),
+                    "Focus prompt question must not be replaced by a retrieval hint");
+            String rendered = messages.stream().filter(SystemMessage.class::isInstance)
+                    .map(SystemMessage.class::cast).map(SystemMessage::text)
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            assertTrue(rendered.contains("### USER QUESTION\n" + authoritative),
+                    "the actual rendered question uses the authoritative input");
+            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
+        } finally { clearWorkflowState(); }
+    }
+
     @ParameterizedTest @ValueSource(strings={"approved","master_off","opt_out","strict","unknown","unready"})
     void approvedPreparationReachesActualFinalModelAsUserData(String mode) throws Exception {
         clearWorkflowState();

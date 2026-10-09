@@ -1,0 +1,83 @@
+{
+  "checkedAtUtc": "2026-10-09T11:23:50.989371+00:00",
+  "targets": [
+    {
+      "path": "main/resources/static/assets/display/display-focus-controls.js",
+      "beforeSha256": "c01d1cd3f045f909352deee8c7613fc91a0707832be7c8857e0221ee691084bb",
+      "currentSha256": "d30f8ecfd09fad74d83b4c53846eca6a4655dc8cad903d0de1b62a439b1e16cd",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-01\\before\\0.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "src/test/js/display-focus-client.test.cjs",
+      "beforeSha256": "792fbe203f49509620c826f19f98a6f142776392538cf12a007fdb189604c0a6",
+      "currentSha256": "5ce89936c848732d272ce59673fcdbb03e64610afbe4c46feb701118db729328",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-01\\before\\1.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusanswer.java",
+      "beforeSha256": "007fcc94b0ac58f0b7e9633cf3fd3555bc3e9b89bad49233ac61ee48403af20e",
+      "currentSha256": "ef3a179669e81008f729055b560f0732051c34155130f30f34eba1830228d94b",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\0.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusanswerservice.java",
+      "beforeSha256": "078a1cfa0569cbeabc930a195fbddbab2fb1a8ebbbbb209bf72831179b1c715b",
+      "currentSha256": "8cf23cddc3df061b230e552e04fa810c28e63bb6d7ed428af71f357633a6dfe0",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\1.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusservice.java",
+      "beforeSha256": "e567c93930a681222a73ee0b4cf99827dc0046dd8a42059171eeea5fb9802cce",
+      "currentSha256": "780139c3f2c40279911bca5ef62cece9d07f5998ef3fa0e5e3c5a2511afcc8ea",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\2.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusstate.java",
+      "beforeSha256": "1c2e372c430cf1990571fe9a15db1ef6eb2c145d4992a0440e7b56301c9569e9",
+      "currentSha256": "6f95e7c0e6fc49f1314effb36c8680ff7f3dc38503baff56a14de62d168fe25b",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\3.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/resources/static/assets/display/display-focus.js",
+      "beforeSha256": "d0ea63fdc2ee7ce8ec3b81a5c53bbf36ccd2958f0542402b9c887594c29d9b4f",
+      "currentSha256": "f8a7d7474ea9747a9f6842e1de35e85f6f698dc20683da8eb54bd9dca7edcbbc",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\4.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "main/resources/static/assets/display/display-conversate.js",
+      "beforeSha256": "5b92ee196c1188d00bc34a1072f1d46018f141c79794632ee5a4898668584f59",
+      "currentSha256": "8d2f229807b977d1da03a2a7eb14cdbee83e33ec57410954711fc116f80fef35",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\5.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/novafocusexecutionpolicytest.java",
+      "beforeSha256": "d8583b8fc98f97f753d23503d20209ee31252e86ca7c0d4a5b4b324145c1a2ae",
+      "currentSha256": "902521c50967c822d773c8e59346e9e8f44d7f8782ae5a97caf417475cc97f93",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\6.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/novafocusstatetest.java",
+      "beforeSha256": "038519400783e631b3bb03eece9516be1b099fc0bad9e169eb6b0560efbed76b",
+      "currentSha256": "3f563c4cf60fc4bd6daf748fdfb338b9ad005d7dcca14960e2d72e0481fd1ea2",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\7.bin",
+      "eolPreserved": true
+    },
+    {
+      "path": "src/test/js/display-focus-projection.test.cjs",
+      "beforeSha256": "3ece8c4683f9369f67ec0deb5f48bdb63f833489f978fc048e27a2934262212b",
+      "currentSha256": "ddc29f38608eb340b62dc8f0bbae7207aabbe7a4e4ccf1b5b346c75c02233904",
+      "backup": "data\\agent-handoff\\codex-autonomy\\focus-auto-fallback-16b85be6\\cycle-02\\before\\8.bin",
+      "eolPreserved": true
+    }
+  ],
+  "allEolPreserved": true
+}

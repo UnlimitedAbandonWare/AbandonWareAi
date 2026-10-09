@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-10-09T12:09:32.620674+00:00",
+  "models": [
+    {
+      "id": "llmrouter.gemini-cue",
+      "modelId": "gemini-3.5-flash-lite",
+      "provider": "gemini",
+      "selectable": true,
+      "reason": ""
+    },
+    {
+      "id": "llmrouter.gemini-pro",
+      "modelId": "gemini-3.8-flash",
+      "provider": "gemini",
+      "selectable": true,
+      "reason": ""
+    }
+  ]
+}

@@ -30,13 +30,19 @@
     const snapshotter=host.DisplaySnapshot?host.DisplaySnapshot.createSnapshotter({navigator:host.navigator,document}):null;
     $('nova-question').disabled=true;
     const projection=host.NovaFocus.createProjection({host,document,target:'fold',panel,status:$('nova-fold-status'),draft:$('nova-fold-draft'),answer:$('nova-fold-answer'),receipt:host.NovaFocus.receiptSender(host),reasonText:reason=>Object.prototype.hasOwnProperty.call(messages,reason)?messages[reason]:host.NovaFocus.closeReasonText?.(reason),keepClosed:()=>$('device-debug')?.open===true,diagnostic:(event,detail)=>host.console?.debug?.('[AWX][nova-focus]',event,{...detail,epoch:client.state?.epoch||0,connection:client.state?.connection||'UNKNOWN'})});
-    const fields={enabled:'nf-enabled',recallEnabled:'nf-recall',rememberFactsEnabled:'nf-remember',wakeWord:'nf-wake',utteranceQuietMs:'nf-quiet',followupIdleMs:'nf-idle',wakeListenTimeoutMs:'nf-listen',answerLengthChars:'nf-answer-length',quickAnswerEnabled:'nf-quick'};
+    const fields={enabled:'nf-enabled',recallEnabled:'nf-recall',rememberFactsEnabled:'nf-remember',wakeWord:'nf-wake',cameraWakeWord:'nf-camera-wake',utteranceQuietMs:'nf-quiet',followupIdleMs:'nf-idle',wakeListenTimeoutMs:'nf-listen',answerLengthChars:'nf-answer-length',quickAnswerEnabled:'nf-quick',answerInstruction:'nf-answer-instruction'};
     const flags=new Set(['enabled','recallEnabled','rememberFactsEnabled','quickAnswerEnabled']);
     const length=$('nf-answer-length'),lengthPreset=$('nf-answer-length-preset');
     function syncLengthPreset(){if(lengthPreset)lengthPreset.value=['320','400','480'].includes(String(length?.value))?String(length.value):'';}
     if(length)length.oninput=syncLengthPreset;
     if(lengthPreset)lengthPreset.onchange=()=>{if(lengthPreset.value&&length)length.value=lengthPreset.value;};
     if($('nf-answer-length-reset'))$('nf-answer-length-reset').onclick=()=>{if(length){length.value=400;settingsEdits++;}syncLengthPreset();};
+    const INTERVIEW_INSTRUCTION='너는 면접 중인 사용자를 돕는 안경 보조다. 들린 면접 질문에 대해 사용자가 그대로 말할 수 있는 1인칭 답변을 짧은 문장 2~4개로 준다. 존댓말, 핵심 먼저, 숫자·경험 예시 1개. 확실하지 않은 사실은 지어내지 않는다.';
+    const answerPreset=$('nf-answer-preset'),answerInstruction=$('nf-answer-instruction'),instructionCount=$('nf-answer-instruction-count');
+    function syncInstructionCount(){if(instructionCount&&answerInstruction)instructionCount.textContent=[...answerInstruction.value].length+'/1200';}
+    if(answerPreset)answerPreset.onchange=()=>{if(answerInstruction&&answerPreset.value==='INTERVIEW')answerInstruction.value=INTERVIEW_INSTRUCTION;else if(answerInstruction&&answerPreset.value==='GENERAL')answerInstruction.value='';syncInstructionCount();};
+    if(answerInstruction)answerInstruction.oninput=()=>{if(answerPreset&&answerPreset.value!=='CUSTOM'&&answerInstruction.value!==(answerPreset.value==='INTERVIEW'?INTERVIEW_INSTRUCTION:''))answerPreset.value='CUSTOM';syncInstructionCount();};
+    if($('nf-answer-instruction-reset'))$('nf-answer-instruction-reset').onclick=()=>{if(answerPreset)answerPreset.value='GENERAL';if(answerInstruction)answerInstruction.value='';syncInstructionCount();settingsEdits++;};
     const presentation={sequentialTextEnabled:'nf-sequential',charIntervalMs:'nf-speed',maxVisibleLines:'nf-lines',autoFadeEnabled:'nf-fade-on',tailHoldMs:'nf-hold',fadeMs:'nf-fade'};
     const messages={focus_settings_conflict:'다른 기기에서 설정이 바뀌었습니다. 서버 설정을 다시 불러와 주세요.',focus_busy:'앞선 질문을 처리하고 있습니다. 잠시 후 다시 시도해 주세요.',focus_unavailable:'노바 응답 경로가 아직 준비되지 않았습니다.',focus_answer_unavailable:'응답을 확인하지 못했습니다. 기록에서 상태를 확인해 주세요.',focus_session_stale:'연결이 바뀌었습니다. 다시 연결된 뒤 시도해 주세요.',event_owner_required:'현재 수음을 보내는 기기에서 사용해 주세요.',display_rate_limited:'잠시 후 다시 시도해 주세요.'};
     Object.assign(messages,host.NovaFocus.CLOSE_REASONS||{});
@@ -117,7 +123,7 @@
         for(const row of rows.filter(value=>value.selectable===true))add(row.id,row.provider+' · '+row.id);
         if(selected&&!rows.some(row=>row.id===selected&&row.selectable===true)){
           const unavailable=rows.some(row=>row.id===selected&&row.selectable===false);
-          add(selected,'저장된 선택 · '+selected+(unavailable?' (현재 선택 불가)':' (현재 사용 가능 여부 미확인)'),unavailable);
+          add(selected,'저장된 선택 · '+selected+(unavailable?' (현재 선택 불가)':' (현재 사용 가능 여부 미확인)'),true);
         }
         input.value=selected;
       }
@@ -131,20 +137,21 @@
       settingsEdits++;modelStatus();$('nf-status').textContent='모델 전환 설정을 저장하면 다음 질문부터 적용합니다.';
     };
     if($('nf-general-mode'))$('nf-general-mode').onclick=()=>{$('nf-answer-target').value='AUTO';settingsEdits++;modelStatus();$('nf-status').textContent='일반 자동 모드로 전환할 설정입니다. 저장 후 다음 질문부터 적용합니다.';};
-    // 메인 모델 프리셋: 카탈로그에서 선택 가능한 경로를 우선 찾고 없으면 라우트 기본값을 쓴다. 클릭은 편집값만 바꾸고 저장 전 전송은 없다.
+    // 메인 모델 프리셋: 카탈로그에서 선택 가능한 경로만 사용한다. 클릭은 편집값만 바꾸고 저장 전 전송은 없다.
     const presetSay=text=>{const e=$('nf-preset-status');if(e)e.textContent=text;};
-    function presetModel(res,fallback){
-      for(const re of res){const hit=catalogRows.find(row=>re.test(row.id)&&row.selectable===true)||catalogRows.find(row=>re.test(row.id));if(hit)return hit.id;}
-      return fallback;
+    function presetModel(res){
+      for(const re of res){const hit=catalogRows.find(row=>re.test(row.id)&&row.selectable===true);if(hit)return hit.id;}
+      return null;
     }
     function presetApply(target,model,webSearch,text){
+      if(model===null){presetSay("선택 가능한 모델이 없습니다. 기존 선택을 유지합니다.");return;}
       if($('nf-answer-target'))$('nf-answer-target').value=target;
       if($('nf-answer-model')){const selections={};for(const id of modelInputs)selections[id]=id==='nf-answer-model'?model:($(id)?.value||'');modelOptions(catalogRows,selections);}
       if(webSearch!==null&&$('nf-web-search'))$('nf-web-search').value=webSearch;
       settingsEdits++;modelStatus();presetSay(text);
     }
-    if($('nf-preset-luna'))$('nf-preset-luna').onclick=()=>presetApply('API_ONLY',presetModel([/openai-economy/i,/luna/i],'llmrouter.openai-economy'),'false','루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
-    if($('nf-preset-gemini'))$('nf-preset-gemini').onclick=()=>presetApply('GEMINI_WEBSEARCH_ONLY',presetModel([/gemini-pro/i,/gemini/i],'llmrouter.gemini-pro'),'true','제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+    if($('nf-preset-luna'))$('nf-preset-luna').onclick=()=>presetApply('API_ONLY',presetModel([/^chatgpt-oauth:gpt-5\.6-luna$/i,/^chatgpt-oauth:.*luna/i]),'false','루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+    if($('nf-preset-gemini'))$('nf-preset-gemini').onclick=()=>presetApply('GEMINI_WEBSEARCH_ONLY',presetModel([/gemini-pro/i,/gemini/i]),'true','제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
     if($('nf-preset-auto'))$('nf-preset-auto').onclick=()=>presetApply('AUTO','',null,'자동 모드로 전환할 설정입니다. 저장하면 다음 질문부터 적용됩니다.');
     async function loadModels(){
       if(catalogLoaded||catalogBusy||!host.fetch||!$('nf-answer-model'))return;catalogBusy=true;
@@ -158,16 +165,19 @@
       finally{host.clearTimeout?.(timer);if(generation===catalogGeneration){catalogBusy=false;catalogAbort=null;}}
     }
     function paintSettings(value){
-      value={...value,settings:{...value.settings,answerLengthChars:value.settings?.answerLengthChars??400,quickAnswerEnabled:value.settings?.quickAnswerEnabled??false,reasoningPreset:value.settings?.reasoningPreset??'STANDARD'}};
+      value={...value,settings:{...value.settings,answerLengthChars:value.settings?.answerLengthChars??400,quickAnswerEnabled:value.settings?.quickAnswerEnabled??false,reasoningPreset:value.settings?.reasoningPreset??'STANDARD',answerPreset:value.settings?.answerPreset??null,answerInstruction:value.settings?.answerInstruction??'',cameraWakeWord:value.settings?.cameraWakeWord??'데빈'}};
       if($('nf-reasoning'))$('nf-reasoning').value=value.settings.reasoningPreset;
       stored=value;
-      for(const [key,id] of Object.entries(fields)){const e=$(id);if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
+      for(const [key,id] of Object.entries(fields)){const e=$(id);if(!e)continue;if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
       syncLengthPreset();
+      if($('nf-answer-preset'))$('nf-answer-preset').value=['GENERAL','INTERVIEW','CUSTOM'].includes(value.settings.answerPreset)?value.settings.answerPreset:(value.settings.answerInstruction?'CUSTOM':'GENERAL');
+      syncInstructionCount();
       if($('nf-web-search'))$('nf-web-search').value=value.settings.webSearchEnabled==null?'':String(value.settings.webSearchEnabled);
-      for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=value.settings.presentation[key];}
+      for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=key==='tailHoldMs'?value.settings.presentation[key]/1000:value.settings.presentation[key];}
       const snap=value.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
-      const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
+      const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source'),camAllowed=$('nf-camera-allowed');
       if(snapEnabled)snapEnabled.checked=!!snap.enabled;if(snapSource)snapSource.value=snap.source||'FOLD_REAR';
+      if(camAllowed)camAllowed.checked=snap.cameraAllowed!==false;
       const selection=value.settings.answerSelection||{mode:'AUTO',modelId:''},routing=selection.routing||{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]};
       if($('nf-answer-model')){const selections={'nf-answer-model':selection.mode==='FIXED'?selection.modelId:''};
         for(let i=1;i<=3;i++)selections['nf-answer-backup-'+i]=routing.allowedFallbackIds?.[i-1]||'';
@@ -315,11 +325,14 @@
         const settings={presentation:{}};
         const rawLength=String($('nf-answer-length')?.value??'').trim();
         if(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(Number(rawLength))||Number(rawLength)<80||Number(rawLength)>800)throw Error('invalid_nova_settings');
-        for(const [key,id] of Object.entries(fields)){const e=$(id);settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'?e.value:Number(e.value);}
+        for(const [key,id] of Object.entries(fields)){const e=$(id);if(!e)continue;settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'||key==='answerInstruction'||key==='cameraWakeWord'?e.value:Number(e.value);}
         if($('nf-web-search')&&$('nf-web-search').value!=='')settings.webSearchEnabled=$('nf-web-search').value==='true';
         if($('nf-reasoning'))settings.reasoningPreset=$('nf-reasoning').value;
-        for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value);}
-        if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR'};
+        if(['GENERAL','INTERVIEW','CUSTOM'].includes($('nf-answer-preset')?.value))settings.answerPreset=$('nf-answer-preset').value;
+      for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value)*(key==='tailHoldMs'?1000:1);}
+        // cameraAllowed=false는 사진 호출어·자동 촬영·시험 촬영 모두를 막는다. 구 페이지는 필드를 보내지 않아 서버 저장값을 유지한다.
+        if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR',cameraAllowed:$('nf-camera-allowed')?$('nf-camera-allowed').checked:null};
+        if($('nf-camera-allowed')&&!$('nf-camera-allowed').checked)cancelCaptureJobs();
         if($('nf-answer-model')){
           const model=$('nf-answer-model').value;
           const exclusive=$('nf-answer-target').value==='GEMINI_WEBSEARCH_ONLY';
@@ -350,6 +363,7 @@
     const testShot=$('nf-snapshot-test');
     if(testShot)testShot.onclick=async()=>{
       if(!snapshotter){notice({message:'snapshot_unsupported'});return;}
+      if($('nf-camera-allowed')&&!$('nf-camera-allowed').checked){if($('nf-snapshot-test-status'))$('nf-snapshot-test-status').textContent='카메라 사용 허용이 꺼져 있습니다.';return;}
       const st=$('nf-snapshot-test-status'),img=$('nf-snapshot-preview');
       if(st)st.textContent='카메라를 준비합니다.';
       const r=await snapshotter.captureOnce({facingMode:'environment'});
@@ -441,9 +455,11 @@
       if(owned&&!stored&&!loading)void loadSettings();
       // 확정 질문의 단발 촬영 명령은 생산자 폴링 응답으로만 도착한다. 이미 claim된 명령은
       // 이전 구현체의 작업일 수 있으므로 자동 재생 없이 0회로 둔다. 로컬 OFF 의도가 있으면 시작하지 않는다.
-      const command=state.focusControl;
+      // 사진 호출어(trigger==='camera_wake') 명령은 자동 촬영 OFF·로컬 OFF 의도와 무관하게 실행한다 — 카메라 전체 차단(cameraAllowed)만 막는다.
+      const command=state.focusControl,cameraWake=command&&command.trigger==='camera_wake';
       if(command&&command.kind==='snapshot'&&command.captureId&&command.requestId&&owned&&command.expiresInMs>0
-        &&!snapshotLocalBlocked&&(stored==null||stored.settings?.snapshot?.enabled!==false)
+        &&(cameraWake||(!snapshotLocalBlocked&&(stored==null||stored.settings?.snapshot?.enabled!==false)))
+        &&(stored?.settings?.snapshot?.cameraAllowed!==false)
         &&!captureJobs.has(command.captureId)&&!command.claimed)void startSnapshotJob(command);
       if(wasActive&&!state.focus?.active){scopeEpoch++;clearContent();}
       wasActive=!!state.focus?.active;

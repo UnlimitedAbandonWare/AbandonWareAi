@@ -1,0 +1,55 @@
+{
+  "runId": "3387d13f-6274-4073-a764-cde34151f425",
+  "scope": "verification",
+  "startedAt": "2026-10-09T08:14:57.666470+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 13,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "--tests",
+    "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+    "--tests",
+    "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusAnswerServiceTest",
+    "--tests",
+    "com.example.lms.assist.UnknownAnswerPolicyTest"
+  ],
+  "commandSha256": "57fd17cc3669af797f90940c4e3d4c3ad4902976f578f5247aa86bce16517715",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\service\\ChatWorkflow.java",
+      "kind": "file",
+      "sha256": "34312e01c0146d6e9806d8b5fd7b2d3f40f473db355bc13fe866d1b32fe1ec71",
+      "bytes": 769907
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\service\\ChatWorkflowPromptMessageRoleTest.java",
+      "kind": "file",
+      "sha256": "afb3765b7fe4ba06c1e40b00cde0f298698e1ef9adba52c61135964fe3c9321f",
+      "bytes": 57158
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 14292,
+  "endedAt": "2026-10-09T08:15:29.671678+00:00",
+  "elapsedMs": 32002,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

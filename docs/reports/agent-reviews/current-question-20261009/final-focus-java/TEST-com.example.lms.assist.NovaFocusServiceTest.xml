@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusServiceTest" tests="29" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:42:21" hostname="DESKTOP-M5NOV6K" time="1.076">
+  <properties/>
+  <testcase name="workerDiagnosticsAreOwnerBoundAllowlistedAndClearedOnClose()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.078"/>
+  <testcase name="snapshotErrorReportFailsQuestionButKeepsIt()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.01"/>
+  <testcase name="deterministicFocusFailuresDoNotSpendASecondAttempt()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.014"/>
+  <testcase name="memorySearchRequiresOwnerEpochAndNeverCallsChat()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.075"/>
+  <testcase name="generatedAnswerAndUnconfirmedPresentationHaveSeparateOutcomes()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.087"/>
+  <testcase name="[1] outcome=completed" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.017"/>
+  <testcase name="[2] outcome=failed" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.017"/>
+  <testcase name="[3] outcome=changed" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.021"/>
+  <testcase name="[4] outcome=closed" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.02"/>
+  <testcase name="settingsAndHistoryRequireExistingOwnerEpoch()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.005"/>
+  <testcase name="audioEpochRebindPreservesRecentPairsButExplicitCloseClearsThem()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.033"/>
+  <testcase name="firstAttemptRuntimeFailureRetriesAndDeliversTheAnswer()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.018"/>
+  <testcase name="allAttemptsFailingClosesWithUnavailableAndKeepsTheRealReasonCode()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.019"/>
+  <testcase name="[1] code=backend_timeout" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.012"/>
+  <testcase name="[2] code=backend_unavailable" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.012"/>
+  <testcase name="turningVoiceWakeOffCancelsFocusWorkAndPreservesBinding()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.016"/>
+  <testcase name="blockedDiagnosticSinkDoesNotHoldCaptureStateAndKeepsOriginalEpoch()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.03"/>
+  <testcase name="slowRenderSinkReleasesTheHttpControllerMonitor()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.214"/>
+  <testcase name="audioEpochRebindKeepsInFlightAnswerAndRejectsOldAudio()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.014"/>
+  <testcase name="snapshotLifecycleClaimsOnceAndFeedsGenerateWithOneImage()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.009"/>
+  <testcase name="persistedManualRetryDoesNotQueueAndConflictingPayloadFailsSynchronously()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.005"/>
+  <testcase name="overflowAndShutdownNeverWaitForTheDiagnosticSink()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.216"/>
+  <testcase name="currentRequestWithChangedMemoryStillClosesActivation()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.018"/>
+  <testcase name="audioEpochOldAttachCannotRollBindingBack()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.001"/>
+  <testcase name="focusBoundariesJoinOneRequestWithoutTextOrDuplicateReceipts()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.02"/>
+  <testcase name="[1] boundary=assist_replaced" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.023"/>
+  <testcase name="[2] boundary=explicit_reopen" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.024"/>
+  <testcase name="independentWorkerAndCloseFenceLateProviderCompletion()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.008"/>
+  <testcase name="failedDiagnosticSinkCannotChangeAnswerReceiptOrFollowup()" classname="com.example.lms.assist.NovaFocusServiceTest" time="0.022"/>
+  <system-out><![CDATA[19:42:21.364 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.384 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=ANSWER_READY version=10
+19:42:21.386 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=11
+19:42:21.389 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=ARMED version=2
+19:42:21.396 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_outcome_unknown phase=THINKING version=10
+19:42:21.397 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ARMED version=11
+19:42:21.399 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.405 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=8
+19:42:21.411 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:21.482 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.487 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=4
+19:42:21.490 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.565 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=presentation_unconfirmed phase=ANSWER_READY version=9
+19:42:21.565 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=presentation_unconfirmed phase=OFF version=10
+19:42:21.573 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=11
+19:42:21.577 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.592 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=10
+19:42:21.595 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.606 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=9
+19:42:21.610 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=10
+19:42:21.614 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.621 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_stream_final_mismatch phase=THINKING version=9
+19:42:21.632 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=10
+19:42:21.635 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.639 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=THINKING version=9
+19:42:21.652 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=10
+19:42:21.654 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.656 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.658 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=4
+19:42:21.658 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=4
+19:42:21.660 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.681 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=ANSWER_READY version=16
+19:42:21.691 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=22
+19:42:21.694 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.694 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=LISTENING version=5
+19:42:21.709 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=11
+19:42:21.713 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.723 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=8
+19:42:21.728 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:21.733 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.738 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=8
+19:42:21.742 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:21.745 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.750 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=8
+19:42:21.755 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:21.759 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=ARMED version=2
+19:42:21.769 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_disabled phase=THINKING version=9
+19:42:21.771 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=10
+19:42:21.773 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:21.801 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=LISTENING version=13
+19:42:21.805 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.016 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=PRESENTING version=10
+19:42:22.019 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.032 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=10
+19:42:22.035 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=ARMED version=2
+19:42:22.042 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_outcome_unknown phase=THINKING version=11
+19:42:22.042 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ARMED version=12
+19:42:22.044 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.047 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=LISTENING version=6
+19:42:22.049 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.064 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=11
+19:42:22.074 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=19
+19:42:22.085 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=27
+19:42:22.096 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=35
+19:42:22.105 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=43
+19:42:22.115 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=51
+19:42:22.125 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=59
+19:42:22.136 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=67
+19:42:22.145 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=75
+19:42:22.156 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=83
+19:42:22.165 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=91
+19:42:22.176 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=99
+19:42:22.186 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=107
+19:42:22.198 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=115
+19:42:22.209 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=123
+19:42:22.217 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=131
+19:42:22.227 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=139
+19:42:22.236 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=147
+19:42:22.247 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=155
+19:42:22.255 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=WAITING version=163
+19:42:22.263 [ForkJoinPool.commonPool-worker-1] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=LISTENING version=166
+19:42:22.265 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.271 [nova-focus-answer] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=memory_changed phase=THINKING version=8
+19:42:22.282 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:22.284 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.284 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=LISTENING version=6
+19:42:22.286 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.305 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=WAITING version=11
+19:42:22.308 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.312 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=THINKING version=8
+19:42:22.329 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=15
+19:42:22.332 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.335 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=THINKING version=8
+19:42:22.354 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=14
+19:42:22.357 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.362 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=closed phase=THINKING version=8
+19:42:22.363 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=OFF version=9
+19:42:22.365 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=OFF version=2
+19:42:22.385 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=15
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

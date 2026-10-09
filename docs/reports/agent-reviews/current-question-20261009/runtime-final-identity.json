@@ -1,0 +1,21 @@
+{
+  "checkedAtUtc": "2026-10-09T09:42:44.563712+00:00",
+  "runtimeRole": "dev",
+  "springProfile": "local,meta-display",
+  "pid": 69604,
+  "runId": "20261009-183657-468a997c",
+  "launcherStatus": "ready",
+  "springReused": false,
+  "startedAt": "2026-10-09T09:40:16.2339570+00:00",
+  "readyAt": "2026-10-09T09:40:57.3546406Z",
+  "sourceProfileHash": "263c73b012e8206f877896b6142bdc7c45304065935ba60b25dbda1b3397faa4",
+  "compiledProfilePath": "build\\desktop-meta-display\\resources\\main\\application-meta-display.yml",
+  "compiledProfileHash": "263c73b012e8206f877896b6142bdc7c45304065935ba60b25dbda1b3397faa4",
+  "sourceAndCompiledProfileMatch": true,
+  "sourceAssetHash": "0b46552688cfe8ea0058cbb2079d80739b19df612768aaae6ca6aefcee4b8181",
+  "servedAssetHash": "0b46552688cfe8ea0058cbb2079d80739b19df612768aaae6ca6aefcee4b8181",
+  "generationAfterNewDefault": "NOT_RUN_latest_stop_steering",
+  "effectiveModelBinding": "NOT_OBSERVED",
+  "hardwareRendered": "NOT_OBSERVED",
+  "inflightStartCompleted": true
+}

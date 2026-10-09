@@ -24,10 +24,13 @@ public class NovaFocusService implements AutoCloseable {
     private final Clock clock;
     @Autowired(required=false) private FocusMemoryService memories;
     @Autowired(required=false) private JevDecisionAdvisor jevAdvisor;
+    @Autowired(required=false) private com.example.lms.debug.DebugEventStore debugEvents;
     private final SecureRandom random=new SecureRandom();
     private final Map<String,Slot> scopes=new ConcurrentHashMap<>(),sessions=new ConcurrentHashMap<>();
     private final ExecutorService workers=new ThreadPoolExecutor(2,2,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(16),r->{var t=new Thread(r,"nova-focus-answer");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
     private final ScheduledExecutorService timer=Executors.newSingleThreadScheduledExecutor(r->{var t=new Thread(r,"nova-focus-clock");t.setDaemon(true);return t;});
+    private final ExecutorService diagnosticWriter=new ThreadPoolExecutor(1,1,0,TimeUnit.MILLISECONDS,new ArrayBlockingQueue<>(64),r->{var t=new Thread(r,"nova-focus-diagnostics");t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
+    private final java.util.concurrent.atomic.AtomicLong diagnosticDropped=new java.util.concurrent.atomic.AtomicLong(),diagnosticFailed=new java.util.concurrent.atomic.AtomicLong();
     private static final class Slot {
         final String owner,channel;
         final NovaFocusState state;
@@ -39,10 +42,69 @@ public class NovaFocusService implements AutoCloseable {
         String preparedRequestId;
         NovaFocusHistoryService.Context preparedContext;
         Map<String,Object> answerDiagnostics=Map.of();
+        Observation observation;
         final ArrayDeque<NovaFocusHistoryService.Pair> recent=new ArrayDeque<>();
         final LinkedHashMap<String,com.example.lms.service.ChatConversationContext.Transcript> finalized=new LinkedHashMap<>();
         long contextEpoch;
         Slot(String owner,String channel,String server,NovaFocusSettings settings){this.owner=owner;this.channel=channel;state=new NovaFocusState(server,settings);}
+    }
+    /** Server-bound opaque identity; never an authorization credential or a transcript hash. */
+    private static final class Observation {
+        final String ownerHash,sessionHash,serverInstanceHash,activationHash,requestHash;
+        final long epoch,confirmedAt,startedNano=System.nanoTime();
+        String turnHash;
+        long answerNano;
+        Map<String,Object> modelDiagnostic=Map.of();
+        String failureExceptionClass,failureRootClass;
+        boolean terminalRecorded;
+        boolean closedRecorded;
+        Observation(Slot s,String server,NovaFocusState.Request request,long now){
+            ownerHash=hash(s.owner);sessionHash=hash(s.assistId);serverInstanceHash=hash(server);
+            activationHash=hash(request.activationId());requestHash=hash(request.requestId());epoch=s.epoch;confirmedAt=now;
+        }
+    }
+    private static String hash(String id){return id==null||id.isBlank()?null:com.example.lms.trace.SafeRedactor.hashValue(id);}
+    private Map<String,Object> diagnostic(Slot s,Observation o,String stage,String outcome,String reason){
+        if(o==null)return null;
+        var row=new LinkedHashMap<String,Object>();
+        row.put("stage",stage);row.put("outcome",outcome);
+        row.put("reasonCode",reason!=null&&reason.matches("[a-z][a-z0-9_]{0,63}")?reason:"unknown");
+        row.put("observedAtMs",stage.equals("focus_question_confirmed")?o.confirmedAt:clock.millis());
+        row.put("ownerHash",o.ownerHash);row.put("sessionHash",o.sessionHash);row.put("serverInstanceHash",o.serverInstanceHash);
+        row.put("activationHash",o.activationHash);row.put("requestHash",o.requestHash);row.put("turnHash",o.turnHash);
+        row.put("epoch",o.epoch);row.put("currentEpoch",Objects.equals(o.sessionHash,hash(s.assistId))?s.epoch:null);
+        row.put("answerVersion",s.state.view(clock.millis()).answerVersion());
+        row.put("deviceHash",null);row.put("captureRun",null);row.put("connectionGeneration",null);
+        row.put("latencyMs",stage.equals("focus_question_confirmed")?null:TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-o.startedNano));
+        row.put("renderLatencyMs",stage.startsWith("focus_first_")||stage.equals("focus_presentation_done")?
+            o.answerNano==0?null:TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-o.answerNano):null);
+        row.put("clockDomain","server_monotonic");row.put("hardwareRenderedObserved",false);
+        row.put("evidenceBoundary",stage.equals("focus_first_visible")||stage.equals("focus_presentation_done")?"dom_callback_only":"server_boundary");
+        if(stage.equals("focus_terminal"))row.put("answerModel",o.modelDiagnostic);
+        return Collections.unmodifiableMap(row);
+    }
+    private Map<String,Object> terminalDiagnostic(Slot s,Observation o,String outcome,String reason){
+        if(o==null||o.terminalRecorded)return null;
+        o.terminalRecorded=true;return diagnostic(s,o,"focus_terminal",outcome,reason);
+    }
+    private Map<String,Object> closedDiagnostic(Slot s,String reason){
+        var o=s.observation;if(o==null||o.closedRecorded)return null;
+        o.closedRecorded=true;return diagnostic(s,o,"focus_lifecycle_closed",reason.endsWith("timeout")?"timeout":"closed",reason);
+    }
+    private void emitDiagnostic(Map<String,Object> row,String where){
+        if(row==null||debugEvents==null)return;
+        try{
+            diagnosticWriter.execute(()->{
+                try{
+                    var packet=new LinkedHashMap<String,Object>(row);
+                    packet.put("diagnosticDropped",diagnosticDropped.get());packet.put("diagnosticFailed",diagnosticFailed.get());
+                    String fingerprint=String.valueOf(row.get("serverInstanceHash"))+row.get("ownerHash")+row.get("sessionHash")+
+                        row.get("requestHash")+row.get("stage")+row.get("outcome");
+                    debugEvents.emit(com.example.lms.debug.DebugProbeType.ORCHESTRATION,com.example.lms.debug.DebugEventLevel.INFO,
+                        fingerprint,"[AWX][nova-focus] "+row.get("stage"),where,packet,null);
+                }catch(RuntimeException unavailable){diagnosticFailed.incrementAndGet();}
+            });
+        }catch(RejectedExecutionException full){diagnosticDropped.incrementAndGet();}
     }
     @Autowired public NovaFocusService(NovaFocusHistoryService history,ObjectProvider<NovaFocusAnswer> answers,PublicChatAdmissionGuard admission){
         this(history,answers,admission,monotonicClock());
@@ -143,11 +205,25 @@ public class NovaFocusService implements AutoCloseable {
         var s=owned(owner,assistId,epoch);if(memories==null)throw new IllegalStateException("focus_memory_unavailable");
         synchronized(s){memories.delete(owner,s.channel,source,revision,consent);cancel(s,"memory_changed");}
     }
+    /** Request identity is not known at open; the session-level start row carries only boundary hashes. */
+    private Map<String,Object> startDiagnostic(Slot s){
+        var row=new LinkedHashMap<String,Object>();
+        row.put("stage","focus_started");row.put("outcome","open");row.put("reasonCode","none");
+        row.put("observedAtMs",clock.millis());
+        row.put("ownerHash",hash(s.owner));row.put("sessionHash",hash(s.assistId));row.put("serverInstanceHash",hash(server));
+        row.put("epoch",s.epoch);row.put("currentEpoch",s.epoch);
+        row.put("clockDomain","server_monotonic");row.put("hardwareRenderedObserved",false);
+        row.put("evidenceBoundary","server_boundary");
+        return Collections.unmodifiableMap(row);
+    }
     public NovaFocusState.View open(String owner,String assistId,long epoch,String target) {
         var s=owned(owner,assistId,epoch);
         if(answers.getIfAvailable()==null)throw new IllegalStateException("focus_answer_unavailable");
         Long room=history.open(owner,s.channel);
-        synchronized(s){s.room=room;s.state.open(clock.millis(),target);s.lastSeen=clock.millis();return s.state.view(clock.millis());}
+        Map<String,Object> started;NovaFocusState.View view;
+        synchronized(s){s.room=room;s.state.open(clock.millis(),target);s.lastSeen=clock.millis();started=startDiagnostic(s);view=s.state.view(clock.millis());}
+        emitDiagnostic(started,"NovaFocusService.open");
+        return view;
     }
     public void input(String owner,String assistId,long epoch,String request,String text){
         var s=owned(owner,assistId,epoch);synchronized(s){
@@ -229,7 +305,8 @@ public class NovaFocusService implements AutoCloseable {
     public Map<String,Object> diagnostics(String owner,String assistId,long epoch){
         var s=owned(owner,assistId,epoch);synchronized(s){var result=new LinkedHashMap<>(s.state.diagnostics());result.put("busy",s.busy);
             pruneTranscript(s,clock.millis());result.put("recentFinalCount",s.finalized.size());result.put("contextEpoch",s.contextEpoch);
-            result.put("answerModel",s.answerDiagnostics);return Map.copyOf(result);}
+            result.put("answerModel",s.answerDiagnostics);result.put("diagnosticDropped",diagnosticDropped.get());
+            result.put("diagnosticFailed",diagnosticFailed.get());return Map.copyOf(result);}
     }
     public NovaFocusState.View view(String owner,String assistId,long epoch){
         var s=sessions.get(assistId);if(s==null||!s.owner.equals(owner)||s.epoch!=epoch)return null;
@@ -247,6 +324,8 @@ public class NovaFocusService implements AutoCloseable {
         var s=sessions.remove(assistId);if(s!=null)synchronized(s){cancel(s,reason);clearTranscript(s);}
     }
     private void cancel(Slot s,String reason){
+        emitDiagnostic(terminalDiagnostic(s,s.observation,"cancelled",reason),"NovaFocusService.cancel");
+        emitDiagnostic(closedDiagnostic(s,reason),"NovaFocusService.cancel");
         s.preparedContext=null;s.preparedRequestId=null;
         s.answerDiagnostics=Map.of();
         s.recent.clear();
@@ -260,8 +339,15 @@ public class NovaFocusService implements AutoCloseable {
     /** Receipt ticket grants exactly these two transitions, no owner or input authority. */
     public boolean rendered(Receipt r){
         if(r==null||r.renderReceiptTicket()==null||!r.renderReceiptTicket().matches("[a-f0-9]{64}")||r.event()==null||!Set.of("first_visible","presentation_done").contains(r.event()))return false;
-        for(var s:scopes.values())synchronized(s){
-            if(s.state.receipt(r.serverInstanceId(),r.activationId(),r.turnId(),r.answerVersion(),r.renderReceiptTicket(),r.event(),clock.millis()))return true;
+        for(var s:scopes.values()){
+            Map<String,Object> event=null;boolean accepted;
+            synchronized(s){
+                long version=s.state.view(clock.millis()).stateVersion();
+                accepted=s.state.receipt(r.serverInstanceId(),r.activationId(),r.turnId(),r.answerVersion(),r.renderReceiptTicket(),r.event(),clock.millis());
+                if(accepted&&s.state.view(clock.millis()).stateVersion()!=version)
+                    event=diagnostic(s,s.observation,"focus_"+r.event(),"success","none");
+            }
+            emitDiagnostic(event,"NovaFocusService.rendered");if(accepted)return true;
         }
         return false;
     }
@@ -270,56 +356,68 @@ public class NovaFocusService implements AutoCloseable {
         for(var s:scopes.values()){
             NovaFocusState.Request request;
             NovaFocusHistoryService.Context context=null;
+            Observation observation=null;Map<String,Object> confirmed=null,terminal=null,closed=null;
             synchronized(s){
                 boolean was=s.state.active();request=s.state.tick(now,!s.busy,s.settingsVersion);
-                if(was&&!s.state.active())cancel(s,s.state.view(now).reason());
+                if(was&&!s.state.active()){
+                    String reason=s.state.view(now).reason();
+                    terminal=terminalDiagnostic(s,s.observation,reason.endsWith("timeout")?"timeout":"cancelled",reason);
+                    closed=closedDiagnostic(s,reason);
+                    cancel(s,reason);
+                }
                 pruneTranscript(s,now);
                 var accepted=request==null?s.state.pendingQuestion():request;
                 if(accepted!=null&&!Objects.equals(s.preparedRequestId,accepted.requestId())){
                     s.answerDiagnostics=Map.of();
+                    s.observation=new Observation(s,server,accepted,now);
+                    confirmed=diagnostic(s,s.observation,"focus_question_confirmed","accepted","none");
                     var sourceIds=accepted.sourceIds();
                     s.preparedContext=new NovaFocusHistoryService.Context(List.copyOf(s.recent),"",List.of(),
                         s.finalized.values().stream().filter(t->!sourceIds.contains(t.sourceId())).toList(),
-                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled(),accepted.webSearchEnabled(),accepted.reasoningPreset());
+                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled(),accepted.webSearchEnabled(),accepted.reasoningPreset(),
+                        s.state.settings.effectiveAnswerInstruction(),s.state.settings.effectiveAnswerPreset());
                     s.preparedRequestId=accepted.requestId();
                 }
                 if(request!=null){
                     s.busy=true;context=s.preparedContext;
+                    observation=s.observation;
                     s.preparedContext=null;s.preparedRequestId=null;
                 }
             }
             final var acceptedContext=context;
-            if(request!=null)try{workers.execute(()->generate(s,request,acceptedContext));}
-            catch(RejectedExecutionException full){synchronized(s){s.busy=false;s.state.failed(request,"focus_busy");}}
+            final var acceptedObservation=observation;
+            emitDiagnostic(confirmed,"NovaFocusService.maintain");
+            if(request!=null)try{workers.execute(()->generate(s,request,acceptedContext,acceptedObservation));}
+            catch(RejectedExecutionException full){synchronized(s){s.busy=false;terminal=terminalDiagnostic(s,observation,"rejected","focus_busy");s.state.failed(request,"focus_busy");}}
+            emitDiagnostic(terminal,"NovaFocusService.maintain");
+            emitDiagnostic(closed,"NovaFocusService.maintain");
         }
     }
-    private void generate(Slot s,NovaFocusState.Request request,NovaFocusHistoryService.Context memory){
+    private void generate(Slot s,NovaFocusState.Request request,NovaFocusHistoryService.Context memory,Observation observation){
         com.example.lms.search.TraceStore.clear();
-        String id=null;PublicChatAdmissionGuard.Lease lease=null;
+        String id=null;PublicChatAdmissionGuard.Lease lease=null;Map<String,Object> terminal=null;
         try{
             var adapter=answers.getIfAvailable();if(adapter==null)throw new IllegalStateException("focus_answer_unavailable");
             lease=admission.tryAcquire(s.owner).orElseThrow(PublicChatAdmissionGuard::rejection);
-            synchronized(s){if(!s.state.accepts(request))return;}
+            synchronized(s){if(!s.state.accepts(request)){terminal=terminalDiagnostic(s,observation,"cancelled","focus_request_stale");return;}}
             var accepted=history.accept(s.owner,s.channel,request.activationId(),request.requestId(),request.question());id=accepted.turnId();
             synchronized(s){
                 s.room=accepted.chatSessionId();s.pendingTurn=id;
-                if(!s.state.accepts(request)){history.terminal(s.owner,s.channel,id,"CANCELLED",null);return;}
-                if(!accepted.created()){s.state.failed(request,"focus_request_already_accepted");return;}
+                if(!s.state.accepts(request)){terminal=terminalDiagnostic(s,observation,"cancelled","focus_request_stale");history.terminal(s.owner,s.channel,id,"CANCELLED",null);return;}
+                if(!accepted.created()){terminal=terminalDiagnostic(s,observation,"rejected","focus_request_already_accepted");s.state.failed(request,"focus_request_already_accepted");return;}
                 s.state.accepted(request,id);
+                if(observation!=null)observation.turnHash=hash(id);
             }
+            Map<String,Object> started;synchronized(s){started=diagnostic(s,observation,"focus_generation_started","attempted","none");}
+            emitDiagnostic(started,"NovaFocusService.generate");
             FocusMemoryScope scope;
             synchronized(s){scope=memories==null?null:memories.scope(s.owner,s.channel);}
-            var result=adapter.answerResult(accepted.chatSessionId(),request.question(),request.imageBase64(),request.imageMediaType(),memory,scope,()->{synchronized(s){return s.state.accepts(request);}},text->{
-                synchronized(s){
-                    if(!s.state.accepts(request)||s.settingsVersion!=request.settingsVersion()||(memories!=null&&!memories.current(scope)))
-                        throw new java.util.concurrent.CancellationException("focus_stream_cancelled");
-                    s.state.foldPartial(request,accepted.turnId(),text);
-                }
-            });
+            var result=answerWithRetry(s,request,accepted,memory,scope,observation,adapter);
             String answer=result.text();
             synchronized(s){
-                if(!s.state.accepts(request)){history.terminal(s.owner,s.channel,id,"CANCELLED",null);return;}
-                if(memories!=null&&!memories.current(scope)){history.terminal(s.owner,s.channel,id,"CANCELLED",null);s.state.close("memory_changed");return;}
+                if(observation!=null)observation.modelDiagnostic=NovaFocusAnswerService.diagnosticTrace();
+                if(!s.state.accepts(request)){terminal=terminalDiagnostic(s,observation,"cancelled","focus_request_stale");history.terminal(s.owner,s.channel,id,"CANCELLED",null);return;}
+                if(memories!=null&&!memories.current(scope)){terminal=terminalDiagnostic(s,observation,"cancelled","memory_changed");history.terminal(s.owner,s.channel,id,"CANCELLED",null);s.state.close("memory_changed");return;}
                 s.answerDiagnostics=NovaFocusAnswerService.diagnosticTrace();
                 if(!s.state.foldPrefixMatches(answer))throw new IllegalStateException("focus_stream_final_mismatch");
                 if(history.terminal(s.owner,s.channel,id,"COMPLETED",answer)){
@@ -327,26 +425,114 @@ public class NovaFocusService implements AutoCloseable {
                         NovaFocusHistoryService.memoryClip(request.question(),350),NovaFocusHistoryService.memoryClip(answer,350)));
                     while(s.recent.size()>2)s.recent.removeFirst();
                     byte[] bytes=new byte[32];random.nextBytes(bytes);
-                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis(),result.grounding());
-                }else s.state.failed(request,"focus_outcome_unknown");
+                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis(),result.grounding(),result.modelOutcome());
+                    var published=s.state.view(clock.millis());
+                    boolean answerReady="ANSWER_READY".equals(published.phase())&&Objects.equals(id,published.turnId());
+                    if(answerReady&&observation!=null)observation.answerNano=System.nanoTime();
+                    terminal=terminalDiagnostic(s,observation,answerReady?"success":"error",answerReady?"none":published.reason());
+                }else {terminal=terminalDiagnostic(s,observation,"unknown","focus_outcome_unknown");s.state.failed(request,"focus_outcome_unknown");}
             }
         }catch(RuntimeException failure){
             synchronized(s){
+                if(observation!=null){observation.modelDiagnostic=NovaFocusAnswerService.diagnosticTrace();
+                    observation.failureExceptionClass=failure.getClass().getSimpleName();
+                    observation.failureRootClass=rootCauseClass(failure);}
                 if(s.state.accepts(request))s.answerDiagnostics=NovaFocusAnswerService.diagnosticTrace();
-                if(id!=null)try{history.terminal(s.owner,s.channel,id,"OUTCOME_UNKNOWN",null);}catch(RuntimeException unavailable){}
+                if(id!=null)try{history.terminal(s.owner,s.channel,id,failure instanceof java.util.concurrent.CancellationException?"CANCELLED":"OUTCOME_UNKNOWN",null);}catch(RuntimeException unavailable){}
                 String reason=failure instanceof PublicChatAdmissionGuard.Rejection?"focus_busy":"focus_answer_unavailable";
                 if(java.util.Set.of("focus_grounding_publication_held","focus_search_off","focus_search_quick","focus_search_image_unsupported",
                         "focus_search_model_required","focus_search_unsupported","focus_search_not_observed","focus_search_model_mismatch",
                         "focus_search_attribution_unavailable","focus_stream_final_mismatch","focus_stream_cancelled").contains(java.util.Objects.toString(failure.getMessage(),"")))reason=failure.getMessage();
                 if(request.answerSelection().routing()!=null&&request.answerSelection().routing().executionTarget()==NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY
                         &&failure instanceof com.example.lms.llm.ModelSelectionException known)reason="focus_search_"+known.code();
+                String diagnosticReason=focusReasonCode(failure,reason);
+                String outcome="backend_timeout".equals(diagnosticReason)||"llm_timeout".equals(diagnosticReason)?"timeout":failure instanceof java.util.concurrent.CancellationException?"cancelled":"error";
+                terminal=terminalDiagnostic(s,observation,outcome,diagnosticReason);
+                if(terminal!=null&&observation!=null&&observation.failureExceptionClass!=null){
+                    var packet=new LinkedHashMap<String,Object>(terminal);
+                    packet.put("exceptionClass",observation.failureExceptionClass);
+                    packet.put("exceptionRootClass",observation.failureRootClass);
+                    terminal=Collections.unmodifiableMap(packet);
+                }
                 s.state.failed(request,reason);
                 if(!s.state.active())s.recent.clear();
             }
-        }finally{com.example.lms.search.TraceStore.clear();if(lease!=null)lease.close();synchronized(s){s.pendingTurn=null;s.busy=false;}}
+        }finally{com.example.lms.search.TraceStore.clear();if(lease!=null)lease.close();synchronized(s){s.pendingTurn=null;s.busy=false;}
+            emitDiagnostic(terminal,"NovaFocusService.generate");}
+    }
+    /**
+     * One bounded second attempt so a single provider/runtime failure cannot close Focus
+     * before the configured fallback chain has run. Each attempt re-enters the adapter
+     * (fresh run + request time budget); {@code accepts()} is the live generationUntil
+     * guard and a published partial pins the first stream, so no retry is allowed then.
+     */
+    private NovaFocusAnswer.Result answerWithRetry(Slot s,NovaFocusState.Request request,NovaFocusHistoryService.Accepted accepted,
+            NovaFocusHistoryService.Context memory,FocusMemoryScope scope,Observation observation,NovaFocusAnswer adapter){
+        for(int attempt=1;;attempt++){
+            Map<String,Object> row;
+            synchronized(s){
+                if(!s.state.accepts(request))throw new java.util.concurrent.CancellationException("focus_request_stale");
+                row=diagnostic(s,observation,"focus_model_attempt","attempted","none");
+                if(row!=null){var packet=new LinkedHashMap<String,Object>(row);packet.put("attempt",attempt);row=Collections.unmodifiableMap(packet);}
+            }
+            emitDiagnostic(row,"NovaFocusService.generate");
+            try{
+                return adapter.answerResult(accepted.chatSessionId(),request.question(),request.imageBase64(),request.imageMediaType(),memory,scope,()->{synchronized(s){return s.state.accepts(request);}},text->{
+                    synchronized(s){
+                        if(!s.state.accepts(request)||(memories!=null&&!memories.current(scope)))
+                            throw new java.util.concurrent.CancellationException("focus_stream_cancelled");
+                        s.state.foldPartial(request,accepted.turnId(),text);
+                    }
+                });
+            }catch(RuntimeException failure){
+                synchronized(s){if(observation!=null)observation.modelDiagnostic=NovaFocusAnswerService.diagnosticTrace();}
+                Map<String,Object> failed;
+                synchronized(s){
+                    failed=diagnostic(s,observation,"focus_model_attempt","failed",focusReasonCode(failure,null));
+                    if(failed!=null){var packet=new LinkedHashMap<String,Object>(failed);packet.put("attempt",attempt);packet.put("exceptionClass",failure.getClass().getSimpleName());failed=Collections.unmodifiableMap(packet);}
+                }
+                emitDiagnostic(failed,"NovaFocusService.generate");
+                boolean partialPublished,memoriesCurrent;
+                synchronized(s){partialPublished=s.state.view(clock.millis()).answerVersion()>0;memoriesCurrent=memories==null||memories.current(scope);}
+                if(attempt>=2||partialPublished||!memoriesCurrent||!focusRetryable(failure))throw failure;
+            }
+        }
+    }
+    /** Deterministic Focus outcomes and cancelled/non-retryable selections never gain a second attempt. */
+    private static boolean focusRetryable(Throwable failure){
+        if(failure instanceof PublicChatAdmissionGuard.Rejection||failure instanceof java.util.concurrent.CancellationException)return false;
+        String message=Objects.toString(failure.getMessage(),"");
+        if(message.startsWith("focus_"))return false;
+        if(failure instanceof com.example.lms.llm.ModelSelectionException known)
+            return Set.of("backend_timeout","backend_unavailable").contains(known.code());
+        return com.example.lms.llm.LlmErrorClassifier.classify(failure).retryable();
+    }
+    /** Safe reason code for the terminal diagnostic; raw exception messages stay out. */
+    private static String focusReasonCode(Throwable failure,String fallback){
+        if(failure instanceof PublicChatAdmissionGuard.Rejection)return fallback!=null?fallback:"focus_busy";
+        if(failure instanceof com.example.lms.llm.ModelSelectionException known)return known.code();
+        String message=Objects.toString(failure.getMessage(),"");
+        if(message.matches("[a-z][a-z0-9_]{0,63}")&&message.startsWith("focus_"))return message;
+        return switch(com.example.lms.llm.LlmErrorClassifier.classify(failure).code()){
+            case "TIMEOUT"->"llm_timeout";
+            case "RATE_LIMIT"->"llm_rate_limited";
+            case "UPSTREAM_5XX"->"llm_upstream_5xx";
+            case "BLANK_RESPONSE"->"evidence_empty";
+            case "AUTH"->"llm_auth_failed";
+            case "MODEL_NOT_FOUND","MODEL_REQUIRED","HTTP_4XX"->"no_model_allowed";
+            case "NON_REPLAYABLE"->"llm_non_replayable";
+            case "CANCELLED","INTERRUPTED"->"focus_cancelled";
+            default->"llm_failed_unknown";
+        };
+    }
+    private static String rootCauseClass(Throwable failure){
+        Throwable root=failure;int hops=0;
+        while(root.getCause()!=null&&root.getCause()!=root&&hops++<8)root=root.getCause();
+        return root.getClass().getSimpleName();
     }
     @Override @PreDestroy public void close(){
         timer.shutdownNow();workers.shutdownNow();
+        diagnosticWriter.shutdown();
         for(var s:scopes.values())synchronized(s){s.recent.clear();clearTranscript(s);s.state.close("server_shutdown");}
         sessions.clear();scopes.clear();
     }

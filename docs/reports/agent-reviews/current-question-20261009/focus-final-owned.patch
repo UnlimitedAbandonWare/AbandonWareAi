@@ -1,0 +1,478 @@
+--- a/main/resources/static/assets/display/display-focus-controls.js
++++ b/main/resources/static/assets/display/display-focus-controls.js
+@@ -117,7 +117,7 @@
+         for(const row of rows.filter(value=>value.selectable===true))add(row.id,row.provider+' · '+row.id);
+         if(selected&&!rows.some(row=>row.id===selected&&row.selectable===true)){
+           const unavailable=rows.some(row=>row.id===selected&&row.selectable===false);
+-          add(selected,'저장된 선택 · '+selected+(unavailable?' (현재 선택 불가)':' (현재 사용 가능 여부 미확인)'),unavailable);
++          add(selected,'저장된 선택 · '+selected+(unavailable?' (현재 선택 불가)':' (현재 사용 가능 여부 미확인)'),true);
+         }
+         input.value=selected;
+       }
+@@ -131,20 +131,21 @@
+       settingsEdits++;modelStatus();$('nf-status').textContent='모델 전환 설정을 저장하면 다음 질문부터 적용합니다.';
+     };
+     if($('nf-general-mode'))$('nf-general-mode').onclick=()=>{$('nf-answer-target').value='AUTO';settingsEdits++;modelStatus();$('nf-status').textContent='일반 자동 모드로 전환할 설정입니다. 저장 후 다음 질문부터 적용합니다.';};
+-    // 메인 모델 프리셋: 카탈로그에서 선택 가능한 경로를 우선 찾고 없으면 라우트 기본값을 쓴다. 클릭은 편집값만 바꾸고 저장 전 전송은 없다.
++    // 메인 모델 프리셋: 카탈로그에서 선택 가능한 경로만 사용한다. 클릭은 편집값만 바꾸고 저장 전 전송은 없다.
+     const presetSay=text=>{const e=$('nf-preset-status');if(e)e.textContent=text;};
+-    function presetModel(res,fallback){
+-      for(const re of res){const hit=catalogRows.find(row=>re.test(row.id)&&row.selectable===true)||catalogRows.find(row=>re.test(row.id));if(hit)return hit.id;}
+-      return fallback;
++    function presetModel(res){
++      for(const re of res){const hit=catalogRows.find(row=>re.test(row.id)&&row.selectable===true);if(hit)return hit.id;}
++      return null;
+     }
+     function presetApply(target,model,webSearch,text){
++      if(model===null){presetSay("선택 가능한 모델이 없습니다. 기존 선택을 유지합니다.");return;}
+       if($('nf-answer-target'))$('nf-answer-target').value=target;
+       if($('nf-answer-model')){const selections={};for(const id of modelInputs)selections[id]=id==='nf-answer-model'?model:($(id)?.value||'');modelOptions(catalogRows,selections);}
+       if(webSearch!==null&&$('nf-web-search'))$('nf-web-search').value=webSearch;
+       settingsEdits++;modelStatus();presetSay(text);
+     }
+-    if($('nf-preset-luna'))$('nf-preset-luna').onclick=()=>presetApply('API_ONLY',presetModel([/openai-economy/i,/luna/i],'llmrouter.openai-economy'),'false','루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+-    if($('nf-preset-gemini'))$('nf-preset-gemini').onclick=()=>presetApply('GEMINI_WEBSEARCH_ONLY',presetModel([/gemini-pro/i,/gemini/i],'llmrouter.gemini-pro'),'true','제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
++    if($('nf-preset-luna'))$('nf-preset-luna').onclick=()=>presetApply('API_ONLY',presetModel([/^chatgpt-oauth:gpt-5\.6-luna$/i,/^chatgpt-oauth:.*luna/i]),'false','루나(Luna) 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
++    if($('nf-preset-gemini'))$('nf-preset-gemini').onclick=()=>presetApply('GEMINI_WEBSEARCH_ONLY',presetModel([/gemini-pro/i,/gemini/i]),'true','제미나이(Gemini) 웹검색 전용 모델이 선택되었습니다. 설정을 저장하면 다음 질문부터 적용됩니다.');
+     if($('nf-preset-auto'))$('nf-preset-auto').onclick=()=>presetApply('AUTO','',null,'자동 모드로 전환할 설정입니다. 저장하면 다음 질문부터 적용됩니다.');
+     async function loadModels(){
+       if(catalogLoaded||catalogBusy||!host.fetch||!$('nf-answer-model'))return;catalogBusy=true;
+--- a/src/test/js/display-focus-client.test.cjs
++++ b/src/test/js/display-focus-client.test.cjs
+@@ -258,7 +258,7 @@
+   assert.equal(element('nf-answer-model').value,'fixture-b');assert.equal(choice().disabled,false);
+   assert.doesNotMatch(choice().textContent,/현재 선택 불가|미확인/);
+   await reload([{id:'fixture-a',provider:'synthetic',selectable:true}]);
+-  assert.equal(element('nf-answer-model').value,'fixture-b');assert.match(choice().textContent,/미확인/);
++  assert.equal(element('nf-answer-model').value,'fixture-b');assert.match(choice().textContent,/미확인/);assert.equal(choice().disabled,true);
+   assert.match(element('nf-model-status').textContent,/미확인/);
+   assert.ok(calls.every(route=>route==='settings/read'));
+  }finally{controls.dispose();}
+@@ -308,24 +308,33 @@
+  const html=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../../main/resources/static/assets/display/index.html'),'utf8');
+  assert.match(html,/id="nf-preset-luna"/);assert.match(html,/id="nf-preset-gemini"/);assert.match(html,/id="nf-preset-auto"/);assert.match(html,/id="nf-preset-status"/);
+ });
+-test('Luna preset selects the economy API model and saves a FIXED API_ONLY selection',async()=>{
++test('Luna preset selects admitted OAuth only and leaves fields intact when OAuth is unavailable',async()=>{
+  const elements=new Map(),calls=[];
+  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
+  const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:true,presentation:{},
+   answerSelection:{mode:'AUTO',modelId:null,routing:{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]}}};
+- const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.openai-economy',provider:'synthetic',selectable:true},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
++ let available=true;
++ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.openai-economy',provider:'synthetic',selectable:false},{id:'chatgpt-oauth:gpt-5.6-luna',provider:'chatgpt-oauth',selectable:available},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
+  const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+  try{
+   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+   element('nf-preset-luna').onclick();
+-  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
++  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'chatgpt-oauth:gpt-5.6-luna');
+   assert.equal(element('nf-web-search').value,'false');assert.match(element('nf-preset-status').textContent,/루나/);
+   await element('nova-settings-form').onsubmit({preventDefault(){}});
+   const saved=calls.at(-1).body.settings;
+-  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'llmrouter.openai-economy');
++  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'chatgpt-oauth:gpt-5.6-luna');
+   assert.equal(saved.answerSelection.routing.executionTarget,'API_ONLY');assert.equal(saved.webSearchEnabled,false);
+   assert.equal(calls.filter(c=>c.route==='input').length,0);
+  }finally{controls.dispose();}
++ available=false;calls.length=0;
++ const blocked=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(){return {settingsVersion:1,settings};}}});
++ try{blocked.update({assistId:'s2',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
++ const prior=[element('nf-answer-model').value,element('nf-answer-target').value,element('nf-web-search').value];
++ element('nf-preset-luna').onclick();
++ assert.deepEqual([element('nf-answer-model').value,element('nf-answer-target').value,element('nf-web-search').value],prior);
++ assert.match(element('nf-preset-status').textContent,/선택 가능한.*없/);assert.equal(calls.length,0);
++ }finally{blocked.dispose();}
+ });
+ test('Gemini preset selects the dedicated websearch route, prefers the pro route, and enables web search',async()=>{
+  const elements=new Map(),calls=[];
+@@ -348,7 +357,7 @@
+   assert.equal(saved.webSearchEnabled,true);
+  }finally{controls.dispose();}
+ });
+-test('auto preset restores server AUTO and presets still resolve without a catalog',async()=>{
++test('auto preset restores server AUTO while an unavailable Luna preset retains the selection',async()=>{
+  const elements=new Map(),calls=[];
+  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
+  const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:false,presentation:{},
+@@ -358,7 +367,8 @@
+  try{
+   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+   element('nf-preset-luna').onclick();
+-  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
++  assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-model').value,'');
++  assert.match(element('nf-preset-status').textContent,/선택 가능한.*없/);
+   element('nf-preset-auto').onclick();
+   assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-model').value,'');
+   assert.match(element('nf-preset-status').textContent,/자동/);
+@@ -368,3 +378,16 @@
+   assert.equal(saved.answerSelection.routing.executionTarget,'AUTO');assert.equal(saved.webSearchEnabled,false);
+  }finally{controls.dispose();}
+ });
++
++
++test('late Focus input response cannot replace a newer epoch or fallback banner',async()=>{
++ const id='12345678-1234-4234-8234-123456789abc',timers=new Map();let n=0,epoch=1,complete;
++ const current={active:true,phase:'ANSWER_READY',serverInstanceId:'boot',activationId:'new',turnId:'new-turn',stateVersion:1,answerVersion:1,draftText:'',questionText:'',answerText:'normal',idleRemainingMs:0,renderTarget:'fold',isFallback:false};
++ const snapshot=()=>({assistId:id,epoch,ready:true,version:1,caption:null,card:null,captionTtlMs:0,cardTtlMs:0,audioAvailable:false,audioState:'READY',hintsEnabled:false,role:'STANDALONE',focus:current});
++ const client=createClient({transcription:true,standalone:true,setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:id=>timers.delete(id),fetchImpl:async(url)=>{
++ if(url.endsWith('/focus/input'))return new Promise(resolve=>complete=()=>resolve({ok:true,json:async()=>({...current,stateVersion:99,activationId:'old',isFallback:true})}));
++ return {ok:true,json:async()=>snapshot()};}});
++ try{client.start();await flush();const pending=client.focusRequest('input',{requestId:'fixture',text:'synthetic'});await flush();epoch=2;await client.reconnect();complete();await assert.rejects(pending,/focus_session_stale/);assert.equal(client.state.epoch,2);assert.equal(client.state.focus.isFallback,false);}
++ finally{client.dispose();}
++});
++
+--- a/main/java/com/example/lms/assist/novafocusanswer.java
++++ b/main/java/com/example/lms/assist/novafocusanswer.java
+@@ -2,7 +2,11 @@
+ 
+ /** Internal adapter: never exposed as a client-supplied history/model request. */
+ public interface NovaFocusAnswer {
+-    record Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding) {
++    record ModelOutcome(String requestedModel,String effectiveRoute,String effectiveModel,boolean isFallback,String reasonCode,String originalError) {
++        @Override public String toString(){return "FocusModelOutcome[redacted]";}
++    }
++    record Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,ModelOutcome modelOutcome) {
++        public Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){this(text,grounding,null);}
+         @Override public String toString(){return "NovaFocusResult[redacted]";}
+     }
+     default Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context context,FocusMemoryScope scope,java.util.function.BooleanSupplier current){
+--- a/main/java/com/example/lms/assist/novafocusanswerservice.java
++++ b/main/java/com/example/lms/assist/novafocusanswerservice.java
+@@ -1,6 +1,7 @@
+ package com.example.lms.assist;
+ 
+ import com.example.lms.api.PublicRequestBudgetGuard;
++import com.example.lms.api.PublicChatAdmissionGuard;
+ import com.example.lms.dto.ChatRequestDto;
+ import com.example.lms.gptsearch.decision.SearchDecisionService;
+ import com.example.lms.gptsearch.dto.SearchMode;
+@@ -233,7 +234,7 @@
+             if(run.foldHasPublished())answer=answer.stripLeading();
+             run.requireFoldPrefix(answer);
+             terminal="success";terminalModel=result.modelUsed();
+-            return new Result(answer,grounded?grounding:null);
++            return new Result(answer,grounded?grounding:null,new ModelOutcome(request.getModel(),completed.selectedModel(),result.modelUsed(),completed.fallbackCount()>0,completed.fallbackReason(),completed.originalError()));
+         }catch(java.util.concurrent.CancellationException cancelled){terminal="cancelled";throw cancelled;
+         }catch(ModelSelectionException failure){if("backend_timeout".equals(failure.code()))terminal="timeout";else if("request_cancelled".equals(failure.code()))terminal="cancelled";throw failure;
+         }finally{
+@@ -493,19 +494,20 @@
+         if(StringUtils.hasText(defaultModel)&&preferred==null)return defaultModel;
+         throw new ModelSelectionException("model_request_invalid");
+     }
+-    private record ModelAnswer(ChatResult result,String text,String selectedModel,int fallbackCount,String fallbackReason){
++    private record ModelAnswer(ChatResult result,String text,String selectedModel,int fallbackCount,String fallbackReason,String originalError){
+         @Override public String toString(){return "FocusModelAnswer[redacted]";}
+     }
+     private static void requireCurrent(java.util.function.BooleanSupplier current){
+         if(!current.getAsBoolean())throw new java.util.concurrent.CancellationException("focus_closed");
+         ChatRunExecutionContext.throwIfCancelled();ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
+     }
+-    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason,boolean searchRetryAllowed){
++    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason,String originalError,boolean searchRetryAllowed){
+         requireCurrent(current);
+         ChatResult result;
+         try{
+             result=chat.continueChat(request,null,context);
+         }catch(ModelSelectionException|java.util.concurrent.CancellationException failure){throw failure;
++        }catch(IllegalArgumentException|PublicRequestBudgetGuard.Rejection|PublicChatAdmissionGuard.Rejection failure){throw failure;
+         }catch(RuntimeException failure){
+             // Same-model parametric recovery: a transient search/grounding failure on a
+             // web-enabled call must not cascade into model fallback or stall the lens.
+@@ -524,18 +526,18 @@
+             answer=result.content();
+             if(answer!=null&&!answer.isBlank())answer="사진 분석 모델이 준비되지 않아 사진 없이 답변합니다.\n\n"+answer;
+         }
+-        return new ModelAnswer(result,answer,request.getModel(),fallbacks,reason);
++        return new ModelAnswer(result,answer,request.getModel(),fallbacks,reason,originalError);
+     }
+     private ModelAnswer executeModels(ChatRequestDto request,ChatConversationContext context,NovaFocusSettings.AnswerSelection selection,
+                                       java.util.function.BooleanSupplier current,boolean memoryEnabled){
+         var entryBudget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+         if(entryBudget!=null&&entryBudget.remainingMillis()<2000)throw new java.util.concurrent.CancellationException("focus_budget_exhausted");
+         var policy=selection.routing();
+-        if(policy==null)return callModel(request,context,current,0,"none",true);
++        if(policy==null)return callModel(request,context,current,0,"none",null,true);
+         var ids=new LinkedHashSet<String>();ids.add(request.getModel());
+         boolean fallbackAllowed=policy.effectiveFallbackAllowed();
+         if(fallbackAllowed)ids.addAll(policy.allowedFallbackIds());
+-        int index=0,fallbacks=0;String reason="none";RuntimeException last=null;
++        int index=0,fallbacks=0;String reason="none",originalError=null;RuntimeException last=null;
+         for(String id:ids){
+             requireCurrent(current);
+             boolean backup=index++>0;
+@@ -549,23 +551,24 @@
+                 var projected=attempt.toBuilder().message(request.getMessage()+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
+                 budgets.validateChatProjected(projected,PlanHints.empty("nova-focus"),Boolean.TRUE.equals(request.isUseWebSearch()),memoryEnabled);
+                 if(backup)fallbacks++;
+-                return callModel(attempt,context,current,fallbacks,reason,
++                return callModel(attempt,context,current,fallbacks,reason,originalError,
+                         policy.executionTarget()!=NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY);
+             }catch(ModelSelectionException failure){
+                 requireCurrent(current);last=failure;
+-                if("none".equals(reason))reason=failure.code();
++                if("none".equals(reason)){reason=failure.code();originalError="ModelSelectionException";}
+                 com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",reason);
+                 com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",fallbacks);
+                 var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+                 if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!fallbackAllowed||Set.of("request_cancelled","model_request_invalid").contains(failure.code())
+                         ||budget!=null&&budget.remainingMillis()<2000)throw failure;
+             }catch(java.util.concurrent.CancellationException failure){throw failure;
++            }catch(IllegalArgumentException|PublicRequestBudgetGuard.Rejection|PublicChatAdmissionGuard.Rejection failure){throw failure;
+             }catch(RuntimeException failure){
+                 // Provider/runtime failure on this candidate must not end Focus while
+                 // another policy-allowed model remains and the failure is retryable.
+                 requireCurrent(current);last=failure;
+                 var classified=com.example.lms.llm.LlmErrorClassifier.classify(failure);
+-                if("none".equals(reason))reason=classified.code().toLowerCase(java.util.Locale.ROOT);
++                if("none".equals(reason)){reason=classified.code().toLowerCase(java.util.Locale.ROOT);String type=failure.getClass().getSimpleName();originalError=type.matches("[A-Za-z][A-Za-z0-9_]{0,63}")?type:"RuntimeException";}
+                 com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",reason);
+                 com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",fallbacks);
+                 var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+--- a/main/java/com/example/lms/assist/novafocusservice.java
++++ b/main/java/com/example/lms/assist/novafocusservice.java
+@@ -424,7 +424,7 @@
+                         NovaFocusHistoryService.memoryClip(request.question(),350),NovaFocusHistoryService.memoryClip(answer,350)));
+                     while(s.recent.size()>2)s.recent.removeFirst();
+                     byte[] bytes=new byte[32];random.nextBytes(bytes);
+-                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis(),result.grounding());
++                    s.state.answer(request,id,answer,HexFormat.of().formatHex(bytes),clock.millis(),result.grounding(),result.modelOutcome());
+                     var published=s.state.view(clock.millis());
+                     boolean answerReady="ANSWER_READY".equals(published.phase())&&Objects.equals(id,published.turnId());
+                     if(answerReady&&observation!=null)observation.answerNano=System.nanoTime();
+--- a/main/java/com/example/lms/assist/novafocusstate.java
++++ b/main/java/com/example/lms/assist/novafocusstate.java
+@@ -33,7 +33,23 @@
+                 boolean active,String phase,String draftText,String questionText,String answerText,
+                 String renderTarget,String renderReceiptTicket,long idleRemainingMs,String reason,
+                 NovaFocusSettings.Presentation presentation,boolean answerTruncated,boolean hasMoreOnFold,int answerLengthChars,
+-                com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,boolean answerComplete) {
++                com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,boolean answerComplete,
++                @com.fasterxml.jackson.annotation.JsonIgnore NovaFocusAnswer.ModelOutcome modelOutcome) {
++        View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more,int length,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,boolean complete){
++            this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,length,grounding,complete,null);
++        }
++        @com.fasterxml.jackson.annotation.JsonProperty("requestedModel") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public String requestedModel(){return modelOutcome==null?null:modelOutcome.requestedModel();}
++        @com.fasterxml.jackson.annotation.JsonProperty("effectiveModel") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public String effectiveModel(){return modelOutcome==null?null:modelOutcome.effectiveModel();}
++        @com.fasterxml.jackson.annotation.JsonProperty("effectiveRoute") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public String effectiveRoute(){return modelOutcome==null?null:modelOutcome.effectiveRoute();}
++        @com.fasterxml.jackson.annotation.JsonProperty("isFallback") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public Boolean isFallback(){return modelOutcome==null?null:modelOutcome.isFallback();}
++        @com.fasterxml.jackson.annotation.JsonProperty("fallbackReasonCode") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public String fallbackReasonCode(){return modelOutcome==null?null:modelOutcome.reasonCode();}
++        @com.fasterxml.jackson.annotation.JsonProperty("originalError") @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
++        public String originalError(){return modelOutcome==null?null:modelOutcome.originalError();}
+         View(String server,String activation,String turn,long version,long answerVersion,boolean active,String phase,String draft,String question,String answer,String target,String ticket,long idle,String reason,NovaFocusSettings.Presentation presentation,boolean truncated,boolean more,int length,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){
+             this(server,activation,turn,version,answerVersion,active,phase,draft,question,answer,target,ticket,idle,reason,presentation,truncated,more,length,grounding,true);
+         }
+@@ -49,7 +65,7 @@
+         View forTarget(String surface){boolean lens="lens".equals(surface);
+             String visible=lens&&grounding!=null?"검색 답변은 휴대폰에서 확인하세요.":lens?NovaFocusAnswerService.lensText(answerText,answerComplete):answerText;
+             boolean clipped=answerTruncated||!Objects.equals(visible,answerText);
+-            return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars,lens?null:grounding,answerComplete);}
++            return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars,lens?null:grounding,answerComplete,lens?null:modelOutcome);}
+     }
+     final String server;
+     NovaFocusSettings settings;
+@@ -60,6 +76,7 @@
+     private String foldPartial="";
+     private boolean partialVersionReserved;
+     private com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding;
++    private NovaFocusAnswer.ModelOutcome modelOutcome;
+     private long version,answerVersion,listenUntil,wakeDeadline,generationUntil,presentationUntil,idleUntil;
+     private boolean inFlight,firstVisible,done,answerTruncated;
+     private int runAnswerLength=400;
+@@ -108,13 +125,13 @@
+         if(active())return;
+         activation=UUID.randomUUID().toString();target=renderTarget;phase="LISTENING";draft.clear();draftKeys.clear();
+         foldPartial="";partialVersionReserved=false;answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();wakeDeadline=now+WAKE_PREVIEW_LIMIT_MS;version++;
+-        grounding=null;
++        grounding=null;modelOutcome=null;
+         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
+     }
+     void close(String cause){
+         log.info("[AWX][nova-focus] close reason={} phase={} version={}",cause!=null&&cause.matches("[a-z][a-z0-9_]{0,63}")?cause:"unknown",phase,version+1);
+         phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+-        grounding=null;
++        grounding=null;modelOutcome=null;
+         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
+     private String key(ConversateQuestionPolicy.Utterance u){
+         String source=u.questionId()+":"+u.utteranceId();
+@@ -199,7 +216,7 @@
+             runPresentation=settings.effectivePresentation();
+             committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
+             draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";
+-            grounding=null;
++            grounding=null;modelOutcome=null;
+             if(snapshotEnabled()){
+                 pendingRequest=request;pendingCaptureId=newCaptureId();pendingCaptureSource=settings.snapshotOrDefault().source();
+                 claimedCaptureId=null;snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;
+@@ -277,10 +294,13 @@
+         answer(request,turnId,text,ticket,now,null);
+     }
+     void answer(Request request,String turnId,String text,String ticket,long now,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounded){
++        answer(request,turnId,text,ticket,now,grounded,null);
++    }
++    void answer(Request request,String turnId,String text,String ticket,long now,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounded,NovaFocusAnswer.ModelOutcome outcome){
+         if(!accepts(request)||!turnId.equals(turn))return;
+         if(grounded!=null&&(!grounded.publicationReady()||!Objects.equals(text,grounded.originalText()))){close("focus_grounding_publication_held");return;}
+         if(!foldPrefixMatches(text)){close("focus_stream_final_mismatch");return;}
+-        grounding=grounded;
++        grounding=grounded;modelOutcome=outcome;
+         inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);if(!partialVersionReserved)answerVersion++;foldPartial="";partialVersionReserved=false;receipt=ticket;phase="ANSWER_READY";reason="";
+         firstVisible=done=false;idleUntil=0;
+         presentationUntil=now+Math.max(120000,Math.min(1500000L,answer.codePointCount(0,answer.length())*(long)settings.presentation().charIntervalMs()+120000));
+@@ -294,7 +314,7 @@
+         if(!done){done=true;phase=draft.hasInput()?"LISTENING":"WAITING";idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
+     }
+     View view(long now){return new View(server,activation,turn,version,answerVersion,active(),phase,
+-        NovaFocusHistoryService.clip(draft.text(),2000),question,inFlight&&!foldPartial.isEmpty()?foldPartial:answer,grounding==null?target:"fold",receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength,grounding,!inFlight||foldPartial.isEmpty());}
++        NovaFocusHistoryService.clip(draft.text(),2000),question,inFlight&&!foldPartial.isEmpty()?foldPartial:answer,grounding==null?target:"fold",receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength,grounding,!inFlight||foldPartial.isEmpty(),modelOutcome);}
+     Map<String,Object> diagnostics(){var m=new LinkedHashMap<String,Object>();
+         m.put("active",active());m.put("phase",phase);m.put("stateVersion",version);m.put("answerVersion",answerVersion);
+         m.put("bufferedQuestions",draft.hasInput()?1:0);m.put("snapshotPending",phase.equals("SNAPSHOT")&&pendingRequest!=null);
+--- a/main/resources/static/assets/display/display-focus.js
++++ b/main/resources/static/assets/display/display-focus.js
+@@ -15,6 +15,11 @@
+     if(raw.renderTarget!=null&&!['lens','fold'].includes(raw.renderTarget))throw Error('invalid_focus');
+     if(raw.renderReceiptTicket!=null&&raw.renderReceiptTicket!==''&&!/^[a-f0-9]{64}$/.test(raw.renderReceiptTicket))throw Error('invalid_focus');
+     for(const field of ['answerTruncated','hasMoreOnFold'])if(raw[field]!=null&&typeof raw[field]!=='boolean')throw Error('invalid_focus');
++    if(raw.isFallback!=null&&typeof raw.isFallback!=='boolean')throw Error('invalid_focus');
++    if(raw.isFallback===true){
++      for(const field of ['requestedModel','effectiveModel'])if(typeof raw[field]!=='string'||raw[field].length>180||! /^[a-zA-Z0-9][a-zA-Z0-9._/:+-]*$/.test(raw[field]))throw Error('invalid_focus');
++      if(!/^[a-z][a-z0-9_]{0,63}$/.test(raw.fallbackReasonCode||'')||! /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(raw.originalError||''))throw Error('invalid_focus');
++    }
+     if(raw.grounding!=null){
+       const value=raw.grounding;
+       if(raw.renderTarget!=='fold'||typeof value.originalText!=='string'||!value.originalText||typeof value.model!=='string'
+@@ -28,13 +33,22 @@
+     let groundedKey='',groundedHost=null;
+     const keepalive=options.target==='fold';
+     let closeTimer=null,terminalKey='',terminalVisible=false,dismissedActivation='',lastDiagnostic='',scopeEndedActive=false;
++    let fallbackStatus=options.fallbackStatus||null;
++    function renderFallback(next){
++      const visible=keepalive&&next?.active&&next.isFallback===true&&!!next.answerText&&next.answerComplete!==false;
++      if(visible&&!fallbackStatus&&doc?.createElement&&panel?.append){
++        fallbackStatus=doc.createElement('div');fallbackStatus.setAttribute?.('role','status');
++        Object.assign(fallbackStatus.style,{padding:'8px',border:'1px solid #d69e2e',background:'#44351c',color:'#fff3cd'});panel.append(fallbackStatus);
++      }
++      if(fallbackStatus){fallbackStatus.hidden=!visible;fallbackStatus.textContent=visible?'요청 모델 '+next.requestedModel+' 실패 ('+next.fallbackReasonCode+') · 대체 모델 '+next.effectiveModel+'로 응답했습니다.':'';}
++    }
+     function cancelClose(){if(closeTimer!==null)host.clearTimeout?.(closeTimer);closeTimer=null;terminalVisible=false;}
+     function diagnostic(cause,hidden=false){
+       const key=cause+':'+hidden;if(key===lastDiagnostic)return;lastDiagnostic=key;
+       options.diagnostic?.(hidden?'hide_cause':'focus_visibility',{cause,hidden,stateVersion:current?.stateVersion||0,phase:current?.phase||'OFF'});
+     }
+     function dismiss(){
+-      dismissedActivation=current?.activationId||'';scopeEndedActive=false;cancelClose();clearGrounding();flow.accept(null);receipts.clear();
++      renderFallback(null);dismissedActivation=current?.activationId||'';scopeEndedActive=false;cancelClose();clearGrounding();flow.accept(null);receipts.clear();
+       if(panel)panel.hidden=true;
+     }
+     function contractError(){
+@@ -66,7 +80,7 @@
+     let flow=makeFlow();
+     function reset(){
+       scopeEndedActive=scopeEndedActive||!!current?.active&&dismissedActivation!==current.activationId;
+-      cancelClose();clearGrounding();receipts.clear();flow.dispose();flow=makeFlow();
++      renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();flow=makeFlow();
+       current=null;server='';version=-1;terminalKey='';dismissedActivation='';lastDiagnostic='';awaitingFresh=true;
+       if(panel)panel.hidden=true;if(options.draft)options.draft.textContent='';if(options.status)options.status.textContent='';
+     }
+@@ -128,7 +142,7 @@
+       if(next){server=next.serverInstanceId;version=next.stateVersion;}
+       if(keepalive&&!next?.active&&!next?.reason&&terminalKey){current=next||current;if(panel)panel.hidden=!terminalVisible;return false;}
+       const wasActive=!!current?.active||scopeEndedActive;if(next)scopeEndedActive=false;
+-      current=next;
++      current=next;renderFallback(next);
+       if(keepalive&&next?.activationId&&dismissedActivation===next.activationId){if(panel)panel.hidden=true;return false;}
+       if(keepalive&&!next?.active&&next?.reason&&(wasActive||terminalKey)){
+         clearGrounding();flow.accept(null);receipts.clear();
+@@ -159,7 +173,7 @@
+     }
+     function visibility(){if(doc?.hidden){awaitingFresh=true;flow.pause();}else if(!awaitingFresh)flow.pause(paused);}
+     function togglePause(){paused=!paused;flow.pause(paused||awaitingFresh||!!doc?.hidden);return paused;}
+-    function dispose(){disposed=true;cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
++    function dispose(){disposed=true;renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
+     return {update,visibility,togglePause,replay:()=>flow.replay(),dismiss,reset,dispose,isActive:()=>!!current?.active&&dismissedActivation!==current.activationId||terminalVisible};
+   }
+   function receiptSender(host=globalThis){
+--- a/main/resources/static/assets/display/display-conversate.js
++++ b/main/resources/static/assets/display/display-conversate.js
+@@ -344,7 +344,9 @@
+     async function focusRequest(route,body={},opts){
+       if(!session)throw Error('focus_session_stale');
+       if(!['settings/read','settings','history','open','input','input/status','snapshot/claim','snapshot/result','close','memory/read','memory/save','memory/delete','memory/search'].includes(route))throw Error('invalid_focus_action');
+-      const view=await post('focus/'+route,{...connection(),...body},opts);
++      const bound=connection(),stamp=pollGeneration;
++      const view=await post('focus/'+route,{...bound,...body},opts);
++      if(stamp!==pollGeneration||session?.assistId!==bound.assistId||session?.epoch!==bound.epoch)throw Error('focus_session_stale');
+       if(['open','input','close'].includes(route)){applyFocus(view);notify();}
+       return view;
+     }
+--- a/src/test/java/com/example/lms/assist/novafocusexecutionpolicytest.java
++++ b/src/test/java/com/example/lms/assist/novafocusexecutionpolicytest.java
+@@ -257,6 +257,22 @@
+             assertEquals(1,TraceStore.get("focus.selection.fallbackCount"));
+         }
+     }
++    @Test void resultPreservesActualFallbackFailureAndNormalAutoIsNotFallback() throws Exception {
++        for(boolean fallback:List.of(true,false))try(var f=new Fixture()){
++            f.geminiChoices();f.setIfPresent("focusDefaultModel",A);
++            f.response=r->{if(fallback&&A.equals(r.getModel()))throw new ModelSelectionException("backend_timeout");return f.success(r);};
++            var selected=selection("AUTO",null,"API_ONLY",true,List.of(B));
++            var context=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selected,2);
++            var result=f.adapter.answerResult(7L,"Why are leaves green?",null,null,context,null,()->true);
++            var meta=JSON.valueToTree(result).path("modelOutcome");
++            assertEquals(fallback,meta.path("isFallback").asBoolean());
++            assertEquals(A,meta.path("requestedModel").asText());
++            assertEquals(fallback?"gemini-3.5-flash-lite":"gemini-3.8-flash",meta.path("effectiveModel").asText());
++            assertEquals(fallback?"backend_timeout":"none",meta.path("reasonCode").asText());
++            if(fallback)assertEquals("ModelSelectionException",meta.path("originalError").asText());
++            assertEquals(fallback?List.of(A,B):List.of(A),f.calls.stream().map(ChatRequestDto::getModel).toList());
++        }
++    }
+     static final class Fixture implements AutoCloseable {
+         final ChatService chat=mock(ChatService.class);
+         final ChatModelCatalogService catalog=mock(ChatModelCatalogService.class);
+--- a/src/test/java/com/example/lms/assist/novafocusstatetest.java
++++ b/src/test/java/com/example/lms/assist/novafocusstatetest.java
+@@ -4,6 +4,20 @@
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+ class NovaFocusStateTest {
++    @Test void fallbackOutcomeStaysWithAcceptedRequestAndOnlyFoldThenClearsOnNormalAnswer() {
++        var s=state(true);s.open(0,"fold");s.input(u("one",0,true,"첫 질문"),0);var first=s.tick(1200);s.accepted(first,"first");
++        var outcome=new NovaFocusAnswer.ModelOutcome("fixture-primary","llmrouter.gemini-cue","gemini-3.5-flash-lite",true,"backend_timeout","ModelSelectionException");
++        s.answer(first,"first","대체 응답","ticket",1300,null,outcome);
++        var json=new com.fasterxml.jackson.databind.ObjectMapper();var fold=json.valueToTree(s.view(1300).forTarget("fold"));
++        assertTrue(fold.path("isFallback").asBoolean());assertEquals("backend_timeout",fold.path("fallbackReasonCode").asText());
++        assertFalse(json.valueToTree(s.view(1300).forTarget("lens")).has("isFallback"));
++        s.close("user_closed");s.open(2000,"fold");s.input(u("two",0,true,"다음 질문"),2000);var next=s.tick(3200);s.accepted(next,"next");
++        s.answer(first,"first","늦은 대체","old-ticket",3300,null,outcome);assertFalse(json.valueToTree(s.view(3300).forTarget("fold")).has("isFallback"));
++        s.answer(next,"next","정상 응답","new-ticket",3400,null,new NovaFocusAnswer.ModelOutcome("llmrouter.gemini-cue","llmrouter.gemini-cue","gemini-3.5-flash-lite",false,"none",null));
++        assertFalse(json.valueToTree(s.view(3400).forTarget("fold")).path("isFallback").asBoolean());
++        assertEquals("정상 응답",s.view(3400).answerText());
++    }
++
+     @Test void threeSecondShortQuestionUsesCorrectedFinalOnceWithoutEightSecondOrLengthMinimum() {
+         var s=state(true);s.open(0,"fold");
+         s.input(u("current",0,false,"Even G2?"),100);
+--- a/src/test/js/display-focus-projection.test.cjs
++++ b/src/test/js/display-focus-projection.test.cjs
+@@ -111,3 +111,14 @@
+  assert.equal(f.calls.filter(x=>x.name==='first_visible').length,1);
+  assert.equal(f.calls.filter(x=>x.name==='presentation_done').length,1);
+ });
++
++
++test('fallback banner is Fold-only, clears on normal success, and ignores a retired state',()=>{
++ const notice={hidden:true,textContent:''},f=fixture('fold',{fallbackStatus:notice});
++ const failed={...base,renderTarget:'fold',isFallback:true,requestedModel:'chatgpt-oauth:fixture',effectiveModel:'gemini-fixture',fallbackReasonCode:'backend_timeout',originalError:'ModelSelectionException'};
++ f.projection.update(failed);assert.equal(notice.hidden,false);assert.match(notice.textContent,/backend_timeout/);assert.match(notice.textContent,/gemini-fixture/);
++ const normal={...failed,stateVersion:2,answerVersion:2,turnId:'next',isFallback:false};
++ f.projection.update(normal);assert.equal(notice.hidden,true);
++ f.projection.update(failed);assert.equal(notice.hidden,true);
++ const lensNotice={hidden:true,textContent:''},lens=fixture('lens',{fallbackStatus:lensNotice});lens.projection.update({...failed,renderTarget:'lens'});assert.equal(lensNotice.hidden,true);
++});

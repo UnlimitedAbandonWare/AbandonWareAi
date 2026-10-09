@@ -100,6 +100,8 @@
 <label for="nf-embed-prefer">기억 임베딩 경로</label><select id="nf-embed-prefer" class="focusable"><option value="LOCAL_THEN_CLOUD">로컬 우선 · 허용 시 클라우드 대체</option><option value="LOCAL_ONLY">로컬만</option><option value="CLOUD_ONLY">클라우드만(설정된 경우)</option></select>
 <label for="nf-web-unknown">모를 때 웹 재시도</label><select id="nf-web-unknown" class="focusable"><option value="">서버 정책 따름(기본)</option><option value="false">이 프로필에서는 끔</option><option value="true">허용(서버가 켠 경우에만)</option></select>
 <label for="nf-wake">호출어</label><input id="nf-wake" class="focusable" type="text" value="노바" maxlength="16">
+<label for="nf-camera-wake">사진 호출어</label><input id="nf-camera-wake" class="focusable" type="text" value="데빈" maxlength="16">
+<span class="hint" style="grid-column:1/-1">이 호출어로 부르면 그 질문에만 사진 1장. 비우면 사진 호출어를 끕니다.</span>
 <label for="nf-target">답변을 읽을 화면</label><select id="nf-target" class="focusable"><option value="auto">연결된 안경 · 없으면 휴대폰</option><option value="lens">안경</option><option value="fold">이 휴대폰</option></select>
 <label for="nf-answer-target">답변 실행 경로</label><select id="nf-answer-target" class="focusable"><option value="AUTO">자동</option><option value="API_ONLY">API만</option><option value="LOCAL_ONLY">로컬만</option><option value="GEMINI_WEBSEARCH_ONLY">Gemini 검색 고정</option></select>
 <span>전용 모드는 선택 Gemini로 웹검색을 요청하며 검색·출처·Google 검색 제안이 확인된 답변만 제공합니다. 다른 모델로 자동 전환하지 않습니다.</span><button id="nf-general-mode" class="focusable" type="button">일반 자동 모드로 전환</button><span>전환 후 설정을 저장하면 다음 질문부터 적용합니다. 질문을 자동 재전송하지 않습니다.</span>
@@ -119,19 +121,24 @@
 <label for="nf-answer-length-preset">답변 길이</label><select id="nf-answer-length-preset" class="focusable"><option value="320">320자</option><option value="400" selected>400자</option><option value="480">480자</option><option value="">직접 입력</option></select>
 <label for="nf-answer-length">생성 목표·안경 표시 상한(80~800자)</label><input id="nf-answer-length" class="focusable" type="number" min="80" max="800" step="1" value="400">
 <span>짧은 답변도 허용하며 공백·문장부호와 Unicode 글자 묶음을 셉니다.</span><button id="nf-answer-length-reset" class="focusable" type="button">답변 길이 기본값</button>
+<label for="nf-answer-preset">답변 목적</label><select id="nf-answer-preset" class="focusable"><option value="GENERAL" selected>일반</option><option value="INTERVIEW">면접</option><option value="CUSTOM">직접 입력</option></select>
+<label for="nf-answer-instruction">답변 지침(프롬프트 · 최대 1200자 · 줄바꿈 허용)</label><textarea id="nf-answer-instruction" class="focusable" maxlength="1200" rows="3"></textarea>
+<span><span id="nf-answer-instruction-count">0/1200</span> · 면접을 고르면 기본 지침이 채워지고, 고치면 직접 입력으로 저장됩니다. 자동 대화 시작의 '대화 목적'과는 별개이며, 안경 표시 내용에는 들어가지 않습니다.</span><button id="nf-answer-instruction-reset" class="focusable" type="button">답변 지침 기본값</button>
 <label for="nf-quick">빠른 답변·완성 답변 빠른 표시</label><input id="nf-quick" class="focusable" type="checkbox"><span>이 질문에서는 웹·도구 검색을 끕니다. 생성 완료 후 줄 단위로 표시합니다.</span>
 <label for="nf-web-search">웹 검색</label><select id="nf-web-search" class="focusable"><option value="">저장된 정책 유지</option><option value="true">허용</option><option value="false">끄기</option></select><span>다음 질문부터 적용합니다. 빠른 답변에서는 검색하지 않습니다. 지원하는 Gemini 답변은 Google 검색 근거와 검색 제안을 휴대폰에 함께 표시합니다.</span>
+<label for="nf-camera-allowed">카메라 사용 허용</label><input id="nf-camera-allowed" class="focusable" type="checkbox" checked>
+<span class="hint" style="grid-column:1/-1">끄면 어떤 호출어로도 사진을 찍지 않습니다.</span>
 <label for="nf-snapshot-enabled">사진 기반 AI 힌트(질문당 1장)</label><input id="nf-snapshot-enabled" class="focusable" type="checkbox">
 <label for="nf-snapshot-source">촬영 장치</label><select id="nf-snapshot-source" class="focusable"><option value="FOLD_REAR">폴드 후면 카메라</option><option value="META_GLASSES" disabled>Meta 안경 카메라(미지원)</option></select>
 <label for="nf-snapshot-test">카메라 시험 촬영</label><button id="nf-snapshot-test" class="focusable" type="button">이 폴드에서만 확인 · AI 전송 안 함</button>
 <label for="nf-quiet">발화 확정 후 조용시간(ms)</label><input id="nf-quiet" class="focusable" type="number" min="500" max="5000" step="100" value="1200">
 <label for="nf-idle">답변 표시 후 후속 질문 대기(ms)</label><input id="nf-idle" class="focusable" type="number" min="5000" max="120000" step="1000" value="20000">
-<label for="nf-listen">호출 후 질문 대기(ms)</label><input id="nf-listen" class="focusable" type="number" min="3000" max="30000" step="1000" value="8000">
+<label for="nf-listen">호출 후 질문 시작 대기 상한(ms)</label><input id="nf-listen" class="focusable" type="number" min="3000" max="30000" step="1000" value="12000">
 <label for="nf-sequential">글자 순차 출력</label><input id="nf-sequential" class="focusable" type="checkbox" checked>
 <label for="nf-speed">글자 출력 간격(ms)</label><input id="nf-speed" class="focusable" type="number" min="50" max="160" step="10" value="80">
 <label for="nf-lines">화면에 남길 줄 수</label><input id="nf-lines" class="focusable" type="number" min="4" max="8" step="1" value="6">
 <label for="nf-fade-on">마지막 내용 자동 숨김</label><input id="nf-fade-on" class="focusable" type="checkbox" checked>
-<label for="nf-hold">마지막 내용 유지(ms)</label><input id="nf-hold" class="focusable" type="number" min="2000" max="15000" step="1000" value="5000">
+      <label for="nf-hold">답변 유지시간(초)</label><input id="nf-hold" class="focusable" type="number" min="2" max="15" step="1" value="5">
 <label for="nf-fade">천천히 사라지는 시간(ms)</label><input id="nf-fade" class="focusable" type="number" min="200" max="1000" step="100" value="400">
 </div><button id="nf-save" class="focusable" type="submit" disabled>노바 설정 저장</button><button id="nf-reload" class="focusable" type="button">서버 설정 다시 불러오기</button></form>
 <p id="nf-model-status" class="hint" role="status">모델 목록 확인 중</p><p class="hint">변경한 답변 설정은 다음에 확정되는 질문부터 적용됩니다. <span id="nf-jev-status">Jev: 확인 중</span></p>

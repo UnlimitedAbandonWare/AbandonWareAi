@@ -7,6 +7,7 @@ import org.junit.jupiter.api.io.TempDir;
 import reactor.core.publisher.Flux;
 import java.nio.file.Path;
 import java.time.*;
+import java.util.List;
 import java.util.concurrent.atomic.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -54,6 +55,36 @@ class ConversateCloudSttTest {
         var probe=cloud.transcribe(new byte[640]).subscribe();assertThrows(Exception.class,()->cloud.transcribe(new byte[640]).block());
         verify(service,times(3)).transcribePcm16Mono(any(),eq(16000),eq("ko"));probe.dispose();
     }
+    @Test void deepgramTimeoutRetriesOnceThenReportsTheRealReason() throws Exception{
+        var service=service();var cloud=cloud(service,budget("1"));
+        when(service.transcribePcm16Mono(any(),eq(16000),eq("ko"),any()))
+            .thenReturn(Flux.error(new RuntimeException("deepgram:timeout")),Flux.error(new RuntimeException("deepgram:timeout")));
+        var errors=new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var transport=cloud.openStream(event->{},errors::add);
+        try{await(()->!errors.isEmpty());
+            assertEquals(List.of("ASR_TIMEOUT"),errors);
+            verify(service,times(2)).transcribePcm16Mono(any(),eq(16000),eq("ko"),any());
+        }finally{transport.close().get(2,java.util.concurrent.TimeUnit.SECONDS);}
+    }
+    @Test void deepgramTimeoutRetriesThenFallsBackToConfiguredAlternate() throws Exception{
+        var service=service();
+        var soniox=mock(com.example.lms.service.stt.SonioxSttService.class);when(soniox.isConfigured()).thenReturn(true);
+        when(soniox.transcribePcm16Mono(any(),any(),eq("ko"))).thenAnswer(call->{((Runnable)call.getArgument(1)).run();return Flux.never();});
+        var cloud=new ConversateCloudStt(service,soniox,"auto",budget("1"),json,nanos::get,Duration.ofMillis(80),Duration.ofSeconds(60));
+        when(service.transcribePcm16Mono(any(),eq(16000),eq("ko"),any()))
+            .thenReturn(Flux.error(new RuntimeException("deepgram:timeout")),Flux.error(new RuntimeException("deepgram:timeout")));
+        var events=new java.util.concurrent.CopyOnWriteArrayList<com.fasterxml.jackson.databind.JsonNode>();var errors=new java.util.concurrent.CopyOnWriteArrayList<String>();
+        var policy=new ConversateCloudStt.StreamPolicy("deepgram",true,List.of("soniox"),"ko");
+        var transport=cloud.openStream(events::add,errors::add,policy);
+        try{await(()->events.stream().anyMatch(e->"ready".equals(e.path("type").asText())));
+            verify(service,times(2)).transcribePcm16Mono(any(),eq(16000),eq("ko"),any());
+            verify(soniox,times(1)).transcribePcm16Mono(any(),any(),eq("ko"));
+            assertTrue(errors.isEmpty());assertTrue(transport.alive());
+            var ready=events.stream().filter(e->"ready".equals(e.path("type").asText())).findFirst().orElseThrow();
+            assertEquals("soniox",ready.path("runtime").path("provider").asText());
+        }finally{transport.close().get(2,java.util.concurrent.TimeUnit.SECONDS);}
+    }
+    static void await(java.util.function.BooleanSupplier condition)throws Exception{long end=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);while(!condition.getAsBoolean()&&System.nanoTime()<end)Thread.sleep(5);assertTrue(condition.getAsBoolean());}
     @Test void invalidAudioAndConflictingSegmentsCannotProduceText(){
         var service=service();var cloud=cloud(service,budget("1"));
         assertThrows(Exception.class,()->cloud.transcribe(new byte[320640]).block());verify(service,never()).transcribePcm16Mono(any(),anyInt(),anyString());

@@ -90,6 +90,24 @@ class NovaFocusDisplayContractTest {
         try{assertEquals("모르겠습니다.",adapter.answer(17L,"공식 자료를 찾아 확인해줘",captured));verify(chat,times(1)).continueChat(any(),isNull(),any());}
         finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
+    @Test void interviewInstructionReachesConversationContextAndGeneralStaysEmpty() throws Exception {
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("합성 답변","fixture",false));
+        var interview=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            NovaFocusSettings.AnswerSelection.defaults(),1,400,false,null,NovaFocusSettings.ReasoningPreset.STANDARD,"면접 지침 본문",NovaFocusSettings.AnswerPreset.INTERVIEW);
+        var general=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
+            NovaFocusSettings.AnswerSelection.defaults(),1,400,false,null,NovaFocusSettings.ReasoningPreset.STANDARD,"",NovaFocusSettings.AnswerPreset.GENERAL);
+        try{
+            assertEquals("합성 답변",adapter.answer(7L,"합성 질문",interview));
+            assertEquals("합성 답변",adapter.answer(7L,"일반 질문",general));
+            var captured=org.mockito.ArgumentCaptor.forClass(ChatConversationContext.class);
+            verify(chat,times(2)).continueChat(any(),isNull(),captured.capture());
+            assertEquals("면접 지침 본문",captured.getAllValues().get(0).focusAnswerInstruction());
+            assertEquals("",Objects.toString(captured.getAllValues().get(1).focusAnswerInstruction(),""));
+        }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
     @Test void overflowKeepsTheFullAnswerTextWithoutANotice(){
         var adapter=new NovaFocusAnswerService(mock(ChatService.class),mock(PublicRequestBudgetGuard.class),mock(ChatRunRegistry.class));
         ReflectionTestUtils.setField(adapter,"lensAnswerChars",80);
@@ -126,4 +144,49 @@ class NovaFocusDisplayContractTest {
         }
         assertNull(ChatConversationContext.empty().focusAnswerLengthChars());
     }
+    @Test void focusInstructionRendersOnlyInsideFocusPromptAndLeavesOrdinaryChatAlone(){
+        var builder=new com.example.lms.prompt.StandardPromptBuilder();
+        var base=com.example.lms.prompt.PromptContext.builder().userQuery("합성 질문").minWordCount(500).sectionSpec(List.of("OVERVIEW","DETAILS")).build();
+        assertFalse(builder.buildInstructions(base).contains("사용자 답변 지침"));
+        var general=base.toBuilder().focusAnswerLengthChars(400).build();
+        assertFalse(builder.buildInstructions(general).contains("사용자 답변 지침"));
+        var interview=general.toBuilder().focusAnswerInstruction("1인칭 존댓말로 핵심부터 답한다.").build();
+        String prompt=builder.buildInstructions(interview);
+        assertTrue(prompt.contains("사용자 답변 지침:\n1인칭 존댓말로 핵심부터 답한다."));
+        assertTrue(prompt.contains("DISPLAY FOCUS OUTPUT"));
+        assertEquals("1인칭 존댓말로 핵심부터 답한다.",interview.focusAnswerInstruction());
+        assertNull(ChatConversationContext.empty().focusAnswerInstruction());
+    }
+    @Test void answerInstructionRoundTripsAndOldJsonDefaultsToGeneral(){
+        var legacy=assertDoesNotThrow(()->mapper.treeToValue(mapper.valueToTree(NovaFocusSettings.defaults()),NovaFocusSettings.class));
+        assertNull(legacy.answerInstruction());assertNull(legacy.answerPreset());
+        assertEquals(NovaFocusSettings.AnswerPreset.GENERAL,legacy.effectiveAnswerPreset());
+        assertEquals("",legacy.effectiveAnswerInstruction());
+        var custom=(ObjectNode)mapper.valueToTree(legacy);
+        custom.put("answerInstruction","1인칭으로, 핵심 먼저.\n두 번째 줄.");custom.put("answerPreset","CUSTOM");
+        var saved=assertDoesNotThrow(()->mapper.treeToValue(custom,NovaFocusSettings.class));
+        var reread=assertDoesNotThrow(()->mapper.readValue(mapper.writeValueAsString(saved),NovaFocusSettings.class));
+        assertEquals(NovaFocusSettings.AnswerPreset.CUSTOM,reread.answerPreset());
+        assertEquals("1인칭으로, 핵심 먼저.\n두 번째 줄.",reread.answerInstruction());
+        assertEquals(saved.answerInstruction(),reread.effectiveAnswerInstruction());
+        var preset=(ObjectNode)mapper.valueToTree(legacy);preset.put("answerPreset","INTERVIEW");
+        var interview=assertDoesNotThrow(()->mapper.treeToValue(preset,NovaFocusSettings.class));
+        assertEquals(NovaFocusSettings.AnswerPreset.INTERVIEW,interview.effectiveAnswerPreset());
+        assertEquals(NovaFocusSettings.INTERVIEW_ANSWER_INSTRUCTION,interview.effectiveAnswerInstruction());
+    }
+    @Test void answerInstructionBoundsRejectOverflowAndControlButAllowMultiline(){
+        var base=(ObjectNode)mapper.valueToTree(NovaFocusSettings.defaults());
+        var overflow=(ObjectNode)base.deepCopy();overflow.put("answerInstruction","가".repeat(1201));
+        assertEquals("invalid_nova_settings",root(assertThrows(Exception.class,()->mapper.treeToValue(overflow,NovaFocusSettings.class))).getMessage());
+        var control=(ObjectNode)base.deepCopy();control.put("answerInstruction","지침중간");
+        assertEquals("invalid_nova_settings",root(assertThrows(Exception.class,()->mapper.treeToValue(control,NovaFocusSettings.class))).getMessage());
+        var multiline=(ObjectNode)base.deepCopy();multiline.put("answerInstruction","첫 줄.\n둘째 줄.\t들여쓰기");
+        var parsed=assertDoesNotThrow(()->mapper.treeToValue(multiline,NovaFocusSettings.class));
+        assertEquals("첫 줄.\n둘째 줄.\t들여쓰기",parsed.answerInstruction());
+        var exact=(ObjectNode)base.deepCopy();exact.put("answerInstruction","가".repeat(1200));
+        assertDoesNotThrow(()->mapper.treeToValue(exact,NovaFocusSettings.class));
+        var crlf=(ObjectNode)base.deepCopy();crlf.put("answerInstruction","윗줄\r\n아랫줄");
+        assertEquals("윗줄\n아랫줄",assertDoesNotThrow(()->mapper.treeToValue(crlf,NovaFocusSettings.class)).answerInstruction());
+    }
+    static Throwable root(Throwable value){while(value.getCause()!=null&&value.getCause()!=value)value=value.getCause();return value;}
 }

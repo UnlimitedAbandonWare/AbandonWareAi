@@ -26,6 +26,8 @@ For explicitly requested Display answer-length, font, model-selection or quick-d
 
 For synthetic OAuth configuration checks, use `scripts/lint_chatgpt_oauth_contract.py --offline` and its focused `scripts/test_lint_chatgpt_oauth_contract.py` fixture. This mode reads no env, credentials or product source; source proof is SKIP and strict still fails. It does not verify model payload, live account eligibility, deployment, Display generation or device behavior.
 
+답변 지침: `NovaFocusSettings.answerPreset`(GENERAL/INTERVIEW/CUSTOM)·`answerInstruction`(≤1200자, 줄바꿈·탭 허용)이 `NovaFocusService` Context → `ChatConversationContext.focusAnswerInstruction` → `PromptContext` → `StandardPromptBuilder`의 `사용자 답변 지침:` 블록(포커스 출력 전용, /chat 무영향)으로 들어간다. 빈 지침+INTERVIEW면 `INTERVIEW_ANSWER_INSTRUCTION` 상수 문구, GENERAL/빈 값은 주입 없음. trace는 `focus.instruction.preset|chars|sha8`만 — 지침 원문 로그 금지.
+
 ## Resume note (read before opening scope)
 
 Two earlier sessions stalled at registration: journals `nova-focus-17795bf7`, `nova-focus-flow-263cc992` (`in_progress`, 0 events = liveness unknown, not done). Re-read actual files; do not restart scope blindly. Some implementation targets sit under **expired** leases (`main/java/com/example/lms/service/chatworkflow.java` = `rag-chat-path-gate-c3`, `conversatelocalcardgenerator.java` = `madwain-live-verify`): expired + `owner-evidence-needed` still blocks overlap — use `scoped-blocker-recovery` lease lifecycle (proven dead owner → `-Action recover`) or take non-overlapping work first; never delete or steal a lock. `.windsurf/rules/meta-rayban-display-runtime.md` still carries the superseded "do not change force-hint 180 s" lock — `AGENTS.md` (settings-driven display/generation knobs) wins over it.
@@ -72,3 +74,12 @@ T01 OFF→no focus side effects; T03 hints OFF + Nova ON works; T05 wake retract
 ## Guards that still apply
 
 Work-ledger journal + checkpoint cycles; `source_edit_session` lease for app source; `demo1-source-edit-three-way-preflight` for app-source mutation; `AGENTS.md` model lock + `configs/api-routing.yaml` (no new/paid model without approval); no secrets in logs/tests; synthetic fixtures for verification; matching Close/Start wear BAT pair for live Java proof; `$demo1-goal-complete-stop` at acceptance.
+
+## Live readiness (grokbot3 2026-10-09)
+- `/chat` OK or health UP is not Nova OK. Nova is ready only when `python -B scripts\model_default_probe.py --ready` = READY (focus_terminal success after the last restart).
+- `NOT_PROVEN_FOCUS` → say "server/model OK, Nova answer not yet seen"; `FOCUS_LAST_FAILED`/`FOCUS_MODEL_BLOCKED` → fix before inviting a glasses test.
+- Missing tests in a run = NOT_DONE; AUTO default is fast-first (Flash-Lite → Luna) but a saved FIXED profile shadows it. See `$demo1-reachability-first-debug` R7-R12.
+
+## Camera wake word (second wake, 2026-10-09)
+- Two wake words: `wakeWord` (기본 노바, 기존 text-only 경로 불변) + `cameraWakeWord` (기본 데빈) — camera wake는 첫 질문 1건에만 FOLD_REAR 1장; 같은 activation 후속 질문은 재촬영 없음.
+- `snapshot.cameraAllowed` (기본 true)가 최우선 게이트 — false면 어떤 호출어도 촬영 불가; 촬영 실패/타임아웃은 질문 보존 text-only 폴백 (trace: `focus.snapshot.trigger` auto|camera_wake|none, `focus.snapshot.outcome` under testStatus.focus).

@@ -184,13 +184,14 @@
 ## Concurrent Desktop and Notebook Editing
 - Desktop/Notebook 동시 편집의 target-scoped 조정과 lease begin/verify 규칙. — 상세: `docs/agents-rules/SECTION-concurrent-desktop-and-notebook-editing.md`
 <!-- BEGIN DEMO1-LEASE-LIFECYCLE -->
-## Source-edit lease lifecycle (begin → work → end, no leftovers)
+## Source-edit lease lifecycle
 - 소스 편집 lease 수명주기: begin→heartbeat→end, stale reclaim, live 금지. — 상세: `docs/agents-rules/DEMO1-LEASE-LIFECYCLE.md`
+- 겹침: $demo1-parallel-auto-resume
 <!-- END DEMO1-LEASE-LIFECYCLE -->
 
 <!-- BEGIN DEMO1-DEVIN-MULTI-SESSION -->
 ## Multiple Concurrent Devin Sessions
-- 동일 체크아웃 다중 Devin 세션 격리·충돌·종료 규칙. — 상세: `docs/agents-rules/DEMO1-DEVIN-MULTI-SESSION.md`
+- 동일 체크아웃 다중 Devin 세션 격리·충돌·종료·마감3분류 — 상세: `docs/agents-rules/DEMO1-DEVIN-MULTI-SESSION.md`
 <!-- END DEMO1-DEVIN-MULTI-SESSION -->
 <!-- BEGIN DEMO1-DEVIN-DIRECTIVE-LOOP -->
 ## External-Agent Directive Loops (Devin report ↔ follow-up directive)

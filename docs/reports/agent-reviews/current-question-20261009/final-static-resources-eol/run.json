@@ -1,0 +1,44 @@
+{
+  "runId": "cb941b8d-45f3-465e-b817-aa0bd4cb9e9b",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:23:02.653887+00:00",
+  "status": "passed",
+  "executable": "gradlew.bat",
+  "argumentCount": 8,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "processResources",
+    "-Pawx.splitBuildOutputs=true",
+    "-Pawx.buildHostId=desktop-meta-display",
+    "--project-cache-dir=C:/Users/nninn/AppData/Local/AWX/meta-display/project-cache",
+    "-g",
+    "C:/Users/nninn/.gradle-awx-rag-launcher"
+  ],
+  "commandSha256": "a3e7b6c98bc83b853f9c44e2d262f2441bc5f1b9ffa92c4467331d3875070be4",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus-controls.js",
+      "kind": "file",
+      "sha256": "d30f8ecfd09fad74d83b4c53846eca6a4655dc8cad903d0de1b62a439b1e16cd",
+      "bytes": 43531
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 70608,
+  "endedAt": "2026-10-09T11:23:08.932155+00:00",
+  "elapsedMs": 6277,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

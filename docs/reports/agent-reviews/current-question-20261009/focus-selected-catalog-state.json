@@ -1,0 +1,20 @@
+[
+  {
+    "id": "llmrouter.openai-economy",
+    "provider": "openai",
+    "endpointId": "openai-economy",
+    "modelId": "gpt-5.6-luna",
+    "selectable": false,
+    "reason": "remote_selection_disabled",
+    "status": "unavailable",
+    "metadata": {
+      "googleSearchSupported": false,
+      "costTier": "paid",
+      "enabled": true,
+      "apiSurface": "responses",
+      "focusReasoningReason": "provider_model_contract_unverified",
+      "focusReasoningSupported": false,
+      "googleSearchReason": "focus_search_unsupported"
+    }
+  }
+]

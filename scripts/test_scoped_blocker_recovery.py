@@ -106,6 +106,108 @@ class ScopedBlockerTests(unittest.TestCase):
                      for topic in ['race-a', 'race-b']]
         self.assertEqual(sorted(f.result().returncode for f in calls), [0, 7], [f.result().stdout for f in calls])
 
+    def test_barrier_disjoint_writers_mutate_with_separate_outputs_in_overlapping_intervals(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        start, writing, completed = Barrier(2), Barrier(2), Barrier(2)
+        plans = []
+        for index in range(2):
+            rel = f'parallel-{index}.txt'
+            (self.root / rel).write_bytes(b'original\n')
+            manifest = self.root / f'parallel-{index}.json'
+            manifest.write_text(json.dumps({'targets': [{'path': rel,
+                'sha256': hashlib.sha256(b'original\n').hexdigest()}]}))
+            plans.append((f'barrier-{index}', rel, manifest))
+
+        def worker(plan):
+            topic, rel, manifest = plan
+            receipt = None
+            try:
+                start.wait(timeout=25)
+                begun = self.session(topic=topic, extra=f'-TargetManifest {ps_quote(manifest)} -Json')
+                self.assertEqual(begun.returncode, 0, begun.stdout + begun.stderr)
+                receipt = json.loads(begun.stdout)
+                verified = self.session(action='verify', topic=topic,
+                    extra=f'-TargetManifest {ps_quote(manifest)} -LeaseFingerprint {receipt["fingerprint"]} -RequireAbsentTargets')
+                self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+                entered = time.perf_counter_ns()
+                writing.wait(timeout=25)
+                (self.root / rel).write_text(topic + '\n')
+                output = self.root / f'output-{topic}.json'
+                output.write_text(json.dumps({'topic': topic, 'editCalls': 1}))
+                completed.wait(timeout=25)
+                return {'entered': entered, 'left': time.perf_counter_ns(), 'output': output, 'editCalls': 1}
+            finally:
+                if receipt:
+                    ended = self.session(action='end', topic=topic, extra=f'-LeaseFingerprint {receipt["fingerprint"]}')
+                    self.assertEqual(ended.returncode, 0, ended.stdout + ended.stderr)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(worker, plans))
+        self.assertLess(max(r['entered'] for r in results), min(r['left'] for r in results))
+        self.assertEqual([r['editCalls'] for r in results], [1, 1])
+        self.assertNotEqual(results[0]['output'], results[1]['output'])
+        for plan, result in zip(plans, results):
+            self.assertEqual((self.root / plan[1]).read_text(), plan[0] + '\n')
+            self.assertEqual(json.loads(result['output'].read_text())['editCalls'], 1)
+        self.assertFalse(list((self.root / '__patch_drop__/source-edit-locks').glob('*.lock')))
+
+    def test_barrier_overlap_matrix_allows_one_mutation_and_an_independent_writer(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import Barrier
+        for case in ['same-file', 'different-hunks', 'subset-targets', 'directory-child']:
+            with self.subTest(case=case):
+                start, admitted = Barrier(3), Barrier(3)
+                shared = 'module/area/parent.txt' if case == 'directory-child' else 'matrix.txt'
+                child = 'module/area/child.txt' if case == 'directory-child' else shared
+                paths = {shared, child, 'matrix-extra.txt', 'independent.txt'}
+                for rel in paths:
+                    target = self.root / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b'line-1\nline-2\nline-3\n')
+                plans = []
+                for index, rel in enumerate([shared, child, 'independent.txt']):
+                    targets = [rel] + (['matrix-extra.txt'] if case == 'subset-targets' and index == 1 else [])
+                    doc = {'targets': [{'path': p, 'sha256': hashlib.sha256((self.root / p).read_bytes()).hexdigest()}
+                                       for p in targets]}
+                    if case == 'directory-child' and index == 0:
+                        doc['reservePaths'] = ['module/area']
+                    manifest = self.root / f'matrix-{index}.json'
+                    manifest.write_text(json.dumps(doc))
+                    plans.append((f'matrix-{index}', rel, manifest, 2 if case == 'different-hunks' and index == 1 else 0))
+
+                def worker(plan):
+                    topic, rel, manifest, hunk = plan
+                    receipt = None
+                    try:
+                        start.wait(timeout=25)
+                        begun = self.session(topic=topic, extra=f'-TargetManifest {ps_quote(manifest)} -Json')
+                        admitted.wait(timeout=25)  # Keep the winner lease until both contenders have returned.
+                        if begun.returncode != 0:
+                            return {'code': begun.returncode, 'editCalls': 0, 'topic': topic, 'rel': rel, 'hunk': hunk}
+                        receipt = json.loads(begun.stdout)
+                        verified = self.session(action='verify', topic=topic,
+                            extra=f'-TargetManifest {ps_quote(manifest)} -LeaseFingerprint {receipt["fingerprint"]} -RequireAbsentTargets')
+                        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+                        lines = (self.root / rel).read_text().splitlines(keepends=True)
+                        lines[hunk] = topic + '\n'
+                        (self.root / rel).write_text(''.join(lines))
+                        return {'code': 0, 'editCalls': 1, 'topic': topic, 'rel': rel, 'hunk': hunk}
+                    finally:
+                        if receipt:
+                            ended = self.session(action='end', topic=topic, extra=f'-LeaseFingerprint {receipt["fingerprint"]}')
+                            self.assertEqual(ended.returncode, 0, ended.stdout + ended.stderr)
+
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    results = list(pool.map(worker, plans))
+                self.assertEqual(sorted(r['code'] for r in results[:2]), [0, 7])
+                self.assertEqual(sorted(r['editCalls'] for r in results[:2]), [0, 1])
+                self.assertEqual((results[2]['code'], results[2]['editCalls']), (0, 1))
+                winner = next(r for r in results[:2] if r['code'] == 0)
+                self.assertEqual((self.root / winner['rel']).read_text().splitlines()[winner['hunk']], winner['topic'])
+                self.assertEqual((self.root / 'independent.txt').read_text().splitlines()[0], 'matrix-2')
+                self.assertFalse(list((self.root / '__patch_drop__/source-edit-locks').glob('*.lock')))
+
     def test_targeted_status_does_not_treat_disjoint_active_session_as_global_hold(self):
         self.assertEqual(self.session(extra=f'-TargetManifest {ps_quote(self.manifest)}').returncode, 0)
         other = self.root / 'status-targets.json'

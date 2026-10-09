@@ -24,9 +24,10 @@ public class NovaFocusHistoryService {
     public record Pair(long sequence,String turnId,String state,String question,String answer) {}
     public record Page(List<Pair> turns,Long beforeSequence) {}
     public record Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,
-                          NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,Integer answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled,NovaFocusSettings.ReasoningPreset reasoningPreset) {
+                          NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,Integer answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled,NovaFocusSettings.ReasoningPreset reasoningPreset,
+                          String answerInstruction,NovaFocusSettings.AnswerPreset answerPreset) {
         public Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,NovaFocusSettings.AnswerSelection selection,long version,Integer length,boolean quick,Boolean web){
-            this(recent,summary,relevant,transcript,selection,version,length,quick,web,NovaFocusSettings.ReasoningPreset.STANDARD);
+            this(recent,summary,relevant,transcript,selection,version,length,quick,web,NovaFocusSettings.ReasoningPreset.STANDARD,null,null);
         }
         public Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,NovaFocusSettings.AnswerSelection selection,long version,Integer length,boolean quick){
             this(recent,summary,relevant,transcript,selection,version,length,quick,null);
@@ -95,13 +96,26 @@ public class NovaFocusHistoryService {
         try{transaction(()->{var p=new NovaFocusProfile();p.setId(id);p.setOwnerKey(owner);p.setChannel(channel);em.persist(p);em.flush();return null;});}
         catch(RuntimeException race){if(!transaction(()->em.find(NovaFocusProfile.class,id)!=null))throw race;}
     }
+    private static final int LEGACY_WAKE_LISTEN_MS=8000;
     private NovaFocusSettings serverDefaults(){
         var d=NovaFocusSettings.defaults();
-        var selection=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,defaultDisplayModel,
-            new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of()));
+        var selection=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.AUTO,null,
+            new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,true,List.of("llmrouter.api3")));
         return new NovaFocusSettings(defaultEnabled,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),
             d.wakeListenTimeoutMs(),d.presentation(),d.recallEnabled(),d.rememberFactsEnabled(),
-            d.snapshot(),selection,d.recentContext(),d.memory(),d.answerLengthChars(),d.quickAnswerEnabled(),d.webSearchEnabled(),d.effectiveReasoningPreset());
+            d.snapshot(),selection,d.recentContext(),d.memory(),d.answerLengthChars(),d.quickAnswerEnabled(),d.webSearchEnabled(),d.effectiveReasoningPreset(),d.answerInstruction(),d.answerPreset(),d.cameraWakeWord());
+    }
+    /** Old-default rows upgrade to the walking-mode defaults on read; deliberate choices stay. */
+    private NovaFocusSettings migrateLegacyDefaults(NovaFocusSettings stored){
+        var legacySelection=new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,defaultDisplayModel,
+            new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of()));
+        var selection=Objects.equals(stored.answerSelection(),legacySelection)?serverDefaults().answerSelection():stored.answerSelection();
+        int listen=stored.wakeListenTimeoutMs()==LEGACY_WAKE_LISTEN_MS?NovaFocusSettings.defaults().wakeListenTimeoutMs():stored.wakeListenTimeoutMs();
+        if(selection==stored.answerSelection()&&listen==stored.wakeListenTimeoutMs())return stored;
+        return new NovaFocusSettings(stored.enabled(),stored.wakeWord(),stored.utteranceQuietMs(),stored.followupIdleMs(),
+            listen,stored.presentation(),stored.recallEnabled(),stored.rememberFactsEnabled(),stored.snapshot(),
+            selection,stored.recentContext(),stored.memory(),stored.answerLengthChars(),stored.quickAnswerEnabled(),
+            stored.webSearchEnabled(),stored.reasoningPreset(),stored.answerInstruction(),stored.answerPreset(),stored.cameraWakeWord());
     }
     private NovaFocusSettings decode(String json) {
         if(json==null)return serverDefaults();
@@ -133,27 +147,34 @@ public class NovaFocusHistoryService {
     }
     public Settings settings(String owner,String channel) {
         return transaction(()->{var p=em.find(NovaFocusProfile.class,scope(owner,channel));
-            return p==null?new Settings(0,serverDefaults()):new Settings(p.getSettingsVersion(),decode(p.getSettingsJson()));});
+            return p==null?new Settings(0,serverDefaults()):new Settings(p.getSettingsVersion(),migrateLegacyDefaults(decode(p.getSettingsJson())));});
     }
     public Settings settings(String owner,String channel,long expected,NovaFocusSettings value) {
         Objects.requireNonNull(value);ensure(owner,channel);
         return transaction(()->{var p=locked(owner,channel);
             if(p.getSettingsVersion()!=expected)throw new IllegalArgumentException("focus_settings_conflict");
             var merged=value;
-            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null||value.reasoningPreset()==null){ // Omitted optional blocks preserve server-owned values.
+            if(value.snapshot()==null||value.snapshot().cameraAllowed()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null||value.reasoningPreset()==null||value.answerInstruction()==null||value.answerPreset()==null||value.cameraWakeWord()==null){ // Omitted optional blocks preserve server-owned values.
                 var stored=decode(p.getSettingsJson());
                 var selection=value.answerSelection()==null?stored.answerSelection():value.answerSelection();
                 if(p.getSettingsJson()!=null&&value.answerSelection()!=null&&value.answerSelection().routing()==null&&stored.answerSelection()!=null)
                     selection=new NovaFocusSettings.AnswerSelection(selection.mode(),selection.modelId(),stored.answerSelection().routing());
+                var snapshot=value.snapshot()==null?stored.snapshot():value.snapshot();
+                // 구 클라이언트가 cameraAllowed를 생략하면 저장값을 유지한다(자동 촬영 토글만내도 권한이 풀리지 않게).
+                if(value.snapshot()!=null&&value.snapshot().cameraAllowed()==null&&stored.snapshot()!=null&&stored.snapshot().cameraAllowed()!=null)
+                    snapshot=new NovaFocusSettings.Snapshot(snapshot.enabled(),snapshot.source(),stored.snapshot().cameraAllowed());
                 merged=new NovaFocusSettings(value.enabled(),value.wakeWord(),value.utteranceQuietMs(),value.followupIdleMs(),
                     value.wakeListenTimeoutMs(),value.presentation(),value.recallEnabled(),value.rememberFactsEnabled(),
-                    value.snapshot()==null?stored.snapshot():value.snapshot(),
+                    snapshot,
                     selection,value.recentContext()==null?stored.recentContext():value.recentContext(),
                     value.memory()==null?stored.memory():value.memory(),
                     value.answerLengthChars()==null?stored.answerLengthChars():value.answerLengthChars(),
                     value.quickAnswerEnabled()==null?stored.quickAnswerEnabled():value.quickAnswerEnabled(),
                     value.webSearchEnabled()==null?stored.webSearchEnabled():value.webSearchEnabled(),
-                    value.reasoningPreset()==null?stored.effectiveReasoningPreset():value.reasoningPreset());
+                    value.reasoningPreset()==null?stored.effectiveReasoningPreset():value.reasoningPreset(),
+                    value.answerInstruction()==null?stored.answerInstruction():value.answerInstruction(),
+                    value.answerPreset()==null?stored.answerPreset():value.answerPreset(),
+                    value.cameraWakeWord()==null?stored.cameraWakeWord():value.cameraWakeWord());
             }
             try{p.setSettingsJson(mapper.writeValueAsString(merged));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
             p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),merged);});

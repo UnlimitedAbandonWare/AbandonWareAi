@@ -184,6 +184,22 @@ function Get-DebugPortMap {
     return $map
 }
 
+function Get-DebugWatchStateAssessment {
+    # status=running is only trusted while the recorded watcher pid is alive
+    # AND the runtime port 18180 still listens; otherwise the file is stale.
+    param([object]$State)
+    $result = [ordered]@{ assessment = 'absent'; pidAlive = $false; port18180Listening = $false }
+    if ($null -eq $State) { return [pscustomobject]$result }
+    $result.assessment = 'not_running'
+    if ([string]$State.status -eq 'running') {
+        $wpid = 0; [void][int]::TryParse([string]$State.pid, [ref]$wpid)
+        if ($wpid -gt 0) { $result.pidAlive = ($null -ne (Get-Process -Id $wpid -ErrorAction SilentlyContinue)) }
+        try { $result.port18180Listening = ($null -ne (Get-RagPortOwner -Port 18180)) } catch { }
+        $result.assessment = if (-not $result.pidAlive -or -not $result.port18180Listening) { 'stale_running' } else { 'consistent' }
+    }
+    return [pscustomobject]$result
+}
+
 function Get-DebugWatcherRows {
     $rows = @()
     foreach ($w in @(Get-StopWatchTargets)) {
@@ -199,6 +215,7 @@ function Get-DebugWatcherRows {
     return [pscustomobject][ordered]@{
         watchers = @($rows)
         state = $state
+        watchState = (Get-DebugWatchStateAssessment -State $state)
         logTail = @(Get-Content -LiteralPath (Join-Path $script:RagRoot 'var\dev-reload\dev-reload.log') -Tail 6 -ErrorAction SilentlyContinue)
     }
 }
@@ -662,6 +679,10 @@ function Invoke-DebugStatus {
         $wUpdatedAt = [string](Get-AwxObjectProperty $w.state 'updatedAt')
         Write-DebugStage 'DEVWATCH' 'STATE' "status=$wStatus tier=$wTier at=$wUpdatedAt"
         $script:Report.devWatch = [ordered]@{ status = $wStatus; tier = $wTier; updatedAt = $wUpdatedAt }
+        $script:Report.devWatch.stateAssessment = [string]$w.watchState.assessment
+        $script:Report.devWatch.watchPidAlive = [bool]$w.watchState.pidAlive
+        $script:Report.devWatch.port18180Listening = [bool]$w.watchState.port18180Listening
+        if ($w.watchState.assessment -eq 'stale_running') { Write-DebugStage 'DEVWATCH' 'WARN' 'watch.state.json stale_running: status=running but watcher pid dead or 18180 not listening' }
     } else {
         $script:Report.devWatch = [ordered]@{ status = 'not_observed' }
     }
@@ -1043,9 +1064,10 @@ function Invoke-DebugVerify {
         $watchStatus = [string](Get-AwxObjectProperty $w.state 'status')
         $watchTier = [string](Get-AwxObjectProperty $w.state 'lastTier')
         $watchUpdatedAt = [string](Get-AwxObjectProperty $w.state 'updatedAt')
-        $dwRow.evidence = [ordered]@{ status = $watchStatus; tier = $watchTier; updatedAt = $watchUpdatedAt; failStreak = $failStreak }
-        $dwRow.detail = "status=$watchStatus tier=$watchTier failStreak=$failStreak"
+        $dwRow.evidence = [ordered]@{ status = $watchStatus; tier = $watchTier; updatedAt = $watchUpdatedAt; failStreak = $failStreak; assessment = [string]$w.watchState.assessment }
+        $dwRow.detail = "status=$watchStatus tier=$watchTier failStreak=$failStreak assessment=$($w.watchState.assessment)"
         if ($failStreak -gt 0) { Set-DebugCheckVerdict $dwRow 'warn'; $dwRow.status = 'fail-streak' }
+        if ([string]$w.watchState.assessment -eq 'stale_running') { Set-DebugCheckVerdict $dwRow 'warn'; $dwRow.status = 'stale_running' }
     }
     $checks += [pscustomobject]$dwRow
     Write-DebugStage 'VERIFY' $(if ($dwRow.verdict -eq 'pass') { 'OK' } else { 'WARN' }) "check=devwatch run=$($dwRow.run) status=$($dwRow.status) $($dwRow.detail)"

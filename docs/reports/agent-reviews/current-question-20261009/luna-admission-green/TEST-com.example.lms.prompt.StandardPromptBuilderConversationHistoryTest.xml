@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" tests="11" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:03:58" hostname="DESKTOP-M5NOV6K" time="0.03">
+  <properties/>
+  <testcase name="blankHistoryAddsNoConversationBlock()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.014"/>
+  <testcase name="recentConversationHistoryIsRendered()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.0"/>
+  <testcase name="currentUserTurnIsNotDuplicated()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.001"/>
+  <testcase name="currentProductAndDatedEvidenceStayDistinctFromOldMemoryAndMissingDates()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.008"/>
+  <testcase name="assistantQuotedAssignmentDoesNotBecomeUserSessionAuthority()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.001"/>
+  <testcase name="genericShortcutDoesNotDropSessionContext()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.001"/>
+  <testcase name="longHistoryIsBounded()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.0"/>
+  <testcase name="ordinaryMemoryAddsNoSessionAssignmentPrecedenceRule()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.001"/>
+  <testcase name="explicitUserSessionCorrectionHasPrecedenceOverRepeatedAssistantGuesses()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.001"/>
+  <testcase name="lastAssistantAnswerRenderedWhenMissingFromHistory()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.0"/>
+  <testcase name="latestAnswerQualificationsSurviveHistorySampling()" classname="com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

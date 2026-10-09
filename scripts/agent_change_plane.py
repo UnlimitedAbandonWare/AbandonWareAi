@@ -49,6 +49,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_scope_lease as scope  # canon/overlap/run_ps/lease_summary/journal reads
+import lease_lifetime  # heartbeat sidecar merge (Get-AwxLeaseLifetime port)
 
 SCHEMA = "awx.agent-change-plane.v1"
 INTENT_SCHEMA = "awx.change-intent.v1"
@@ -632,28 +633,12 @@ def local_lease_state(root, lease_name):
     try:
         raw = lease_path.read_bytes()
         lease = json.loads(raw)
-        expires = parse_time(lease.get("expiresAtUtc") or lease.get("expiresAt"))
     except (OSError, ValueError, AttributeError):
         return "corrupt", None
-    if expires is None:
+    lifetime = lease_lifetime.lifetime(root / HEARTBEAT_REL, lease, raw)
+    if lifetime["expires"] is None:
         return "corrupt", None
-    lease_id = str(lease.get("leaseId") or "")
-    if re.fullmatch(r"[a-f0-9]{32}", lease_id):
-        hb_path = root / HEARTBEAT_REL / (lease_id + ".json")
-        try:
-            hb = json.loads(hb_path.read_bytes())
-            renewed = parse_time(hb.get("renewedAtUtc"))
-            until = parse_time(hb.get("expiresAtUtc"))
-            now = utcnow()
-            if (hb.get("leaseId") == lease_id and renewed and until
-                    and str(hb.get("leaseFingerprint", "")).lower()
-                    == hashlib.sha256(raw).hexdigest()
-                    and renewed <= now + timedelta(seconds=30)
-                    and renewed < until <= renewed + timedelta(minutes=540)
-                    and until > expires):
-                expires = until
-        except (OSError, ValueError, AttributeError):
-            pass
+    expires = lifetime["effective"]
     if expires <= utcnow():
         return "expired", iso(expires)
     return "active", iso(expires)

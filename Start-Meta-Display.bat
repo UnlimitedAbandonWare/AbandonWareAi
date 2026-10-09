@@ -6,6 +6,7 @@ title AbandonWare Meta Display Wear Launcher
 set "RAG_EXIT=%ERRORLEVEL%"
 echo.
 if not "%RAG_EXIT%"=="0" echo [FAILED] Launcher exit code: %RAG_EXIT%. See the stage and log path above.
+if not "%RAG_EXIT%"=="0" echo [CHECK] Do not relaunch. Real server state: python -B scripts\model_default_probe.py --ready
 echo You may close this window. The wear runtime stays up; generic ForceRestart and DevWatch will not stop it.
 if not defined AWX_RAG_NO_PAUSE pause
 exit /b %RAG_EXIT%

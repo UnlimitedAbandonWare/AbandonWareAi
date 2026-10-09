@@ -54,3 +54,8 @@ system. Invariants: `docs/agents-rules/DEMO1-TRI-SYSTEM-SEAM-ISOLATION.md` +
 ## Exit report (short)
 
 `route=<primary>`, `guard=<optional|none>`, `files=...`, `driftChecked=true|false`, `lensContract=simple-caption|n/a`.
+
+## Reachability-first pointer (grokbot 2026-10-09)
+
+- Display / Nova Focus / model selection / `provider_not_configured` / "여러 번 고쳤는데 그대로": load `$demo1-reachability-first-debug` **before** the primary skill above and before choosing any file.
+- It locates the failing stage from runtime evidence, reads the effective saved profile, and spawns `assist_runtime_skeptic` in parallel; a brief whose path is unreachable gets a CHALLENGE, not a patch.

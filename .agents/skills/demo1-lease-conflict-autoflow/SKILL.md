@@ -1,10 +1,6 @@
 ---
 name: demo1-lease-conflict-autoflow
-description: >-
-  Use when overlapping source-edit leases block a task: classify each blocking
-  lease as live / stale / orphan, auto-reclaim stale ones, continue free
-  targets, and leave one standard release request per conflict fingerprint —
-  live leases are never force-released.
+description: 'Use when overlapping source-edit leases block a task: classify each blocking lease as live / stale / orphan, recover only proven-dead owners, continue free targets, and leave one standard release request per conflict fingerprint — live leases are never force-released.'
 ---
 
 # demo1 Lease Conflict Autoflow
@@ -12,7 +8,7 @@ description: >-
 Overlapping source-edit leases must not stall a task into repeated
 "lease를 종료해 주세요" prompts — and must not turn the user into a
 messenger between sessions. This flow classifies each blocking lease as
-**live | stale | orphan**, auto-reclaims stale ones, continues free
+**live | stale | orphan**, preserves unknown owners, continues free
 targets, and leaves exactly one standard release request per conflict
 fingerprint for live owners. Live leases are never force-released.
 
@@ -40,9 +36,10 @@ fingerprint for live owners. Live leases are never force-released.
 2. `python -B scripts/lease_conflict_autoflow.py plan --goal-files <files>
    --task <myTaskId> --execute`
    → `staleReclaim` (quarantined/skipped), `proceed_without`, `blocked`,
-   `user_prompt`, `auto_actions`. `--execute` first quarantines stale
-   overlaps (receipt + `stale-reclaim` event + `AUTO:lease-reclaimed=`
-   journal), then recomputes: only **live/orphan** leases stay blocked.
+   `user_prompt`, `auto_actions`. `--execute` uses native recovery for expired
+   overlaps with fresh same-host dead-owner proof (receipt + `recover` event +
+   `AUTO:lease-reclaimed=` journal), then recomputes. Unknown/remote/corrupt
+   owners remain blocked; expiry is not recovery authority.
    Without `--execute` the plan only computes (plus the once-only prompt
    marker); `--no-mark` = pure preview (used by `check`/checkpoint hints).
 3. Continue on `proceed_without` immediately: claim/begin only those targets.
@@ -51,9 +48,10 @@ fingerprint for live owners. Live leases are never force-released.
 4. Manual reclaim of known leftovers:
    `python -B scripts/lease_conflict_autoflow.py reclaim [--targets <files>]
    --task <myTaskId>` (`agent_scope_lease.py reclaim` is the same call;
-   `--dry-run` previews, `--include-orphan` also quarantines corrupt locks,
-   `--stale-grace-seconds` default 120). Proven same-host dead owners also
-   go through `source_edit_session.ps1 -Action recover`.
+   `--dry-run` previews, `--include-orphan` retains unreadable locks for review,
+   `--stale-grace-seconds` default 120). Execution reuses
+   `source_edit_session.ps1 -Action recover -RecoveryLockName <exact-lock>
+   -LeaseFingerprint <current-sha256>`; it cannot recover other locks.
 5. For **live** foreign leases the standard request is delivered once per
    fingerprint — to the owner's task channel, never as a user-relay ask:
    - `data/agent-handoff/codex-autonomy/<ownerTaskId>/LEASE_RELEASE_REQUEST.md`
@@ -69,7 +67,7 @@ fingerprint for live owners. Live leases are never force-released.
    later — the same fingerprint never re-prompts. `finishing` = owner
    journal closed or a release request already pending.
    **live lease → 대기 후 이어서 (D32):** BLOCKED로 끝내지 않는다.
-   `plan`이 `nextAction: "WAIT"`와 `waitCommand`를 내면 그 명령을 그대로
+   `plan`이 `nextAction: "WAIT"` 또는 `"WAITING"`과 `waitCommand`를 내면 그 명령을
    실행한다:
    `python -B scripts/codex_auto_unblock.py lease-wait --paths <blocked>
    --max-min auto --enqueue --task <myTaskId>`
@@ -79,18 +77,21 @@ fingerprint for live owners. Live leases are never force-released.
    - `--enqueue`: `__patch_drop__/source-edit-locks/waiters/<sha12>/
      <UTC>-<task>.json` 대기표 — 같은 파일을 기다리는 세션은 순번대로만
      진행(만료 대기표는 무시, 내 것만 생성·삭제).
-   - `--task`: 대기 중 interval마다 내 lease heartbeat 갱신.
+   - `--task`: 대기 중 backoff poll마다 내 lease heartbeat 갱신. elapsed는 monotonic,
+     sleep은 60초와 round의 남은 deadline으로 제한한다. round 소진은 목표 종료가 아니다.
    - `--dry-run`은 1회 스캔만(대기표도 안 만든다, 완전 읽기 전용).
    대기 중에는 사용자에게 "기다릴까요?"를 묻지 않고, 막히지 않은 파일
    작업·테스트 준비·막힌 파일용 패치를 ledger 아래 `.diff`로 미리 작성
    (실제 파일엔 안 씀)까지만 한다. 대기 시작·끝에 journal `LEASE_WAIT_START`/
    `LEASE_WAIT_END` 1줄씩.
    풀리면(result=free) `plan --waited`로 재계획 → `nextAction: "RESUME"` +
-   `resumeChecks` 3개(① 대상 sha12 재기록, 바뀌었으면 EXTERNAL_DRIFT 기록 후
-   최신 위에 다시 패치 ② 내 RED 테스트 재실행 ③ begin/재claim). 예산이 끝났는데
-   live면 `plan --waited`는 `nextAction: "HOLD"` + `resumeWhen:
-   [{leaseId,topic,expiresAtUtc}]`를 낸다 — 이때만 release 요청 1회 + partial +
-   handoff에 그 resumeWhen을 그대로 기록.
+   `resumeAllowed=false`와 `resumeChecks` 5개를 낸다: 자기 fresh begin receipt 획득 →
+   immutable baseline과 최신 target/test/config full SHA256·path identity 비교 →
+   재독/새 계획/RED 또는 현재 검사로 already-done 확인 → strict pre-edit verify →
+   변경에 묶인 현재 검사. 이는 advisory 계획이며 free가 쓰기 권한은 아니다.
+   예산이 끝났는데 live면 `plan --waited`는 `nextAction: "WAITING"`과
+   `resumeWhen: [{leaseId,topic,expiresAtUtc}]`를 유지한다. 다음 round를 관측하며
+   독립 범위를 계속한다. stale/orphan/unknown은 lifecycle SSOT에 따라 해당 lane만 보류한다.
    여러 Devin/Codex를 동시에 돌릴 때 ChatWorkflow.java처럼 자주 겹치는 파일은
    쓰는 에이전트 1개만 배정하고, 나머지는 읽기·테스트·`.diff` 준비 역할로 둔다.
 7. While holding a lease, renew at progress boundaries so your owner state
@@ -112,10 +113,9 @@ fingerprint for live owners. Live leases are never force-released.
   hard rule. Never ask the user to relay "그 작업에 전달해 주세요" as a
   default response; user intermediation is reserved for a live lease that
   blocks urgent work long-term.
-- Never reclaim on TTL alone without the tool: `reclaim` re-verifies lock
-  inventory, lease fingerprint, root, heartbeat freshness and expiry right
-  before the quarantine move (`--stale-grace-seconds` margin); a lease that
-  refreshed between scan and move is left alone.
+- Never reclaim on TTL alone. Native recovery proves same-host PID/start
+  death and re-verifies lock inventory, fingerprint, root and heartbeat
+  before movement; a refreshed or invalid heartbeat stops the move.
 - Never edit a target another task's **live** lease still covers; proceed
   on free targets only (`target-scoped` overlap = exact or prefix either
   direction).
@@ -129,10 +129,10 @@ fingerprint for live owners. Live leases are never force-released.
 ## Validate
 
 `python -B -m unittest scripts.test_lease_conflict_autoflow -v` —
-fixtures cover: expired unknown-owner lease → reclaim quarantines it and
-the target frees (begin→abnormal-exit→stale→reclaim→edit repro),
-live lease and live-heartbeat lease never reclaimed, grace-window hold,
-orphan flag gating, once-only prompt, and lease bytes preserved.
+fixtures cover: unknown/remote/corrupt owners preserved in preview and execute,
+proven-dead recovery, targeted scope and generation replacement, fresh heartbeat
+and receipt-time refresh protection, grace-window hold, once-only prompt, and
+exact foreign lease byte preservation.
 
 ## Parallel-lane preflight (additive)
 
@@ -142,3 +142,7 @@ Before the first edit on a goal that other chats may share, run
 with `blockingClaims` + `freeScope`, and `STALE_CLAIM` candidates as a
 dry-run only (reclaim stays with this flow's `reclaim`). See
 `.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.
+
+## Overlapping lease = auto-resume, never a stop (additive)
+
+An overlapping live lease must not end the session: lease-wait while doing non-overlapping work, then lease_resume_check.py exit code (0 continue / 10 re-plan+resume / 20 hold that file only). SSOT: $demo1-parallel-auto-resume (.agents/skills/demo1-parallel-auto-resume/SKILL.md).

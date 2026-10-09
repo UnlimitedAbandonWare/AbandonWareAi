@@ -1,0 +1,43 @@
+{
+  "runId": "e2ab4e87-e044-4a0d-bbd2-d6270f51842f",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:46:28.171572+00:00",
+  "status": "passed",
+  "executable": "gradlew.bat",
+  "argumentCount": 7,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusServiceTest"
+  ],
+  "commandSha256": "703b8ed161f56f116ff341c492e72af4f49479e88fd0360b0a3b12ddad3fb9dc",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\assist\\NovaFocusState.java",
+      "kind": "file",
+      "sha256": "01502803cb08e337fc12b816806f4e13173fad2c77366bb0ed57325e88e83ee0",
+      "bytes": 28184
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 66832,
+  "endedAt": "2026-10-09T11:46:56.417278+00:00",
+  "elapsedMs": 28245,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

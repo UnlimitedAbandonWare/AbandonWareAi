@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.service.ChatModelCatalogServiceTest" tests="12" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:03:47" hostname="DESKTOP-M5NOV6K" time="3.033">
+  <properties/>
+  <testcase name="lunaPresetRouteIsAdmittedByMetaDisplayProfileWithoutOpeningOtherRoutes()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="2.412"/>
+  <testcase name="routeOptInUsesExactKeysAndIsClosedByDefault()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.083"/>
+  <testcase name="failedDiscoveryIsNotReportedAsGenerationSuccess()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.154"/>
+  <testcase name="installedChatDiscoveryIsBoundedCachedAndDoesNotEnableCloud()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.137"/>
+  <testcase name="explicitPublicDiscoveryIsCredentialFreeCachedAndNeverSelectable()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.008"/>
+  <testcase name="exactRouteOptInDoesNotOpenOtherEligibleCloudModels()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.012"/>
+  <testcase name="routeOptInCannotOverrideManifestOrGatewayRejection()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.035"/>
+  <testcase name="discoveryDoesNotContactRemoteOrCredentialBearingUrls()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.001"/>
+  <testcase name="geminiCueSelectableUnderMetaDisplayDefaultRoutesWithoutOpeningGlobalSelection()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.036"/>
+  <testcase name="googleSearchCapabilityUsesConfiguredNativeReadinessWithoutGenerationProbe()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.095"/>
+  <testcase name="preservesPolicyAndRouteReasonsInJsonWithLegacyPrimaryReason()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.019"/>
+  <testcase name="apiFirstCatalogueDesignatesEligibleCloudDefaultWithoutOpeningRejectedRoutes()" classname="com.example.lms.service.ChatModelCatalogServiceTest" time="0.025"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,218 @@
+{
+  "checkedAt": "2026-10-09T08:44:19.001Z",
+  "base": "http://127.0.0.1:18180",
+  "requestedModel": "chatgpt-oauth:gpt-5.6-terra",
+  "restoredAuthState": false,
+  "maxGenerationPosts": 2,
+  "generationPosts": 2,
+  "scenarios": [
+    {
+      "id": "greeting",
+      "freshContext": true,
+      "questionHash": "b8e6062790b1",
+      "requests": [
+        {
+          "endpoint": "/api/chat/stream",
+          "status": 200,
+          "requestHash": "f2915aa9cc32"
+        }
+      ],
+      "consoleErrorCount": 0,
+      "failedRequestCount": 0,
+      "selection": {
+        "selectedValue": "chatgpt-oauth:gpt-5.6-terra",
+        "statusText": "",
+        "applied": false
+      },
+      "protocolCaptures": [
+        {
+          "bodyReadStatus": "success",
+          "bodyBytes": 49350,
+          "eventCount": 27,
+          "dataLineCount": 27,
+          "jsonParseSucceeded": 27,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {
+            "status": 8,
+            "transformer": 5,
+            "session": 1,
+            "selection_entropy": 2,
+            "thought": 6,
+            "debug_fx": 2,
+            "token": 1,
+            "trace": 1,
+            "final": 1
+          },
+          "completedAtEpochMs": 1791535487698
+        }
+      ],
+      "streamCapture": [
+        {
+          "source": "page_fetch_clone",
+          "bodyReadStatus": "success",
+          "bodyBytes": 49350,
+          "eventCount": 27,
+          "dataLineCount": 27,
+          "jsonParseSucceeded": 27,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {
+            "status": 8,
+            "transformer": 5,
+            "session": 1,
+            "selection_entropy": 2,
+            "thought": 6,
+            "debug_fx": 2,
+            "token": 1,
+            "trace": 1,
+            "final": 1
+          }
+        }
+      ],
+      "metadata": {
+        "reasonCode": "",
+        "claimedModel": "gpt-5.6-terra",
+        "observedProvider": "chatgpt_oauth",
+        "observedModel": "gpt-5.6-terra",
+        "routeId": "hash:7fcf48292c2a",
+        "fallbackCount": 0
+      },
+      "correlationHash": "822139e13177",
+      "trace": {
+        "matched": true,
+        "reason": null,
+        "status": 200,
+        "diagnostics": {
+          "observedModel": "gpt-5.6-terra",
+          "observedProvider": "chatgpt_oauth",
+          "routeId": "hash:7fcf48292c2a",
+          "fallbackCount": 0,
+          "prompt.localDocsCount": 0,
+          "prompt.localDocsRenderedCount": 0,
+          "rag.evidence.promotion.candidateCount": 0,
+          "rag.evidence.promotion.citableLocatorCount": 0,
+          "rag.evidence.promotion.evidenceGatePassed": true,
+          "rag.evidence.promotion.citationGateMinPassed": false,
+          "rag.evidence.promotion.promotedCount": 0,
+          "finalAnswer.releaseReason": "verification_not_required",
+          "finalAnswer.evidenceReleaseState": "not_applicable",
+          "finalAnswer.releaseAllowed": true,
+          "finalAnswer.evidenceScopeBound": false,
+          "finalAnswer.retrievalExecution": "not_requested"
+        }
+      },
+      "assistantCreated": true,
+      "answerChars": 60,
+      "answerHash": "f0d8e948fd3f",
+      "holdDisplayed": false,
+      "backendUnavailable": false,
+      "renderedBodyAvailable": true,
+      "verdict": "PASS"
+    },
+    {
+      "id": "general",
+      "freshContext": true,
+      "questionHash": "ee4f9a8222fc",
+      "requests": [
+        {
+          "endpoint": "/api/chat/stream",
+          "status": 200,
+          "requestHash": "1de3b590ccc6"
+        }
+      ],
+      "consoleErrorCount": 0,
+      "failedRequestCount": 0,
+      "selection": {
+        "selectedValue": "chatgpt-oauth:gpt-5.6-terra",
+        "statusText": "",
+        "applied": false
+      },
+      "protocolCaptures": [
+        {
+          "bodyReadStatus": "success",
+          "bodyBytes": 48549,
+          "eventCount": 27,
+          "dataLineCount": 27,
+          "jsonParseSucceeded": 27,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {
+            "status": 8,
+            "transformer": 5,
+            "session": 1,
+            "selection_entropy": 2,
+            "thought": 6,
+            "debug_fx": 2,
+            "token": 1,
+            "trace": 1,
+            "final": 1
+          },
+          "completedAtEpochMs": 1791535511276
+        }
+      ],
+      "streamCapture": [
+        {
+          "source": "page_fetch_clone",
+          "bodyReadStatus": "success",
+          "bodyBytes": 48549,
+          "eventCount": 27,
+          "dataLineCount": 27,
+          "jsonParseSucceeded": 27,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {
+            "status": 8,
+            "transformer": 5,
+            "session": 1,
+            "selection_entropy": 2,
+            "thought": 6,
+            "debug_fx": 2,
+            "token": 1,
+            "trace": 1,
+            "final": 1
+          }
+        }
+      ],
+      "metadata": {
+        "reasonCode": "",
+        "claimedModel": "gpt-5.6-terra",
+        "observedProvider": "chatgpt_oauth",
+        "observedModel": "gpt-5.6-terra",
+        "routeId": "hash:7fcf48292c2a",
+        "fallbackCount": 0
+      },
+      "correlationHash": "f9e19a9796b4",
+      "trace": {
+        "matched": true,
+        "reason": null,
+        "status": 200,
+        "diagnostics": {
+          "observedModel": "gpt-5.6-terra",
+          "observedProvider": "chatgpt_oauth",
+          "routeId": "hash:7fcf48292c2a",
+          "fallbackCount": 0,
+          "prompt.localDocsCount": 0,
+          "prompt.localDocsRenderedCount": 0,
+          "rag.evidence.promotion.candidateCount": 0,
+          "rag.evidence.promotion.citableLocatorCount": 0,
+          "rag.evidence.promotion.evidenceGatePassed": true,
+          "rag.evidence.promotion.citationGateMinPassed": false,
+          "rag.evidence.promotion.promotedCount": 0,
+          "finalAnswer.releaseReason": "verification_not_required",
+          "finalAnswer.evidenceReleaseState": "not_applicable",
+          "finalAnswer.releaseAllowed": true,
+          "finalAnswer.evidenceScopeBound": false,
+          "finalAnswer.retrievalExecution": "not_requested"
+        }
+      },
+      "assistantCreated": true,
+      "answerChars": 95,
+      "answerHash": "cab1bf2db412",
+      "holdDisplayed": false,
+      "backendUnavailable": false,
+      "renderedBodyAvailable": true,
+      "verdict": "PASS"
+    }
+  ]
+}

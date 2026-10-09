@@ -2,7 +2,7 @@
   'use strict';
   const PHASES=new Set(['OFF','ARMED','WAKE_PREVIEW','LISTENING','SNAPSHOT','THINKING','ANSWER_READY','PRESENTING','WAITING','SUSPENDED']);
   const LABELS={WAKE_PREVIEW:'호출 확인 중',LISTENING:'듣는 중',SNAPSHOT:'사진 촬영 중',THINKING:'응답 준비 중',ANSWER_READY:'답변 표시 중',PRESENTING:'답변 표시 중',WAITING:'후속 질문 대기',SUSPENDED:'연결 확인 필요'};
-  const CLOSE_REASONS={wake_no_question:'질문이 들리지 않아 종료했습니다.',wake_unconfirmed:'호출이 확정되지 않아 종료했습니다.',wake_retracted:'노바 호출이 취소됐습니다.',idle_timeout:'후속 질문 대기 시간이 지났습니다.',generation_timeout:'응답 대기 시간이 지났습니다.',presentation_unconfirmed:'답변 표시 완료를 확인하지 못했습니다.',input_unconfirmed:'말씀하신 질문이 확정되지 않았습니다.',capture_changed:'수음 연결이 바뀌었습니다.',memory_changed:'참고할 메모리가 바뀌었습니다.',focus_outcome_unknown:'질문 처리 결과를 확인하지 못했습니다. 같은 질문을 자동으로 다시 보내지 않습니다.',focus_request_already_accepted:'이미 접수된 질문입니다.',focus_grounding_publication_held:'검색 답변의 출처 표시를 확인하지 못했습니다.',focus_stream_final_mismatch:'최종 응답을 확인하지 못했습니다.',server_shutdown:'서버가 재시작되거나 종료됐습니다.',user_closed:'사용자가 집중창을 닫았습니다.',focus_answer_unavailable:'응답을 확인하지 못했습니다.',focus_busy:'앞선 질문을 처리하고 있습니다.'};
+  const CLOSE_REASONS={wake_no_question:'질문이 들리지 않아 종료했습니다.',wake_unconfirmed:'호출이 확정되지 않아 종료했습니다.',wake_retracted:'노바 호출이 취소됐습니다.',idle_timeout:'후속 질문 대기 시간이 지났습니다.',generation_timeout:'응답 대기 시간이 지났습니다.',presentation_unconfirmed:'답변 표시 완료를 확인하지 못했습니다.',input_unconfirmed:'말씀하신 질문이 확정되지 않았습니다.',capture_changed:'수음 연결이 바뀌었습니다.',memory_changed:'참고할 메모리가 바뀌었습니다.',focus_outcome_unknown:'질문 처리 결과를 확인하지 못했습니다. 같은 질문을 자동으로 다시 보내지 않습니다.',focus_request_already_accepted:'이미 접수된 질문입니다.',focus_grounding_publication_held:'검색 답변의 출처 표시를 확인하지 못했습니다.',focus_stream_final_mismatch:'최종 응답을 확인하지 못했습니다.',server_shutdown:'서버가 재시작되거나 종료됐습니다.',user_closed:'사용자가 집중창을 닫았습니다.',focus_answer_unavailable:'답을 만들지 못했어요. 잠시 후 다시 질문해 주세요.',focus_busy:'앞선 질문을 처리하고 있습니다.'};
   CLOSE_REASONS.session_changed='연결 세션이 바뀌었습니다.';
   const reasonCode=value=>/^[a-z][a-z0-9_]{0,63}$/.test(value||'')?value:'unknown';
   const closeReasonText=value=>Object.prototype.hasOwnProperty.call(CLOSE_REASONS,reasonCode(value))?CLOSE_REASONS[reasonCode(value)]:'노바가 종료됐습니다 ('+reasonCode(value)+').';
@@ -15,6 +15,11 @@
     if(raw.renderTarget!=null&&!['lens','fold'].includes(raw.renderTarget))throw Error('invalid_focus');
     if(raw.renderReceiptTicket!=null&&raw.renderReceiptTicket!==''&&!/^[a-f0-9]{64}$/.test(raw.renderReceiptTicket))throw Error('invalid_focus');
     for(const field of ['answerTruncated','hasMoreOnFold'])if(raw[field]!=null&&typeof raw[field]!=='boolean')throw Error('invalid_focus');
+    if(raw.isFallback!=null&&typeof raw.isFallback!=='boolean')throw Error('invalid_focus');
+    if(raw.isFallback===true){
+      for(const field of ['requestedModel','effectiveModel'])if(typeof raw[field]!=='string'||raw[field].length>180||! /^[a-zA-Z0-9][a-zA-Z0-9._/:+-]*$/.test(raw[field]))throw Error('invalid_focus');
+      if(!/^[a-z][a-z0-9_]{0,63}$/.test(raw.fallbackReasonCode||'')||! /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(raw.originalError||''))throw Error('invalid_focus');
+    }
     if(raw.grounding!=null){
       const value=raw.grounding;
       if(raw.renderTarget!=='fold'||typeof value.originalText!=='string'||!value.originalText||typeof value.model!=='string'
@@ -28,13 +33,22 @@
     let groundedKey='',groundedHost=null;
     const keepalive=options.target==='fold';
     let closeTimer=null,terminalKey='',terminalVisible=false,dismissedActivation='',lastDiagnostic='',scopeEndedActive=false;
+    let fallbackStatus=options.fallbackStatus||null;
+    function renderFallback(next){
+      const visible=keepalive&&next?.active&&next.isFallback===true&&!!next.answerText&&next.answerComplete!==false;
+      if(visible&&!fallbackStatus&&doc?.createElement&&panel?.append){
+        fallbackStatus=doc.createElement('div');fallbackStatus.setAttribute?.('role','status');
+        Object.assign(fallbackStatus.style,{padding:'8px',border:'1px solid #d69e2e',background:'#44351c',color:'#fff3cd'});panel.append(fallbackStatus);
+      }
+      if(fallbackStatus){fallbackStatus.hidden=!visible;fallbackStatus.textContent=visible?'요청 모델 '+next.requestedModel+' 실패 ('+next.fallbackReasonCode+') · 대체 모델 '+next.effectiveModel+'로 응답했습니다.':'';}
+    }
     function cancelClose(){if(closeTimer!==null)host.clearTimeout?.(closeTimer);closeTimer=null;terminalVisible=false;}
     function diagnostic(cause,hidden=false){
       const key=cause+':'+hidden;if(key===lastDiagnostic)return;lastDiagnostic=key;
       options.diagnostic?.(hidden?'hide_cause':'focus_visibility',{cause,hidden,stateVersion:current?.stateVersion||0,phase:current?.phase||'OFF'});
     }
     function dismiss(){
-      dismissedActivation=current?.activationId||'';scopeEndedActive=false;cancelClose();clearGrounding();flow.accept(null);receipts.clear();
+      renderFallback(null);dismissedActivation=current?.activationId||'';scopeEndedActive=false;cancelClose();clearGrounding();flow.accept(null);receipts.clear();
       if(panel)panel.hidden=true;
     }
     function contractError(){
@@ -66,7 +80,7 @@
     let flow=makeFlow();
     function reset(){
       scopeEndedActive=scopeEndedActive||!!current?.active&&dismissedActivation!==current.activationId;
-      cancelClose();clearGrounding();receipts.clear();flow.dispose();flow=makeFlow();
+      renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();flow=makeFlow();
       current=null;server='';version=-1;terminalKey='';dismissedActivation='';lastDiagnostic='';awaitingFresh=true;
       if(panel)panel.hidden=true;if(options.draft)options.draft.textContent='';if(options.status)options.status.textContent='';
     }
@@ -128,7 +142,7 @@
       if(next){server=next.serverInstanceId;version=next.stateVersion;}
       if(keepalive&&!next?.active&&!next?.reason&&terminalKey){current=next||current;if(panel)panel.hidden=!terminalVisible;return false;}
       const wasActive=!!current?.active||scopeEndedActive;if(next)scopeEndedActive=false;
-      current=next;
+      current=next;renderFallback(next);
       if(keepalive&&next?.activationId&&dismissedActivation===next.activationId){if(panel)panel.hidden=true;return false;}
       if(keepalive&&!next?.active&&next?.reason&&(wasActive||terminalKey)){
         clearGrounding();flow.accept(null);receipts.clear();
@@ -159,7 +173,7 @@
     }
     function visibility(){if(doc?.hidden){awaitingFresh=true;flow.pause();}else if(!awaitingFresh)flow.pause(paused);}
     function togglePause(){paused=!paused;flow.pause(paused||awaitingFresh||!!doc?.hidden);return paused;}
-    function dispose(){disposed=true;cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
+    function dispose(){disposed=true;renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
     return {update,visibility,togglePause,replay:()=>flow.replay(),dismiss,reset,dispose,isActive:()=>!!current?.active&&dismissedActivation!==current.activationId||terminalVisible};
   }
   function receiptSender(host=globalThis){

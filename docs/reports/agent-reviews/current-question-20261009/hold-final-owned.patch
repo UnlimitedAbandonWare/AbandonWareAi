@@ -1,0 +1,256 @@
+--- a/main/java/com/example/lms/assist/NovaFocusState.java
++++ b/main/java/com/example/lms/assist/NovaFocusState.java
+@@ -77,7 +77,7 @@
+     private boolean partialVersionReserved;
+     private com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding;
+     private NovaFocusAnswer.ModelOutcome modelOutcome;
+-    private long version,answerVersion,listenUntil,wakeDeadline,generationUntil,presentationUntil,idleUntil;
++    private long version,answerVersion,listenUntil,wakeDeadline,generationUntil,presentationUntil,idleUntil,answerHoldUntil;
+     private boolean inFlight,firstVisible,done,answerTruncated;
+     private int runAnswerLength=400;
+     private NovaFocusSettings.Presentation runPresentation;
+@@ -125,13 +125,13 @@
+         if(active())return;
+         activation=UUID.randomUUID().toString();target=renderTarget;phase="LISTENING";draft.clear();draftKeys.clear();
+         foldPartial="";partialVersionReserved=false;answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();wakeDeadline=now+WAKE_PREVIEW_LIMIT_MS;version++;
+-        grounding=null;modelOutcome=null;
++        grounding=null;modelOutcome=null;answerHoldUntil=0;
+         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
+     }
+     void close(String cause){
+         log.info("[AWX][nova-focus] close reason={} phase={} version={}",cause!=null&&cause.matches("[a-z][a-z0-9_]{0,63}")?cause:"unknown",phase,version+1);
+         phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+-        grounding=null;modelOutcome=null;
++        grounding=null;modelOutcome=null;answerHoldUntil=0;
+         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
+     private String key(ConversateQuestionPolicy.Utterance u){
+         String source=u.questionId()+":"+u.utteranceId();
+@@ -194,9 +194,15 @@
+     Request tick(long now,boolean capacity,long settingsVersion){
+         if(!active())return null;
+         if(draft.overLimit()){draft.clear();draftKeys.clear();reason="focus_input_limit";version++;}
++        // Keep duplex ASR and its one pending question while the accepted answer remains visible.
++        if(done&&phase.equals("PRESENTING")&&(now>=answerHoldUntil
++                ||capacity&&draft.finalReady(now,settings.utteranceQuietMs())
++                    &&draftKeys.size()==1&&draftKeys.iterator().next().startsWith("typed-"))){
++            phase=draft.hasInput()?"LISTENING":"WAITING";version++;
++        }
+         if(phase.equals("WAKE_PREVIEW")&&now>=listenUntil){close("wake_unconfirmed");return null;}
+         if(inFlight&&now>=generationUntil){close("generation_timeout");return null;}
+-        if(Set.of("ANSWER_READY","PRESENTING").contains(phase)&&now>=presentationUntil){close("presentation_unconfirmed");return null;}
++        if(!done&&Set.of("ANSWER_READY","PRESENTING").contains(phase)&&now>=presentationUntil){close("presentation_unconfirmed");return null;}
+         if(phase.equals("WAITING")&&now>=idleUntil){close("idle_timeout");return null;}
+         if(phase.equals("LISTENING")&&!draft.hasInput()&&now>=listenUntil){close("wake_no_question");return null;}
+         if(draft.hasInput()&&!draft.finalized()&&now-draft.changedAt()>60000){close("input_unconfirmed");return null;}
+@@ -216,7 +222,7 @@
+             runPresentation=settings.effectivePresentation();
+             committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
+             draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";
+-            grounding=null;modelOutcome=null;
++            grounding=null;modelOutcome=null;answerHoldUntil=0;
+             if(snapshotEnabled()){
+                 pendingRequest=request;pendingCaptureId=newCaptureId();pendingCaptureSource=settings.snapshotOrDefault().source();
+                 claimedCaptureId=null;snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;
+@@ -302,7 +308,7 @@
+         if(!foldPrefixMatches(text)){close("focus_stream_final_mismatch");return;}
+         grounding=grounded;modelOutcome=outcome;
+         inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);if(!partialVersionReserved)answerVersion++;foldPartial="";partialVersionReserved=false;receipt=ticket;phase="ANSWER_READY";reason="";
+-        firstVisible=done=false;idleUntil=0;
++        firstVisible=done=false;idleUntil=answerHoldUntil=0;
+         presentationUntil=now+Math.max(120000,Math.min(1500000L,answer.codePointCount(0,answer.length())*(long)settings.presentation().charIntervalMs()+120000));
+         version++;
+     }
+@@ -311,7 +317,8 @@
+         if(!server.equals(instance)||!activation.equals(activationId)||!turn.equals(turnId)||answerVersion!=answerVer||receipt.isEmpty()||!receipt.equals(ticket)||!active())return false;
+         if(event.equals("first_visible")){if(!firstVisible){firstVisible=true;phase="PRESENTING";version++;}return true;}
+         if(!event.equals("presentation_done")||!firstVisible)return false;
+-        if(!done){done=true;phase=draft.hasInput()?"LISTENING":"WAITING";idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
++        if(!done){done=true;answerHoldUntil=now+(runPresentation==null?settings.effectivePresentation():runPresentation).tailHoldMs();
++            idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
+     }
+     View view(long now){return new View(server,activation,turn,version,answerVersion,active(),phase,
+         NovaFocusHistoryService.clip(draft.text(),2000),question,inFlight&&!foldPartial.isEmpty()?foldPartial:answer,grounding==null?target:"fold",receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength,grounding,!inFlight||foldPartial.isEmpty(),modelOutcome);}
+--- a/src/test/java/com/example/lms/assist/NovaFocusStateTest.java
++++ b/src/test/java/com/example/lms/assist/NovaFocusStateTest.java
+@@ -4,6 +4,74 @@
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+ class NovaFocusStateTest {
++    @Test void selectedThreeAndFiveSecondHoldPreservesAnswerAndOneVoiceQuestionUntilDeadline() {
++        for(int hold: new int[]{3000,5000}){
++            var s=heldState(hold,20000);s.open(0,"fold");s.input(u("first",0,true,"첫 질문"),0);
++            var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","읽는 답변","ticket",1300);
++            s.input(u("next",0,false,"다음"),1350);s.input(u("next",1,true,"다음 질문"),1400);
++            s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
++            assertNull(s.tick(1450));
++            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
++            assertNull(s.tick(1700),"early voice handoff, hold="+hold);
++            assertThrows(IllegalArgumentException.class,()->s.typed("manual","덮어쓰기",1800));
++            s.input(u("extra",0,true,"추가 질문"),2800);
++            assertEquals("focus_next_question_full",s.view(2800).reason());
++            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",3000);
++            long deadline=1500+hold;assertNull(s.tick(deadline-1));
++            assertEquals("읽는 답변",s.view(deadline-1).answerText());assertEquals(1,s.view(deadline-1).answerVersion());
++            assertEquals("다음 질문",s.view(deadline-1).draftText());
++            var next=s.tick(deadline);assertNotNull(next);assertEquals("다음 질문",next.question());
++            assertNull(s.tick(deadline+1));
++        }
++    }
++    @Test void holdFreezesWithAcceptedQuestionAndStillRequiresFinalQuiet() {
++        var s=heldState(3000,20000);s.open(0,"fold");s.input(u("first",0,true,"질문"),0);
++        var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","답변","ticket",1300);
++        s.configure(heldState(5000,20000).settings,1400);
++        s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
++        s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
++        assertEquals(3000,s.view(1500).presentation().tailHoldMs());
++        s.input(u("next",0,false,"부분"),2000);assertNull(s.tick(4300));
++        s.input(u("next",1,true,"확정 질문"),4400);assertNull(s.tick(4500));assertNull(s.tick(5599));
++        var next=s.tick(5600);assertNotNull(next);assertEquals("확정 질문",next.question());
++        assertEquals(5000,s.view(5600).presentation().tailHoldMs());
++    }
++    @Test void shortIdleCannotPreemptHoldButStopAndOldReceiptRemainImmediate() {
++        var idle=heldState(15000,5000);idle.open(0,"fold");idle.input(u("first",0,true,"질문"),0);
++        var first=idle.tick(1200);idle.accepted(first,"turn");idle.answer(first,"turn","답변","ticket",1300);
++        idle.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
++        idle.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
++        assertNull(idle.tick(6500));assertTrue(idle.active());assertEquals("답변",idle.view(16499).answerText());
++        assertNull(idle.tick(16499));assertTrue(idle.active());idle.tick(16500);
++        assertFalse(idle.active());assertEquals("idle_timeout",idle.view(16500).reason());
++        var stop=heldState(5000,20000);stop.open(0,"fold");stop.input(u("first",0,true,"질문"),0);
++        var old=stop.tick(1200);stop.accepted(old,"turn");stop.answer(old,"turn","답변","ticket",1300);
++        stop.receipt("server",old.activationId(),"turn",1,"ticket","first_visible",1400);
++        stop.receipt("server",old.activationId(),"turn",1,"ticket","presentation_done",1500);
++        stop.close("user_closed");assertFalse(stop.active());assertEquals("",stop.view(1501).answerText());
++        stop.open(1600,"fold");assertFalse(stop.receipt("server",old.activationId(),"turn",1,"ticket","presentation_done",1700));
++        stop.input(u("fresh",0,true,"새 질문"),1600);assertNotNull(stop.tick(2800));
++    }
++    private NovaFocusState heldState(int hold,int idle){
++        var d=NovaFocusSettings.defaults();var p=d.presentation();
++        return new NovaFocusState("server",new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),idle,d.wakeListenTimeoutMs(),
++            new NovaFocusSettings.Presentation(p.sequentialTextEnabled(),p.charIntervalMs(),p.maxVisibleLines(),p.autoFadeEnabled(),hold,p.fadeMs())));
++    }
++    @Test void manualBypassWaitsForQuietAndCapacityWithoutOpeningVoiceMergeDuringHold() {
++        for(boolean capacity: new boolean[]{true,false}){
++            var s=heldState(5000,20000);s.open(0,"fold");s.input(u("first",0,true,"질문"),0);
++            var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","읽는 답변","ticket",1300);
++            s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
++            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
++            s.typed("manual","수동 질문",1600);assertNull(s.tick(1601,capacity));
++            assertEquals("PRESENTING",s.view(1601).phase());assertEquals("읽는 답변",s.view(1601).answerText());
++            if(!capacity){assertNull(s.tick(2800,false));assertEquals("PRESENTING",s.view(2800).phase());}
++            s.input(u("voice",0,true,"합치면 안 되는 음성"),2801);
++            assertEquals("focus_next_question_full",s.view(2801).reason());assertEquals("수동 질문",s.view(2801).draftText());
++            var manual=s.tick(2802,true);assertNotNull(manual);assertEquals("수동 질문",manual.question());
++            assertEquals(NovaFocusState.typedRequestId("manual"),manual.requestId());assertNull(s.tick(2803));
++        }
++    }
+     @Test void fallbackOutcomeStaysWithAcceptedRequestAndOnlyFoldThenClearsOnNormalAnswer() {
+         var s=state(true);s.open(0,"fold");s.input(u("one",0,true,"첫 질문"),0);var first=s.tick(1200);s.accepted(first,"first");
+         var outcome=new NovaFocusAnswer.ModelOutcome("fixture-primary","llmrouter.gemini-cue","gemini-3.5-flash-lite",true,"backend_timeout","ModelSelectionException");
+@@ -182,7 +250,10 @@
+         var first=s.tick(1200);s.accepted(first,"first");s.answer(first,"first","answer","ticket",1300);
+         s.receipt("server",first.activationId(),"first",1,"ticket","first_visible",1400);
+         s.receipt("server",first.activationId(),"first",1,"ticket","presentation_done",1500);
+-        s.sourceNamespace("assist:2");s.input(u("a",0,true,"second"),1600);var second=s.tick(2800);
++        s.sourceNamespace("assist:2");s.input(u("a",0,true,"second"),1600);
++        long deadline=1500+s.view(1500).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
++        assertEquals("answer",s.view(deadline-1).answerText());assertEquals("second",s.view(deadline-1).draftText());
++        var second=s.tick(deadline);
+         assertNotNull(second);assertTrue(s.accepts(second));assertFalse(s.accepts(first));
+         s.failed(first,"late_failure");assertTrue(s.accepts(second));
+     }
+@@ -223,7 +294,10 @@
+         var s=state(true);s.input(u("a",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
+         s.input(u("b",0,false,"질문"),1500);s.input(u("b",1,true,"질문"),1600);assertNull(s.tick(3000));
+         s.answer(r,"turn","답변","ticket",3100);s.receipt("server",r.activationId(),"turn",1,"ticket","first_visible",3200);
+-        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",4000);assertEquals("질문",s.tick(4001).question());
++        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",4000);
++        long deadline=4000+s.view(4000).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
++        assertEquals("답변",s.view(deadline-1).answerText());assertEquals("질문",s.view(deadline-1).draftText());
++        assertEquals("질문",s.tick(deadline).question());assertNull(s.tick(deadline+1));
+     }
+     @Test void typedRequestIdentitySurvivesServerAndActivationChange(){
+         var first=state(false);first.sourceNamespace("old-capture");first.open(0,"fold");first.typed("request-1","question",0);var a=first.tick(1200);
+@@ -248,7 +322,10 @@
+         assertEquals("다음 질문",s.view(2600).draftText());assertEquals("focus_next_question_full",s.view(2600).reason());
+         assertEquals(new java.util.HashSet<>(java.util.List.of("active","phase","stateVersion","answerVersion","bufferedQuestions","snapshotPending","captureAttempts","capturesCompleted","duplicateSuppressed","captureGrants","textFallbacks")),s.diagnostics().keySet());
+         s.answer(r,"turn","답변","ticket",2700);s.receipt("server",r.activationId(),"turn",1,"ticket","first_visible",2800);
+-        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",3000);assertEquals("다음 질문",s.tick(3001).question());
++        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",3000);
++        long deadline=3000+s.view(3000).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
++        assertEquals("답변",s.view(deadline-1).answerText());assertEquals("다음 질문",s.view(deadline-1).draftText());
++        assertEquals("다음 질문",s.tick(deadline).question());assertNull(s.tick(deadline+1));
+     }
+     @Test void sameCaptureFinalReplayIsStableButNewCaptureCanReuseAsrCounter(){
+         var a=state(true);a.sourceNamespace("capture:1");a.input(u("asr-1",0,true,"노바 질문"),0);var first=a.tick(1200);
+--- a/src/test/java/com/example/lms/assist/NovaFocusServiceTest.java
++++ b/src/test/java/com/example/lms/assist/NovaFocusServiceTest.java
+@@ -80,7 +80,7 @@
+                 .when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+             doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+             f.ask(1,"one");f.awaitAnswer(1);f.presented(1);
+-            assertEquals("WAITING",f.service.view(f.owner,"assist",1).phase());
++            assertEquals("PRESENTING",f.service.view(f.owner,"assist",1).phase());
+             f.ask(1,"two");f.awaitAnswer(1);assertEquals("answer",f.service.view(f.owner,"assist",1).answerText());
+             verify(f.history,times(2)).terminal(any(),any(),any(),eq("COMPLETED"),any());
+         }
+--- a/main/resources/static/assets/display/display-focus-controls.js
++++ b/main/resources/static/assets/display/display-focus-controls.js
+@@ -165,7 +165,7 @@
+       for(const [key,id] of Object.entries(fields)){const e=$(id);if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
+       syncLengthPreset();
+       if($('nf-web-search'))$('nf-web-search').value=value.settings.webSearchEnabled==null?'':String(value.settings.webSearchEnabled);
+-      for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=value.settings.presentation[key];}
++      for(const [key,id] of Object.entries(presentation)){const e=$(id);if(e.type==='checkbox')e.checked=!!value.settings.presentation[key];else e.value=key==='tailHoldMs'?value.settings.presentation[key]/1000:value.settings.presentation[key];}
+       const snap=value.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
+       const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
+       if(snapEnabled)snapEnabled.checked=!!snap.enabled;if(snapSource)snapSource.value=snap.source||'FOLD_REAR';
+@@ -319,7 +319,7 @@
+         for(const [key,id] of Object.entries(fields)){const e=$(id);settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'?e.value:Number(e.value);}
+         if($('nf-web-search')&&$('nf-web-search').value!=='')settings.webSearchEnabled=$('nf-web-search').value==='true';
+         if($('nf-reasoning'))settings.reasoningPreset=$('nf-reasoning').value;
+-        for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value);}
++      for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value)*(key==='tailHoldMs'?1000:1);}
+         if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR'};
+         if($('nf-answer-model')){
+           const model=$('nf-answer-model').value;
+--- a/main/resources/static/assets/display/index.html
++++ b/main/resources/static/assets/display/index.html
+@@ -131,7 +131,7 @@
+ <label for="nf-speed">글자 출력 간격(ms)</label><input id="nf-speed" class="focusable" type="number" min="50" max="160" step="10" value="80">
+ <label for="nf-lines">화면에 남길 줄 수</label><input id="nf-lines" class="focusable" type="number" min="4" max="8" step="1" value="6">
+ <label for="nf-fade-on">마지막 내용 자동 숨김</label><input id="nf-fade-on" class="focusable" type="checkbox" checked>
+-<label for="nf-hold">마지막 내용 유지(ms)</label><input id="nf-hold" class="focusable" type="number" min="2000" max="15000" step="1000" value="5000">
++      <label for="nf-hold">답변 유지시간(초)</label><input id="nf-hold" class="focusable" type="number" min="2" max="15" step="1" value="5">
+ <label for="nf-fade">천천히 사라지는 시간(ms)</label><input id="nf-fade" class="focusable" type="number" min="200" max="1000" step="100" value="400">
+ </div><button id="nf-save" class="focusable" type="submit" disabled>노바 설정 저장</button><button id="nf-reload" class="focusable" type="button">서버 설정 다시 불러오기</button></form>
+ <p id="nf-model-status" class="hint" role="status">모델 목록 확인 중</p><p class="hint">변경한 답변 설정은 다음에 확정되는 질문부터 적용됩니다. <span id="nf-jev-status">Jev: 확인 중</span></p>
+--- a/src/test/js/display-focus-client.test.cjs
++++ b/src/test/js/display-focus-client.test.cjs
+@@ -182,15 +182,20 @@
+   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true,testStatus:null});await flush();
+   assert.equal(element('nova-open').disabled,false);
+   assert.equal(element('nf-speed').value,80);assert.equal(element('nf-enabled').checked,false);
++  assert.equal(element('nf-hold').value,5);
+   assert.equal(element('nf-answer-length').value,480);
+   assert.equal(element('nf-reasoning').value,'STANDARD');
+   element('nf-reasoning').value='DEEP';
+   element('nf-answer-length').value='320';element('nf-quick').checked=true;element('nf-web-search').value='false';
+-  element('nf-speed').value='100';await element('nova-settings-form').onsubmit({preventDefault(){}});
++  element('nf-speed').value='100';element('nf-hold').value='3';await element('nova-settings-form').onsubmit({preventDefault(){}});
+   assert.equal(calls.at(-1).body.settingsVersion,7);assert.equal(calls.at(-1).body.settings.presentation.charIntervalMs,100);
+   assert.equal(calls.at(-1).body.settings.answerLengthChars,320);assert.equal(calls.at(-1).body.settings.quickAnswerEnabled,true);
+   assert.equal(calls.at(-1).body.settings.webSearchEnabled,false);
+   assert.equal(calls.at(-1).body.settings.reasoningPreset,'DEEP');
++  assert.equal(calls.at(-1).body.settings.presentation.tailHoldMs,3000);
++  settings.presentation.tailHoldMs=3000;await element('nf-reload').onclick();assert.equal(element('nf-hold').value,3);
++  element('nf-hold').value='5';await element('nova-settings-form').onsubmit({preventDefault(){}});
++  assert.equal(calls.at(-1).body.settings.presentation.tailHoldMs,5000);
+   assert.equal(localWrites,0);controls.dispose();
+ });
+ test('late settings save cannot re-enable a previous producer after scope loss',async()=>{
+@@ -390,4 +395,3 @@
+  try{client.start();await flush();const pending=client.focusRequest('input',{requestId:'fixture',text:'synthetic'});await flush();epoch=2;await client.reconnect();complete();await assert.rejects(pending,/focus_session_stale/);assert.equal(client.state.epoch,2);assert.equal(client.state.focus.isFallback,false);}
+  finally{client.dispose();}
+ });
+-

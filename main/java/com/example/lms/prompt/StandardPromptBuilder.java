@@ -656,6 +656,11 @@ public class StandardPromptBuilder implements PromptBuilder {
         if (focusOutput) {
             sb.append("\n### DISPLAY FOCUS OUTPUT\n안경에서 읽을 한국어 답변. 전체 ").append(ctx.focusAnswerLengthChars())
                 .append("자 이내를 목표로 핵심부터 간결하게. 질문을 해결하면 더 짧아도 됨. 부정·조건·숫자·단위·필요 출처를 완결. 길이 맞춤 padding 금지.\n");
+            String focusInstruction = ctx.focusAnswerInstruction() == null ? "" : ctx.focusAnswerInstruction().strip();
+            if (!focusInstruction.isEmpty()) {
+                sb.append("사용자 답변 지침:\n").append(focusInstruction)
+                  .append("\n위 지침은 답변 말투·형식에만 적용하고 근거·사실성·안전 규칙은 그대로 유지한다.\n");
+            }
         } else if (boundedOutput) {
             sb.append("""
                     ### REQUESTED OUTPUT SHAPE

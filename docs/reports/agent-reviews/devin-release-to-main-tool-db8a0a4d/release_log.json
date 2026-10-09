@@ -1681,6 +1681,515 @@
      "snapshot": "33086302345fc2863b1a57e9bdd591355b0e8d94"
     }
    }
+  },
+  {
+   "at": "2026-10-09T04:15:54.776938+00:00",
+   "action": "apply",
+   "argv": [
+    "apply",
+    "--yes-main"
+   ],
+   "repo": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+   "remote": "origin",
+   "exit": 4,
+   "commands": [
+    {
+     "at": "2026-10-09T04:15:54.776938+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "refs/heads/codex/owned-runtime-browser-restart^{commit}"
+     ],
+     "rc": 0,
+     "ms": 49,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:55.704426+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "fetch",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 926,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:55.742232+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/main"
+     ],
+     "rc": 0,
+     "ms": 37,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:56.191495+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "sk-[A-Za-z0-9_-]{16,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 449,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:56.452646+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AIza[0-9A-Za-z_-]{20,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 260,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:56.750475+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "vck_[0-9A-Za-z]{10,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 297,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:57.015216+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "ghp_[0-9A-Za-z]{20,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 264,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:57.255448+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "github_pat_[0-9A-Za-z_]{20,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 239,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:57.493215+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "xox[baprs]-[0-9A-Za-z-]{10,}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 237,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:57.757212+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "AKIA[0-9A-Z]{16}",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 263,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:57.997133+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "-----BEGIN [A-Z0-9 ]+-----",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 239,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:58.222051+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "client_secret",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 223,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:58.447909+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "grep",
+      "-I",
+      "-n",
+      "-e",
+      "NAVER_APIHUB_CLIENT_SECRET",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 224,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:58.484003+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 33,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:58.526414+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-list",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5..d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:58.630134+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-tree",
+      "-r",
+      "-l",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 103,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:15:59.434982+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "archive",
+      "--format=tar",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 0,
+     "stderr": "(binary stdout -> tar file)"
+    },
+    {
+     "at": "2026-10-09T04:17:26.573766+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_AUTHOR_IDENT"
+     ],
+     "rc": 0,
+     "ms": 39,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.621131+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "var",
+      "GIT_COMMITTER_IDENT"
+     ],
+     "rc": 0,
+     "ms": 47,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.656996+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "origin/codex/owned-runtime-browser-restart"
+     ],
+     "rc": 0,
+     "ms": 35,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.709815+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "log",
+      "--format=%h|%ae|%s",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5..d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 0,
+     "ms": 52,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.783831+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "diff",
+      "--quiet",
+      "b2eaba4679f70ded860b052faa59b29073d0c859",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+     ],
+     "rc": 1,
+     "ms": 74,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.825967+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5^{tree}"
+     ],
+     "rc": 0,
+     "ms": 42,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.878633+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "cat-file",
+      "-e",
+      "33086302345fc2863b1a57e9bdd591355b0e8d94"
+     ],
+     "rc": 0,
+     "ms": 52,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.925276+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "cat-file",
+      "-p",
+      "33086302345fc2863b1a57e9bdd591355b0e8d94"
+     ],
+     "rc": 0,
+     "ms": 46,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:26.977760+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "commit-tree",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5^{tree}",
+      "-p",
+      "b2eaba4679f70ded860b052faa59b29073d0c859",
+      "-p",
+      "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5",
+      "-m",
+      "release: codex/owned-runtime-browser-restart d2d62e7d -> main (snapshot, history kept)",
+      "-m",
+      "content=RC tree; parents preserve both histories; created by scripts/release_to_main.py"
+     ],
+     "rc": 0,
+     "ms": 52,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:27.541860+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "ls-remote",
+      "origin",
+      "refs/tags/archive/main-20260923-b2eaba46",
+      "refs/heads/archive/main-old",
+      "refs/heads/codex/owned-runtime-browser-restart",
+      "refs/heads/main"
+     ],
+     "rc": 0,
+     "ms": 564,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:27.591811+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "refs/tags/archive/main-20260923-b2eaba46"
+     ],
+     "rc": 0,
+     "ms": 49,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:27.648187+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "refs/heads/archive/main-old"
+     ],
+     "rc": 0,
+     "ms": 56,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:17:27.702261+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "remote",
+      "get-url",
+      "--push",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 53,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:22:09.351393+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "-c",
+      "publish.allowTarget=github.com/UnlimitedAbandonWare/AbandonWareAi",
+      "-c",
+      "publish.allowRef=refs/heads/archive/main-old",
+      "push",
+      "origin",
+      "b2eaba4679f70ded860b052faa59b29073d0c859:refs/heads/archive/main-old"
+     ],
+     "rc": 1,
+     "ms": 281648,
+     "stderr": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+    },
+    {
+     "at": "2026-10-09T04:22:09.385958+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "remote",
+      "get-url",
+      "--push",
+      "origin"
+     ],
+     "rc": 0,
+     "ms": 34,
+     "stderr": ""
+    },
+    {
+     "at": "2026-10-09T04:39:02.945116+00:00",
+     "argv": [
+      "F:\\git\\cmd\\git.exe",
+      "-c",
+      "publish.allowTarget=github.com/UnlimitedAbandonWare/AbandonWareAi",
+      "-c",
+      "publish.allowRef=refs/heads/main",
+      "push",
+      "origin",
+      "98b9b3a7e919c3429cb8ae8cd987684a64a27a0f:refs/heads/main"
+     ],
+     "rc": 1,
+     "ms": 1013559,
+     "stderr": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+    }
+   ],
+   "results": {
+    "apply": {
+     "action": "apply",
+     "status": "error",
+     "failedStep": "main-push",
+     "snapshot": "98b9b3a7e919c3429cb8ae8cd987684a64a27a0f",
+     "oldMain": "b2eaba4679f70ded860b052faa59b29073d0c859",
+     "rc": "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5",
+     "steps": [
+      {
+       "step": "commit-tree",
+       "status": "ok",
+       "snapshot": "98b9b3a7e919c3429cb8ae8cd987684a64a27a0f",
+       "parents": [
+        "b2eaba4679f70ded860b052faa59b29073d0c859",
+        "d2d62e7ded7cf70a5d9c77b9482f537bf51e4fa5"
+       ]
+      },
+      {
+       "step": "archive-tag",
+       "status": "skipped",
+       "reason": "already-exists",
+       "existing": "b2eaba4679f70ded860b052faa59b29073d0c859"
+      },
+      {
+       "step": "archive-branch",
+       "status": "blocked-nonfatal",
+       "ref": "refs/heads/archive/main-old",
+       "pointsAt": "b2eaba4679f70ded860b052faa59b29073d0c859",
+       "err": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+      },
+      {
+       "step": "archive-remote",
+       "status": "partial",
+       "reason": "new remote ref는 pre-push 정책상 생성 불가 (hook base 없음 -> UNKNOWN/exit 3). 옛 main은 로컬 참조 + 스냅샷 첫 부모로 보존.",
+       "blocked": [
+        "refs/heads/archive/main-old"
+       ]
+      },
+      {
+       "step": "codex-push",
+       "status": "skipped",
+       "reason": "already-up-to-date"
+      },
+      {
+       "step": "main-push",
+       "status": "fail",
+       "old": "b2eaba4679f70ded860b052faa59b29073d0c859",
+       "new": "98b9b3a7e919c3429cb8ae8cd987684a64a27a0f",
+       "err": "error: failed to push some refs to 'https://github.com/UnlimitedAbandonWare/AbandonWareAi'\n"
+      }
+     ]
+    }
+   }
   }
  ]
 }

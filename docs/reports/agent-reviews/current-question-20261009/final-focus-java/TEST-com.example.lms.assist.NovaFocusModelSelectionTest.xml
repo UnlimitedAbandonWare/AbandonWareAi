@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusModelSelectionTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:42:21" hostname="DESKTOP-M5NOV6K" time="0.183">
+  <properties/>
+  <testcase name="fixedSelectionSurvivesSettingsSerialization()" classname="com.example.lms.assist.NovaFocusModelSelectionTest" time="0.009"/>
+  <testcase name="settingsChangeDuringPhotoWaitCannotChangeAcceptedQuestionModel()" classname="com.example.lms.assist.NovaFocusModelSelectionTest" time="0.146"/>
+  <testcase name="acceptedQuestionCarriesExactSelectedModelToChatDto()" classname="com.example.lms.assist.NovaFocusModelSelectionTest" time="0.026"/>
+  <system-out><![CDATA[19:42:21.244 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=ARMED version=2
+19:42:21.278 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=12
+19:42:21.281 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=session_changed phase=ARMED version=2
+19:42:21.305 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=server_shutdown phase=ANSWER_READY version=9
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

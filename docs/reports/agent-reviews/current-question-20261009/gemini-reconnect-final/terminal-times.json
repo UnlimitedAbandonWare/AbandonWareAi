@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-10-09T12:11:11.234858+00:00",
+  "rows": [
+    {
+      "route": "llmrouter.gemini-pro",
+      "requestHash": "hash:fed24af393e1",
+      "terminalAtUtc": 1791547469.626
+    },
+    {
+      "route": "llmrouter.gemini-cue",
+      "requestHash": "hash:39cb71e99625",
+      "terminalAtUtc": 1791547474.058
+    }
+  ]
+}

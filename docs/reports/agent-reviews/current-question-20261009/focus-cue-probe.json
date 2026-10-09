@@ -1,0 +1,80 @@
+{
+  "surface": "owned-synthetic-Focus",
+  "selectedAlias": "llmrouter.gemini-cue",
+  "syntheticInput": true,
+  "searchEnabled": false,
+  "reasoningPreset": "STANDARD",
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200,
+      "requestHash": "53e6f431254c"
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200,
+      "requestHash": "08c6806d6ccd"
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings",
+      "status": 200,
+      "requestHash": "c0977233362b"
+    },
+    {
+      "endpoint": "/api/assist/display/focus/open",
+      "status": 200,
+      "requestHash": "ef65cac79590"
+    },
+    {
+      "endpoint": "/api/assist/display/focus/input",
+      "status": 200,
+      "requestHash": "8a0eab541d29"
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200,
+      "requestHash": "baca790862cb"
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200,
+      "requestHash": "77e648f24eec"
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200,
+      "requestHash": "eb2389006ca7"
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200,
+      "requestHash": "ffa17e38cc1a"
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200,
+      "requestHash": "13c75c97c9e7"
+    },
+    {
+      "endpoint": "/api/assist/display/focus/close",
+      "status": 200,
+      "requestHash": "5f44d281f616"
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200,
+      "requestHash": "9ce6f05ada31"
+    }
+  ],
+  "hardwareRenderedObserved": false,
+  "elapsedMs": 5047,
+  "phase": "ANSWER_READY",
+  "active": true,
+  "reason": "",
+  "answerChars": 121,
+  "answerHash": "a50dd78debe1",
+  "requestHash": null,
+  "epoch": 1,
+  "checkedAtUtc": "2026-10-09T09:10:33.720817+00:00",
+  "requestCorrelation": "NOT_OBSERVED: View omitted requestId; prior value was empty-string hash"
+}

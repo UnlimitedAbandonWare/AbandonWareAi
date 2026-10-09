@@ -1,0 +1,203 @@
+{
+  "taskId": "focus-auto-fallback-16b85be6",
+  "taskKind": "patch",
+  "allRequiredWorkComplete": true,
+  "completionFlag": true,
+  "postimages": [
+    {
+      "path": "main/resources/static/assets/display/display-focus-controls.js",
+      "sha256": "d30f8ecfd09fad74d83b4c53846eca6a4655dc8cad903d0de1b62a439b1e16cd"
+    },
+    {
+      "path": "src/test/js/display-focus-client.test.cjs",
+      "sha256": "5ce89936c848732d272ce59673fcdbb03e64610afbe4c46feb701118db729328"
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusanswer.java",
+      "sha256": "ef3a179669e81008f729055b560f0732051c34155130f30f34eba1830228d94b"
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusanswerservice.java",
+      "sha256": "8cf23cddc3df061b230e552e04fa810c28e63bb6d7ed428af71f357633a6dfe0"
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusservice.java",
+      "sha256": "780139c3f2c40279911bca5ef62cece9d07f5998ef3fa0e5e3c5a2511afcc8ea"
+    },
+    {
+      "path": "main/java/com/example/lms/assist/novafocusstate.java",
+      "sha256": "6f95e7c0e6fc49f1314effb36c8680ff7f3dc38503baff56a14de62d168fe25b"
+    },
+    {
+      "path": "main/resources/static/assets/display/display-focus.js",
+      "sha256": "f8a7d7474ea9747a9f6842e1de35e85f6f698dc20683da8eb54bd9dca7edcbbc"
+    },
+    {
+      "path": "main/resources/static/assets/display/display-conversate.js",
+      "sha256": "8d2f229807b977d1da03a2a7eb14cdbee83e33ec57410954711fc116f80fef35"
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/novafocusexecutionpolicytest.java",
+      "sha256": "902521c50967c822d773c8e59346e9e8f44d7f8782ae5a97caf417475cc97f93"
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/novafocusstatetest.java",
+      "sha256": "3f563c4cf60fc4bd6daf748fdfb338b9ad005d7dcca14960e2d72e0481fd1ea2"
+    },
+    {
+      "path": "src/test/js/display-focus-projection.test.cjs",
+      "sha256": "ddc29f38608eb340b62dc8f0bbae7207aabbe7a4e4ccf1b5b346c75c02233904"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/LUNA_PRESET_FALLBACK_REPAIR.md",
+      "sha256": "5419089f1bc7fcc67102081357667eea4a875bad0374d370c0535fb4a4c52b77"
+    }
+  ],
+  "evidenceFiles": [
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/final-focus-java/command.log",
+      "sha256": "db27666af110809630261489c56c544d76350cfcf987b9b1321521c5027664db"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/final-display-js-eol/command.log",
+      "sha256": "ecf48f7c90c6fc7b7a6109f727d1a922b81849e6bc63f25a5d0f96d5d6d0b087"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/focus-final-browser/correlated-runtime.json",
+      "sha256": "0fec4da347b9ab626428f28fad12a38c705cf504e06f4aff6ec7181cc8cd8e36"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/focus-browser-fixture/evidence.json",
+      "sha256": "d92a54db5004fc736a15b5777a7971731800fd6f7e709757c3f06e5aaf96db4f"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/final-served-catalog.json",
+      "sha256": "85deb7ec1712a0ede3f7265552ddc65fd39b5fce7093fbcdb8b292b414096e83"
+    },
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/final-user-profile-readonly.json",
+      "sha256": "53be003498271948810b9e0823275225f702bd14598c019fdaf55c5f76018c5f"
+    }
+  ],
+  "preserveFiles": [
+    {
+      "path": "docs/reports/agent-reviews/current-question-20261009/focus-final-owned.patch",
+      "sha256": "f2c5eb705ba22bb3cdd017c9232c6e24073d5210fc191a8d2cfc4d0910121e25"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-01/before/0.bin",
+      "sha256": "c01d1cd3f045f909352deee8c7613fc91a0707832be7c8857e0221ee691084bb"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-01/before/1.bin",
+      "sha256": "792fbe203f49509620c826f19f98a6f142776392538cf12a007fdb189604c0a6"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/0.bin",
+      "sha256": "007fcc94b0ac58f0b7e9633cf3fd3555bc3e9b89bad49233ac61ee48403af20e"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/1.bin",
+      "sha256": "078a1cfa0569cbeabc930a195fbddbab2fb1a8ebbbbb209bf72831179b1c715b"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/2.bin",
+      "sha256": "e567c93930a681222a73ee0b4cf99827dc0046dd8a42059171eeea5fb9802cce"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/3.bin",
+      "sha256": "1c2e372c430cf1990571fe9a15db1ef6eb2c145d4992a0440e7b56301c9569e9"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/4.bin",
+      "sha256": "d0ea63fdc2ee7ce8ec3b81a5c53bbf36ccd2958f0542402b9c887594c29d9b4f"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/5.bin",
+      "sha256": "5b92ee196c1188d00bc34a1072f1d46018f141c79794632ee5a4898668584f59"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/6.bin",
+      "sha256": "d8583b8fc98f97f753d23503d20209ee31252e86ca7c0d4a5b4b324145c1a2ae"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/7.bin",
+      "sha256": "038519400783e631b3bb03eece9516be1b099fc0bad9e169eb6b0560efbed76b"
+    },
+    {
+      "path": "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6/cycle-02/before/8.bin",
+      "sha256": "3ece8c4683f9369f67ec0deb5f48bdb63f833489f978fc048e27a2934262212b"
+    }
+  ],
+  "queueRoots": [
+    "data/agent-handoff/codex-autonomy/focus-auto-fallback-16b85be6"
+  ],
+  "disposableArtifacts": [],
+  "sourcePatchCompletion": "verified",
+  "desktopFinalProof": "verified",
+  "appliedPatch": {
+    "path": "docs/reports/agent-reviews/current-question-20261009/focus-final-owned.patch",
+    "sha256": "f2c5eb705ba22bb3cdd017c9232c6e24073d5210fc191a8d2cfc4d0910121e25"
+  },
+  "acceptance": [
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/final-focus-java/command.log",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/final-focus-java/command.log",
+        "sha256": "db27666af110809630261489c56c544d76350cfcf987b9b1321521c5027664db"
+      }
+    },
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/final-display-js-eol/command.log",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/final-display-js-eol/command.log",
+        "sha256": "ecf48f7c90c6fc7b7a6109f727d1a922b81849e6bc63f25a5d0f96d5d6d0b087"
+      }
+    },
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/focus-final-browser/correlated-runtime.json",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/focus-final-browser/correlated-runtime.json",
+        "sha256": "0fec4da347b9ab626428f28fad12a38c705cf504e06f4aff6ec7181cc8cd8e36"
+      }
+    },
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/focus-browser-fixture/evidence.json",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/focus-browser-fixture/evidence.json",
+        "sha256": "d92a54db5004fc736a15b5777a7971731800fd6f7e709757c3f06e5aaf96db4f"
+      }
+    },
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/final-served-catalog.json",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/final-served-catalog.json",
+        "sha256": "85deb7ec1712a0ede3f7265552ddc65fd39b5fce7093fbcdb8b292b414096e83"
+      }
+    },
+    {
+      "id": "docs/reports/agent-reviews/current-question-20261009/final-user-profile-readonly.json",
+      "status": "passed",
+      "exitCode": 0,
+      "evidence": {
+        "path": "docs/reports/agent-reviews/current-question-20261009/final-user-profile-readonly.json",
+        "sha256": "53be003498271948810b9e0823275225f702bd14598c019fdaf55c5f76018c5f"
+      }
+    }
+  ],
+  "limits": [
+    "hardware render not directly observed; user reported works",
+    "initial checkpoint bookkeeping HOLD preserved",
+    "profile write actor/path not observed; final desired state read-only verified"
+  ]
+}

@@ -12,6 +12,75 @@ function fixture(overrides={}) {
   const capture=createCapture({client,env,setTimer(fn){timers.set(1,fn);return 1;},clearTimer(id){timers.delete(id);},...overrides.options});
   return {capture,client,env,calls,nodes,timers,media,stopped:()=>stopped};
 }
+
+for(const outcome of ['success','event_owner_required','asr_quota_exceeded','asr_rate_limited','transport']) {
+ test(`late renewal ${outcome} cannot affect a capture started after explicit stop`,async()=>{
+  let settle,begins=0,ends=0;
+  const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+   beginVoice(){begins++;return begins===2?new Promise((resolve,reject)=>{settle=()=>outcome==='success'?resolve():reject(Object.assign(Error(outcome),{status:outcome==='event_owner_required'?403:503}));}):Promise.resolve();},
+   async endVoice(){ends++;},async reconnect(){}}});
+  await f.capture.start();const renewing=f.capture.reconnect();await flush();
+  assert.equal(begins,2);await f.capture.stop();await f.capture.start();
+  const before={ends,stopped:f.stopped(),timers:f.timers.size,events:f.capture.state.events.length,reconnects:f.capture.state.reconnects};
+  settle();await renewing;
+  assert.equal(f.capture.isActive(),true);assert.equal(f.capture.state.phase,'LISTENING');
+  assert.equal(f.capture.state.errorCode,null);assert.equal(f.capture.state.sttPausedReason,null);
+  assert.deepEqual({ends,stopped:f.stopped(),timers:f.timers.size,events:f.capture.state.events.length,reconnects:f.capture.state.reconnects},before);
+  assert.equal(begins,3);await f.capture.stop();
+ });
+}
+
+test('late renewal failure after stop alone leaves capture OFF without a retry',async()=>{
+ let rejectRenewal,begins=0,ends=0;
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+  beginVoice(){return ++begins===2?new Promise((_,reject)=>{rejectRenewal=reject;}):Promise.resolve();},
+  async endVoice(){ends++;},async reconnect(){}}});
+ await f.capture.start();const renewing=f.capture.reconnect();await flush();await f.capture.stop();
+ const before={ends,stopped:f.stopped(),events:f.capture.state.events.length};
+ rejectRenewal(Object.assign(Error('event_owner_required'),{status:403}));await renewing;
+ assert.equal(f.capture.isActive(),false);assert.equal(f.capture.state.phase,'OFF');assert.equal(f.capture.state.errorCode,null);
+ assert.equal(f.timers.size,0);assert.equal(begins,2);
+ assert.deepEqual({ends,stopped:f.stopped(),events:f.capture.state.events.length},before);
+});
+
+test('the current renewal still fails explicitly for an owner permission error',async()=>{
+ let begins=0;
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+  async beginVoice(){if(++begins===2)throw Object.assign(Error('event_owner_required'),{status:403});},async reconnect(){}}});
+ await f.capture.start();await f.capture.reconnect();
+ assert.equal(f.capture.isActive(),false);assert.equal(f.capture.state.phase,'ERROR');
+ assert.equal(f.capture.state.errorCode,'event_owner_required');assert.equal(f.stopped(),1);assert.equal(f.timers.size,0);
+});
+
+test('a quota pause awaiting server stop cannot change the next capture phase',async()=>{
+ let rejectRenewal,releasePause,begins=0,ends=0;
+ const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},
+  beginVoice(){return ++begins===2?new Promise((_,reject)=>{rejectRenewal=reject;}):Promise.resolve();},
+  endVoice(){return ++ends===2?new Promise(resolve=>{releasePause=resolve;}):Promise.resolve();},async reconnect(){}}});
+ await f.capture.start();const renewing=f.capture.reconnect();await flush();
+ rejectRenewal(Error('asr_rate_limited'));await flush();assert.ok(releasePause);
+ await f.capture.stop();await f.capture.start();const before={ends,stopped:f.stopped(),timers:f.timers.size,events:f.capture.state.events.length};
+ releasePause();await renewing;
+ assert.equal(f.capture.isActive(),true);assert.equal(f.capture.state.phase,'LISTENING');assert.equal(f.capture.state.sttPausedReason,null);
+ assert.deepEqual({ends,stopped:f.stopped(),timers:f.timers.size,events:f.capture.state.events.length},before);await f.capture.stop();
+});
+
+for(const reason of ['event_owner_required','asr_quota_exceeded','transport']) {
+ test(`finish during renewal still reports ${reason} instead of a successful drain`,async()=>{
+  let rejectRenewal,begins=0,ends=0;
+  const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true,audioFinished:true},
+   beginVoice(){return ++begins===2?new Promise((_,reject)=>{rejectRenewal=reject;}):Promise.resolve();},
+   async endVoice(){ends++;},async reconnect(){}}});
+  await f.capture.start();const renewing=f.capture.reconnect();await flush();
+  f.nodes[0].port.postMessage=message=>{if(message==='finish')queueMicrotask(()=>f.nodes[0].port.onmessage({data:{stopped:true}}));};
+  const finishing=f.capture.finish();assert.equal(f.capture.state.phase,'FINISHING');
+  rejectRenewal(Object.assign(Error(reason),{status:reason==='event_owner_required'?403:503}));
+  await renewing;await finishing;
+  assert.equal(f.capture.state.phase,'ERROR');assert.equal(f.capture.state.errorCode,reason);
+  assert.equal(f.capture.isActive(),false);assert.equal(begins,2);assert.equal(ends,2);assert.equal(f.timers.size,0);
+  await f.capture.stop();assert.equal(f.stopped(),1);
+ });
+}
 test('explicit capture waits for ready, sends ordered PCM once and stop closes tracks',async()=>{
   const f=fixture();assert.deepEqual(f.calls,[]);await f.capture.start();assert.equal(f.capture.state.phase,'LISTENING');
   f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();

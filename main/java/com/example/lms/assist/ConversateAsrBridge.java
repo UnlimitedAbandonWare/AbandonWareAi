@@ -147,7 +147,7 @@ public class ConversateAsrBridge {
             if(sequence!=c.nextSeq)throw error(HttpStatus.CONFLICT,"sequence_gap");
             c.ack=new CompletableFuture<>();c.ackSeq=sequence;
             try{if(c.firstAudioNanos==0)c.firstAudioNanos=System.nanoTime();c.transport.send(json.writeValueAsString(Map.of("seq",sequence,"pcm",pcm)));c.ack.get(2,TimeUnit.SECONDS);}
-            catch(Exception failure){c.fail("ASR_INPUT_UNAVAILABLE");throw error(HttpStatus.SERVICE_UNAVAILABLE,c.clientFailure("asr_input_unavailable"));}
+            catch(Exception failure){String why=failure instanceof TimeoutException?"ASR_TIMEOUT":Objects.toString(failure.getMessage(),"");c.fail(why.matches("ASR_[A-Z_]{1,40}")?why:why.matches("asr_[a-z_]{1,40}")?"ASR_"+why.substring(4).toUpperCase(Locale.ROOT):"ASR_INPUT_UNAVAILABLE");throw error(HttpStatus.SERVICE_UNAVAILABLE,c.clientFailure("asr_input_unavailable"));}
             c.seen.put(sequence,digest);while(c.seen.size()>64)c.seen.remove(c.seen.keySet().iterator().next());c.nextSeq++;c.chunks++;c.lastInput=System.nanoTime();c.metrics();
         }return sessions.status(owner,id);
     }
@@ -293,7 +293,7 @@ public class ConversateAsrBridge {
             boundedNumber(node,"queueLength",2);boundedNumber(node,"errors",1000000);
         }
         void metrics(){var safe=new LinkedHashMap<>(runtime);safe.put("cloudStatus",cloudStatus);sessions.audioMetrics(owner,id,epoch,new AudioMetrics(chunks,partials,finals,duplicates,lastAsrMs,finishing?(runtime.containsKey("stopReason")?"STOPPED":"FINISHING"):chunks>0?"CAPTURING":ready.isDone()?"READY":"STARTING",safe));}
-        String clientFailure(String fallback){String reason=Objects.toString(runtime.get("failureReason"),"");return Set.of("asr_auth_failed","asr_quota_exceeded","asr_rate_limited","asr_audio_format_invalid","asr_provider_failed","asr_provider_disconnected","asr_budget_unavailable","asr_budget_exhausted","asr_budget_invalid","asr_budget_busy","asr_budget_ledger_limit").contains(reason)?reason:fallback;}
+        String clientFailure(String fallback){String reason=Objects.toString(runtime.get("failureReason"),"");return Set.of("asr_auth_failed","asr_quota_exceeded","asr_rate_limited","asr_audio_format_invalid","asr_provider_failed","asr_provider_disconnected","asr_budget_unavailable","asr_budget_exhausted","asr_budget_invalid","asr_budget_busy","asr_budget_ledger_limit","asr_timeout","asr_no_fallback","asr_fallback_unavailable","asr_stream_failed","asr_stream_ended","asr_input_unavailable","asr_processing_failed").contains(reason)?reason:fallback;}
         void fail(String reason){
             if(reason!=null&&reason.matches("soniox:(auth_failed|quota_exceeded|rate_limited|audio_format_invalid|provider_error)"))reason="ASR_"+reason.substring(7).toUpperCase(Locale.ROOT).replace("PROVIDER_ERROR","PROVIDER_FAILED");
             if(reason==null||!reason.matches("ASR_[A-Z_]{1,40}"))reason="ASR_PROCESSING_FAILED";

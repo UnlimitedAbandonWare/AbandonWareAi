@@ -233,6 +233,48 @@ function Get-FallbackPathList {
     return @($paths.ToArray() | Sort-Object -Unique)
 }
 
+function ConvertFrom-GitQuotedPath {
+    # git ls-files/diff (quotepath 기본값)은 비ASCII 경로를 "dir/\ooo\ooo" 처럼
+    # 따옴표+8진법 UTF-8 바이트로 출력한다. 이 따옴표 문자열을 그대로 Test-Path에
+    # 넣으면 " 문자 때문에 ArgumentException이 나서 스캔 전체가 죽고, 억지로
+    # 넘기면 한글 이름 파일이 스캔에서 빠진다. 여기서 원래 경로로 되돌린다.
+    param([Parameter(Mandatory = $true)][string]$Line)
+    if ($Line.Length -lt 2 -or -not $Line.StartsWith('"') -or -not $Line.EndsWith('"')) {
+        return $Line
+    }
+    $inner = $Line.Substring(1, $Line.Length - 2)
+    $bytes = New-Object System.Collections.Generic.List[byte]
+    $i = 0
+    while ($i -lt $inner.Length) {
+        $c = $inner[$i]
+        if ($c -eq '\' -and $i + 1 -lt $inner.Length) {
+            $n = $inner[$i + 1]
+            if ($n -ge '0' -and $n -le '7') {
+                $value = 0
+                $digits = 0
+                while ($digits -lt 3 -and $i + 1 -lt $inner.Length) {
+                    $d = $inner[$i + 1]
+                    if ($d -lt '0' -or $d -gt '7') { break }
+                    $value = $value * 8 + ([int][char]$d - 48)
+                    $i++
+                    $digits++
+                }
+                if ($digits -gt 0) { $bytes.Add([byte]$value); $i++; continue }
+            }
+            switch ($n) {
+                'n'  { $bytes.Add([byte]10);  $i += 2; continue }
+                't'  { $bytes.Add([byte]9);   $i += 2; continue }
+                '\'  { $bytes.Add([byte]92);  $i += 2; continue }
+                '"'  { $bytes.Add([byte]34);  $i += 2; continue }
+                default { $bytes.Add([byte][char]$n); $i += 2; continue }
+            }
+        }
+        $bytes.Add([byte][char]$c)
+        $i++
+    }
+    return [Text.UTF8Encoding]::new($false, $false).GetString($bytes.ToArray())
+}
+
 function Start-GitReader {
     param([string]$Root, [string]$Arguments)
     $info = New-Object Diagnostics.ProcessStartInfo
@@ -317,7 +359,8 @@ function Find-SecretGuardFindings {
         @($RelativePaths | Sort-Object -Unique -CaseSensitive)
     } else { @($RelativePaths | Sort-Object -Unique) }
     foreach ($relative in $scanPaths) {
-        $rel = $relative.Replace('\', '/')
+        # git 출력은 비ASCII 경로를 따옴표+8진법으로 인용하므로 먼저 되돌린다.
+        $rel = (ConvertFrom-GitQuotedPath $relative).Replace('\', '/')
         # Block the entire private area before skipped directories/template rules,
         # and never open its values or recovery files during a generic scan.
         if ($rel -match '(?i)(^|/)(\.secrets|config/secrets)(/|$)') {
@@ -352,10 +395,19 @@ function Find-SecretGuardFindings {
                 }
             }
         } else {
-            if (-not (Test-Path -LiteralPath $absolute -PathType Leaf)) {
+            try {
+                # NTFS는 허용하지만 Win32가 금지하는 문자(|, <, >, ", 제어문자)가
+                # 섞인 경로는 Test-Path가 비종결 ArgumentException으로 실패한다.
+                # -ErrorAction Stop으로 잡아낼 수 있는 종결 오류로 바꾼 뒤,
+                # 스캔을 멈추지 않고 건너뛰되 조용히 넘기지 않고 경고로 남긴다.
+                if (-not (Test-Path -LiteralPath $absolute -PathType Leaf -ErrorAction Stop)) {
+                    continue
+                }
+                $text = Read-TextFileOrNull $absolute
+            } catch {
+                Write-Warning ("[AWX][git-guard][SKIP] unreadable-path path=" + $rel)
                 continue
             }
-            $text = Read-TextFileOrNull $absolute
         }
         if ($null -eq $text) {
             continue

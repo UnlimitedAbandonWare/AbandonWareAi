@@ -1,0 +1,38 @@
+{
+  "runId": "9ebcae2b-702e-48e8-a6a5-e294d709a23f",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:32:38.999451+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 5,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusExecutionPolicyTest.resultPreservesActualFallbackFailureAndNormalAutoIsNotFallback"
+  ],
+  "commandSha256": "36bc804de21e506d1788247c5e0df840be7136935b3301b8f8c9fe1974783040",
+  "sourceIdentity": [],
+  "expectedSuites": [
+    "com.example.lms.assist.NovaFocusExecutionPolicyTest"
+  ],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [
+    "missing_xml:com.example.lms.assist.NovaFocusExecutionPolicyTest"
+  ],
+  "log": "command.log",
+  "pid": 45556,
+  "endedAt": "2026-10-09T10:32:58.712318+00:00",
+  "elapsedMs": 19712,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

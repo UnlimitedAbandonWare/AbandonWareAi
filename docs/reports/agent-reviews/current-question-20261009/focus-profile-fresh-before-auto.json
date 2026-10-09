@@ -1,0 +1,59 @@
+{
+  "ok": true,
+  "profiles": [
+    {
+      "profilePrefix": "b22f968af973",
+      "ownerHash": "c05091bcd646",
+      "settingsVersion": 3,
+      "settingsHash": "143b5240d5713f2a28e928e53e9fda696b0150c1a86ca384840b89d6407732cd",
+      "selection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null
+    },
+    {
+      "profilePrefix": "ea47bab48c4a",
+      "ownerHash": "0711cbda88f3",
+      "settingsVersion": 0,
+      "settingsHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "selection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null
+    },
+    {
+      "profilePrefix": "dfa4c4c2aa24",
+      "ownerHash": "33d5f21b86f3",
+      "settingsVersion": 6,
+      "settingsHash": "8bb87864753521df310a76d39936ed4e920fd3b7a4299e2500c9b85979f2c66a",
+      "selection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.openai-economy",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "webSearchEnabled": false,
+      "reasoningPreset": "STANDARD"
+    },
+    {
+      "profilePrefix": "21e09a73b5cc",
+      "ownerHash": "23bc46f44887",
+      "settingsVersion": 0,
+      "settingsHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "selection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null
+    },
+    {
+      "profilePrefix": "f7b6e76ef594",
+      "ownerHash": "bb3007fd22b4",
+      "settingsVersion": 0,
+      "settingsHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "selection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null
+    }
+  ]
+}

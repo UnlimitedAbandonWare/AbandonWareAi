@@ -1,0 +1,60 @@
+{
+  "checkedAtUtc": "2026-10-09T11:57:54.029Z",
+  "freshContext": true,
+  "restoredAuthState": false,
+  "providerGenerationCount": 0,
+  "userLiveProfileWriteCount": 0,
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200
+    }
+  ],
+  "rows": [],
+  "hardwareRenderedObserved": false,
+  "fixtureAncestors": [
+    {
+      "id": "nova-settings",
+      "tag": "DETAILS",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "advanced-settings",
+      "tag": "DETAILS",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "app",
+      "tag": "MAIN",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "hidden": false,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    {
+      "id": "",
+      "tag": "HTML",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    }
+  ],
+  "verdict": "NOT_PROVEN",
+  "errorClass": "TimeoutError",
+  "errorCode": "locator.click: Timeout 5000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#",
+  "testProducerDisabled": true
+}

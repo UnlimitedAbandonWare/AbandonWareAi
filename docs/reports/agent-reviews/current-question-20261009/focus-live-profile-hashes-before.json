@@ -1,0 +1,34 @@
+{
+  "checkedAtUtc": "2026-10-09T10:17:21.554865+00:00",
+  "ok": true,
+  "exitCode": 0,
+  "rowCount": 5,
+  "rows": [
+    {
+      "profile_prefix": "b22f968af973",
+      "settings_version": "3",
+      "settings_hash": "143b5240d5713f2a28e928e53e9fda696b0150c1a86ca384840b89d6407732cd"
+    },
+    {
+      "profile_prefix": "ea47bab48c4a",
+      "settings_version": "0",
+      "settings_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "profile_prefix": "dfa4c4c2aa24",
+      "settings_version": "6",
+      "settings_hash": "8bb87864753521df310a76d39936ed4e920fd3b7a4299e2500c9b85979f2c66a"
+    },
+    {
+      "profile_prefix": "21e09a73b5cc",
+      "settings_version": "0",
+      "settings_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "profile_prefix": "f7b6e76ef594",
+      "settings_version": "0",
+      "settings_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "reason": null
+}

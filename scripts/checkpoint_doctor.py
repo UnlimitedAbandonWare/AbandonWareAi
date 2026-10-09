@@ -24,6 +24,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lease_lifetime
+
 RUN_PREFIX = "data/agent-handoff/"
 CONTINUITY_SCHEMA = "awx.task-continuity.v1"
 CONTRACT_PREFIX = "continuity: "
@@ -560,19 +563,24 @@ def load_lease(root, ref):
     if not p.is_file():
         return {"path": rel, "present": False}
     try:
-        data = json.loads(p.read_text(encoding="utf-8"))
+        raw = p.read_bytes()
+        data = json.loads(raw)
     except (OSError, ValueError):
         return {"path": rel, "present": True, "unreadable": True}
-    exp = None
-    try:
-        exp = datetime.fromisoformat(str(data.get("expiresAtUtc", "")).replace("Z", "+00:00"))
-    except ValueError:
-        pass
+    if not isinstance(data, dict):
+        return {"path": rel, "present": True, "unreadable": True}
+    now = datetime.now(timezone.utc)
+    lifetime = lease_lifetime.lifetime(
+        root / "__patch_drop__" / "source-edit-heartbeats", data, raw, now)
+    effective = lifetime["effective"]
     return {"path": rel, "present": True,
             "leaseId": data.get("leaseId"), "ownerId": data.get("ownerId"),
             "expiresAtUtc": data.get("expiresAtUtc"),
-            "secondsToExpiry": ((exp - datetime.now(timezone.utc)).total_seconds()
-                                if exp and exp.tzinfo else None)}
+            "effectiveExpiresAtUtc": lease_lifetime.iso(effective),
+            "heartbeatState": lifetime["heartbeatState"],
+            "heartbeatAgeSeconds": lifetime["heartbeatAgeSeconds"],
+            "secondsToExpiry": ((effective - now).total_seconds()
+                                if effective else None)}
 
 
 def next_hint(state, lease):
@@ -589,9 +597,17 @@ def next_hint(state, lease):
     }
     hint = hints.get(status, "inspect checkpoint.json")
     if rule == "source-lease-drift":
-        hint = ("lease file changed mid-cycle (heartbeat renews expiresAtUtc); "
-                "post-patch identity check passes same-lease renewals — "
-                "re-run the action once")
+        hint = ("lease.json bytes changed mid-cycle; heartbeat renewals write only "
+                "the sidecar, so this is a real change — re-run once if the owner "
+                "just re-issued the lease, otherwise inspect the lease file")
+    if rule == "source-lease-expired":
+        if lease and lease.get("heartbeatState") == "valid":
+            hint = ("lease.json expiry passed but a valid heartbeat sidecar extends it "
+                    "— the hold was written by pre-sidecar-aware checkpoint code; "
+                    "update codex_work_checkpoint.py and re-run, no release/re-claim needed")
+        else:
+            hint = ("lease expired; renew it with source_edit_session.ps1 -Action "
+                    "heartbeat (owner session) before seal/finish")
     if rule == "secret-pattern":
         hint = "locate the flagged file:line in firstBlockingRule detail; mask or env-ize the literal"
     if lease and lease.get("secondsToExpiry") is not None and status in ("prepared", "begun", "sealed"):

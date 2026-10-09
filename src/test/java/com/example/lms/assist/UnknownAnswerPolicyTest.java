@@ -6,6 +6,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /** P0-B precedence: the same fixed table drives cue supplement and Focus retry. */
 class UnknownAnswerPolicyTest {
+    @Test void confidentProductClaimIsNotEvidenceOfFreshnessOrAnAsrCorrection() {
+        assertNull(UnknownAnswerPolicy.classify("HP Reverb G2 is Even Realities G2, according to old memory."));
+        var unavailable=UnknownAnswerPolicy.decide(UnknownAnswerPolicy.Mode.GENERAL,true,false,true,false,
+                UnknownAnswerPolicy.Trigger.EMPTY_ANSWER);
+        assertFalse(unavailable.webAllowed());assertEquals("request_web_off",unavailable.reason());
+        var alreadyAttempted=UnknownAnswerPolicy.decide(UnknownAnswerPolicy.Mode.WEB,false,true,true,true,
+                UnknownAnswerPolicy.Trigger.EXPLICIT_UNKNOWN);
+        assertFalse(alreadyAttempted.webAllowed());assertEquals("web_already_attempted",alreadyAttempted.reason());
+    }
+
     @Test void generalWebHybridAllowUnknownWebRetryOnce(){
         for(var mode:List.of(UnknownAnswerPolicy.Mode.GENERAL,UnknownAnswerPolicy.Mode.WEB,UnknownAnswerPolicy.Mode.HYBRID))
             for(var trigger:UnknownAnswerPolicy.Trigger.values()){

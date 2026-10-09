@@ -1,0 +1,63 @@
+{
+  "runId": "4af16420-8144-414d-8230-0988a22830fd",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:59:25.354779+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 15,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js\\display-audio-batch.test.cjs",
+    "src/test/js\\display-auto-voice-trigger.test.cjs",
+    "src/test/js\\display-capture-recovery.test.cjs",
+    "src/test/js\\display-continuity.test.cjs",
+    "src/test/js\\display-focus-client.test.cjs",
+    "src/test/js\\display-phone-policy.test.cjs",
+    "src/test/js\\display-stop-lifecycle.test.cjs",
+    "src/test/js\\display-voice.test.cjs",
+    "src\\test\\js\\display-focus-client.test.cjs",
+    "src\\test\\js\\display-focus-flow.test.cjs",
+    "src\\test\\js\\display-focus-memory.test.cjs",
+    "src\\test\\js\\display-focus-mount.test.cjs",
+    "src\\test\\js\\display-focus-privacy.test.cjs",
+    "src\\test\\js\\display-focus-projection.test.cjs"
+  ],
+  "commandSha256": "c9b060d554e8f36c3c7922364a39ff14f14f6081dcf5e418682de041190e3660",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus-controls.js",
+      "kind": "file",
+      "sha256": "2167759f5d3c1b4192fd21e1b86a1d2108b8cee4c9a17ea8c9dac22c235461ac",
+      "bytes": 43993
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-conversate.js",
+      "kind": "file",
+      "sha256": "267348fbba642ddbbf9c7103c546e28b4311e1ba6ea7349c2b1b5bc8e4218248",
+      "bytes": 31052
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus.js",
+      "kind": "file",
+      "sha256": "f8a7d7474ea9747a9f6842e1de35e85f6f698dc20683da8eb54bd9dca7edcbbc",
+      "bytes": 16448
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 23168,
+  "endedAt": "2026-10-09T10:59:25.753957+00:00",
+  "elapsedMs": 397,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

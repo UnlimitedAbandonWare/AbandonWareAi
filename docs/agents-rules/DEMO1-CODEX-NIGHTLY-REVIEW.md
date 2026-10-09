@@ -36,6 +36,16 @@ python -B scripts/codex_nightly_review.py run --config configs/codex-nightly-rev
 python -B scripts/test_codex_nightly_review.py
 ```
 
+`run` also accepts an optional output-cap metrics path:
+`--sessions-dir <rollout dir> --days N --json-out <file>`. With no `--config`
+the run is `METRICS_LOCAL` — no manifest collection and no state writes. It
+counts `Warning: truncated output` markers in raw Codex rollout `*.jsonl`
+files (token counts only; content is never retained), and the result JSON
+always carries `truncated_output {count, token_sum, median, p90, max,
+measured}`. A measured p90 above 10000 tokens prints
+`WARN_OUTPUT_CAP: p90=<value>` after the JSON line. Without `--sessions-dir`
+the field reports zeros with `measured=false`.
+
 For local-only collection, explicitly supply `enabled=true`, `firstDate`,
 absolute `allowedRoots`, `inputManifest`, `outputRoot` and `deliveryRoot`.
 `outputRoot` and `deliveryRoot` must stay inside the canonical project root.

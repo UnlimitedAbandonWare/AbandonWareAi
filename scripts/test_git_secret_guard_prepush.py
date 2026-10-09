@@ -160,6 +160,33 @@ class PrePushAllowanceTests(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn('push-blob-unavailable', proc.stdout + proc.stderr)
 
+    def test_git_quoted_nonascii_path_scanned_not_crashed(self):
+        # git ls-files quotes non-ASCII names as "dir/\ooo" octal escapes; the
+        # quoted string used to reach Test-Path and abort the scan. After
+        # decoding, the real file must be scanned and its finding reported.
+        self.commit_file("scripts/한글-secret.txt", 'KEY = "sk-' + 'F' * 24 + '"\n')
+        tool = Path(__file__).resolve().with_name('git_secret_guard.ps1')
+        proc = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                               '-File', str(tool), '-Mode', 'manual'],
+                              cwd=self.repo, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn('[BLOCK]', proc.stdout + proc.stderr)
+        self.assertIn('-secret.txt', proc.stdout + proc.stderr)
+        self.assertNotIn('ArgumentException', proc.stdout + proc.stderr)
+        self.assertNotIn('unreadable-path', proc.stdout + proc.stderr)
+
+    def test_git_quoted_nonascii_clean_path_scanned_not_skipped(self):
+        # The decoded name must resolve to the real worktree file — clean
+        # non-ASCII paths scan to zero findings instead of warn-skipping.
+        self.commit_file("scripts/한글-clean.txt", "clean = True\n")
+        tool = Path(__file__).resolve().with_name('git_secret_guard.ps1')
+        proc = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                               '-File', str(tool), '-Mode', 'manual'],
+                              cwd=self.repo, capture_output=True, text=True, timeout=60)
+        self.assertEqual(proc.returncode, 0)
+        self.assertNotIn('unreadable-path', proc.stdout + proc.stderr)
+        self.assertNotIn('ArgumentException', proc.stdout + proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

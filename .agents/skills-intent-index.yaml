@@ -524,6 +524,26 @@ intents:
     forbid_families: []
     notes: 소스/범위 리스·동적 포트 리스 진입(py가 SSOT, ps1은 thin proxy); 'release request'/change-plane 문맥은 change-plane intent 유지
 
+  - intent: reachability-first-debug
+    match:
+      - 여러 번 고쳤는데
+      - 고쳤는데 그대로
+      - 고쳤는데 안
+      - 같은 증상
+      - 헛수정
+      - 답이 안 나
+      - 응답을 확인하지 못했습니다
+      - provider_not_configured
+      - modelselectionexception
+      - model selection
+      - 저장 설정
+      - saved profile
+      - reachability
+    primary_skill: demo1-reachability-first-debug
+    optional_skill: demo1-evidence-debugging
+    forbid_families: []
+    notes: 고치기 전 런타임 증거로 실패 단계 찾기(reachability first)·저장 프로필·writer·재기동 확인; 지시서와 어긋나면 CHALLENGE + assist_runtime_skeptic 병렬
+
   - intent: nova-focus
     match:
       - 노바
@@ -1273,6 +1293,25 @@ intents:
     optional_skill: agent-scope-lease
     forbid_families: []
     notes: 충돌 분류 live/stale/orphan → stale 회수+진행+release 요청 1회
+
+  - intent: parallel-auto-resume
+    match:
+      - lease-wait
+      - resume-check
+      - 대기 후 재개
+      - 기다렸다가 이어
+      - 겹치는 lease
+      - lease 기다리
+      - 잠금 때문에 대기
+      - 병렬 세션 충돌
+      - 다른 세션이 잡고
+      - 상대 세션이 수정
+      - pending lease
+      - PENDING_LEASE
+    primary_skill: demo1-parallel-auto-resume
+    optional_skill: demo1-lease-conflict-autoflow
+    forbid_families: []
+    notes: 겹친 lease = 멈추지 않고 lease-wait→resume-check→exit code별 자동 재개; before.json/pending.json 계약
 
   - intent: scoped-blocker
     match:

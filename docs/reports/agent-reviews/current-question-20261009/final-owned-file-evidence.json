@@ -1,0 +1,63 @@
+{
+  "checkedAtUtc": "2026-10-09T09:43:48.758791+00:00",
+  "testRunId": "7f4f8d1e-a6d9-4edc-99e5-dde913a312be",
+  "basis": "preserved task preimages; original checkpoint remains prepared/HOLD, second checkpoint verified",
+  "files": [
+    {
+      "path": "main/java/com/example/lms/service/ChatWorkflow.java",
+      "preimageSha256": "34312e01c0146d6e9806d8b5fd7b2d3f40f473db355bc13fe866d1b32fe1ec71",
+      "currentSha256": "7b73be7bfa12448456a431acb52b525b307ea6adb778146f8545a704a48b539c",
+      "matchesFinal115": true,
+      "addedLines": 3,
+      "deletedLines": 3
+    },
+    {
+      "path": "src/test/java/com/example/lms/service/ChatWorkflowPromptMessageRoleTest.java",
+      "preimageSha256": "81ad732b0b6b1b46a21a8853d315efa199476541942657d0c0cce4b2994488dd",
+      "currentSha256": "ad38933b6d7a60a194b1ce5d86f6e0ece69e8a8d3a524ed77fc107007637089e",
+      "matchesFinal115": true,
+      "addedLines": 67,
+      "deletedLines": 0
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/NovaFocusStateTest.java",
+      "preimageSha256": "ca233614fee5b777be0f93c6e2836ac90bc169c39c5831f43afb7d82b0edad72",
+      "currentSha256": "038519400783e631b3bb03eece9516be1b099fc0bad9e169eb6b0560efbed76b",
+      "matchesFinal115": true,
+      "addedLines": 12,
+      "deletedLines": 0
+    },
+    {
+      "path": "src/test/java/com/example/lms/prompt/StandardPromptBuilderConversationHistoryTest.java",
+      "preimageSha256": "e942ed617f5b389ade37a380c5d9b696bee6c7db771821f1998f4122397b71f4",
+      "currentSha256": "d0f5d6c14c11059d8daf59d490777def3a8e0b54058752aa3e4fcb6860776c46",
+      "matchesFinal115": true,
+      "addedLines": 17,
+      "deletedLines": 0
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/NovaFocusAnswerServiceTest.java",
+      "preimageSha256": "5e2e454f80a25fbf7c38224a8a51087ef78f627030d9b10d621f78dec7dfbf8e",
+      "currentSha256": "cfbc8340056b5e22cfcf9a9ff6e018f0e364a3fcacc4260ff375fe5a0965a4ee",
+      "matchesFinal115": true,
+      "addedLines": 55,
+      "deletedLines": 0
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/UnknownAnswerPolicyTest.java",
+      "preimageSha256": "3ceeb0452eba0c739ca3fa3b6e1a4f0ba88dc43754d6aeff76ebf98c43ae8ad7",
+      "currentSha256": "a4232e8ccde87705340a28363b2191716b424d35a81c9d1263f1852d02f0fdd7",
+      "matchesFinal115": true,
+      "addedLines": 10,
+      "deletedLines": 0
+    },
+    {
+      "path": "main/resources/application-meta-display.yml",
+      "preimageSha256": "bda08a7bcceac75e703be34c6b71bec750081969cc6e34a21a7b2b5ab9a1b1a1",
+      "currentSha256": "263c73b012e8206f877896b6142bdc7c45304065935ba60b25dbda1b3397faa4",
+      "matchesFinal115": true,
+      "addedLines": 1,
+      "deletedLines": 1
+    }
+  ]
+}

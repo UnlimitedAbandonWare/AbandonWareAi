@@ -1,0 +1,31 @@
+{
+  "runId": "a935a396-f37d-48db-bec5-440953ce9b12",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:30:00.708749+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 2,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js/display-focus-client.test.cjs"
+  ],
+  "commandSha256": "b6d894b68ebe3e391b81256136fbb6b5823837ee990573862071459dbcb46a10",
+  "sourceIdentity": [],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 68848,
+  "endedAt": "2026-10-09T10:30:00.878856+00:00",
+  "elapsedMs": 169,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "runId": "d9d48623-0f73-4878-9e28-8499cad293ba",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:56:40.642481+00:00",
+  "status": "failed",
+  "executable": "node",
+  "argumentCount": 9,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js\\display-audio-batch.test.cjs",
+    "src/test/js\\display-auto-voice-trigger.test.cjs",
+    "src/test/js\\display-capture-recovery.test.cjs",
+    "src/test/js\\display-focus-client.test.cjs",
+    "src/test/js\\display-continuity.test.cjs",
+    "src/test/js\\display-phone-policy.test.cjs",
+    "src/test/js\\display-voice.test.cjs",
+    "src/test/js\\display-stop-lifecycle.test.cjs"
+  ],
+  "commandSha256": "2691e0c9d40e78d0431cd3d8cc52dd57f6daef8229030095e00f4d683197defe",
+  "sourceIdentity": [],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 62248,
+  "endedAt": "2026-10-09T10:56:40.934789+00:00",
+  "elapsedMs": 291,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

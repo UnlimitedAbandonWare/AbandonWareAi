@@ -20,6 +20,9 @@ conversate:
     cloud:
       # Complete local-fallback utterances only; Soniox/Deepgram continuous streaming is unchanged.
       utterance-provider: ${CONVERSATE_STT_UTTERANCE_PROVIDER:economy}
+      # auto orders the configured providers by cost/circuit (soniox first, deepgram
+      # fallback) for requests without a client sttPolicy; an explicit policy still wins.
+      routing: ${CONVERSATE_ASR_CLOUD_ROUTING:auto}
       # Renew only the provider stream before this bound; microphone session has no timer.
       stream-seconds: 75
   transcript:
@@ -149,7 +152,10 @@ conversate:
     web-model: ${CONVERSATE_FOCUS_WEB_MODEL:llmrouter.gemini-pro}
     # Soft default for AUTO-routing focus answers: must resolve to an existing
     # selectable catalog route, otherwise the local default keeps its place.
-    default-model: ${CONVERSATE_FOCUS_DEFAULT_MODEL:llmrouter.gemini-pro}
+    default-model: ${CONVERSATE_FOCUS_DEFAULT_MODEL:llmrouter.gemini-cue}
+    # Request ceiling is clamped at 10000ms in NovaFocusAnswerService; 10000 keeps
+    # >=2000ms for one fallback admission after a primary attempt burns its budget.
+    timeout-ms: ${CONVERSATE_FOCUS_TIMEOUT_MS:10000}
 demo:
   interview:
     # Conversate uses the existing authenticated owner and generation boundary.

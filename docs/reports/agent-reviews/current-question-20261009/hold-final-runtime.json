@@ -1,0 +1,27 @@
+{
+  "checkedAt": "2026-10-09T12:04:46.777096+00:00",
+  "mainChatHttp": 200,
+  "health": "UP",
+  "role": "dev",
+  "springPid": 38456,
+  "springReused": false,
+  "launcherStatus": "ready",
+  "publicHttpsProof": "tls-and-current-page-verified",
+  "assets": [
+    {
+      "path": "main/resources/static/assets/display/display-focus-controls.js",
+      "http": 200,
+      "sourceSha256": "ae9429ed17894ac84a1d18aed585fbc48a849710a419c1d371ac4f457680f87b",
+      "servedSha256": "ae9429ed17894ac84a1d18aed585fbc48a849710a419c1d371ac4f457680f87b",
+      "sameBytes": true
+    },
+    {
+      "path": "main/resources/static/assets/display/index.html",
+      "http": 200,
+      "sourceSha256": "363ae4210e912b7dccfeaea388d9783d20dae64920200c0465eee417ab59f2bc",
+      "servedSha256": "363ae4210e912b7dccfeaea388d9783d20dae64920200c0465eee417ab59f2bc",
+      "sameBytes": true
+    }
+  ],
+  "verdict": "PASS"
+}

@@ -1,0 +1,45 @@
+{
+  "runId": "175ed255-b50d-4133-b3f8-11fc68658900",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:58:01.343526+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 9,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js\\display-audio-batch.test.cjs",
+    "src/test/js\\display-auto-voice-trigger.test.cjs",
+    "src/test/js\\display-continuity.test.cjs",
+    "src/test/js\\display-capture-recovery.test.cjs",
+    "src/test/js\\display-focus-client.test.cjs",
+    "src/test/js\\display-phone-policy.test.cjs",
+    "src/test/js\\display-stop-lifecycle.test.cjs",
+    "src/test/js\\display-voice.test.cjs"
+  ],
+  "commandSha256": "e6eef9ccda0a2dda91ffd19c89dd9c972cf8513ccc4e6576dd9d7000349a48d3",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-conversate.js",
+      "kind": "file",
+      "sha256": "267348fbba642ddbbf9c7103c546e28b4311e1ba6ea7349c2b1b5bc8e4218248",
+      "bytes": 31052
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 34136,
+  "endedAt": "2026-10-09T10:58:01.640211+00:00",
+  "elapsedMs": 296,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

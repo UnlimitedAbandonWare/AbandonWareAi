@@ -7,7 +7,7 @@ machinery instead of replacing it:
 
   - __patch_drop__/source_edit_session.ps1: target-scoped source-edit lease
     (real enforcement; expired leases still block overlapping targets until
-    recover proves a dead owner or reclaim proves the lease stale).
+    recover/reclaim proves a same-host dead owner, never expiry alone).
   - scripts/work_journal.py: per-task journal with declared plannedScope
     (visibility, not a lock).
   - data/agent-handoff/codex-autonomy/<taskId>/scope-claim.json: this tool's
@@ -151,7 +151,8 @@ def extract_ps_reason(proc, receipt=None) -> str:
 
 
 def run_ps(root: Path, action: str, topic=None, owner=None, manifest=None,
-           fingerprint=None, ttl=None, task_id=None, want_json=False, timeout=75):
+           fingerprint=None, ttl=None, task_id=None, want_json=False, timeout=75,
+           recovery_lock=None):
     session = os.environ.get("AWX_SCOPE_SESSION_PS1") or str(SESSION_PS1)
     if not Path(session).is_file():
         raise ScopeError("source-edit-session-missing")
@@ -165,6 +166,8 @@ def run_ps(root: Path, action: str, topic=None, owner=None, manifest=None,
         cmd += ["-TargetManifest", str(manifest)]
     if fingerprint:
         cmd += ["-LeaseFingerprint", str(fingerprint)]
+    if recovery_lock:
+        cmd += ["-RecoveryLockName", str(recovery_lock)]
     if ttl:
         cmd += ["-TtlMinutes", str(int(ttl))]
     if task_id:

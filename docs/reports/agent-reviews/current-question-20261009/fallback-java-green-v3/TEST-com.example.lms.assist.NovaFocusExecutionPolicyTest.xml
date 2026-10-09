@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusExecutionPolicyTest" tests="32" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:39:36" hostname="DESKTOP-M5NOV6K" time="2.842">
+  <properties/>
+  <testcase name="fallbackPreservesLegacyWebRequirementAndFrozenContext()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="1.917"/>
+  <testcase name="cancellationAfterFirstFailureStopsTheFallbackChain()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.027"/>
+  <testcase name="dedicatedTargetSurvivesJsonWithoutErasingTheGeneralFallbackPolicy()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <testcase name="dedicatedModeRejectsAutomaticNonGeminiUnknownAndMismatchedRoutesWithoutCalls()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.005"/>
+  <testcase name="admissionOrValidationFailureIsNotAProviderFallbackSignal()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.02"/>
+  <testcase name="localOnlyRejectsFixedApiBeforeAnyCall()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.004"/>
+  <testcase name="resultPreservesActualFallbackFailureAndNormalAutoIsNotFallback()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.061"/>
+  <testcase name="latePrimarySuccessAfterExactCancellationCannotPublishOrStartFallback()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.034"/>
+  <testcase name="disabledFallbackDoesNotTryAnAllowedBackup()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.019"/>
+  <testcase name="dedicatedModeNeverFallsBackForAnyCategoricalProviderFailure()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.113"/>
+  <testcase name="explicitOffQuickImageAndCancelDominateDedicatedModeWithoutCalls()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.004"/>
+  <testcase name="automaticApiChoiceUsesConfiguredWeightAndNeverLocalDefault()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.025"/>
+  <testcase name="imageTextRetryRetainsTheSuccessfulFallbackCandidate()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.017"/>
+  <testcase name="dedicatedModePinsEitherGeminiAndUsesOnlyNativePermissionEvenForGreetings()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.131"/>
+  <testcase name="[1] status=400" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.072"/>
+  <testcase name="[2] status=401" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.028"/>
+  <testcase name="[3] status=403" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.028"/>
+  <testcase name="[4] status=408" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.029"/>
+  <testcase name="[5] status=429" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.031"/>
+  <testcase name="[6] status=500" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.033"/>
+  <testcase name="[7] status=503" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.029"/>
+  <testcase name="[8] status=504" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.026"/>
+  <testcase name="automaticLocalChoicePinsTheConfiguredLocalDefault()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.013"/>
+  <testcase name="apiOnlyRejectsFixedLocalBeforeAnyCall()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.003"/>
+  <testcase name="dedicatedSettingsExposeEffectiveOffWithoutErasingRawPreference()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.021"/>
+  <testcase name="configuredLocalRouteCannotBecomeApiBecauseCatalogLabelSaysCloud()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <testcase name="automaticApiChoiceDoesNotPromoteFallbackOnlyRoutes()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.014"/>
+  <testcase name="dedicatedResultRejectsDifferentModelOrLateCancellation()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.026"/>
+  <testcase name="unobservedSearchAndIncompleteAttributionDoNotPublishOrRetry()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.027"/>
+  <testcase name="fallbackListIsBoundedAtSettingsBoundary()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.004"/>
+  <testcase name="fallbackIsStrictOrderedAndNeverCrossesApiOnlyBoundary()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.016"/>
+  <testcase name="unknownConfiguredProviderCannotProveApiOnly()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <system-out><![CDATA[19:39:38.758 [Test worker] INFO com.example.lms.service.chat.ChatRunRegistry -- [LLM_CANCEL_ACCEPTED] runHash=hash:7337954bb300 observedAtEpochMs=1791542378754 boundary=application_cancellation
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

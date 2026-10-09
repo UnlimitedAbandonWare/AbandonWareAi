@@ -1,0 +1,248 @@
+{
+  "exitCode": 0,
+  "ok": true,
+  "via": "live-http",
+  "columns": [
+    "id",
+    "settings_version",
+    "settings_json"
+  ],
+  "rowCount": 20,
+  "totalMatched": 20,
+  "safeRows": [
+    {
+      "profileIdPrefix": "dfa4c4c2aa24",
+      "settingsVersion": 6,
+      "answerSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.openai-economy",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "webSearchEnabled": false,
+      "reasoningPreset": "STANDARD",
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    },
+    {
+      "profileIdPrefix": "51411b6bdb8b",
+      "settingsVersion": 6,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "60a81ac8e959",
+      "settingsVersion": 5,
+      "answerSelection": {
+        "mode": "FIXED",
+        "modelId": "chatgpt-oauth:gpt-5.6-luna",
+        "routing": {
+          "executionTarget": "AUTO",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": []
+        }
+      },
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    },
+    {
+      "profileIdPrefix": "b22f968af973",
+      "settingsVersion": 3,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "2b7a0e879dee",
+      "settingsVersion": 3,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "e5602bf8edc3",
+      "settingsVersion": 3,
+      "answerSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-pro",
+        "routing": {
+          "executionTarget": "AUTO",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "webSearchEnabled": false,
+      "reasoningPreset": "STANDARD",
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    },
+    {
+      "profileIdPrefix": "ecf2d0cab52f",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "f05c25e0c668",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "c260a712f35e",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "8a3793e95806",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "4e53b87489fc",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "1fdc8c4530c4",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "d68a3f8b1349",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "0873bb2f6362",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "d53b2a0e05e8",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "9b5c201dda81",
+      "settingsVersion": 2,
+      "answerSelection": {
+        "mode": "AUTO",
+        "modelId": null,
+        "routing": {
+          "executionTarget": "AUTO",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": []
+        }
+      },
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": false
+    },
+    {
+      "profileIdPrefix": "53a3b442c4e5",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "66041e00c9c2",
+      "settingsVersion": 2,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profileIdPrefix": "e47e3b86d66a",
+      "settingsVersion": 2,
+      "answerSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-pro",
+        "routing": {
+          "executionTarget": "AUTO",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "webSearchEnabled": null,
+      "reasoningPreset": "STANDARD",
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    },
+    {
+      "profileIdPrefix": "b1f1ef6bb280",
+      "settingsVersion": 1,
+      "answerSelection": {
+        "mode": "AUTO",
+        "modelId": null,
+        "routing": {
+          "executionTarget": "AUTO",
+          "fallbackAllowed": true,
+          "allowedFallbackIds": [
+            "llmrouter.api3"
+          ],
+          "effectiveFallbackAllowed": true
+        }
+      },
+      "webSearchEnabled": false,
+      "reasoningPreset": "STANDARD",
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    }
+  ]
+}

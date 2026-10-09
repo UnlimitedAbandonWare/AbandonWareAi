@@ -214,9 +214,14 @@ def cmd_status(g: Git, _args) -> dict:
     lock = index_lock_path(g)
     lock_info = {"present": False}
     if lock.is_file():
-        st = lock.stat()
-        lock_info = {"present": True, "sizeBytes": st.st_size,
-                     "ageSeconds": round(time.time() - st.st_mtime, 1)}
+        try:
+            st = lock.stat()
+        except OSError:
+            st = None
+        lock_info = {"present": True}
+        if st is not None:
+            lock_info.update(sizeBytes=st.st_size,
+                             ageSeconds=round(time.time() - st.st_mtime, 1))
     return {
         "ok": True, "branch": branch, "head": head, "upstream": upstream,
         "ahead": ahead, "behind": behind,

@@ -1,0 +1,38 @@
+{
+  "runId": "4f635c35-47fd-457a-9dcf-6bf2977ae838",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:46:39.762828+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 2,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js/display-focus-client.test.cjs"
+  ],
+  "commandSha256": "b6d894b68ebe3e391b81256136fbb6b5823837ee990573862071459dbcb46a10",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus-controls.js",
+      "kind": "file",
+      "sha256": "ae9429ed17894ac84a1d18aed585fbc48a849710a419c1d371ac4f457680f87b",
+      "bytes": 43614
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 11232,
+  "endedAt": "2026-10-09T11:46:39.989614+00:00",
+  "elapsedMs": 225,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

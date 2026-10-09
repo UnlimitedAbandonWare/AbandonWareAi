@@ -344,7 +344,9 @@
     async function focusRequest(route,body={},opts){
       if(!session)throw Error('focus_session_stale');
       if(!['settings/read','settings','history','open','input','input/status','snapshot/claim','snapshot/result','close','memory/read','memory/save','memory/delete','memory/search'].includes(route))throw Error('invalid_focus_action');
-      const view=await post('focus/'+route,{...connection(),...body},opts);
+      const bound=connection(),stamp=pollGeneration;
+      const view=await post('focus/'+route,{...bound,...body},opts);
+      if(stamp!==pollGeneration||session?.assistId!==bound.assistId||session?.epoch!==bound.epoch)throw Error('focus_session_stale');
       if(['open','input','close'].includes(route)){applyFocus(view);notify();}
       return view;
     }

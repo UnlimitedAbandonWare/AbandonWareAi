@@ -1,0 +1,24 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "6dd1b7b1b74cee5e663c4707daa4d5cb730708ecd33ef8dcbab47e30d5c2c5b6",
+                        "path":  "scripts/codex_auto_unblock.py"
+                    },
+                    {
+                        "sha256":  "79713a35f45ac0661bfc41d170913a82bc865ada6786221e63f81100642e7609",
+                        "path":  "scripts/lease_conflict_autoflow.py"
+                    },
+                    {
+                        "sha256":  "edab6a3534779b7feef6f8c11339cb8f41941b7c9f2d191fc868a804ecfa1e62",
+                        "path":  "scripts/test_codex_auto_unblock.py"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/lease_resume_check.py"
+                    },
+                    {
+                        "sha256":  null,
+                        "path":  "scripts/test_lease_resume_check.py"
+                    }
+                ]
+}

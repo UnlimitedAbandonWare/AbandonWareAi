@@ -1,0 +1,303 @@
+{
+  "surface": "owned-synthetic-Focus-AUTO",
+  "syntheticInput": true,
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/open",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/input",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/poll",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/close",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200
+    }
+  ],
+  "hardwareRenderedObserved": false,
+  "serverDefaultSelection": {
+    "mode": "AUTO",
+    "modelId": null,
+    "routing": {
+      "executionTarget": "AUTO",
+      "fallbackAllowed": true,
+      "allowedFallbackIds": [
+        "llmrouter.api3"
+      ],
+      "effectiveFallbackAllowed": true
+    }
+  },
+  "reasoningPreset": "STANDARD",
+  "searchEnabled": false,
+  "elapsedMs": 12156,
+  "phase": "ANSWER_READY",
+  "active": true,
+  "reason": "",
+  "answerChars": 31,
+  "answerHash": "667cefea63fa",
+  "epoch": 1,
+  "sessionHash": "hash:fe49846b7c72",
+  "diagnostics": [
+    {
+      "stage": "focus_terminal",
+      "requestHash": "hash:227762dbd3f3",
+      "sessionHash": "hash:fe49846b7c72",
+      "epoch": 1,
+      "reasonCode": "none",
+      "latencyMs": 9969,
+      "outcome": "success",
+      "answerModel": {
+        "focus.selection.strict": true,
+        "focus.memory.graphHitCount": 0,
+        "focus.request.budgetSource": {
+          "present": true,
+          "len": 5,
+          "hash12": "c51faa148557"
+        },
+        "focus.context.tokenUpperBound": "(redacted)",
+        "focus.request.evidenceBoundary": {
+          "present": true,
+          "len": 13,
+          "hash12": "acc550195aac"
+        },
+        "focus.selection.resultModelHash": "319034f3e25d0d9bd6b3a46b1def7a01b7689f0d51384c63da1f6e0b464af810",
+        "focus.unknown.mode": {
+          "present": true,
+          "len": 7,
+          "hash12": "b15f584799e6"
+        },
+        "focus.length.visibleGraphemes": 31,
+        "focus.request.appliedBudgetMs": 9999,
+        "focus.context.transcriptCount": 0,
+        "focus.request.configuredTimeoutMs": 10000,
+        "focus.unknown.trigger": {
+          "present": true,
+          "len": 4,
+          "hash12": "140bedbf9c3f"
+        },
+        "focus.request.elapsedMs": 9879,
+        "focus.selection.executionTarget": {
+          "present": true,
+          "len": 4,
+          "hash12": "6ea56fae9eac"
+        },
+        "focus.jev.reasonCode": "disabled",
+        "focus.memory.evidenceCount": 0,
+        "focus.unknown.webRetry": false,
+        "focus.length.generatedGraphemes": 31,
+        "focus.context.sourceIds": [],
+        "focus.jev.mode": {
+          "present": true,
+          "len": 3,
+          "hash12": "b4dc66dde806"
+        },
+        "focus.search.webRequested": false,
+        "focus.selection.settingsVersion": 1,
+        "focus.memory.status": "OFF",
+        "focus.request.attempts": [
+          {
+            "evidenceBoundary": {
+              "present": true,
+              "len": 13,
+              "hash12": "acc550195aac"
+            },
+            "logicalCallOrdinal": 1,
+            "modelHash": "hash:319034f3e25d",
+            "outcome": "success",
+            "responseObserved": true,
+            "failureClass": "none",
+            "protocol": {
+              "present": true,
+              "len": 23,
+              "hash12": "8cb788eb9e39"
+            },
+            "providerReceiptObserved": false,
+            "elapsedMs": 2756,
+            "routeKeyHash": "hash:60f50563b3ad",
+            "wireAttemptObserved": false,
+            "clientHttpExchangeObserved": false,
+            "sequence": 1,
+            "modelAdapterAttemptObserved": true,
+            "terminalClass": "success",
+            "attemptOrdinal": 1,
+            "role": {
+              "present": true,
+              "len": 7,
+              "hash12": "986a1b7135f4"
+            },
+            "clientHttpResponseObserved": false,
+            "providerAttemptObserved": false
+          },
+          {
+            "evidenceBoundary": {
+              "present": true,
+              "len": 13,
+              "hash12": "acc550195aac"
+            },
+            "logicalCallOrdinal": 2,
+            "modelHash": "hash:319034f3e25d",
+            "outcome": "success",
+            "responseObserved": true,
+            "failureClass": "none",
+            "protocol": {
+              "present": true,
+              "len": 23,
+              "hash12": "8cb788eb9e39"
+            },
+            "providerReceiptObserved": false,
+            "elapsedMs": 7073,
+            "routeKeyHash": "hash:60f50563b3ad",
+            "wireAttemptObserved": false,
+            "clientHttpExchangeObserved": false,
+            "sequence": 2,
+            "modelAdapterAttemptObserved": true,
+            "terminalClass": "success",
+            "attemptOrdinal": 1,
+            "role": {
+              "present": true,
+              "len": 7,
+              "hash12": "986a1b7135f4"
+            },
+            "clientHttpResponseObserved": false,
+            "providerAttemptObserved": false
+          }
+        ],
+        "focus.memory.graphHops": 0,
+        "focus.context.snapshotId": {
+          "present": true,
+          "len": 64,
+          "hash12": "cd372fb85148"
+        },
+        "focus.selection.effectiveFallbackAllowed": true,
+        "focus.selection.fallbackReason": "none",
+        "focus.selection.fallbackAllowed": true,
+        "focus.jev.applied": false,
+        "focus.memory.tookMs": 0,
+        "focus.request.attemptCount": 2,
+        "focus.jev.decision": "off",
+        "focus.length.targetChars": 80,
+        "focus.selection.mode": {
+          "present": true,
+          "len": 4,
+          "hash12": "6ea56fae9eac"
+        },
+        "focus.selection.selectedModelHash": "44db8309cdf7c5277cf99fed473f244251fc6ab09c5a7e2e53cd98a33cfcadcd",
+        "focus.unknown.reason": "no_signal",
+        "focus.search.allowed": false,
+        "focus.request.attemptRowsOmitted": 0,
+        "focus.request.terminalClass": "success",
+        "focus.memory.mode": {
+          "present": true,
+          "len": 4,
+          "hash12": "c627c09c14e5"
+        },
+        "focus.selection.requestedModelHash": "6ea56fae9eacbb0ebed74bbbe731cf1179b7d41146162fe9b8c26cf0615c2367",
+        "focus.memory.vectorHitCount": 0,
+        "focus.memory.evidenceBytes": 2,
+        "focus.search.groundingStatus": "off",
+        "focus.selection.fallbackCount": 0,
+        "focus.quick": false
+      }
+    },
+    {
+      "stage": "focus_model_attempt",
+      "requestHash": "hash:227762dbd3f3",
+      "sessionHash": "hash:fe49846b7c72",
+      "epoch": 1,
+      "reasonCode": "none",
+      "latencyMs": 3,
+      "outcome": "attempted"
+    },
+    {
+      "stage": "focus_generation_started",
+      "requestHash": "hash:227762dbd3f3",
+      "sessionHash": "hash:fe49846b7c72",
+      "epoch": 1,
+      "reasonCode": "none",
+      "latencyMs": 3,
+      "outcome": "attempted"
+    },
+    {
+      "stage": "focus_question_confirmed",
+      "requestHash": "hash:227762dbd3f3",
+      "sessionHash": "hash:fe49846b7c72",
+      "epoch": 1,
+      "reasonCode": "none",
+      "latencyMs": null,
+      "outcome": "accepted"
+    },
+    {
+      "stage": "focus_started",
+      "sessionHash": "hash:fe49846b7c72",
+      "epoch": 1,
+      "reasonCode": "none",
+      "outcome": "open"
+    }
+  ],
+  "checkedAtUtc": "2026-10-09T09:15:07.794366+00:00"
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "path": "main\\java\\com\\example\\lms\\service\\ChatWorkflow.java",
+    "sha256": "7b73be7bfa12448456a431acb52b525b307ea6adb778146f8545a704a48b539c",
+    "mtime": "2026-10-09T17:21:35.285803"
+  },
+  {
+    "path": "build\\classes\\java\\main\\com\\example\\lms\\service\\ChatWorkflow.class",
+    "sha256": "49c9f563f5c0c1cc9b358ac83ade873f298f81076d582cc9960d7faf925122da",
+    "mtime": "2026-10-09T17:22:00.255490"
+  }
+]

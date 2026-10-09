@@ -1,0 +1,94 @@
+{
+  "runId": "4751754a-9143-4ff7-a22c-c60de832aafd",
+  "startedAt": "2026-10-09T11:47:41.827496+00:00",
+  "endedAt": "2026-10-09T11:48:05.561987+00:00",
+  "suites": [
+    {
+      "suite": "com.example.lms.assist.NovaFocusAnswerServiceTest",
+      "tests": 33,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485352615700,
+      "xmlSha256": "0e33d25b8a894a11d6b4764c3a1e3ae075fc8e13147fb885b62b11214f384071"
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusStateTest",
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485355616500,
+      "xmlSha256": "aa2ee776477b6db5c6a286582e8645f9c805ffb8f8940df1afa0e128bccb04e4"
+    },
+    {
+      "suite": "com.example.lms.assist.UnknownAnswerPolicyTest",
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485347614900,
+      "xmlSha256": "2c205c9dad067da9397206a2e65b34ac02ee4a015ae887327b92a564a6f77f93"
+    },
+    {
+      "suite": "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485350615300,
+      "xmlSha256": "7e05eb724c2db3f0cad70fdd60257c45cbbb1136ca079dd0333deb6b79236e76"
+    },
+    {
+      "suite": "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+      "tests": 36,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485358617000,
+      "xmlSha256": "3f4d17a1fe62c1841239c373856d682d80de74087717d438cda770757bb95e15"
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusExecutionPolicyTest",
+      "tests": 32,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485353616300,
+      "xmlSha256": "fbe752c089c0a318d0ec52295258f8e0fdb4b368189a4c1196bf40b6e74507b7"
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusServiceTest",
+      "tests": 29,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485358617000,
+      "xmlSha256": "162db91c2ade35033ca8a10da8d71d70f57255cfa39b0b712d86503800e02980"
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusDisplayContractTest",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485350615300,
+      "xmlSha256": "5042ce88435d6249a1ef5539482a82261ea41483a37355d5786d434f8a850ace"
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusModelSelectionTest",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "mtimeNs": 1791546485347614900,
+      "xmlSha256": "f93a17afeb38d88fee7e8be5916cf4b6a6ced791dcb4ded6268af437a8636c67"
+    }
+  ],
+  "totals": {
+    "tests": 193,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

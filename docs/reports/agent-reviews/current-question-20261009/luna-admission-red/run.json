@@ -1,0 +1,63 @@
+{
+  "runId": "e1a24034-a68d-487c-98d3-8486f41c49f8",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:00:15.089522+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 5,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.service.ChatModelCatalogServiceTest.lunaPresetRouteIsAdmittedByMetaDisplayProfileWithoutOpeningOtherRoutes"
+  ],
+  "commandSha256": "59c1d0b306a871637b3b476fe1dc651e41d1f5bfdc589647288cb5a2718bff18",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\application-meta-display.yml",
+      "kind": "file",
+      "sha256": "263c73b012e8206f877896b6142bdc7c45304065935ba60b25dbda1b3397faa4",
+      "bytes": 13753
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\service\\ChatModelCatalogServiceTest.java",
+      "kind": "file",
+      "sha256": "3941c92293ee7fb535652bc41830f07b393190b2f21dd3d75a115534f963adcd",
+      "bytes": 15900
+    }
+  ],
+  "expectedSuites": [
+    "com.example.lms.service.ChatModelCatalogServiceTest"
+  ],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [
+    {
+      "suite": "com.example.lms.service.ChatModelCatalogServiceTest",
+      "path": "TEST-com.example.lms.service.ChatModelCatalogServiceTest.xml",
+      "sha256": "10cbc7e630d81fcfa208690f70b974d402ebd95f41312a79b42b419baa7f21a2",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "failures": [
+    "junit_failure"
+  ],
+  "log": "command.log",
+  "pid": 2552,
+  "endedAt": "2026-10-09T10:00:37.302267+00:00",
+  "elapsedMs": 22211,
+  "totals": {
+    "tests": 1,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "runId": "a580bdbc-4423-4ec3-b124-29b14b199834",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:45:01.499253+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 9,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest.selectedThreeAndFiveSecondHoldPreservesAnswerAndOneVoiceQuestionUntilDeadline",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest.holdFreezesWithAcceptedQuestionAndStillRequiresFinalQuiet",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest.shortIdleCannotPreemptHoldButStopAndOldReceiptRemainImmediate"
+  ],
+  "commandSha256": "3786d2b71dc508fec7bb126088ce25816cba1c8d33165ea4716b21fdabedf171",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\assist\\NovaFocusState.java",
+      "kind": "file",
+      "sha256": "6f95e7c0e6fc49f1314effb36c8680ff7f3dc38503baff56a14de62d168fe25b",
+      "bytes": 27682
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 40976,
+  "endedAt": "2026-10-09T11:45:16.674056+00:00",
+  "elapsedMs": 15174,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

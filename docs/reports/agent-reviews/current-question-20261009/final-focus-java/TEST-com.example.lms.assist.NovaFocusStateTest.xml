@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusStateTest" tests="29" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:42:22" hostname="DESKTOP-M5NOV6K" time="0.083">
+  <properties/>
+  <testcase name="comparisonsRemainProseWhileActualHtmlAndAutolinksDisappear()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="groundedOriginalIsPhoneOnlyAndLateCompletionPublishesNeitherBodyNorMetadata()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.011"/>
+  <testcase name="markdownPartialsKeepThePublishedPrefixWhenFormattingCloses()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="reasoningFreezesWithModelBeforeSnapshotAndNextQuestionUsesNewSetting()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.009"/>
+  <testcase name="safePartialReachesLensAndFinalVersionStaysStable()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.008"/>
+  <testcase name="urlOnlyFinalHasShortSafeNotice()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="fallbackOutcomeStaysWithAcceptedRequestAndOnlyFoldThenClearsOnNormalAnswer()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.003"/>
+  <testcase name="acceptedQuestionFreezesSearchSettingUntilNextQuestion()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.009"/>
+  <testcase name="audioEpochOldRequestCannotCancelNextTurnInSameActivation()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.002"/>
+  <testcase name="threeSecondShortQuestionUsesCorrectedFinalOnceWithoutEightSecondOrLengthMinimum()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="literalBracketAndProseAfterSourceListRemainUseful()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.002"/>
+  <testcase name="rejectedManualOverflowDoesNotConsumeItsRetryIdentity()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="splitLinkPartialNeverFlashesAndProjectionOnlyAppends()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="userCloseAndProviderFailurePublishDistinctReasons()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.0"/>
+  <testcase name="disabledVoiceDoesNotActivateButManualOpenWorks()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="interimWakeCanRetractAndQuietNeverFinalizesInterim()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.002"/>
+  <testcase name="typedRequestIdentitySurvivesServerAndActivationChange()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="recentPartialInputSurvivesListeningDeadlineWithoutSubmittingUnconfirmedText()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="sameCaptureFinalReplayIsStableButNewCaptureCanReuseAsrCounter()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="lensProjectsUsefulLabelsAndKeepsOriginalOnFold()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="lateCompletionAndStaleReceiptsCannotReopen()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="finalCharacterReceiptStartsIdleOnceAndLongAnswersSurviveTwentySeconds()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="completedNextQuestionIsBoundedAndLaterQuestionIsExplicitlyDeferred()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.0"/>
+  <testcase name="nextQuestionWaitsForPresentationAndNewPositionCanRepeatText()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="audioEpochCannotCarryAnUnconfirmedWakeIntoNextSegment()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="clippedProjectionPreservesUnicodeAndPointsToFullDurableHistory()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.008"/>
+  <testcase name="stalePartialAndFailedStreamCannotPublishOrComplete()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="audioEpochDropsOnlyUnconfirmedPartsAndSeparatesReusedAsrIds()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.001"/>
+  <testcase name="closeReasonIsPublishedInStateJsonAndContainsNoDraft()" classname="com.example.lms.assist.NovaFocusStateTest" time="0.003"/>
+  <system-out><![CDATA[19:42:22.398 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=ANSWER_READY version=7
+19:42:22.409 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=THINKING version=8
+19:42:22.423 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=ANSWER_READY version=7
+19:42:22.442 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=ANSWER_READY version=11
+19:42:22.443 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=user_closed phase=LISTENING version=3
+19:42:22.443 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_answer_unavailable phase=THINKING version=6
+19:42:22.445 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=wake_retracted phase=WAKE_PREVIEW version=4
+19:42:22.448 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=input_unconfirmed phase=LISTENING version=5
+19:42:22.449 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=capture_changed phase=THINKING version=6
+19:42:22.451 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=closed phase=THINKING version=6
+19:42:22.453 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=idle_timeout phase=WAITING version=9
+19:42:22.455 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=capture_changed phase=WAKE_PREVIEW version=5
+19:42:22.465 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=focus_stream_failed phase=THINKING version=7
+19:42:22.467 [Test worker] INFO com.example.lms.assist.NovaFocusState -- [AWX][nova-focus] close reason=wake_no_question phase=LISTENING version=3
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

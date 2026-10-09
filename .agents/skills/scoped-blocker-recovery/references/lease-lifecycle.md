@@ -48,7 +48,7 @@ $fingerprint = (Get-FileHash .\__patch_drop__\source-edit-locks\<returned-leaseN
 powershell -NoProfile -ExecutionPolicy Bypass -File .\__patch_drop__\source_edit_session.ps1 `
   -Action heartbeat -Root . -Topic $task -OwnerId $owner -LeaseFingerprint $fingerprint -TtlMinutes 180
 powershell -NoProfile -ExecutionPolicy Bypass -File .\__patch_drop__\source_edit_session.ps1 `
-  -Action verify -Root . -Topic $task -OwnerId $owner -LeaseFingerprint $fingerprint -TargetManifest .\task-targets.json
+  -Action verify -Root . -Topic $task -OwnerId $owner -LeaseFingerprint $fingerprint -TargetManifest .\task-targets.json -RequireAbsentTargets
 # Apply only verified targets, check postimages and release in the caller's finally.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\__patch_drop__\source_edit_session.ps1 `
   -Action end -Root . -Topic $task -OwnerId $owner -LeaseFingerprint $fingerprint
@@ -74,19 +74,14 @@ receipt; recovery never recursively deletes an unknown directory. Legacy,
 remote, corrupt or uninspectable ownership stays evidence-needed. TTL or folder
 mtime alone is never process-death proof. A live old directory is preserved.
 
-Stale reclaim (`lease_conflict_autoflow.py reclaim`,
-`agent_scope_lease.py reclaim`) covers the case process-death recovery cannot:
-a lease whose owner left no provable PID at all (scope claims, crashed or
-remote sessions). A lease counts **stale** only when its effective expiry —
-lease TTL extended by any *live* heartbeat — has passed and no owner is proven
-alive; the mover re-verifies lock inventory, lease fingerprint, root and
-heartbeat freshness immediately before quarantine, so a reservation renewed
-between scan and move is left alone. Reclaim writes the same
-quarantine receipt plus a `stale-reclaim` event and an
-`AUTO:lease-reclaimed=<owner|reason>` journal note. Live leases (valid TTL,
-recent heartbeat, alive owner) are never reclaimable — the only cross-session
-paths for them are the owner's own `end` or a `LEASE_RELEASE_REQUEST.md`
-delivered once per conflict fingerprint.
+Expiry-only stale reclaim of a foreign unknown owner is forbidden by the
+current [parallel resume SSOT](../../../../docs/agents-rules/DEMO1-LEASE-LIFECYCLE.md).
+Expired TTL plus missing heartbeat/PID is not process-death evidence. Preserve
+that reservation and block only overlapping targets. The older `reclaim` and
+automatic claim-retry paths require current enforcement proof before use on
+unknown owners; they do not replace the proven-dead recovery described above.
+Normal live contention stays WAITING across observation rounds, then requires
+a fresh owned receipt, current comparison/replan and pre-edit verification.
 
 `status -Json` is a read-only inventory. Human status and JSON show normalized
 targets, hashed owner/task, PID/start, role, effective expiry, heartbeat age,

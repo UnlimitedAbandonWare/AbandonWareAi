@@ -13,6 +13,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 후속 발화가 맥락을 잃는다.
  */
 class StandardPromptBuilderConversationHistoryTest {
+    @Test void currentProductAndDatedEvidenceStayDistinctFromOldMemoryAndMissingDates() {
+        String question="HP Reverb G2 2026 official status?";
+        var current=dev.langchain4j.rag.content.Content.from("HP Reverb G2; synthetic official evidence; updated 2026-10-09; version G2.");
+        var undated=dev.langchain4j.rag.content.Content.from("HP Reverb G2; date not supplied; unverified.");
+        var ctx=PromptContext.builder().userQuery(question)
+                .history("User: Even Realities G2?\nAssistant: Old memory from 2024, unverified.")
+                .web(List.of(current,undated)).ragEnabled(true).build();
+        String prompt=builder.build(ctx);
+        assertTrue(prompt.contains("### USER QUESTION\n"+question));
+        assertTrue(prompt.contains("Even Realities G2"));
+        assertTrue(prompt.contains("updated 2026-10-09"));
+        assertTrue(prompt.contains("date not supplied; unverified"));
+        String instructions=builder.buildInstructions(ctx);
+        assertTrue(instructions.contains("do not infer freshness when evidence lacks them"));
+        assertTrue(instructions.contains("state the conflict or evidence gap"));
+    }
+
 
     private final StandardPromptBuilder builder = new StandardPromptBuilder();
 

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusHistoryTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:03:57" hostname="DESKTOP-M5NOV6K" time="1.139">
+  <properties/>
+  <testcase name="idempotencyAndTerminalCasDoNotDuplicateMessages()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.531"/>
+  <testcase name="unsetDisplayDefaultIsAutoWithApiFallbackAndExplicitChoicesArePreserved()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.127"/>
+  <testcase name="answerSelectionSurvivesLegacySaveAndExplicitAutoClearsFixedChoice()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.023"/>
+  <testcase name="storedOldDefaultsMigrateOnReadAndDeliberateChoicesSurvive()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.027"/>
+  <testcase name="omittedMemoryPreservesStoredPolicyAndExplicitBlockReplacesIt()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.032"/>
+  <testcase name="reasoningIsIndependentPersistedAndLegacySavePreservesIt()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.044"/>
+  <testcase name="dedicatedModeAndFallbackPreferencesSurviveLegacySaveCasReconnectAndOwnerIsolation()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.031"/>
+  <testcase name="legacyAnswerSelectionPreservesRoutingUntilAnExplicitReplacement()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.015"/>
+  <testcase name="omittedRecentSettingsPreserveStoredPolicyAndExplicitValuesReplaceIt()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.017"/>
+  <testcase name="multilingualMemoryUsesByteCeilingRatherThanEnglishCharacterRatio()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.0"/>
+  <testcase name="readsDoNotCreateRoomsAndSettingsUseCas()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.016"/>
+  <testcase name="concurrentOpenCreatesOneRoomAndDifferentOwnersStaySeparate()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.033"/>
+  <testcase name="snapshotSettingsSurviveLegacyPayloadSavesAndOldJson()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.022"/>
+  <testcase name="searchFalseSurvivesLegacySaveReconnectCasAndOwnerIsolation()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.046"/>
+  <testcase name="boundedHistoryContextAndCrashRecovery()" classname="com.example.lms.assist.NovaFocusHistoryTest" time="0.167"/>
+  <system-out><![CDATA[19:03:53.428 [Test worker] INFO org.hibernate.jpa.internal.util.LogHelper -- HHH000204: Processing PersistenceUnitInfo [name: default]
+19:03:53.513 [Test worker] INFO org.hibernate.Version -- HHH000412: Hibernate ORM core version 6.5.3.Final
+19:03:53.560 [Test worker] INFO org.hibernate.cache.internal.RegionFactoryInitiator -- HHH000026: Second-level cache disabled
+19:03:54.870 [Test worker] INFO org.springframework.orm.jpa.persistenceunit.SpringPersistenceUnitInfo -- No LoadTimeWeaver setup: ignoring JPA class transformer
+19:03:55.929 [Test worker] INFO org.hibernate.validator.internal.util.Version -- HV000001: Hibernate Validator 8.0.1.Final
+19:03:57.374 [Test worker] INFO org.hibernate.engine.transaction.jta.platform.internal.JtaPlatformInitiator -- HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
+19:03:57.493 [Test worker] INFO org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean -- Initialized JPA EntityManagerFactory for persistence unit 'default'
+19:03:58.560 [pool-2-thread-2] WARN org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- SQL Error: 23505, SQLState: 23505
+19:03:58.560 [pool-2-thread-1] WARN org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- SQL Error: 23505, SQLState: 23505
+19:03:58.560 [pool-2-thread-4] WARN org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- SQL Error: 23505, SQLState: 23505
+19:03:58.560 [pool-2-thread-2] ERROR org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- Unique index or primary key violation: "PUBLIC.PRIMARY_KEY_B9 ON PUBLIC.NOVA_FOCUS_PROFILE(ID) VALUES ( /* 12 */ '8a14e09cd8b3005cfd16a59e6b4ae92d18b2569f9b047ef27558dd8d661411d0' )"; SQL statement:
+insert into nova_focus_profile (channel,chat_session_id,memoryRevision,nextSequence,ownerKey,settingsJson,settingsVersion,id) values (?,?,?,?,?,?,?,?) [23505-224]
+19:03:58.560 [pool-2-thread-1] ERROR org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- Unique index or primary key violation: "PUBLIC.PRIMARY_KEY_B9 ON PUBLIC.NOVA_FOCUS_PROFILE(ID) VALUES ( /* 12 */ '8a14e09cd8b3005cfd16a59e6b4ae92d18b2569f9b047ef27558dd8d661411d0' )"; SQL statement:
+insert into nova_focus_profile (channel,chat_session_id,memoryRevision,nextSequence,ownerKey,settingsJson,settingsVersion,id) values (?,?,?,?,?,?,?,?) [23505-224]
+19:03:58.560 [pool-2-thread-4] ERROR org.hibernate.engine.jdbc.spi.SqlExceptionHelper -- Unique index or primary key violation: "PUBLIC.PRIMARY_KEY_B9 ON PUBLIC.NOVA_FOCUS_PROFILE(ID) VALUES ( /* 12 */ '8a14e09cd8b3005cfd16a59e6b4ae92d18b2569f9b047ef27558dd8d661411d0' )"; SQL statement:
+insert into nova_focus_profile (channel,chat_session_id,memoryRevision,nextSequence,ownerKey,settingsJson,settingsVersion,id) values (?,?,?,?,?,?,?,?) [23505-224]
+19:03:58.821 [Test worker] INFO org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean -- Closing JPA EntityManagerFactory for persistence unit 'default'
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

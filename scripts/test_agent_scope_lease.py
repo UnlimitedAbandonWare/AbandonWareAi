@@ -50,7 +50,7 @@ class AgentScopeLeaseTests(unittest.TestCase):
             args += ["--task", task]
         return self.call(*(args + list(extra)), expect=0)[1]
 
-    def foreign_lease(self, topic, targets, expired=True):
+    def foreign_lease(self, topic, targets, expired=True, proven_dead=False):
         # 다른 세션이 end 없이 남긴 잔류 lease 픽스처.
         now = datetime.now(timezone.utc)
         lease_id = hashlib.md5(("lease-" + topic).encode()).hexdigest()
@@ -70,6 +70,11 @@ class AgentScopeLeaseTests(unittest.TestCase):
                "expiresAt": expiry.isoformat(), "mutationAllowed": True,
                "operation": "worktree-edit", "targetPaths": targets,
                "coordinationMode": "target-scoped"}
+        if proven_dead:
+            doc.update(ownerHostHash=hashlib.sha256(
+                os.environ["COMPUTERNAME"].lower().encode()).hexdigest(),
+                ownerProcessId=2147483647,
+                ownerProcessStartedAtUtc=(now - timedelta(hours=2)).isoformat())
         path = lock / "lease.json"
         path.write_text(json.dumps(doc), encoding="utf-8")
         return path
@@ -196,7 +201,7 @@ class AgentScopeLeaseTests(unittest.TestCase):
 
     def test_claim_recovers_stale_lease_and_acquires(self):
         # A 세션이 end 없이 끝나 만료된 잔류 lease -> claim이 회수 후 begin 재시도.
-        self.foreign_lease("dead-session", ["target.txt"])
+        self.foreign_lease("dead-session", ["target.txt"], proven_dead=True)
         claimed = self.claim()
         self.assertTrue(claimed["acquired"])
         lock = (self.root / "__patch_drop__" / "source-edit-locks"
@@ -206,6 +211,19 @@ class AgentScopeLeaseTests(unittest.TestCase):
                             / "source-edit-quarantine").glob("*/lease/lease.json"))
         self.assertEqual(len(quarantined), 1)
         self.call("done", "--task", claimed["taskId"], expect=0)
+
+    def test_claim_preserves_unknown_expired_owner_and_allows_nonoverlap(self):
+        path = self.foreign_lease("unknown-session", ["target.txt"])
+        before = path.read_bytes()
+        proc, row = self.call("claim", "--agent", "devin", "--path", "target.txt")
+        self.assertEqual(proc.returncode, 7)
+        self.assertFalse(row["acquired"])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse((self.root / "__patch_drop__" / "source-edit-quarantine").exists())
+        _, other = self.call("claim", "--agent", "codex", "--path", "other.txt", expect=0)
+        self.assertTrue(other["acquired"])
+        self.assertEqual(path.read_bytes(), before)
+        self.call("done", "--task", other["taskId"], expect=0)
 
     def test_claim_blocked_by_live_lease_does_not_reclaim(self):
         self.foreign_lease("live-session", ["target.txt"], expired=False)
@@ -293,7 +311,7 @@ class AgentScopeLeaseTests(unittest.TestCase):
     def test_claim_exit6_overlap_reason_triggers_autoflow_and_retry(self):
         # exit 6 + source-target-overlap 사유도 autoflow 평가 → stale 회수 후
         # begin 재시도로 claim 완료. 회수는 quarantine+journal 증거로 판정한다.
-        self.foreign_lease("dead-six", ["target.txt"])
+        self.foreign_lease("dead-six", ["target.txt"], proven_dead=True)
         env = self.fail_once_env("source-target-overlap")
         proc, row = self.call("claim", "--agent", "devin", "--path", "target.txt",
                               "--purpose", "synthetic claim", env=env, expect=0)

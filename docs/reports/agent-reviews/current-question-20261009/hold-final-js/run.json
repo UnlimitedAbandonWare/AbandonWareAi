@@ -1,0 +1,81 @@
+{
+  "runId": "f15ac208-2fb2-49c3-a74c-84b9c6afea65",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:47:41.831498+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 15,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js\\display-audio-batch.test.cjs",
+    "src/test/js\\display-auto-voice-trigger.test.cjs",
+    "src/test/js\\display-capture-recovery.test.cjs",
+    "src/test/js\\display-continuity.test.cjs",
+    "src/test/js\\display-focus-client.test.cjs",
+    "src/test/js\\display-phone-policy.test.cjs",
+    "src/test/js\\display-stop-lifecycle.test.cjs",
+    "src/test/js\\display-voice.test.cjs",
+    "src\\test\\js\\display-focus-client.test.cjs",
+    "src\\test\\js\\display-focus-flow.test.cjs",
+    "src\\test\\js\\display-focus-memory.test.cjs",
+    "src\\test\\js\\display-focus-mount.test.cjs",
+    "src\\test\\js\\display-focus-privacy.test.cjs",
+    "src\\test\\js\\display-focus-projection.test.cjs"
+  ],
+  "commandSha256": "c9b060d554e8f36c3c7922364a39ff14f14f6081dcf5e418682de041190e3660",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\assist\\NovaFocusState.java",
+      "kind": "file",
+      "sha256": "01502803cb08e337fc12b816806f4e13173fad2c77366bb0ed57325e88e83ee0",
+      "bytes": 28184
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusStateTest.java",
+      "kind": "file",
+      "sha256": "cd427c4d2867ec84e45a3035a76216c591e1834e8e30aea6845bbc727350f8f6",
+      "bytes": 27504
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusServiceTest.java",
+      "kind": "file",
+      "sha256": "79b6f32a6943cd24186dcf359e69f89bfde550804d18f9dcbbadd18bfb7a11cb",
+      "bytes": 44797
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus-controls.js",
+      "kind": "file",
+      "sha256": "ae9429ed17894ac84a1d18aed585fbc48a849710a419c1d371ac4f457680f87b",
+      "bytes": 43614
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\index.html",
+      "kind": "file",
+      "sha256": "e49aa17cc7009741e5a1e80c9fa82679649bfbf26d2f625cf6bc420b1281b98c",
+      "bytes": 31299
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\js\\display-focus-client.test.cjs",
+      "kind": "file",
+      "sha256": "1ea9dc25e5fa4c77ad778bcf8e8dcc7dc57110f32d125efa0ffa0ed47abedc62",
+      "bytes": 42480
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 64048,
+  "endedAt": "2026-10-09T11:47:42.317450+00:00",
+  "elapsedMs": 482,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -15,6 +15,30 @@ import static org.mockito.Mockito.*;
 
 class NovaFocusAnswerServiceTest {
     @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"HP Reverb G2 specs?","Ray-Ban Meta specs?","Meta Ray-Ban Display specs?"})
+    void confirmedProductQuestionAndOldContextReachWorkflowWithoutCorrectionOrSearchPermission(String question) throws Exception {
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("Synthetic answer, unverified.","fixed-fixture",false));
+        var old=new NovaFocusHistoryService.Pair(1,"old","COMPLETE","Even Realities G2?","Old memory, unverified.");
+        var memory=new NovaFocusHistoryService.Context(List.of(old),"",List.of(),List.of(),
+                new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"fixed-fixture"),4,400,false,false);
+        try {
+            adapter.answer(7L,question,memory);
+            var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
+            var context=org.mockito.ArgumentCaptor.forClass(ChatConversationContext.class);
+            verify(chat).continueChat(request.capture(),isNull(),context.capture());
+            assertEquals(question,request.getValue().getMessage());assertNull(request.getValue().getSessionId());
+            assertTrue(context.getValue().present());assertTrue(context.getValue().interpretationHistory().stream()
+                    .anyMatch(line->line.contains("Even Realities G2")));
+            assertFalse(request.getValue().isUseWebSearch());assertFalse(context.getValue().focusGoogleSearchAllowed());
+            assertEquals(com.example.lms.gptsearch.dto.SearchMode.OFF,request.getValue().getSearchMode());
+            assertEquals("fixed-fixture",request.getValue().getModel());
+        } finally {ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"completed","changed","failed"})
     void publishedFixedOAuthPrefixNeverStartsUnknownWebRetryOrAcceptsRevision(String outcome) throws Exception {
         var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
@@ -476,6 +500,37 @@ class NovaFocusAnswerServiceTest {
             assertEquals(longAnswer,adapter.answer(7L,"아까 정한 이름은?",memory));
             verify(chat,times(1)).continueChat(any(),isNull(),any());
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+    }
+    @Test void profileAutoDefaultUsesAdmittedFlashLiteAndPreservesExplicitChoices() throws Exception {
+        var yaml=new org.springframework.beans.factory.config.YamlPropertiesFactoryBean();
+        yaml.setResources(new org.springframework.core.io.ClassPathResource("application-meta-display.yml"));
+        String configured=yaml.getObject().getProperty("conversate.focus.default-model");
+        var env=new org.springframework.mock.env.MockEnvironment().withProperty("focus.default",configured);
+        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
+        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
+        var catalog=mock(ChatModelCatalogService.class);
+        for(String id:List.of("llmrouter.gemini-cue","llmrouter.gemini-pro"))
+            when(catalog.resolve(id)).thenReturn(Optional.of(new ChatModelCatalogService.Choice(
+                id,"gemini",id.substring("llmrouter.".length()),"fixture-model","configured",true,"","release","server_catalog")));
+        ReflectionTestUtils.setField(adapter,"modelCatalog",catalog);
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("Synthetic answer","fixture-model",false));
+        var routing=new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of());
+        try {
+            for(int scenario=0;scenario<3;scenario++) {
+                if(scenario==1)env.setProperty("CONVERSATE_FOCUS_DEFAULT_MODEL","llmrouter.gemini-pro");
+                ReflectionTestUtils.setField(adapter,"focusDefaultModel",env.getProperty("focus.default"));
+                var selection=new NovaFocusSettings.AnswerSelection(scenario==2?NovaFocusSettings.AnswerSelection.Mode.FIXED:
+                    NovaFocusSettings.AnswerSelection.Mode.AUTO,scenario==2?"llmrouter.gemini-pro":null,routing);
+                var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selection,0);
+                adapter.answer(7L,"Synthetic question",memory);
+                var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
+                verify(chat).continueChat(request.capture(),isNull(),any());
+                assertEquals(scenario==0?"llmrouter.gemini-cue":"llmrouter.gemini-pro",request.getValue().getModel());
+                assertTrue(request.getValue().isStrictModelSelection());
+                clearInvocations(chat);
+            }
+        } finally { ReflectionTestUtils.invokeMethod(runs,"shutdown"); }
     }
     @Test void autoRoutingPrefersConfiguredFocusDefaultModelWhenSelectable() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();

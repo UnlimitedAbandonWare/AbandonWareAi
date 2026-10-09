@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" tests="36" skipped="0" failures="0" errors="0" timestamp="2026-10-09T09:28:50" hostname="DESKTOP-M5NOV6K" time="6.305">
+  <properties/>
+  <testcase name="[1] focus=true, question=HP Reverb G2 2026 specs?, rewritten=Even Realities G2 specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="1.505"/>
+  <testcase name="[2] focus=false, question=HP Reverb G2 2026 specs?, rewritten=Even Realities G2 specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.045"/>
+  <testcase name="[3] focus=true, question=Meta Ray-Ban Display specs?, rewritten=Ray-Ban Meta specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.038"/>
+  <testcase name="[4] focus=false, question=Meta Ray-Ban Display specs?, rewritten=Ray-Ban Meta specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.048"/>
+  <testcase name="[5] focus=true, question=Ray-Ban Meta specs?, rewritten=Meta Ray-Ban Display specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.039"/>
+  <testcase name="[6] focus=false, question=Ray-Ban Meta specs?, rewritten=Meta Ray-Ban Display specs?, score=0.9" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.029"/>
+  <testcase name="[7] focus=true, question=G2 specs?, rewritten=Even Realities G2 specs?, score=0.1" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.034"/>
+  <testcase name="[8] focus=false, question=G2 specs?, rewritten=Even Realities G2 specs?, score=0.1" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.029"/>
+  <testcase name="[9] focus=true, question=G2 specs?, rewritten=Even Realities G2 specs?, score=null" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.027"/>
+  <testcase name="[10] focus=false, question=G2 specs?, rewritten=Even Realities G2 specs?, score=null" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.026"/>
+  <testcase name="attachmentBudgetIncludesActualFinalSystemAndQuestionAndLabelsEstimate()" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.897"/>
+  <testcase name="[1] compress=false, fit=false, table=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="1.648"/>
+  <testcase name="[2] compress=false, fit=true, table=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.124"/>
+  <testcase name="[3] compress=true, fit=false, table=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.042"/>
+  <testcase name="[4] compress=true, fit=true, table=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.071"/>
+  <testcase name="[5] compress=false, fit=false, table=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.049"/>
+  <testcase name="[6] compress=false, fit=true, table=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.07"/>
+  <testcase name="[7] compress=true, fit=false, table=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.045"/>
+  <testcase name="[8] compress=true, fit=true, table=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.068"/>
+  <testcase name="[1] mode=approved" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.3"/>
+  <testcase name="[2] mode=master_off" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.023"/>
+  <testcase name="[3] mode=opt_out" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.026"/>
+  <testcase name="[4] mode=strict" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.011"/>
+  <testcase name="[5] mode=unknown" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.024"/>
+  <testcase name="[6] mode=unready" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.037"/>
+  <testcase name="usedAttachmentReferencesComeFromTheActualFinalModelInput()" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.046"/>
+  <testcase name="oversizedAttachmentQuestionCannotEscapeBudgetByCountingOnlyDocumentBody()" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.508"/>
+  <testcase name="[1] web=true, vector=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.024"/>
+  <testcase name="[2] web=false, vector=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.022"/>
+  <testcase name="[3] web=true, vector=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.024"/>
+  <testcase name="[1] compressionMode=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.068"/>
+  <testcase name="[2] compressionMode=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.027"/>
+  <testcase name="[1] enabled=false, retainedDocs=1, extraSelected=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.148"/>
+  <testcase name="[2] enabled=true, retainedDocs=1, extraSelected=false" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.043"/>
+  <testcase name="[3] enabled=true, retainedDocs=2, extraSelected=true" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.035"/>
+  <testcase name="immediateSameOwnerFollowupUsesCurrentRelationAndSourceAtFinalModelBoundary()" classname="com.example.lms.service.ChatWorkflowPromptMessageRoleTest" time="0.074"/>
+  <system-out><![CDATA[18:28:51.953 [Test worker] INFO com.example.lms.service.rag.guard.EvidenceGate -- [EVIDENCE_GATE] No evidence at all -> block queryHash12=d2fbed419774 queryLength=25
+18:28:51.953 [Test worker] WARN com.example.lms.service.guard.CitationGate -- [CitationGate] No sources provided (minCount=1, logOnly=false).
+18:28:53.966 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538133966 elapsedMs=0 httpStatus=0
+18:28:53.969 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538133969 elapsedMs=3 httpStatus=0
+18:28:54.443 [reactor-http-nio-2] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134443 elapsedMs=477 httpStatus=200 contentType=text/event-stream
+18:28:54.468 [reactor-http-nio-2] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134468 elapsedMs=502 httpStatus=200
+18:28:54.469 [reactor-http-nio-2] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134469 elapsedMs=504 httpStatus=200
+18:28:54.478 [reactor-http-nio-2] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134478 elapsedMs=512 httpStatus=200
+18:28:54.601 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134601 elapsedMs=0 httpStatus=0
+18:28:54.601 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134601 elapsedMs=0 httpStatus=0
+18:28:54.607 [reactor-http-nio-3] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134607 elapsedMs=6 httpStatus=200 contentType=text/event-stream
+18:28:54.607 [reactor-http-nio-3] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134607 elapsedMs=7 httpStatus=200
+18:28:54.608 [reactor-http-nio-3] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134608 elapsedMs=7 httpStatus=200
+18:28:54.608 [reactor-http-nio-3] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134608 elapsedMs=8 httpStatus=200
+18:28:54.630 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.644 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134644 elapsedMs=0 httpStatus=0
+18:28:54.644 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134644 elapsedMs=0 httpStatus=0
+18:28:54.649 [reactor-http-nio-4] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134649 elapsedMs=5 httpStatus=200 contentType=text/event-stream
+18:28:54.650 [reactor-http-nio-4] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134650 elapsedMs=6 httpStatus=200
+18:28:54.650 [reactor-http-nio-4] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134650 elapsedMs=6 httpStatus=200
+18:28:54.651 [reactor-http-nio-4] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134651 elapsedMs=7 httpStatus=200
+18:28:54.669 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.696 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.714 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134714 elapsedMs=0 httpStatus=0
+18:28:54.714 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134714 elapsedMs=0 httpStatus=0
+18:28:54.721 [reactor-http-nio-5] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134721 elapsedMs=6 httpStatus=200 contentType=text/event-stream
+18:28:54.722 [reactor-http-nio-5] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134722 elapsedMs=7 httpStatus=200
+18:28:54.722 [reactor-http-nio-5] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134722 elapsedMs=7 httpStatus=200
+18:28:54.723 [reactor-http-nio-5] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134723 elapsedMs=8 httpStatus=200
+18:28:54.764 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134764 elapsedMs=0 httpStatus=0
+18:28:54.764 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134764 elapsedMs=0 httpStatus=0
+18:28:54.771 [reactor-http-nio-6] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134771 elapsedMs=6 httpStatus=200 contentType=text/event-stream
+18:28:54.772 [reactor-http-nio-6] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134772 elapsedMs=7 httpStatus=200
+18:28:54.772 [reactor-http-nio-6] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134772 elapsedMs=7 httpStatus=200
+18:28:54.773 [reactor-http-nio-6] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134773 elapsedMs=8 httpStatus=200
+18:28:54.835 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134835 elapsedMs=0 httpStatus=0
+18:28:54.835 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134835 elapsedMs=0 httpStatus=0
+18:28:54.842 [reactor-http-nio-7] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134842 elapsedMs=6 httpStatus=200 contentType=text/event-stream
+18:28:54.843 [reactor-http-nio-7] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134843 elapsedMs=7 httpStatus=200
+18:28:54.843 [reactor-http-nio-7] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134843 elapsedMs=7 httpStatus=200
+18:28:54.844 [reactor-http-nio-7] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134844 elapsedMs=8 httpStatus=200
+18:28:54.867 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.881 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134881 elapsedMs=0 httpStatus=0
+18:28:54.881 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134881 elapsedMs=0 httpStatus=0
+18:28:54.888 [reactor-http-nio-8] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134888 elapsedMs=6 httpStatus=200 contentType=text/event-stream
+18:28:54.888 [reactor-http-nio-8] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134888 elapsedMs=7 httpStatus=200
+18:28:54.888 [reactor-http-nio-8] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134888 elapsedMs=7 httpStatus=200
+18:28:54.889 [reactor-http-nio-8] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134889 elapsedMs=8 httpStatus=200
+18:28:54.910 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.928 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=null anchorLength=0)
+18:28:54.950 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=adapter_entry count=1 requestHash=null atEpochMs=1791538134950 elapsedMs=0 httpStatus=0
+18:28:54.950 [Test worker] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_start count=1 requestHash=null atEpochMs=1791538134950 elapsedMs=0 httpStatus=0
+18:28:54.957 [reactor-http-nio-9] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_headers count=1 requestHash=null atEpochMs=1791538134957 elapsedMs=7 httpStatus=200 contentType=text/event-stream
+18:28:54.958 [reactor-http-nio-9] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=http_first_byte count=1 requestHash=null atEpochMs=1791538134958 elapsedMs=8 httpStatus=200
+18:28:54.958 [reactor-http-nio-9] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=sse_first_event count=1 requestHash=null atEpochMs=1791538134958 elapsedMs=8 httpStatus=200
+18:28:54.959 [reactor-http-nio-9] INFO ai.abandonware.nova.orch.llm.OpenAiResponsesChatModel -- [plan9-oauth-phase] phase=terminal count=1 requestHash=null atEpochMs=1791538134959 elapsedMs=9 httpStatus=200
+18:28:55.850 [Test worker] INFO com.example.lms.service.rag.guard.EvidenceGate -- [EVIDENCE_GATE] No evidence at all -> block queryHash12=bfd10b96c1ea queryLength=20000
+18:28:55.850 [Test worker] WARN com.example.lms.service.guard.CitationGate -- [CitationGate] No sources provided (minCount=1, logOnly=false).
+18:28:56.073 [Test worker] WARN com.example.lms.service.guard.CitationGate -- [CitationGate] No sources provided (minCount=1, logOnly=false).
+18:28:56.097 [Test worker] INFO ai.abandonware.nova.orch.aop.RagCompressionAspect -- [NovaRagCompressor] compressed 2 -> 1 docs (anchorHash=hash:d2fbed419774 anchorLength=25)
+18:28:56.097 [Test worker] WARN com.example.lms.service.guard.CitationGate -- [CitationGate] No sources provided (minCount=1, logOnly=false).
+18:28:56.288 [Test worker] INFO ai.abandonware.nova.orch.aop.ExtremeZBurstAspect -- [ExtremeZ] recall boost base=1 extra=1 merged=2
+18:28:56.323 [Test worker] INFO ai.abandonware.nova.orch.aop.ExtremeZBurstAspect -- [ExtremeZ] recall boost base=1 extra=1 merged=2
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,334 @@
+{
+  "checkedAtUtc": "2026-10-09T12:04:24.901Z",
+  "freshContexts": true,
+  "restoredAuthState": false,
+  "userProfileWriteCount": 0,
+  "maximumGenerationPosts": 2,
+  "hardwareRenderedObserved": false,
+  "scenarios": [
+    {
+      "route": "llmrouter.gemini-pro",
+      "expected": "gemini-3.8-flash",
+      "requests": [
+        {
+          "endpoint": "/api/assist/display/phone-test",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/phone-test",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/open",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/input",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/close",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/relay/settings",
+          "status": 200
+        }
+      ],
+      "consoleErrorCount": 0,
+      "requestFailureCount": 0,
+      "submittedInputHash": "hash:bdb89c159499",
+      "catalog": {
+        "id": "llmrouter.gemini-pro",
+        "modelId": "gemini-3.8-flash",
+        "selectable": true,
+        "reason": ""
+      },
+      "epoch": 1,
+      "sessionHash": "hash:c721d45b5ccf",
+      "storedSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-pro",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "settingsVersion": 1,
+      "reconnectedSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-pro",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "reconnectedVersion": 1,
+      "reconnectPreserved": true,
+      "elapsedMs": 5095,
+      "phase": "ANSWER_READY",
+      "reason": "",
+      "answerChars": 32,
+      "answerHash": "ea6b0232b812",
+      "turnHash": "hash:5d7a5b168f9b",
+      "requestedModel": "llmrouter.gemini-pro",
+      "effectiveRoute": "llmrouter.gemini-pro",
+      "effectiveModel": "gemini-3.8-flash",
+      "isFallback": false,
+      "fallbackReasonCode": "none",
+      "requestHash": "hash:fed24af393e1",
+      "diagnostics": [
+        {
+          "stage": "focus_terminal",
+          "requestHash": "hash:fed24af393e1",
+          "sessionHash": "hash:c721d45b5ccf",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "success",
+          "reasonCode": "none",
+          "latencyMs": 2869
+        },
+        {
+          "stage": "focus_model_attempt",
+          "requestHash": "hash:fed24af393e1",
+          "sessionHash": "hash:c721d45b5ccf",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "attempted",
+          "reasonCode": "none",
+          "latencyMs": 24
+        },
+        {
+          "stage": "focus_generation_started",
+          "requestHash": "hash:fed24af393e1",
+          "sessionHash": "hash:c721d45b5ccf",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "attempted",
+          "reasonCode": "none",
+          "latencyMs": 19
+        },
+        {
+          "stage": "focus_question_confirmed",
+          "requestHash": "hash:fed24af393e1",
+          "sessionHash": "hash:c721d45b5ccf",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "accepted",
+          "reasonCode": "none",
+          "latencyMs": null
+        }
+      ],
+      "modelDiagnostic": {
+        "focus.selection.requestedModelHash": "44db8309cdf7c5277cf99fed473f244251fc6ab09c5a7e2e53cd98a33cfcadcd",
+        "focus.selection.selectedModelHash": "44db8309cdf7c5277cf99fed473f244251fc6ab09c5a7e2e53cd98a33cfcadcd",
+        "focus.selection.resultModelHash": "319034f3e25d0d9bd6b3a46b1def7a01b7689f0d51384c63da1f6e0b464af810",
+        "focus.selection.fallbackCount": 0,
+        "focus.selection.effectiveFallbackAllowed": false,
+        "focus.search.webRequested": false,
+        "focus.search.allowed": false,
+        "focus.request.terminalClass": "success"
+      },
+      "modelUsed": "gemini-3.8-flash",
+      "verdict": "FAIL"
+    },
+    {
+      "route": "llmrouter.gemini-cue",
+      "expected": "gemini-3.5-flash-lite",
+      "requests": [
+        {
+          "endpoint": "/api/assist/display/phone-test",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/phone-test",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/settings/read",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/open",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/input",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/poll",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/focus/close",
+          "status": 200
+        },
+        {
+          "endpoint": "/api/assist/display/relay/settings",
+          "status": 200
+        }
+      ],
+      "consoleErrorCount": 0,
+      "requestFailureCount": 0,
+      "submittedInputHash": "hash:714300ebd144",
+      "catalog": {
+        "id": "llmrouter.gemini-cue",
+        "modelId": "gemini-3.5-flash-lite",
+        "selectable": true,
+        "reason": ""
+      },
+      "epoch": 1,
+      "sessionHash": "hash:44ed2ed9b133",
+      "storedSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-cue",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "settingsVersion": 1,
+      "reconnectedSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.gemini-cue",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "reconnectedVersion": 1,
+      "reconnectPreserved": true,
+      "elapsedMs": 3077,
+      "phase": "ANSWER_READY",
+      "reason": "",
+      "answerChars": 27,
+      "answerHash": "40447d5d1981",
+      "turnHash": "hash:1d86e417b0c6",
+      "requestedModel": "llmrouter.gemini-cue",
+      "effectiveRoute": "llmrouter.gemini-cue",
+      "effectiveModel": "gemini-3.5-flash-lite",
+      "isFallback": false,
+      "fallbackReasonCode": "none",
+      "requestHash": "hash:39cb71e99625",
+      "diagnostics": [
+        {
+          "stage": "focus_terminal",
+          "requestHash": "hash:39cb71e99625",
+          "sessionHash": "hash:44ed2ed9b133",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "success",
+          "reasonCode": "none",
+          "latencyMs": 1478
+        },
+        {
+          "stage": "focus_model_attempt",
+          "requestHash": "hash:39cb71e99625",
+          "sessionHash": "hash:44ed2ed9b133",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "attempted",
+          "reasonCode": "none",
+          "latencyMs": 6
+        },
+        {
+          "stage": "focus_generation_started",
+          "requestHash": "hash:39cb71e99625",
+          "sessionHash": "hash:44ed2ed9b133",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "attempted",
+          "reasonCode": "none",
+          "latencyMs": 5
+        },
+        {
+          "stage": "focus_question_confirmed",
+          "requestHash": "hash:39cb71e99625",
+          "sessionHash": "hash:44ed2ed9b133",
+          "serverInstanceHash": "hash:6233a1de975a",
+          "epoch": 1,
+          "outcome": "accepted",
+          "reasonCode": "none",
+          "latencyMs": null
+        }
+      ],
+      "modelDiagnostic": {
+        "focus.selection.requestedModelHash": "5d8c5d0f645e0b07e98821afbf15e5ba539f54b3871c818e2a4c80df3db18498",
+        "focus.selection.selectedModelHash": "5d8c5d0f645e0b07e98821afbf15e5ba539f54b3871c818e2a4c80df3db18498",
+        "focus.selection.resultModelHash": "37a58c167b3b8f674049d3c259bacf074a8d47c406de12f2ca2ece97e0cf658a",
+        "focus.selection.fallbackCount": 0,
+        "focus.selection.effectiveFallbackAllowed": false,
+        "focus.search.webRequested": false,
+        "focus.search.allowed": false,
+        "focus.request.terminalClass": "success"
+      },
+      "modelUsed": "gemini-3.5-flash-lite",
+      "verdict": "FAIL"
+    }
+  ]
+}

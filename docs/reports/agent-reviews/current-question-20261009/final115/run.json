@@ -1,0 +1,147 @@
+{
+  "runId": "7f4f8d1e-a6d9-4edc-99e5-dde913a312be",
+  "scope": "verification",
+  "startedAt": "2026-10-09T09:28:34.589523+00:00",
+  "status": "passed",
+  "executable": "gradlew.bat",
+  "argumentCount": 13,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "--tests",
+    "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+    "--tests",
+    "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusAnswerServiceTest",
+    "--tests",
+    "com.example.lms.assist.UnknownAnswerPolicyTest"
+  ],
+  "commandSha256": "57fd17cc3669af797f90940c4e3d4c3ad4902976f578f5247aa86bce16517715",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\service\\ChatWorkflow.java",
+      "kind": "file",
+      "sha256": "7b73be7bfa12448456a431acb52b525b307ea6adb778146f8545a704a48b539c",
+      "bytes": 769987
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\application-meta-display.yml",
+      "kind": "file",
+      "sha256": "263c73b012e8206f877896b6142bdc7c45304065935ba60b25dbda1b3397faa4",
+      "bytes": 13753
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\service\\ChatWorkflowPromptMessageRoleTest.java",
+      "kind": "file",
+      "sha256": "ad38933b6d7a60a194b1ce5d86f6e0ece69e8a8d3a524ed77fc107007637089e",
+      "bytes": 57650
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusStateTest.java",
+      "kind": "file",
+      "sha256": "038519400783e631b3bb03eece9516be1b099fc0bad9e169eb6b0560efbed76b",
+      "bytes": 20888
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\prompt\\StandardPromptBuilderConversationHistoryTest.java",
+      "kind": "file",
+      "sha256": "d0f5d6c14c11059d8daf59d490777def3a8e0b54058752aa3e4fcb6860776c46",
+      "bytes": 10702
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusAnswerServiceTest.java",
+      "kind": "file",
+      "sha256": "cfbc8340056b5e22cfcf9a9ff6e018f0e364a3fcacc4260ff375fe5a0965a4ee",
+      "bytes": 53640
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\UnknownAnswerPolicyTest.java",
+      "kind": "file",
+      "sha256": "a4232e8ccde87705340a28363b2191716b424d35a81c9d1263f1852d02f0fdd7",
+      "bytes": 5663
+    }
+  ],
+  "expectedSuites": [
+    "com.example.lms.assist.NovaFocusAnswerServiceTest",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "com.example.lms.assist.UnknownAnswerPolicyTest",
+    "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+    "com.example.lms.service.ChatWorkflowPromptMessageRoleTest"
+  ],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [
+    {
+      "suite": "com.example.lms.assist.NovaFocusStateTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusStateTest.xml",
+      "sha256": "e0a18f0246e1a40036104732207b2cbf7eb0b05c69ea2462bdecf239dbb2dc11",
+      "counts": {
+        "tests": 28,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+      "path": "TEST-com.example.lms.service.ChatWorkflowPromptMessageRoleTest.xml",
+      "sha256": "3e92ac3313f74733a45e10622de9043107970218ddbfc683cf8fc3ac5819a052",
+      "counts": {
+        "tests": 36,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+      "path": "TEST-com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest.xml",
+      "sha256": "e9b71ec83ca95424402e4c7d81ecba6ce602b99e3857fbc08241285a8e2c16f6",
+      "counts": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusAnswerServiceTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusAnswerServiceTest.xml",
+      "sha256": "e3e800909c19afba7174d92cfaa0dc4e23e6f0d5490ba7cc95c285ca2ce7f308",
+      "counts": {
+        "tests": 33,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.UnknownAnswerPolicyTest",
+      "path": "TEST-com.example.lms.assist.UnknownAnswerPolicyTest.xml",
+      "sha256": "a2ffe3e045c8c6924e79aae4adc0c333f8e131827869e5ac533f2b35af09ae8a",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "failures": [],
+  "log": "command.log",
+  "pid": 69736,
+  "endedAt": "2026-10-09T09:28:57.201140+00:00",
+  "elapsedMs": 22608,
+  "totals": {
+    "tests": 115,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

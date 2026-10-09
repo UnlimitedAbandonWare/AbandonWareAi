@@ -1,0 +1,4 @@
+interface:
+  display_name: "Demo1 · Reachability-First Debug"
+  short_description: "고치기 전에 런타임 증거로 실패 단계부터; 지시서와 어긋나면 CHALLENGE"
+  default_prompt: "Use $demo1-reachability-first-debug: locate the failing stage from runtime evidence (reasonCode, attempt count, elapsed ms), read the effective saved profile, find the writer of any bad persisted value, spawn assist_runtime_skeptic in parallel, and emit CHALLENGE instead of patching when the brief's path is unreachable."

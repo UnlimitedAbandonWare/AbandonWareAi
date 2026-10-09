@@ -319,6 +319,36 @@
             "rule": "binary-scan-unavailable",
             "oid": "6b5d5448475165265a19d23437fe94e81275fbef",
             "reason": "정상 바이너리 자산/생성물 (2026-10-04 확인)"
+        },
+        {
+            "path": "app/src/main/resources/whitening/lowrank_zca.bin",
+            "rule": "binary-scan-unavailable",
+            "oid": "09f370e38f498a462e1ca0faa724559b6630c04f",
+            "reason": "2바이트 stub 바이너리, 비밀 불가 (2026-10-09 확인)"
+        },
+        {
+            "path": "main/java/ai/abandonware/nova/orch/llm/OpenAiResponsesChatModel.java",
+            "rule": "sensitive-assignment",
+            "oid": "f86669d3d69bf8832be6a59ce54b5aea29db22b0",
+            "reason": "식별자/메서드 호출이며 리터럴 비밀 아님 (2026-10-09 확인)"
+        },
+        {
+            "path": "main/java/com/example/lms/config/LlmConfig.java",
+            "rule": "sensitive-assignment",
+            "oid": "3a11d92c4550f4e5fce1a5bdcfbceb2c047a258e",
+            "reason": "식별자/메서드 호출이며 리터럴 비밀 아님 (2026-10-09 확인)"
+        },
+        {
+            "path": "main/java/com/example/lms/service/rag/orchestrator/UnifiedRagOrchestrator.java",
+            "rule": "binary-scan-unavailable",
+            "oid": "52e77a3c174a23a356371c16b7f49b9caf93068b",
+            "reason": "230KB 소스로 스캔 크기 한도 초과, 코드뿐 (2026-10-09 확인)"
+        },
+        {
+            "path": "src/test/java/com/example/lms/api/TraceSnapshotsDiagnosticsSecurityIntegrationTest.java",
+            "rule": "sensitive-assignment",
+            "oid": "e2ba609482cb974e764d20e087806d2ab3c1a82c",
+            "reason": "src/test 하위 합성 테스트 헤더 (2026-10-09 확인)"
         }
     ]
 }

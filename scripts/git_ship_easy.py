@@ -199,6 +199,8 @@ def classify_changes(g, root, entries, lease_paths):
             excl.append((e, "실행 산출물"))
         elif p in ignored:
             excl.append((e, ".gitignore 대상"))
+        elif "D" in e["xy"]:
+            cand.append(e)              # 삭제 대상은 읽을 파일이 없다
         else:
             size = _file_size(root, p)
             e["size"] = size
@@ -359,8 +361,14 @@ def wait_for_lock(g, out=print, sleep=None, wait_s=None, retries=None,
     return True
 
 
-def _git_path_batches(g, command, paths, out, input_fn=None, failures=None):
+def _git_path_batches(g, command, paths, out, input_fn=None, failures=None,
+                      hold_all=False):
     plist = sorted(paths)
+
+    def _why(err):
+        return command[0] + (" pathspec 실패" if "pathspec" in err.lower()
+                             else " 실패")
+
     for i in range(0, len(plist), ADD_CHUNK):
         chunk = plist[i:i + ADD_CHUNK]
         def attempt(batch):
@@ -371,11 +379,11 @@ def _git_path_batches(g, command, paths, out, input_fn=None, failures=None):
         rc, err = attempt(chunk)
         if not rc:
             continue
-        if failures is None or "pathspec" not in err.lower():
+        if failures is None or ("pathspec" not in err.lower() and not hold_all):
             raise git_ship.ShipError(git_ship.EXIT_ERROR, "git " + command[0] +
                                      " 실패: " + git_ship.sanitize(err))
         if len(chunk) == 1:
-            failures[chunk[0]] = [command[0] + " pathspec 실패"]
+            failures[chunk[0]] = [_why(err)]
             continue
         # One repartition, then singleton probes; no recursive retries.
         half = max(1, len(chunk) // 2)
@@ -386,12 +394,12 @@ def _git_path_batches(g, command, paths, out, input_fn=None, failures=None):
             if not rc:
                 continue
             if len(batch) == 1:
-                failures[batch[0]] = [command[0] + " pathspec 실패"]
+                failures[batch[0]] = [_why(err)]
                 continue
             for path in batch:
                 rc, err = attempt([path])
                 if rc:
-                    failures[path] = [command[0] + " pathspec 실패"]
+                    failures[path] = [_why(err)]
 
 
 def _git_add(g, paths, out, input_fn=None, failures=None):
@@ -399,7 +407,8 @@ def _git_add(g, paths, out, input_fn=None, failures=None):
 
 
 def _git_restore_staged(g, paths, out, input_fn=None, failures=None):
-    _git_path_batches(g, ["restore", "--staged"], paths, out, input_fn, failures)
+    _git_path_batches(g, ["restore", "--staged"], paths, out, input_fn,
+                      failures, hold_all=True)
 
 
 # ------------------------------------------------------ auto-hold rules
@@ -416,12 +425,16 @@ def load_manifest_moved(root):
     """data/agent-handoff/**/moved-skills-manifest.json 전부 병합.
 
     반환 {'.agents/skills/<name>/<rel>': {'skill': name, 'rel': rel, 'sha256': sha}}
-    -- rel은 '/' 정규화. 읽기 실패 파일은 건너뛴다."""
+    -- rel은 '/' 정규화. 읽기 실패 파일은 건너뛴다. MAX_PATH를 넘는 등
+    걸을 수 없는 폴더도 건너뛴다 (rglob은 FileNotFoundError를 삼키지 않음)."""
     moved = {}
     hand = Path(root) / "data" / "agent-handoff"
     if not hand.is_dir():
         return moved
-    for p in hand.rglob("moved-skills-manifest.json"):
+    for dirpath, _dirs, files in os.walk(hand, onerror=lambda _e: None):
+        if "moved-skills-manifest.json" not in files:
+            continue
+        p = Path(dirpath) / "moved-skills-manifest.json"
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -478,8 +491,10 @@ def _referenced_skill_names(root):
     candidates = set()
     for base in (Path(root) / ".agents" / "skills",
                  Path(root) / "data" / "agent-archive" / "skills"):
-        if base.is_dir():
+        try:
             candidates |= {d.name for d in base.iterdir() if d.is_dir()}
+        except OSError:
+            continue
     for n in candidates:
         live_docs = re.sub(
             r"(?:data/)?agent-archive/skills/" + re.escape(n), "", doc_blob)
@@ -539,12 +554,17 @@ def compute_auto_holds(root, g, cand, pre_rows, lease_paths):
         why = _name_hold(pn)
         if why:
             add(pn, why)
-        size = _file_size(root, pn)
-        if size is not None and size > git_ship.DEFAULT_MAX_MB * 1024 * 1024:
-            add(pn, "10MB 초과")
-        if st == "A" and not (Path(root) / pn).exists():
-            add(pn, "올라갔는데 디스크에 없음(AD)")
-        elif _under_any_prefix(pn, lease_paths):
+        if "D" in st:
+            pass                            # 삭제는 디스크에 없는 게 정상
+        elif not (Path(root) / pn).exists():
+            add(pn, "올라갔는데 디스크에 없음(AD)" if st == "A"
+                else "파일 없음")
+            continue
+        else:
+            size = _file_size(root, pn)
+            if size is not None and size > git_ship.DEFAULT_MAX_MB * 1024 * 1024:
+                add(pn, "10MB 초과")
+        if _under_any_prefix(pn, lease_paths):
             add(pn, "에이전트 작업 중(lease)")
     for finding in git_ship.find_junk(g, git_ship.DEFAULT_MAX_MB):
         add(_norm(finding["path"]), "junk 규칙(" + finding["rule"] + ")")
@@ -787,7 +807,7 @@ def commit_flow(g, root, input_fn=input, out=print, push=False):
     except Exception as err:
         result = {"holds": {}, "shipped": 0, "unstaged": [], "commitSha": None,
                   "pushed": False, "verified": None}
-        code = _fail_ship(result, "verify", err, out)
+        code = _fail_ship(result, "verify", err, out, root)
         _write_last_ship(root, result)
         return code
 
@@ -941,9 +961,23 @@ def _remote_ahead(g, remote, branch):
     return rsha if rc == 0 else None
 
 
-def _fail_ship(result, step, err, out):
+def _rel_or_name(root, filename):
+    """프로젝트 상대 경로만. 루트 밖이거나 해석 불가면 파일 이름만."""
+    name = str(filename)
+    try:
+        rel = os.path.relpath(name, str(root))
+    except (OSError, ValueError):
+        return Path(name).name
+    if rel.startswith(".."):
+        return Path(name).name
+    return _norm(rel)
+
+
+def _fail_ship(result, step, err, out, root=None):
     result["failedStep"] = step
     message = err.message if isinstance(err, git_ship.ShipError) else type(err).__name__
+    if root is not None and isinstance(err, OSError) and getattr(err, "filename", None):
+        message += ": " + _rel_or_name(root, err.filename)
     for _rule, pattern in git_ship.PATTERNS:
         message = pattern.sub("[redacted]", message)
     message = re.sub(r"(?:pcsk_|sb_secret_)[A-Za-z0-9_-]+", "[redacted]", message)
@@ -961,16 +995,20 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
     step = "verify"
     try:
         branch = git_ship.current_branch(g)
-        step = "restore"
+        step = "lock"
         if not wait_for_lock(g, out):
             raise git_ship.ShipError(git_ship.EXIT_LOCK, "index.lock 대기 실패")
+        step = "collect"
         entries = collect_changes(g)
         rows = git_ship.staged_name_status(g)
         pre = {_norm(p) for _st, p in rows}
+        step = "lease"
         leases, state, _count = load_active_lease_paths(root)
         if state == "error":
             raise git_ship.ShipError(git_ship.EXIT_POLICY, "lease 상태 확인 실패")
+        step = "classify"
         cand, _excl = classify_changes(g, root, entries, leases)
+        step = "holds"
         holds = compute_auto_holds(root, g, cand, rows, leases)
         if selected_paths is not None:
             holds = {p: w for p, w in holds.items() if p in selected_paths}
@@ -982,6 +1020,7 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
             holds.update(failures)
             result["unstaged"].extend(p for p in paths if p not in failures)
             out(f"보류된 {len(paths)-len(failures)}개를 인덱스에서만 뺐어요 (파일 내용은 그대로).")
+        step = "restore"
         held = sorted(pre & set(holds))
         if held:
             unstage(held)
@@ -1063,7 +1102,7 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
             raise git_ship.ShipError(git_ship.EXIT_VERIFY, "원격 SHA가 로컬 HEAD와 다르거나 확인 실패")
         return 0
     except Exception as err:
-        return _fail_ship(result, step, err, out)
+        return _fail_ship(result, step, err, out, root)
     finally:
         _write_last_ship(root, result)
 

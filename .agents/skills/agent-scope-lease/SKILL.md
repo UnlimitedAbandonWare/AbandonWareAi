@@ -1,9 +1,6 @@
 ---
 name: agent-scope-lease
-description: >-
-  Use when parallel agents on this checkout must coordinate work scope before
-  touching files or logic: ask who owns what, claim a work unit, release on
-  done/abort — composes the existing lease and journal machinery, never a VCS.
+description: 'Use when parallel agents on this checkout must coordinate work scope before touching files or logic: ask who owns what, claim a work unit, release on done/abort — composes the existing lease and journal machinery, never a VCS.'
 ---
 
 # agent-scope-lease
@@ -34,13 +31,13 @@ python -B scripts/agent_scope_lease.py <action>   # or Agent-Scope.bat,
 |---|---|
 | `who` | merged inventory: leases (with `lifecycle` = live/stale/orphan) + claims + in-progress journals |
 | `check --path P [--reserve-path D] [--feature F] [--task ID] [--strict]` | exit 0 = free, 7 = lease conflict; advisories for journal-scope and feature/region overlap; `--strict` makes advisories block |
-| `claim --agent NAME [--task ID] --path P... [--reserve-path D] [--feature F] [--region "path:note"] [--ttl N] [--purpose ...]` | opens or attaches the work journal, begins the source lease, writes `scope-claim-<topic>.json` in the task dir; on a conflict it auto-reclaims **stale** overlaps and retries `begin` once |
+| `claim --agent NAME [--task ID] --path P... [--reserve-path D] [--feature F] [--region "path:note"] [--ttl N] [--purpose ...]` | opens or attaches the work journal and begins a lease; a conflict may retry once after native recovery proves same-host owner death; unknown owners remain reserved |
 | `verify --task ID [--topic T]` | re-validate pinned targets right before editing; nonzero = foreign drift |
 | `heartbeat --task ID [--topic T]` | renew lease TTL — run at progress boundaries so your lease stays `live` |
 | `done --task ID [--topic T] [--note] [--close-result R --summary S]` | release lease(s) on completion (all of the task's claims unless `--topic`) |
 | `abort --task ID [--topic T]` | release lease(s) on abandon (+ journal hold note) |
 | `recover` | reclaim only leases whose owner is proven dead (same-host PID evidence) |
-| `reclaim [--targets P...] [--task ID] [--dry-run] [--include-orphan]` | quarantine **stale** foreign leases (TTL/heartbeat expired, owner not proven alive); live leases are never touched |
+| `reclaim [--targets P...] [--task ID] [--dry-run] [--include-orphan]` | recover expired targets only with fresh same-host dead-owner proof; unknown/remote/corrupt owners are preserved, including with `--include-orphan` |
 | `show --task ID` | claim + lease + journal state for one task |
 
 Typical cycle: `check --path X` → `claim --agent devin --path X --feature foo`
@@ -53,10 +50,11 @@ owner) — never forced, deleted, or stolen; proceed on non-overlapping targets
 and leave one `request-release`. While blocked, wait instead of ending the
 turn: `python -B scripts/codex_auto_unblock.py lease-wait --paths <blocked>
 --max-min auto --enqueue --task <id>` (details:
-`.agents/skills/demo1-lease-conflict-autoflow/SKILL.md` step 6). **stale** (expired, owner not proven alive) —
-reclaim via `reclaim` (quarantine + `AUTO:lease-reclaimed=` journal), never via
-user relay. **orphan** (unreadable lock) — manual review, `--include-orphan` to
-quarantine. Never ask the user to carry "please end your lease" to another
+`.agents/skills/demo1-lease-conflict-autoflow/SKILL.md` step 6). **stale** is an
+expiry observation, not proof of death. Unknown/remote owners remain reserved;
+`reclaim` reuses native same-host process proof. **orphan** (unreadable lock)
+stays reserved for manual evidence review, even with `--include-orphan`.
+Never ask the user to carry "please end your lease" to another
 session.
 
 ## Rules and honest limits
@@ -66,8 +64,8 @@ session.
   not siblings. A claim needs at least one file target.
 - Feature (`--feature`) and region (`--region "path:note"`) labels are
   advisory — enforcement stays at path level; there is no sub-file locking.
-- Expired leases still block overlapping targets until `recover` proves a
-  dead owner or `reclaim` proves the lease stale; never delete lock dirs to
+- Expired leases still block overlapping targets until recovery proves a
+  same-host dead owner with fresh identity and heartbeat evidence; never delete lock dirs to
   work around a conflict.
 - Leases are cooperative: `scripts/devin_pre_edit_guard.ps1` already enforces
   them at write time for wired tools; this tool adds the check/claim/release
@@ -82,8 +80,8 @@ session.
 - `check`: exit 0 free / 7 conflict, plus advisory notes for journal-scope or
   feature/region overlap (`--strict` turns advisories into blocks).
 - `claim`: writes `scope-claim-<topic>.json` under the task dir and reports
-  the opened journal + begun lease; on a stale-overlap conflict it
-  auto-reclaims and retries `begin` once, then reports success/failure.
+  the opened journal + begun lease; only proven-dead recovery may free an
+  overlap for one retry. Expired unknown owners remain blocked.
 - `who`/`show`: JSON inventory (`lifecycle` = live/stale/orphan) — cite it in
   reports instead of asserting ownership.
 - `done`/`abort`: releases lease(s) and closes/annotates the journal; a left-
@@ -99,3 +97,7 @@ When several chats may hold the same goal, run
 (dry-run) and `LANE_VIOLATION`, and prints the claim + writer-begin + quota
 commands in `nextCommands`. See
 `.agents/skills/demo1-codex-parallel-lanes/SKILL.md`.
+
+## Overlapping lease = auto-resume, never a stop (additive)
+
+An overlapping live lease must not end the session: lease-wait while doing non-overlapping work, then lease_resume_check.py exit code (0 continue / 10 re-plan+resume / 20 hold that file only). SSOT: $demo1-parallel-auto-resume (.agents/skills/demo1-parallel-auto-resume/SKILL.md).

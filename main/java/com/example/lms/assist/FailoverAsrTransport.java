@@ -21,13 +21,23 @@ final class FailoverAsrTransport implements ConversateAsrBridge.Transport {
     private int generation;
     private boolean closed,switching,legacyReady,finishing,draining;
     private long fallbackBegan;private boolean firstLegacyTranscript;
+    private volatile String lastReason;
     private final java.util.List<ConversateAsrBridge.Transport> retired=new java.util.ArrayList<>();
     FailoverAsrTransport(ObjectMapper json,ConversateAsrBridge.Factory primary,ConversateAsrBridge.Factory fallback,Consumer<JsonNode> events,Consumer<String> failure)throws IOException{
         this(json,primary,fallback,events,failure,reason->true);
     }
     FailoverAsrTransport(ObjectMapper json,ConversateAsrBridge.Factory primary,ConversateAsrBridge.Factory fallback,Consumer<JsonNode> events,Consumer<String> failure,java.util.function.Predicate<String> retryable)throws IOException{
         this.json=json;this.fallback=fallback;this.events=events;this.failure=failure;this.retryable=retryable;
-        try{launch(primary,0);}catch(IOException unavailable){if(!retryable.test(unavailable.getMessage())){close();throw unavailable;}switchToLegacy(0);}
+        try{launch(primary,0);}catch(IOException unavailable){note(unavailable.getMessage());if(!retryable.test(unavailable.getMessage())){close();throw unavailable;}switchToLegacy(0);}
+    }
+    /** Keep the last bounded ASR reason so terminal failure reports the real cause, not a generic error. */
+    private void note(String raw){
+        if(raw==null)return;
+        String code=raw.matches("ASR_[A-Z_]{1,40}")?raw:
+            raw.matches("stt_budget_[a-z_]{1,40}")?"ASR_"+raw.substring(4).toUpperCase(Locale.ROOT):
+            raw.matches("asr_[a-z_]{1,40}")?"ASR_"+raw.substring(4).toUpperCase(Locale.ROOT):
+            raw.matches("(deepgram|soniox):[a-z_0-9]{1,40}")?"ASR_"+raw.substring(raw.indexOf(':')+1).toUpperCase(Locale.ROOT).replace("PROVIDER_ERROR","PROVIDER_FAILED"):null;
+        lastReason=code!=null?code:lastReason==null?raw:lastReason;
     }
     private void launch(ConversateAsrBridge.Factory factory,int version)throws IOException{
         if(factory==null)throw new IOException("asr_fallback_unavailable");
@@ -39,7 +49,7 @@ final class FailoverAsrTransport implements ConversateAsrBridge.Transport {
     }
     private void failed(int version,String reason){
         boolean terminal;
-        synchronized(this){if(closed||generation!=version)return;terminal=finishing||!retryable.test(reason);}
+        synchronized(this){if(closed||generation!=version)return;note(reason);terminal=finishing||!retryable.test(reason);}
         if(terminal){close();failure.accept(reason);return;}
         switchToLegacy(version);
     }
@@ -72,7 +82,7 @@ final class FailoverAsrTransport implements ConversateAsrBridge.Transport {
                 legacyReady=true;ready=true;
             }
         }
-        if(ready)try{drainLegacy();}catch(IOException unavailable){switchToLegacy(1);return;}
+        if(ready)try{drainLegacy();}catch(IOException unavailable){note(unavailable.getMessage());switchToLegacy(1);return;}
         // Capture/session callbacks can close this transport while holding their
         // own monitor. No callback or child operation may run under our monitor.
         events.accept(forwarded);
@@ -92,16 +102,16 @@ final class FailoverAsrTransport implements ConversateAsrBridge.Transport {
         }
         if(old!=null)old.close();
         uncertainAcks.forEach(events);
-        boolean terminalFailure;
-        synchronized(this){terminalFailure=closed;}
+        boolean terminalFailure;String terminalReason;
+        synchronized(this){terminalFailure=closed;terminalReason=lastReason!=null?lastReason:fallback==null?"ASR_NO_FALLBACK":"ASR_FALLBACK_UNAVAILABLE";}
         // The callback can acquire an outer failover transport's monitor while
         // that transport is closing this child. Never hold this monitor here.
-        if(terminalFailure){failure.accept("ASR_FALLBACK_UNAVAILABLE");return;}
+        if(terminalFailure){failure.accept(terminalReason);return;}
         CompletableFuture.delayedExecutor(30,TimeUnit.SECONDS).execute(()->{
             boolean expired;synchronized(this){expired=!closed&&switching;}
-            if(expired)switchToLegacy(1);
+            if(expired){note("ASR_FALLBACK_TIMEOUT");switchToLegacy(1);}
         });
-        Thread worker=new Thread(()->{try{launch(fallback,1);}catch(Exception unavailable){switchToLegacy(1);}},"soniox-legacy-transition");worker.setDaemon(true);worker.start();
+        Thread worker=new Thread(()->{try{launch(fallback,1);}catch(Exception unavailable){note(unavailable.getMessage());switchToLegacy(1);}},"soniox-legacy-transition");worker.setDaemon(true);worker.start();
     }
     @Override public void send(String line)throws IOException{
         ConversateAsrBridge.Transport current=null;int sendingGeneration=0;JsonNode bufferedAck=null;boolean overflow=false;
@@ -120,11 +130,11 @@ final class FailoverAsrTransport implements ConversateAsrBridge.Transport {
                 current=transport;sendingGeneration=generation;
             }
         }
-        if(overflow){switchToLegacy(1);throw new IOException("asr_fallback_queue_limit");}
+        if(overflow){note("asr_fallback_queue_limit");switchToLegacy(1);throw new IOException("asr_fallback_queue_limit");}
         if(bufferedAck!=null){events.accept(bufferedAck);return;}
         try{current.send(line);}catch(IOException unavailable){
             if(sendingGeneration>0)throw unavailable;
-            switchToLegacy(0);synchronized(this){if(closed)throw unavailable;}
+            note(unavailable.getMessage());switchToLegacy(0);synchronized(this){if(closed)throw unavailable;}
         }
     }
     @Override public CompletableFuture<Void> finish(){

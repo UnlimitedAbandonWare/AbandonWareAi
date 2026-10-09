@@ -6,11 +6,13 @@ import java.util.*;
 
 /** Server-selected conversation data. Never deserialized from a public request. */
 public record ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,
-                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer focusAnswerLengthChars,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch) {
-    public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer length,boolean allowed){this(recent,summary,relevant,supplied,evidence,transcript,length,allowed,false);}
+                                      List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer focusAnswerLengthChars,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch,String focusAnswerInstruction) {
+    public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer length,boolean allowed){this(recent,summary,relevant,supplied,evidence,transcript,length,allowed,false,null);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript,Integer length){this(recent,summary,relevant,supplied,evidence,transcript,length,false);}
     public ChatConversationContext withFocusGoogleSearch(boolean allowed){return withFocusGoogleSearch(allowed,false);}
-    public ChatConversationContext withFocusGoogleSearch(boolean allowed,boolean required){return new ChatConversationContext(recent,summary,relevant,supplied,evidence,transcript,focusAnswerLengthChars,supplied&&allowed,supplied&&allowed&&required);}
+    public ChatConversationContext withFocusGoogleSearch(boolean allowed,boolean required){return new ChatConversationContext(recent,summary,relevant,supplied,evidence,transcript,focusAnswerLengthChars,supplied&&allowed,supplied&&allowed&&required,focusAnswerInstruction);}
+    /** Nova Focus 사용자 답변 지침 — 시스템 지침 블록으로만 소비되고 메모리/인용 경계에는 들어가지 않는다. */
+    public ChatConversationContext withFocusAnswerInstruction(String instruction){return new ChatConversationContext(recent,summary,relevant,supplied,evidence,transcript,focusAnswerLengthChars,focusGoogleSearchAllowed,requireNativeGoogleSearch,instruction);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence,List<Transcript> transcript){this(recent,summary,relevant,supplied,evidence,transcript,null);}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied,List<com.example.lms.assist.MemoryEvidence> evidence){this(recent,summary,relevant,supplied,evidence,List.of());}
     public ChatConversationContext(List<Turn> recent,String summary,List<Turn> relevant,boolean supplied){this(recent,summary,relevant,supplied,List.of());}
@@ -26,6 +28,7 @@ public record ChatConversationContext(List<Turn> recent,String summary,List<Turn
     }
     public ChatConversationContext {
         if(focusAnswerLengthChars!=null&&(focusAnswerLengthChars<80||focusAnswerLengthChars>800))throw new IllegalArgumentException("invalid_focus_answer_length");
+        if(focusAnswerInstruction!=null&&(focusAnswerInstruction.codePointCount(0,focusAnswerInstruction.length())>com.example.lms.assist.NovaFocusSettings.ANSWER_INSTRUCTION_MAX_CHARS||focusAnswerInstruction.codePoints().anyMatch(c->Character.isISOControl(c)&&c!='\n'&&c!='\t')))throw new IllegalArgumentException("invalid_focus_answer_instruction");
         recent=List.copyOf(recent);relevant=List.copyOf(relevant);summary=Objects.requireNonNull(summary);evidence=List.copyOf(evidence);transcript=List.copyOf(transcript);
         if(transcript.size()>12||transcriptTokens(transcript)>2000)throw new IllegalArgumentException("recent_transcript_limit");
         if(evidence.size()>4||evidenceBytes(evidence)>3072)throw new IllegalArgumentException("memory_evidence_limit");

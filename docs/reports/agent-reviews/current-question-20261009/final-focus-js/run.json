@@ -1,0 +1,36 @@
+{
+  "runId": "26dea183-789d-47a9-8f21-9a49de5c9abe",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:40:40.043683+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 7,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js/display-focus-client.test.cjs",
+    "src/test/js/display-focus-projection.test.cjs",
+    "src/test/js/display-focus-flow.test.cjs",
+    "src/test/js/display-focus-memory.test.cjs",
+    "src/test/js/display-focus-mount.test.cjs",
+    "src/test/js/display-focus-privacy.test.cjs"
+  ],
+  "commandSha256": "abbe4377d9343d7105060812db3c1f35c7ca6ebc26166b78a23817736de7ef0d",
+  "sourceIdentity": [],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 60196,
+  "endedAt": "2026-10-09T10:40:40.396302+00:00",
+  "elapsedMs": 352,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

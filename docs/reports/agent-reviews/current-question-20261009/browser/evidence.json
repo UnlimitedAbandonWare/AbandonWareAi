@@ -1,0 +1,102 @@
+{
+  "checkedAt": "2026-10-09T08:42:03.727Z",
+  "base": "http://127.0.0.1:18180",
+  "requestedModel": "chatgpt-oauth:gpt-5.6-terra",
+  "restoredAuthState": false,
+  "maxGenerationPosts": 2,
+  "generationPosts": 2,
+  "scenarios": [
+    {
+      "id": "greeting",
+      "freshContext": true,
+      "questionHash": "b8e6062790b1",
+      "requests": [
+        {
+          "endpoint": "/api/chat/stream",
+          "status": 200,
+          "requestHash": "f523a1a5484e"
+        }
+      ],
+      "consoleErrorCount": 0,
+      "failedRequestCount": 1,
+      "selection": {
+        "selectedValue": "chatgpt-oauth:gpt-5.6-terra",
+        "statusText": "",
+        "applied": false
+      },
+      "streamCapture": [
+        {
+          "bodyReadStatus": "failed",
+          "bodyBytes": 0,
+          "eventCount": 0,
+          "dataLineCount": 0,
+          "jsonParseSucceeded": 0,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {},
+          "completedAtEpochMs": 1791535351914,
+          "error": "response.text: Protocol error (Network.getResponseBody): No data found for resource with given identifier\nResponse body is not available for a response that was navigated away from. Read response.body() before triggering any navigation."
+        }
+      ],
+      "metadata": {},
+      "correlationHash": null,
+      "trace": {
+        "matched": false,
+        "reason": "trace_pointer_missing"
+      },
+      "assistantCreated": true,
+      "answerChars": 60,
+      "answerHash": "f0d8e948fd3f",
+      "holdDisplayed": false,
+      "backendUnavailable": false,
+      "renderedBodyAvailable": true,
+      "verdict": "FAIL"
+    },
+    {
+      "id": "general",
+      "freshContext": true,
+      "questionHash": "ee4f9a8222fc",
+      "requests": [
+        {
+          "endpoint": "/api/chat/stream",
+          "status": 200,
+          "requestHash": "859ac0717ae4"
+        }
+      ],
+      "consoleErrorCount": 0,
+      "failedRequestCount": 1,
+      "selection": {
+        "selectedValue": "chatgpt-oauth:gpt-5.6-terra",
+        "statusText": "",
+        "applied": false
+      },
+      "streamCapture": [
+        {
+          "bodyReadStatus": "failed",
+          "bodyBytes": 0,
+          "eventCount": 0,
+          "dataLineCount": 0,
+          "jsonParseSucceeded": 0,
+          "jsonParseFailed": 0,
+          "truncatedEvents": 0,
+          "eventTypes": {},
+          "completedAtEpochMs": 1791535371973,
+          "error": "response.text: Protocol error (Network.getResponseBody): No data found for resource with given identifier\nResponse body is not available for a response that was navigated away from. Read response.body() before triggering any navigation."
+        }
+      ],
+      "metadata": {},
+      "correlationHash": null,
+      "trace": {
+        "matched": false,
+        "reason": "trace_pointer_missing"
+      },
+      "assistantCreated": true,
+      "answerChars": 91,
+      "answerHash": "a4f77392f1dc",
+      "holdDisplayed": false,
+      "backendUnavailable": false,
+      "renderedBodyAvailable": true,
+      "verdict": "FAIL"
+    }
+  ]
+}

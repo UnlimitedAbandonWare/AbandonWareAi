@@ -1,0 +1,41 @@
+{
+  "ok": true,
+  "rowCount": 1,
+  "exitCode": 0,
+  "settingsVersion": 6,
+  "settings": {
+    "answerSelection": {
+      "mode": "FIXED",
+      "modelId": "llmrouter.openai-economy",
+      "routing": {
+        "executionTarget": "API_ONLY",
+        "fallbackAllowed": false,
+        "allowedFallbackIds": [],
+        "effectiveFallbackAllowed": false
+      }
+    },
+    "webSearchEnabled": false,
+    "reasoningPreset": "STANDARD",
+    "quickAnswerEnabled": false,
+    "answerLengthChars": 200,
+    "snapshot": {
+      "enabled": false,
+      "source": "FOLD_REAR"
+    },
+    "recallEnabled": false,
+    "rememberFactsEnabled": false,
+    "memory": {
+      "mode": null,
+      "graphMode": "OFF",
+      "maxEvidence": 4,
+      "embeddingPrefer": "CLOUD_ONLY",
+      "webOnUnknown": null
+    },
+    "recentContext": {
+      "enabled": true,
+      "maxAgeSeconds": 180,
+      "maxUtterances": 12,
+      "tokenBudget": 2000
+    }
+  }
+}

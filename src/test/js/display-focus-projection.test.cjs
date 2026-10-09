@@ -111,3 +111,14 @@ test('malformed poll pauses without retiring the current answer; valid retry res
  assert.equal(f.calls.filter(x=>x.name==='first_visible').length,1);
  assert.equal(f.calls.filter(x=>x.name==='presentation_done').length,1);
 });
+
+
+test('fallback banner is Fold-only, clears on normal success, and ignores a retired state',()=>{
+ const notice={hidden:true,textContent:''},f=fixture('fold',{fallbackStatus:notice});
+ const failed={...base,renderTarget:'fold',isFallback:true,requestedModel:'chatgpt-oauth:fixture',effectiveModel:'gemini-fixture',fallbackReasonCode:'backend_timeout',originalError:'ModelSelectionException'};
+ f.projection.update(failed);assert.equal(notice.hidden,false);assert.match(notice.textContent,/backend_timeout/);assert.match(notice.textContent,/gemini-fixture/);
+ const normal={...failed,stateVersion:2,answerVersion:2,turnId:'next',isFallback:false};
+ f.projection.update(normal);assert.equal(notice.hidden,true);
+ f.projection.update(failed);assert.equal(notice.hidden,true);
+ const lensNotice={hidden:true,textContent:''},lens=fixture('lens',{fallbackStatus:lensNotice});lens.projection.update({...failed,renderTarget:'lens'});assert.equal(lensNotice.hidden,true);
+});

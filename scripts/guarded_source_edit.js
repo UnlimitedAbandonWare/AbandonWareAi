@@ -24,13 +24,26 @@ function patchPaths(patch) {
   if (!paths.length) throw new Error('empty-patch');
   return paths;
 }
-function command(options, action, fingerprint) {
+function command(options, action, fingerprint, expectedInputDigest) {
   const script = options.root.replace(/\\/g, '/') + '/__patch_drop__/source_edit_session.ps1';
-  const child = "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -Force; & "
+  const resume = options.resume;
+  const resumeChild = action === 'resume-check' ? '& python -B '
+    + quote(options.root.replace(/\\/g,'/') + '/scripts/lease_resume_check.py')
+    + ' --gate --before ' + quote(resume.beforePath) + ' --before-sha256 ' + quote(resume.beforeSha256)
+    + ' --root ' + quote(options.root) + ' --task ' + quote(options.task)
+    + ' --goal-revision ' + quote(resume.goalRevision) + ' --plan-revision ' + quote(resume.planRevision)
+    + ' --receipt-base64 ' + quote(Buffer.from(JSON.stringify(fingerprint),'utf8').toString('base64'))
+    + ' --patch-sha256 ' + quote(require('node:crypto').createHash('sha256').update(options.patch,'utf8').digest('hex'))
+    + ' --decision-base64 ' + quote(Buffer.from(JSON.stringify(resume.decision || null),'utf8').toString('base64'))
+    + (expectedInputDigest ? ' --expected-input-digest ' + quote(expectedInputDigest) : '')
+    + '; exit $LASTEXITCODE' : null;
+  const child = resumeChild || "$ProgressPreference='SilentlyContinue'; Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -Force; & "
     + quote(script) + ' -Action ' + action + ' -Root ' + quote(options.root)
     + ' -Role desktop -Topic ' + quote(options.topic) + ' -OwnerId ' + quote(options.owner)
     + ' -TargetManifest ' + quote(options.manifest)
+    + (options.task ? ' -TaskId ' + quote(options.task) : '')
     + (fingerprint ? ' -LeaseFingerprint ' + quote(fingerprint) : '')
+    + (action === 'verify' ? ' -RequireAbsentTargets' : '')
     + (action === 'begin' ? ' -Json' : '') + '; exit $LASTEXITCODE';
   // Read the actual child Process.ExitCode, never an inherited LASTEXITCODE in
   // the calling shell. Explicit timeout is independent of native-error settings.
@@ -69,24 +82,54 @@ try {
 } finally { $p.Dispose() }`;
 }
 async function guardedSourceEdit(tools, options) {
-  if (!/^[a-zA-Z0-9_.-]+$/.test(options.topic) || !options.owner || !options.root || !options.manifest)
+  options = {...options, resume: options.resume && JSON.parse(JSON.stringify(options.resume))};
+  const root = String(options.root || '').replace(/\\/g,'/').replace(/\/+$/,'');
+  if (!/^[a-zA-Z0-9_.-]+$/.test(options.topic) || !options.owner || !options.manifest
+    || !/^[a-zA-Z]:\//.test(root)
+    || root.slice(3).split('/').some(part => part === '.' || part === '..' || !part))
     throw new Error('invalid-edit-options');
   const paths = patchPaths(options.patch);
   const result = {status: 'hold', phase: 'begin', editCalls: 0, released: false};
+  if ((options.waited || options.resume) && (!options.resume || !options.task
+      || !options.resume.beforePath || !/^[a-f0-9]{64}$/.test(options.resume.beforeSha256 || '')
+      || !options.resume.goalRevision || !options.resume.planRevision)) {
+    result.reason = 'resume-baseline-required';
+    return result;
+  }
   let receipt;
-  async function run(action, fingerprint) {
-    return await tools.exec_command({cmd: command(options, action, fingerprint), workdir: options.root,
+  async function run(action, fingerprint, expectedInputDigest) {
+    return await tools.exec_command({cmd: command(options, action, fingerprint, expectedInputDigest), workdir: options.root,
       yield_time_ms: 1000, max_output_tokens: 2000});
   }
-  async function completed(action, fingerprint) {
-    let r = await run(action, fingerprint);
+  async function completed(action, fingerprint, expectedInputDigest) {
+    let r = await run(action, fingerprint, expectedInputDigest);
+    const parts = [r.output || ''];
+    chunks.push(r.output || '');
     // PTY session IDs are ongoing commands, never successful acquisition.
     while (r.session_id && r.exit_code == null) {
       r = await tools.write_stdin({session_id: r.session_id, chars: '', yield_time_ms: 1000, max_output_tokens: 2000});
       // Receipt output must be retained across yields.
       chunks.push(r.output || '');
+      parts.push(r.output || '');
     }
-    return r;
+    return {...r, output: parts.join('\n')};
+  }
+  async function resumeGate(expectedInputDigest) {
+    const checked = await completed('resume-check', receipt, expectedInputDigest);
+    const row = String(checked.output || '').split(/\r?\n/).reverse()
+      .find(line => line.startsWith('{') && line.includes('resumeAllowed'));
+    let proof;
+    try { proof = row ? JSON.parse(row) : null; } catch { proof = null; }
+    result.resume = proof;
+    const allowed = checked.exit_code === 0 && proof?.resumeAllowed === true
+      && ['APPLY','SKIP_ALREADY_DONE'].includes(proof.status)
+      && /^[a-f0-9]{64}$/.test(proof.inputDigest || '')
+      && proof.leaseId === receipt.leaseId && proof.fingerprint === receipt.fingerprint;
+    if (!allowed) {
+      result.status = proof?.status === 'REPLAN_REQUIRED' ? 'replan-required' : 'hold';
+      result.reason = proof?.reason || 'resume-gate-unproven';
+    }
+    return allowed ? proof : null;
   }
   let chunks = [];
   try {
@@ -107,6 +150,10 @@ async function guardedSourceEdit(tools, options) {
     const row = chunks.join('\n').split(/\r?\n/).find(line => line.startsWith('{') && line.includes('awx.source-edit-acquired.v1'));
     receipt = row ? JSON.parse(row) : null;
     if (!receipt || receipt.acquired !== true || receipt.topic !== options.topic
+      || !/^[a-f0-9]{32}$/.test(receipt.leaseId)
+      || String(receipt.root || '').replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase()
+        !== options.root.replace(/\\/g,'/').replace(/\/+$/,'').toLowerCase()
+      || receipt.taskId !== (options.task || '')
       || !/^[a-f0-9]{64}$/.test(receipt.fingerprint) || !/^[a-f0-9]{64}$/.test(receipt.manifestHash)) {
       receipt = null;
       result.reason = 'fresh-acquisition-receipt-missing';
@@ -115,6 +162,12 @@ async function guardedSourceEdit(tools, options) {
     result.phase = 'scope';
     const allowed = new Set(receipt.writePaths.map(canonical));
     if (paths.some(path => !allowed.has(path))) { result.reason = 'patch-outside-declared-targets'; return result; }
+    let resumeProof;
+    if (options.resume) {
+      result.phase = 'resume';
+      resumeProof = await resumeGate();
+      if (!resumeProof) return result;
+    }
     result.phase = 'verify';
     const verified = await completed('verify', receipt.fingerprint);
     result.verifyExitCode = verified.exit_code ?? null;
@@ -123,6 +176,15 @@ async function guardedSourceEdit(tools, options) {
       result.outputTail = tail(chunks.join(''));
       result.failureLine = failureLine(chunks.join(''));
       return result;
+    }
+    if (resumeProof) {
+      result.phase = 'resume-final';
+      resumeProof = await resumeGate(resumeProof.inputDigest);
+      if (!resumeProof) return result;
+      if (resumeProof.status === 'SKIP_ALREADY_DONE') {
+        result.status = 'skipped-already-done';
+        return result;
+      }
     }
     result.phase = 'edit';
     result.editCalls++;

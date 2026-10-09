@@ -704,6 +704,7 @@ class UnblockCase(unittest.TestCase):
     head_count = AutoShipCase.head_count
     make_origin = AutoShipCase.make_origin
     joined = AutoShipCase.joined
+    write_manifest = AutoShipCase.write_manifest
 
     def seed(self):
         self.w('.agents/skills/INDEX.md', '.agents/skills/referenced/SKILL.md\n')
@@ -856,6 +857,85 @@ class UnblockCase(unittest.TestCase):
         self.assertNotEqual(rc,0)
         rec=json.loads((self.repo/ge.LAST_SHIP_JSON).read_text(encoding='utf-8'))
         self.assertEqual(rec['failedStep'],'verify');self.assertEqual(rec['error'],'OSError')
+
+    # (U9) MAX_PATH를 넘는 깊은 폴더가 있어도 manifest 탐색·올리기가 멈추지 않는다
+    def test_u9_deep_dir_manifest_walk_does_not_crash(self):
+        if os.name != "nt":
+            self.skipTest("MAX_PATH 재현은 Windows 전용")
+        self.make_origin(); git(self.repo,'checkout','-b','ship/deep')
+        deep = self.repo / "data" / "agent-handoff" / "deep"
+        for i in range(8):
+            deep = deep / ("d" * 30 + str(i))
+        os.makedirs("\\\\?\\" + str(deep))
+        self.write_manifest("moved-skill", {"SKILL.md": "moved\n"})
+        self.w("keep.txt", "k\n")
+        try:
+            moved = ge.load_manifest_moved(str(self.repo))
+            self.assertIn(".agents/skills/moved-skill/SKILL.md", moved)
+            res = ge.auto_ship_flow(self.g, str(self.repo),
+                                    input_fn=scripted(), out=self.out.append)
+            self.assertEqual(res, 0)
+            self.assertEqual(
+                git(self.repo, "show", "HEAD:keep.txt").stdout, "k\n")
+        finally:
+            shutil.rmtree(
+                "\\\\?\\" + str(
+                    self.repo / "data" / "agent-handoff" / "deep"),
+                ignore_errors=True)
+
+    # (U10) 수집 뒤 사라진 신규 파일은 '파일 없음' hold로 건너뛴다
+    def test_u10_vanished_candidate_is_held_not_crash(self):
+        self.w("keep.txt", "k\n")
+        fake = [{"xy": "??", "path": "ghost.txt"},
+                {"xy": "??", "path": "keep.txt"}]
+        with mock.patch.object(ge, "collect_changes", return_value=fake):
+            res = ge.auto_ship_flow(self.g, str(self.repo),
+                                    out=self.out.append, commit_only=True)
+        self.assertIsInstance(res, dict)
+        self.assertIn("파일 없음", res["holds"]["ghost.txt"][0])
+        self.assertEqual(
+            git(self.repo, "show", "HEAD:keep.txt").stdout, "k\n")
+
+    # (U11) lease 확인 실패는 FileNotFoundError가 아니라 정책 보류(lease 단계)
+    def test_u11_lease_error_is_policy_hold(self):
+        self.w("a.txt", "a\n")
+        with mock.patch.object(
+                ge, "load_active_lease_paths",
+                lambda root, timeout=20: (set(), "error", 0)):
+            res = ge.auto_ship_flow(self.g, str(self.repo),
+                                    out=self.out.append, commit_only=True)
+        self.assertEqual(res, git_ship.EXIT_POLICY)
+        rec = json.loads(
+            (self.repo / ge.LAST_SHIP_JSON).read_text(encoding="utf-8"))
+        self.assertEqual(rec["failedStep"], "lease")
+
+    # (U12) FileNotFoundError 기록에는 단계 이름 + 프로젝트 상대 경로가 붙는다
+    def test_u12_fnf_error_carries_step_and_relpath(self):
+        target = str(self.repo / "sub" / "gone.txt")
+        err = FileNotFoundError(3, "no such file", target)
+        with mock.patch.object(ge, "collect_changes", side_effect=err):
+            res = ge.auto_ship_flow(self.g, str(self.repo),
+                                    out=self.out.append, commit_only=True)
+        self.assertNotEqual(res, 0)
+        rec = json.loads(
+            (self.repo / ge.LAST_SHIP_JSON).read_text(encoding="utf-8"))
+        self.assertEqual(rec["failedStep"], "collect")
+        self.assertIn("sub/gone.txt", rec["error"])
+        self.assertNotIn(str(self.repo), rec["error"])
+
+    # (U13) 삭제된 추적 파일은 읽기 없이 그대로 삭제 커밋된다
+    def test_u13_deleted_file_commits_deletion(self):
+        self.make_origin(); git(self.repo, "checkout", "-b", "ship/del")
+        self.w("gone.txt", "g\n"); git(self.repo, "add", "gone.txt")
+        git(self.repo, "commit", "-m", "seed")
+        (self.repo / "gone.txt").unlink()
+        res = ge.auto_ship_flow(self.g, str(self.repo), out=self.out.append,
+                                commit_only=True)
+        self.assertIsInstance(res, dict)
+        show = git(self.repo, "show", "--name-status", "--pretty=format:",
+                   "HEAD").stdout
+        self.assertIn("D", show)
+        self.assertIn("gone.txt", show)
 
 
 if __name__ == "__main__":

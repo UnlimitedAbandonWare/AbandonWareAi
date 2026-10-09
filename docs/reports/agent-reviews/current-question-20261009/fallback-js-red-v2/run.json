@@ -1,0 +1,33 @@
+{
+  "runId": "727a02b2-04a3-4d5f-a777-ba794ecddd70",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:33:24.030980+00:00",
+  "status": "failed",
+  "executable": "node",
+  "argumentCount": 4,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "--test-name-pattern=fallback banner|late Focus input",
+    "src/test/js/display-focus-projection.test.cjs",
+    "src/test/js/display-focus-client.test.cjs"
+  ],
+  "commandSha256": "f70730816b7841ec07a770a5d8a38b16d9513a2105b3d1b2b65a6bcbe3ac5967",
+  "sourceIdentity": [],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 62932,
+  "endedAt": "2026-10-09T10:33:24.190891+00:00",
+  "elapsedMs": 159,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

@@ -44,6 +44,42 @@ class LeaseLifecycleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(path.exists())
 
+    def test_pre_edit_verify_rejects_externally_created_absent_target(self):
+        self.manifest.write_text(json.dumps({'targets': [{'path': 'new.txt', 'sha256': None}]}))
+        path = self.begin()
+        fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+        target = self.root / 'new.txt'
+        target.write_text('foreign current bytes')
+        result = self.session(action='verify', extra=(
+            f'-TargetManifest {ps_quote(self.manifest)} -LeaseFingerprint {fingerprint} '
+            '-RequireAbsentTargets'))
+        self.assertEqual(result.returncode, 6, result.stdout + result.stderr)
+        self.assertIn('preimage-changed', result.stdout)
+        self.assertEqual(target.read_text(), 'foreign current bytes')
+        # Existing post-edit callers retain their explicitly separate behavior.
+        legacy = self.session(action='verify', extra=(
+            f'-TargetManifest {ps_quote(self.manifest)} -LeaseFingerprint {fingerprint}'))
+        self.assertEqual(legacy.returncode, 0, legacy.stdout + legacy.stderr)
+
+    def test_fresh_receipt_pins_root_task_and_generation(self):
+        result = self.session(extra=f'-TargetManifest {ps_quote(self.manifest)} -TaskId generation-test -Json')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        receipt = json.loads(result.stdout)
+        lease = json.loads(self.lease_path().read_text(encoding='utf-8-sig'))
+        self.assertEqual(receipt.get('leaseId'), lease['leaseId'])
+        self.assertEqual(receipt.get('root'), str(self.root))
+        self.assertEqual(receipt.get('taskId'), 'generation-test')
+        fingerprint = receipt['fingerprint']
+        ended = self.session(action='end', extra=f'-LeaseFingerprint {fingerprint}')
+        self.assertEqual(ended.returncode, 0, ended.stdout + ended.stderr)
+        self.begin()
+        replacement = self.lease_path().read_bytes()
+        for action in ('verify', 'heartbeat', 'end'):
+            old = self.session(action=action, extra=(
+                f'-TargetManifest {ps_quote(self.manifest)} -LeaseFingerprint {fingerprint}'))
+            self.assertEqual(old.returncode, 3, old.stdout + old.stderr)
+            self.assertEqual(self.lease_path().read_bytes(), replacement)
+
     def test_live_owner_is_not_recovered_and_heartbeat_preserves_fingerprint(self):
         path = self.begin(f'-OwnerProcessId {os.getpid()} -TaskId lifetime-fixture')
         before = path.read_bytes()

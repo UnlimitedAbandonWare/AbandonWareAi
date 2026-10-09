@@ -16,10 +16,11 @@
     const apiLimit=error=>/^(?:asr_(?:budget_[a-z_]+|quota_exceeded|rate_limited|auth_failed|audio_format_invalid)|display_rate_limited)$/.test(error?.message||'');
     const apiMessage='수음 유지 · 전사 API 제한으로 전사 대기 중 (대기 구간은 저장하지 않습니다).';
     async function pauseApi(m,error){
+      if(current!==m||m.closed||!wanted)return;
       m.apiPaused=true;m.reconnecting=false;m.plannedRenewal=false;m.serverReady=false;wakePump(m);discard(m,'api_paused');clearTimer(m.roll);
       state.sttPausedReason=error.message;event('STT_API_PAUSED',{reason:error.message});
       await client.endVoice({finish:true}).catch(()=>{});m.serverAttempted=false;
-      if(m.closed)return;report('LISTENING',apiMessage);
+      if(current!==m||m.closed||!wanted)return;report('LISTENING',apiMessage);
       if(/rate_limited$/.test(error.message)&&state.reconnects<3)m.retry=setTimer(()=>{if(current===m&&!m.closed){m.apiPaused=false;void renew(m);}},Math.max(60000,error.retryAfterMs||60000));
     }
     // Only unsent PCM lives here. Ambiguous in-flight frames are never replayed.
@@ -115,7 +116,7 @@
         m.sequence=0;m.paceAt=now();m.paceCredit=0;m.serverAttempted=true;m.apiPaused=false;m.waiting=false;m.serverReady=true;state.sttPausedReason=null;state.errorCode=null;state.reconnects=0;event('audio_resumed');state.segments++;trim(m);m.reconnecting=false;m.plannedRenewal=false;
         void pump(m).catch(()=>{});if(!m.finishing&&!m.closed){m.roll=setTimer(()=>renew(m,true),renewalMs());report('LISTENING','수음 중 · 즉시 중지할 수 있습니다.');}
       }
-      catch(error){diagnostic(error,'server_begin',m);if(continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(continuous&&recoverable(error)){waitForAudio(m,error);return;}state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'asr_reconnect_failed';await stop('전사 재연결에 실패했습니다. 오류 코드와 연결을 확인해 주세요.',true);}
+      catch(error){if(m.closed||current!==m&&!(completing===m&&m.finishing))return;diagnostic(error,'server_begin',m);if(!m.finishing&&continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(!m.finishing&&continuous&&recoverable(error)){waitForAudio(m,error);return;}state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'asr_reconnect_failed';await stop('전사 재연결에 실패했습니다. 오류 코드와 연결을 확인해 주세요.',true);}
       finally{m.renewalDone=null;renewalDone();}
     }
     function pump(m){if(m.busy||m.closed||m.reconnecting||!m.serverReady)return m.pending||Promise.resolve();m.busy=true;m.pending=(async()=>{
@@ -146,7 +147,7 @@
       if(client.state.autoVoiceSettings?.modeEnabled&&!autoVoiceConsent()){state.errorCode='auto_voice_consent_required';report('ERROR','먼저 안내와 동의를 확인하고 대화 준비를 눌러 주세요.');return false;}
       if(!resuming){wanted=true;run++;state.segments=0;state.reconnects=0;}else if(!wanted)return false;
       if(!supported()||!client.state.audioAvailable||(continuous&&!standalone()&&(client.state.role!=='PHONE'||!client.state.linked))){state.errorCode=null;state.errorStage='precheck';diagnostic(Error('capture_precheck_failed'),'precheck');report('ERROR','휴대폰 연결, 마이크 지원과 전사 서버 설정을 확인해 주세요.');return false;}
-      const m={queue:[],queuedBytes:0,sequence:0,closed:false,busy:false,serverReady:false,starting:true,lastFrame:now()};current=m;state.frames=state.bytes=state.level=0;state.errorCode=null;state.errorStage=null;state.permission='requesting';report('STARTING',resuming?'다음 전사 구간을 시작합니다.':'마이크 권한을 확인하고 있습니다.');
+      const m={queue:[],queuedBytes:0,sequence:0,closed:false,busy:false,serverReady:false,starting:true,lastFrame:now()};current=m;state.frames=state.bytes=state.level=0;state.errorCode=null;state.errorStage=null;state.sttPausedReason=null;state.permission='requesting';report('STARTING',resuming?'다음 전사 구간을 시작합니다.':'마이크 권한을 확인하고 있습니다.');
       try{
         const selected=sttPolicy();m.sttPolicy=selected?Object.freeze({...selected,allowedFallbacks:Object.freeze([...(selected.allowedFallbacks||[])])}):null;
         m.autoVoiceConsent=autoVoiceConsent()===true;

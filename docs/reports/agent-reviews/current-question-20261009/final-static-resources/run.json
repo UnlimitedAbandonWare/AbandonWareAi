@@ -1,0 +1,46 @@
+{
+  "runId": "e1f61375-96ad-4f79-a3f2-51749ad23875",
+  "scope": "verification",
+  "startedAt": "2026-10-09T11:10:20.975108+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 10,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "processResources",
+    "-Pawx",
+    ".splitBuildOutputs=true",
+    "-Pawx",
+    ".buildHostId=desktop-meta-display",
+    "--project-cache-dir=C:/Users/nninn/AppData/Local/AWX/meta-display/project-cache",
+    "-g",
+    "C:/Users/nninn/.gradle-awx-rag-launcher"
+  ],
+  "commandSha256": "44cf2eb409a98720f158b818c31cd49c084f77a50d5f2530a58c7bff31739ee5",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-conversate.js",
+      "kind": "file",
+      "sha256": "8d2f229807b977d1da03a2a7eb14cdbee83e33ec57410954711fc116f80fef35",
+      "bytes": 30838
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 67756,
+  "endedAt": "2026-10-09T11:10:26.404951+00:00",
+  "elapsedMs": 5428,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

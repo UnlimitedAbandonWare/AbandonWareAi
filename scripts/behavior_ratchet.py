@@ -47,6 +47,9 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lease_lifetime
+
 SCHEMA = "awx.behavior-ratchet.v1"
 CONFIG_REL = "configs/behavior-ratchet.json"
 LOCK_REL = "configs/behavior-ratchet.lock.json"
@@ -113,18 +116,15 @@ def live_leased_paths(root: Path, now=None):
         return out
     for lease in base.rglob("lease.json"):
         try:
-            doc = json.loads(read_text(lease) or "{}")
-        except ValueError:
+            raw = lease.read_bytes()
+            doc = json.loads(raw or b"{}")
+        except (ValueError, OSError):
             continue
-        exp = str(doc.get("expiresAtUtc") or doc.get("expiresAt") or "")
-        try:
-            when = _dt.datetime.fromisoformat(exp.replace("Z", "+00:00"))
-            if when.tzinfo is None:
-                when = when.replace(tzinfo=_dt.timezone.utc)
-            if when <= now:
-                continue
-        except ValueError:
-            pass  # unreadable expiry -> treat as live (conservative: only delays locks)
+        lt = lease_lifetime.lifetime(
+            lease_lifetime.heartbeats_dir_for_lease_file(lease), doc, raw, now)
+        if lt["expires"] is not None and lt["effective"] is not None \
+                and lt["effective"] <= now:
+            continue  # provably dead; unreadable expiry stays live (delays only)
         for p in doc.get("targetPaths") or []:
             out.add(canon(p))
     return out

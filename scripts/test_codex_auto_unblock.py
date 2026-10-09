@@ -3,12 +3,14 @@
 All fixtures are synthetic (temp dirs): fake launcher logs, fake journals,
 fake lock dirs. No real log/ledger reads, no network, no leases touched.
 """
+import hashlib
 import importlib.util
 import io
 import json
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -201,6 +203,40 @@ class LeaseWaitTest(unittest.TestCase):
         self.assertEqual("live", rep["result"])
         self.assertEqual(["peer"], [l["topic"] for l in rep["live"]])
 
+    def test_actual_native_schema_without_status_remains_live_in_fallback(self):
+        with tempfile.TemporaryDirectory() as td:
+            record = self.lease('native', ['scripts/x.py'], '2999-01-01T00:00:00+00:00')
+            record.pop('status')
+            record.update(schemaVersion='awx.source_edit_session.lease.v1', leaseId='a' * 32)
+            write(Path(td) / 'native.lock/lease.json', json.dumps(record))
+            result = CAU.lease_scan(td, ['scripts/x.py'])
+            self.assertEqual(result['result'], 'live')
+            self.assertEqual(result['stale'], [])
+
+    def test_native_prefix_and_unscoped_reservations_are_not_reported_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            record = {'schemaVersion': 'awx.source_edit_session.lease.v1', 'leaseId': 'a' * 32,
+                      'expiresAtUtc': '2999-01-01T00:00:00+00:00', 'reservePaths': ['module/area']}
+            path = Path(td) / 'native.lock/lease.json'
+            write(path, json.dumps(record))
+            self.assertEqual(CAU.lease_scan(td, ['module/area/child.txt'])['result'], 'live')
+            self.assertEqual(CAU.lease_scan(td, ['module/area2/sibling.txt'])['result'], 'free')
+            record.pop('reservePaths')
+            path.write_text(json.dumps(record))
+            self.assertEqual(CAU.lease_scan(td, ['unscoped-target.txt'])['result'], 'live')
+
+    def test_malformed_native_scope_is_not_treated_as_disjoint(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / 'native.lock/lease.json'
+            for scope in ({'targetPaths': 'target.txt'}, {'reservePaths': {'path': 'target.txt'}},
+                          {'targetPaths': [None]}, {'targetPaths': [42]}):
+                with self.subTest(scope=scope):
+                    write(path, json.dumps({'schemaVersion': 'awx.source_edit_session.lease.v1',
+                                            'expiresAtUtc': '2999-01-01T00:00:00+00:00', **scope}))
+                    result = CAU.lease_scan(td, ['target.txt'])
+                    self.assertEqual(result['result'], 'live')
+                    self.assertEqual(result['live'][0]['lifecycle'], 'orphan')
+
     def test_non_overlapping_lease_ignored(self):
         with tempfile.TemporaryDirectory() as td:
             write(Path(td) / "c.lock" / "lease.json", json.dumps(
@@ -336,6 +372,144 @@ class LeaseWaitAutoBudgetTest(unittest.TestCase):
         self.assertEqual(2, calls["sleeps"])
 
 
+class WaitRoundContract(unittest.TestCase):
+    def wait(self, **kwargs):
+        return CAU.lease_wait(["target.txt"], "unused",
+                              scanner=rich_scanner(live=[rich_row("peer")]),
+                              heartbeat_fn=lambda: None, **kwargs)
+
+    def test_sleep_does_not_cross_round_deadline(self):
+        clock, sleeps = [0.0], []
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+        result = self.wait(max_min=1 / 60, interval=60,
+                           now_fn=lambda: clock[0], sleep_fn=sleep)
+        self.assertEqual([1.0], sleeps)
+        self.assertEqual(1, result["waitedSec"])
+        self.assertEqual("WAITING", result["waitState"])
+        self.assertFalse(result["ownsTargets"])
+
+    def test_default_elapsed_uses_monotonic_not_wall_clock(self):
+        clock = [0.0]
+        with patch.object(CAU.time, "monotonic", side_effect=lambda: clock[0]), \
+             patch.object(CAU.time, "time", side_effect=AssertionError("wall-clock elapsed")):
+            result = self.wait(max_min=1 / 60, interval=1,
+                               sleep_fn=lambda s: clock.__setitem__(0, clock[0] + s))
+        self.assertTrue(result["pendingLease"])
+
+    def test_slow_heartbeat_cannot_sleep_past_deadline(self):
+        clock, sleeps = [0.0], []
+        result = CAU.lease_wait(["target.txt"], "unused", max_min=1 / 60,
+            now_fn=lambda: clock[0], sleep_fn=lambda s: sleeps.append(s),
+            heartbeat_fn=lambda: clock.__setitem__(0, 2),
+            scanner=rich_scanner(live=[rich_row("peer")]))
+        self.assertEqual([], sleeps)
+        self.assertTrue(result["pendingLease"])
+
+    def test_invalid_interval_or_budget_never_scans(self):
+        for key, values in [("interval", [0, -1, float("nan"), float("inf")]),
+                            ("max_min", [-1, float("nan"), float("inf")])]:
+            for value in values:
+                with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                    CAU.lease_wait(["target.txt"], "unused", **{key: value},
+                                   scanner=lambda _: self.fail("invalid timer scanned"))
+
+    def test_rounds_keep_waiting_with_capped_backoff(self):
+        for _ in range(3):
+            clock, sleeps = [0.0], []
+            def sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += seconds
+            result = self.wait(max_min=2, interval=10, now_fn=lambda: clock[0],
+                               sleep_fn=sleep)
+            self.assertEqual([10, 20, 40, 50], sleeps)
+            self.assertEqual("WAITING", result["waitState"])
+            self.assertTrue(result["pendingLease"])
+
+    def test_three_twenty_minute_rounds_remain_waiting_without_write_authority(self):
+        observed = 0
+        for _ in range(3):
+            clock, sleeps = [0.0], []
+            def sleep(seconds):
+                sleeps.append(seconds)
+                clock[0] += seconds
+            result = self.wait(max_min=20, interval=10, now_fn=lambda: clock[0], sleep_fn=sleep)
+            self.assertEqual(sleeps, [10, 20, 40] + [60] * 18 + [50])
+            self.assertEqual(result['waitState'], 'WAITING')
+            self.assertFalse(result['ownsTargets'])
+            observed += result['waitedSec']
+        self.assertEqual(observed, 3600)
+
+    def test_cancellation_releases_only_own_waiter(self):
+        with tempfile.TemporaryDirectory() as td:
+            ticket(td, ["target.txt"], "peer", FIXED_NOW,
+                   FIXED_NOW + timedelta(seconds=300))
+            peer = next((Path(td) / "waiters").rglob("*-peer.json"))
+            cancelled = [False]
+            result = CAU.lease_wait(["target.txt"], td, enqueue=True, task="me",
+                max_min=1, scanner=rich_scanner(live=[rich_row("peer")]),
+                heartbeat_fn=lambda: None, cancel_fn=lambda: cancelled[0],
+                sleep_fn=lambda _: cancelled.__setitem__(0, True))
+            self.assertEqual("CANCELLED", result["waitState"])
+            self.assertTrue(peer.is_file())
+            self.assertFalse(list((Path(td) / "waiters").rglob("*-me.json")))
+
+    def test_next_round_reuses_own_ticket_and_free_release_is_not_self_blocked(self):
+        with tempfile.TemporaryDirectory() as td:
+            clock = [0.0]
+            first = CAU.lease_wait(['target.txt'], td, max_min=1, interval=60, enqueue=True,
+                task='me', wait_id='same-wait', now_fn=lambda: clock[0],
+                sleep_fn=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+                heartbeat_fn=lambda: None, scanner=rich_scanner(live=[rich_row('peer')]))
+            self.assertEqual(first['waitState'], 'WAITING')
+            with patch.object(CAU, 'datetime', wraps=CAU.datetime) as shifted:
+                shifted.now.return_value = datetime.now(timezone.utc) + timedelta(seconds=2)
+                second = CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True,
+                    task='me', wait_id='same-wait', scanner=rich_scanner(), heartbeat_fn=lambda: None)
+            self.assertEqual(second['result'], 'free')
+            self.assertEqual(second['waitState'], 'READY_TO_ACQUIRE')
+            self.assertFalse(second['ownsTargets'])
+            self.assertFalse(list((Path(td) / 'waiters').rglob('*-me.json')))
+
+    def test_cancelled_round_retires_own_prior_pending_record(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, wait = Path(td) / 'root', Path(td) / 'wait'
+            root.mkdir()
+            (root / 'target.txt').write_bytes(b'original\n')
+            CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True, task='me', root=root,
+                wait_id='cancel', wait_dir=wait, scanner=rich_scanner(live=[rich_row('peer')]),
+                heartbeat_fn=lambda: None)
+            result = CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True, task='me', root=root,
+                wait_id='cancel', wait_dir=wait, scanner=rich_scanner(), cancel_fn=lambda: True)
+            self.assertEqual(result['waitState'], 'CANCELLED')
+            pending = json.loads((wait / 'cancel/pending.json').read_bytes())
+            self.assertEqual(pending['status'], 'CANCELLED')
+            self.assertFalse(pending['pendingLease'])
+            self.assertEqual(pending['nextAction'], 'none')
+
+    def test_terminal_pending_write_failure_is_explicitly_blocked(self):
+        for cancel in [True, False]:
+            with self.subTest(cancel=cancel), tempfile.TemporaryDirectory() as td:
+                root, wait = Path(td) / 'root', Path(td) / 'wait'
+                root.mkdir()
+                (root / 'target.txt').write_bytes(b'original\n')
+                CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True, task='me', root=root,
+                    wait_id='w1', wait_dir=wait, scanner=rich_scanner(live=[rich_row('peer')]),
+                    heartbeat_fn=lambda: None)
+                pending = wait / 'w1/pending.json'
+                original = pending.read_bytes()
+                with patch.object(Path, 'write_text', side_effect=PermissionError('synthetic retirement denial')):
+                    result = CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True, task='me', root=root,
+                        wait_id='w1', wait_dir=wait, scanner=rich_scanner(), cancel_fn=lambda: cancel,
+                        heartbeat_fn=lambda: None)
+                self.assertEqual(pending.read_bytes(), original)
+                self.assertEqual(result['waitState'], 'BLOCKED')
+                self.assertEqual(result['reason'], 'pending-retirement-unconfirmed')
+                self.assertFalse(result['ownsTargets'])
+                self.assertTrue(result['pendingRecordMayBeActive'])
+
+
 class LeaseWaitEnqueueTest(unittest.TestCase):
     """W2: --enqueue 대기표 순번·만료 무시·예외 시 삭제."""
 
@@ -386,6 +560,252 @@ class LeaseWaitEnqueueTest(unittest.TestCase):
             CAU.lease_wait(["scripts/x.py"], td, enqueue=True, task="me",
                            dry_run=True, scanner=rich_scanner())
             self.assertFalse((Path(td) / "waiters").exists())
+
+
+class HelpEncodingTest(unittest.TestCase):
+    """S8-e 회귀: --help가 cp949 콘솔에서 UnicodeEncodeError로 죽지 않는다."""
+
+    def _run_help_on_cp949(self, argv):
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp949", errors="strict")
+        old = sys.stdout
+        try:
+            sys.stdout = stream
+            with self.assertRaises(SystemExit) as cm:
+                CAU.main(argv)
+            stream.flush()
+        finally:
+            sys.stdout = old
+        return cm.exception.code, raw.getvalue()
+
+    def test_lease_wait_help_cp949(self):
+        code, out = self._run_help_on_cp949(["lease-wait", "--help"])
+        self.assertEqual(0, code)
+        self.assertIn(b"--paths", out)
+
+    def test_top_level_help_cp949(self):
+        code, out = self._run_help_on_cp949(["--help"])
+        self.assertEqual(0, code)
+        self.assertIn(b"lease-wait", out)
+
+
+class LeaseWaitSnapshotTest(unittest.TestCase):
+    """S2: 막혀 기다리기 시작하면 before.json 스냅샷을 남긴다."""
+
+    def test_queue_wait_captures_baseline_before_first_sleep(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'root'
+            root.mkdir()
+            (root / 'target.txt').write_bytes(b'original\n')
+            ticket(td, ['target.txt'], 'other', FIXED_NOW - timedelta(minutes=1),
+                   FIXED_NOW + timedelta(minutes=30))
+            rep = CAU.lease_wait(['target.txt'], td, max_min=0, enqueue=True, task='me',
+                root=root, scanner=rich_scanner(), wall_now_fn=lambda: FIXED_NOW,
+                wait_dir=Path(td) / 'wait', wait_id='queue')
+            self.assertEqual(rep['result'], 'free_wait_turn')
+            self.assertTrue(rep.get('beforeJson'))
+            self.assertEqual(json.loads(Path(rep['beforeJson']).read_bytes())['targets'][0]['sha256'],
+                             hashlib.sha256(b'original\n').hexdigest())
+
+    def test_changed_baseline_bytes_cannot_be_adopted_in_next_round(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, wait = Path(td) / 'root', Path(td) / 'wait'
+            root.mkdir()
+            (root / 'target.txt').write_bytes(b'original\n')
+            before = Path(CAU.snapshot_before(root, ['target.txt'], wait, 'w1', task='t1'))
+            doc = json.loads(before.read_bytes())
+            doc['targets'][0]['sha256'] = 'a' * 64
+            before.write_text(json.dumps(doc))
+            self.assertIsNone(CAU.snapshot_before(root, ['target.txt'], wait, 'w1', task='t1'))
+
+    def test_baseline_mutation_during_wait_keeps_first_hash_and_blocks(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'root'
+            root.mkdir()
+            (root / 'target.txt').write_bytes(b'original\n')
+            before = Path(td) / 'wait/w1/before.json'
+            first_sha = []
+            scans = iter([rich_scanner(live=[rich_row('peer')]), rich_scanner()])
+
+            def mutate(_):
+                first_sha.append(hashlib.sha256(before.read_bytes()).hexdigest())
+                doc = json.loads(before.read_bytes())
+                doc['targets'][0]['sha256'] = 'a' * 64
+                before.write_text(json.dumps(doc))
+
+            rep = CAU.lease_wait(['target.txt'], td, max_min=1, task='me', root=root,
+                scanner=lambda p: next(scans)(p), wait_dir=Path(td) / 'wait', wait_id='w1',
+                sleep_fn=mutate, heartbeat_fn=lambda: None)
+            self.assertEqual(rep['result'], 'blocked')
+            self.assertEqual(rep['reason'], 'baseline-changed-during-wait')
+            self.assertEqual(rep['beforeSha256'], first_sha[0])
+            self.assertFalse(rep['ownsTargets'])
+
+    def test_second_round_preserves_original_snapshot_and_context(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, wait = Path(td) / "root", Path(td) / "wait"
+            root.mkdir()
+            target = root / "target.txt"
+            target.write_bytes(b"original\n")
+            before = Path(CAU.snapshot_before(root, ["target.txt"], wait, "w1", task="t1"))
+            original = before.read_bytes()
+            doc = json.loads(original)
+            snapshot = before.parent / doc["targets"][0]["snapshot"]
+            target.write_bytes(b"foreign round two\n")
+            self.assertEqual(str(before), CAU.snapshot_before(root, ["target.txt"], wait, "w1", task="t1"))
+            self.assertEqual(before.read_bytes(), original)
+            self.assertEqual(snapshot.read_bytes(), b"original\n")
+            self.assertIsNone(CAU.snapshot_before(root, ["target.txt"], wait, "w1", task="different"))
+            self.assertEqual(before.read_bytes(), original)
+
+    def test_baseline_records_file_identity_and_read_error_is_unknown(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, wait = Path(td) / "root", Path(td) / "wait"
+            root.mkdir()
+            target = root / "target.txt"
+            target.write_bytes(b"current\n")
+            real_read = Path.read_bytes
+
+            def deny_target(path):
+                if path == target:
+                    raise PermissionError("synthetic denial")
+                return real_read(path)
+
+            with patch.object(Path, "read_bytes", deny_target):
+                before = CAU.snapshot_before(root, ["target.txt", "new.txt"], wait, "w1", task="t1")
+            rows = json.loads(Path(before).read_bytes())["targets"]
+            self.assertEqual(rows[0]["state"], "UNKNOWN")
+            self.assertTrue(rows[0]["exists"])
+            self.assertEqual(rows[1]["state"], "ABSENT")
+            self.assertFalse(rows[1]["exists"])
+
+    def test_goal_plan_and_related_inputs_are_bound_to_immutable_baseline(self):
+        with tempfile.TemporaryDirectory() as td:
+            root, wait = Path(td) / "root", Path(td) / "wait"
+            root.mkdir()
+            (root / "target.txt").write_bytes(b"original\n")
+            (root / "config.json").write_bytes(b"{}\n")
+            context = {"goalRevision": "goal-1", "planRevision": "plan-1",
+                       "inputPaths": ["config.json"], "invariants": ["preserve-foreign-bytes"]}
+            before = Path(CAU.snapshot_before(root, ["target.txt"], wait, "w1", task="t1", context=context))
+            original = before.read_bytes()
+            doc = json.loads(original)
+            self.assertEqual(doc["context"], context)
+            self.assertEqual(doc["inputs"][0]["sha256"], hashlib.sha256(b"{}\n").hexdigest())
+            self.assertEqual(doc["targets"][0]["type"], "file")
+            self.assertTrue(doc["targets"][0]["identity"]["inode"] > 0)
+            self.assertIsNone(CAU.snapshot_before(root, ["target.txt"], wait, "w1", task="t1",
+                                                 context={**context, "goalRevision": "goal-2"}))
+            self.assertEqual(before.read_bytes(), original)
+
+    def test_before_json_written_on_blocked_wait(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "root"
+            (root / "scripts").mkdir(parents=True)
+            payload = b"print(1)\n"
+            (root / "scripts" / "x.py").write_bytes(payload)
+            wait_dir = Path(td) / "wait"
+            scans = iter([rich_scanner(live=[rich_row("p")]),
+                          rich_scanner()])
+            rep = CAU.lease_wait(
+                ["scripts/x.py"], td, max_min=1,
+                scanner=lambda p: next(scans)(p), wait_dir=str(wait_dir),
+                wait_id="w1", task="t1", root=str(root),
+                sleep_fn=lambda s: None)
+            self.assertEqual("free", rep["result"])
+            doc = json.loads((wait_dir / "w1" / "before.json")
+                             .read_text(encoding="utf-8"))
+        row = doc["targets"][0]
+        self.assertEqual("scripts/x.py", row["path"])
+        self.assertTrue(row["exists"])
+        self.assertEqual(hashlib.sha256(payload).hexdigest(), row["sha256"])
+        self.assertEqual(len(payload), row["size"])
+        self.assertIn("mtimeUtc", row)
+        self.assertTrue(row["snapshot"].startswith("before/"))
+
+    def test_no_snapshot_when_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            wait_dir = Path(td) / "wait"
+            CAU.lease_wait(["scripts/x.py"], td, max_min=1,
+                           scanner=rich_scanner(), wait_dir=str(wait_dir),
+                           wait_id="w2", task="t1")
+            self.assertFalse((wait_dir / "w2" / "before.json").exists())
+
+    def test_dry_run_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            wait_dir = Path(td) / "wait"
+            rep = CAU.lease_wait(["scripts/x.py"], td, dry_run=True,
+                                 scanner=rich_scanner(live=[rich_row("p")]),
+                                 wait_dir=str(wait_dir), wait_id="w3",
+                                 task="t1")
+            self.assertEqual("live", rep["result"])
+            self.assertFalse(wait_dir.exists())
+
+
+class LeaseWaitPendingTest(unittest.TestCase):
+    """S4: 예산 소진/stale이어도 세션을 끝내지 않는다 — pendingLease + 티켓 유지."""
+
+    def test_budget_exhausted_pending_keeps_ticket(self):
+        with tempfile.TemporaryDirectory() as td:
+            wait_dir = Path(td) / "wait"
+            clock = {"t": 0.0}
+            scans = {"n": 0}
+
+            def counting(paths):
+                scans["n"] += 1
+                return rich_scanner(live=[rich_row("p")])(paths)
+
+            rep = CAU.lease_wait(
+                ["scripts/x.py"], td, max_min=1, interval=1, enqueue=True,
+                task="me", scanner=counting, wait_dir=str(wait_dir),
+                wait_id="w4", now_fn=lambda: clock["t"],
+                sleep_fn=lambda s: clock.__setitem__("t", clock["t"] + s))
+            self.assertEqual("live", rep["result"])
+            self.assertTrue(rep["pendingLease"])
+            self.assertEqual("budget-exhausted-blocked",
+                             json.loads((wait_dir / "w4" / "pending.json")
+                                        .read_text())["note"])
+            # Round polling backs off while preserving the one-minute deadline.
+            self.assertGreaterEqual(scans["n"], 2)
+            self.assertLessEqual(scans["n"], 8)
+            self.assertEqual(60, rep["waitedSec"])
+            # 대기표를 지우지 않는다 — 순번 유지
+            self.assertTrue(list((Path(td) / "waiters")
+                                 .rglob("*-me.json")))
+
+    def test_stale_pending_keeps_ticket_no_release(self):
+        with tempfile.TemporaryDirectory() as td:
+            wait_dir = Path(td) / "wait"
+            stale_row = rich_row("s", lifecycle="stale", status="ended",
+                                 heartbeat_state="absent",
+                                 expires_at=_iso(FIXED_NOW
+                                                 - timedelta(minutes=5)))
+            rep = CAU.lease_wait(
+                ["scripts/x.py"], td, enqueue=True, task="me",
+                scanner=rich_scanner(stale=[stale_row]),
+                wait_dir=str(wait_dir), wait_id="w5")
+            self.assertEqual("stale", rep["result"])
+            self.assertTrue(rep["pendingLease"])
+            doc = json.loads((wait_dir / "w5" / "pending.json")
+                             .read_text())
+            self.assertEqual("PENDING_LEASE", doc["status"])
+            self.assertEqual("stale-not-released", doc["note"])
+            self.assertTrue(list((Path(td) / "waiters")
+                                 .rglob("*-me.json")))
+
+    def test_free_wait_turn_keeps_queue_ticket(self):
+        # 내 차례가 아니면 대기표를 지우지 않는다 — 순번 유지가 pending의 일부.
+        with tempfile.TemporaryDirectory() as td:
+            ticket(td, ["scripts/x.py"], "other-agent",
+                   FIXED_NOW - timedelta(minutes=1),
+                   FIXED_NOW + timedelta(minutes=30))
+            rep = CAU.lease_wait(
+                ["scripts/x.py"], td, max_min="0", enqueue=True, task="me",
+                scanner=rich_scanner(), wait_dir=str(Path(td) / "wait"),
+                wait_id="w6", wall_now_fn=lambda: FIXED_NOW)
+            self.assertEqual("free_wait_turn", rep["result"])
+            self.assertTrue(list((Path(td) / "waiters")
+                                 .rglob("*-me.json")))
 
 
 class SupersededTest(unittest.TestCase):

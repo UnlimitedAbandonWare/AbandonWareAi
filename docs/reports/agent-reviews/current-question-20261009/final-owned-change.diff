@@ -1,0 +1,239 @@
+--- a/main/java/com/example/lms/service/ChatWorkflow.java
++++ b/main/java/com/example/lms/service/ChatWorkflow.java
+@@ -3178,9 +3178,9 @@
+                 ? modelRouter.resolveModelName(model) : mainDecision.selectedKey();
+ 
+         var ctxBuilder = com.example.lms.prompt.PromptContext.builder()
+-                // Use the rewritten/final query so retrieval signals, section templates and
+-                // follow-up checks stay consistent.
+-                .userQuery(finalQuery)
++                // Focus supplies the confirmed question separately from retrieval hints.
++                // Keep it authoritative in USER QUESTION as well as the final UserMessage.
++                .userQuery(conversationContext.present() ? userQuery : finalQuery)
+                 .lastAssistantAnswer(lastAnswer)
+                 .history(historyStr)
+                 .responsePreferences(responsePreferences(req))
+--- a/src/test/java/com/example/lms/service/ChatWorkflowPromptMessageRoleTest.java
++++ b/src/test/java/com/example/lms/service/ChatWorkflowPromptMessageRoleTest.java
+@@ -70,6 +70,73 @@
+ import dev.langchain4j.data.message.SystemMessage;
+ import dev.langchain4j.data.message.UserMessage;
+ class ChatWorkflowPromptMessageRoleTest {
++    @ParameterizedTest
++    @CsvSource(value = {
++            "true|HP Reverb G2 2026 specs?|Even Realities G2 specs?|0.9",
++            "false|HP Reverb G2 2026 specs?|Even Realities G2 specs?|0.9",
++            "true|Meta Ray-Ban Display specs?|Ray-Ban Meta specs?|0.9",
++            "false|Meta Ray-Ban Display specs?|Ray-Ban Meta specs?|0.9",
++            "true|Ray-Ban Meta specs?|Meta Ray-Ban Display specs?|0.9",
++            "false|Ray-Ban Meta specs?|Meta Ray-Ban Display specs?|0.9",
++            "true|G2 specs?|Even Realities G2 specs?|0.1",
++            "false|G2 specs?|Even Realities G2 specs?|0.1",
++            "true|G2 specs?|Even Realities G2 specs?|NULL",
++            "false|G2 specs?|Even Realities G2 specs?|NULL"
++    }, delimiter = '|', nullValues = "NULL")
++    void confirmedFocusQuestionRemainsAuthoritativeAcrossRetrievalRewrite(
++            boolean focus, String question, String rewritten, Double score) {
++        clearWorkflowState();
++        try {
++            var captured = new java.util.ArrayList<List<ChatMessage>>();
++            var fixture = fixture(captured);
++            var context = focus ? new ChatConversationContext(List.of(
++                    new ChatConversationContext.Turn(rewritten, "Old unverified memory.")), "", List.of())
++                    : ChatConversationContext.empty();
++            var clarifier = (com.example.lms.service.disambiguation.QueryDisambiguationService)
++                    ReflectionTestUtils.getField(fixture.workflow(), "disambiguationService");
++            var rewrite = new com.example.lms.service.disambiguation.DisambiguationResult();
++            rewrite.setRewrittenQuery(rewritten);
++            rewrite.setScore(score);
++            when(clarifier.clarify(anyString(), anyList())).thenReturn(rewrite);
++            var promptAtBuild = new java.util.concurrent.atomic.AtomicReference<com.example.lms.prompt.PromptContext>();
++            var builder = org.mockito.Mockito.spy(new StandardPromptBuilder());
++            org.mockito.Mockito.doAnswer(call -> {
++                promptAtBuild.set(call.getArgument(0));
++                return call.callRealMethod();
++            }).when(builder).build(any(com.example.lms.prompt.PromptContext.class));
++            ReflectionTestUtils.setField(fixture.workflow(), "promptBuilder", builder);
++            var request = ChatRequestDto.builder().message(question).sessionId(null)
++                    .model("release-gate-recording-fake").maxTokens(256).memoryMode("EPHEMERAL")
++                    .searchMode(SearchMode.AUTO).useWebSearch(true).useRag(false)
++                    .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, false)).build();
++
++            fixture.workflow().continueChat(request, ignored -> List.of(), context);
++
++            verify(clarifier).clarify(org.mockito.ArgumentMatchers.eq(question),
++                    org.mockito.ArgumentMatchers.eq(context.interpretationHistory()));
++            var hybrid = (com.example.lms.service.rag.HybridRetriever)
++                    ReflectionTestUtils.getField(fixture.workflow(), "hybridRetriever");
++            String retrievalQuery = rewrite.isConfident() ? rewritten : question;
++            verify(hybrid).retrieveAll(org.mockito.ArgumentMatchers.argThat(queries -> queries.contains(retrievalQuery)),
++                    anyInt(), any(), any()); // Retrieval hints retain their existing contract.
++            assertEquals(question, request.getMessage(), "the DTO never changes the confirmed question");
++            assertEquals(1, captured.size(), "one actual fake-model boundary invocation");
++            var messages = captured.get(0);
++            assertEquals(question, assertInstanceOf(UserMessage.class,
++                    messages.get(messages.size() - 1)).singleText());
++            assertEquals(score, rewrite.getScore(), "unobserved clarify confidence remains null");
++            String authoritative = focus ? question : retrievalQuery;
++            assertEquals(authoritative, promptAtBuild.get().userQuery(),
++                    "Focus prompt question must not be replaced by a retrieval hint");
++            String rendered = messages.stream().filter(SystemMessage.class::isInstance)
++                    .map(SystemMessage.class::cast).map(SystemMessage::text)
++                    .collect(java.util.stream.Collectors.joining("\n"));
++            assertTrue(rendered.contains("### USER QUESTION\n" + authoritative),
++                    "the actual rendered question uses the authoritative input");
++            verifyNoInteractions(fixture.learningWriteInterceptor(), fixture.memoryWriteInterceptor());
++        } finally { clearWorkflowState(); }
++    }
++
+     @ParameterizedTest @ValueSource(strings={"approved","master_off","opt_out","strict","unknown","unready"})
+     void approvedPreparationReachesActualFinalModelAsUserData(String mode) throws Exception {
+         clearWorkflowState();
+--- a/src/test/java/com/example/lms/assist/NovaFocusStateTest.java
++++ b/src/test/java/com/example/lms/assist/NovaFocusStateTest.java
+@@ -4,6 +4,18 @@
+ import static org.junit.jupiter.api.Assertions.*;
+ 
+ class NovaFocusStateTest {
++    @Test void threeSecondShortQuestionUsesCorrectedFinalOnceWithoutEightSecondOrLengthMinimum() {
++        var s=state(true);s.open(0,"fold");
++        s.input(u("current",0,false,"Even G2?"),100);
++        assertNull(s.tick(1800));
++        s.input(u("current",1,true,"HP Reverb G2?"),1800);
++        assertNull(s.tick(2999));
++        var request=s.tick(3000);assertNotNull(request);
++        assertEquals("HP Reverb G2?",request.question());
++        s.input(u("current",1,true,"HP Reverb G2?"),3100);
++        assertNull(s.tick(4300));assertTrue(s.accepts(request));
++    }
++
+     @Test void recentPartialInputSurvivesListeningDeadlineWithoutSubmittingUnconfirmedText() {
+         var s=state(true);s.open(0,"fold");
+         s.input(u("ongoing",0,false,"부분 질문"),7000);
+--- a/src/test/java/com/example/lms/prompt/StandardPromptBuilderConversationHistoryTest.java
++++ b/src/test/java/com/example/lms/prompt/StandardPromptBuilderConversationHistoryTest.java
+@@ -13,6 +13,23 @@
+  * 후속 발화가 맥락을 잃는다.
+  */
+ class StandardPromptBuilderConversationHistoryTest {
++    @Test void currentProductAndDatedEvidenceStayDistinctFromOldMemoryAndMissingDates() {
++        String question="HP Reverb G2 2026 official status?";
++        var current=dev.langchain4j.rag.content.Content.from("HP Reverb G2; synthetic official evidence; updated 2026-10-09; version G2.");
++        var undated=dev.langchain4j.rag.content.Content.from("HP Reverb G2; date not supplied; unverified.");
++        var ctx=PromptContext.builder().userQuery(question)
++                .history("User: Even Realities G2?\nAssistant: Old memory from 2024, unverified.")
++                .web(List.of(current,undated)).ragEnabled(true).build();
++        String prompt=builder.build(ctx);
++        assertTrue(prompt.contains("### USER QUESTION\n"+question));
++        assertTrue(prompt.contains("Even Realities G2"));
++        assertTrue(prompt.contains("updated 2026-10-09"));
++        assertTrue(prompt.contains("date not supplied; unverified"));
++        String instructions=builder.buildInstructions(ctx);
++        assertTrue(instructions.contains("do not infer freshness when evidence lacks them"));
++        assertTrue(instructions.contains("state the conflict or evidence gap"));
++    }
++
+ 
+     private final StandardPromptBuilder builder = new StandardPromptBuilder();
+ 
+--- a/src/test/java/com/example/lms/assist/NovaFocusAnswerServiceTest.java
++++ b/src/test/java/com/example/lms/assist/NovaFocusAnswerServiceTest.java
+@@ -14,6 +14,30 @@
+ import static org.mockito.Mockito.*;
+ 
+ class NovaFocusAnswerServiceTest {
++    @org.junit.jupiter.params.ParameterizedTest
++    @org.junit.jupiter.params.provider.ValueSource(strings={"HP Reverb G2 specs?","Ray-Ban Meta specs?","Meta Ray-Ban Display specs?"})
++    void confirmedProductQuestionAndOldContextReachWorkflowWithoutCorrectionOrSearchPermission(String question) throws Exception {
++        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
++        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
++        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
++        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("Synthetic answer, unverified.","fixed-fixture",false));
++        var old=new NovaFocusHistoryService.Pair(1,"old","COMPLETE","Even Realities G2?","Old memory, unverified.");
++        var memory=new NovaFocusHistoryService.Context(List.of(old),"",List.of(),List.of(),
++                new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.FIXED,"fixed-fixture"),4,400,false,false);
++        try {
++            adapter.answer(7L,question,memory);
++            var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
++            var context=org.mockito.ArgumentCaptor.forClass(ChatConversationContext.class);
++            verify(chat).continueChat(request.capture(),isNull(),context.capture());
++            assertEquals(question,request.getValue().getMessage());assertNull(request.getValue().getSessionId());
++            assertTrue(context.getValue().present());assertTrue(context.getValue().interpretationHistory().stream()
++                    .anyMatch(line->line.contains("Even Realities G2")));
++            assertFalse(request.getValue().isUseWebSearch());assertFalse(context.getValue().focusGoogleSearchAllowed());
++            assertEquals(com.example.lms.gptsearch.dto.SearchMode.OFF,request.getValue().getSearchMode());
++            assertEquals("fixed-fixture",request.getValue().getModel());
++        } finally {ReflectionTestUtils.invokeMethod(runs,"shutdown");}
++    }
++
+     @org.junit.jupiter.params.ParameterizedTest
+     @org.junit.jupiter.params.provider.ValueSource(strings={"completed","changed","failed"})
+     void publishedFixedOAuthPrefixNeverStartsUnknownWebRetryOrAcceptsRevision(String outcome) throws Exception {
+@@ -477,6 +501,37 @@
+             verify(chat,times(1)).continueChat(any(),isNull(),any());
+         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
+     }
++    @Test void profileAutoDefaultUsesAdmittedFlashLiteAndPreservesExplicitChoices() throws Exception {
++        var yaml=new org.springframework.beans.factory.config.YamlPropertiesFactoryBean();
++        yaml.setResources(new org.springframework.core.io.ClassPathResource("application-meta-display.yml"));
++        String configured=yaml.getObject().getProperty("conversate.focus.default-model");
++        var env=new org.springframework.mock.env.MockEnvironment().withProperty("focus.default",configured);
++        var chat=mock(ChatService.class);var runs=new ChatRunRegistry();
++        ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
++        var adapter=new NovaFocusAnswerService(chat,mock(PublicRequestBudgetGuard.class),runs);
++        var catalog=mock(ChatModelCatalogService.class);
++        for(String id:List.of("llmrouter.gemini-cue","llmrouter.gemini-pro"))
++            when(catalog.resolve(id)).thenReturn(Optional.of(new ChatModelCatalogService.Choice(
++                id,"gemini",id.substring("llmrouter.".length()),"fixture-model","configured",true,"","release","server_catalog")));
++        ReflectionTestUtils.setField(adapter,"modelCatalog",catalog);
++        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("Synthetic answer","fixture-model",false));
++        var routing=new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of());
++        try {
++            for(int scenario=0;scenario<3;scenario++) {
++                if(scenario==1)env.setProperty("CONVERSATE_FOCUS_DEFAULT_MODEL","llmrouter.gemini-pro");
++                ReflectionTestUtils.setField(adapter,"focusDefaultModel",env.getProperty("focus.default"));
++                var selection=new NovaFocusSettings.AnswerSelection(scenario==2?NovaFocusSettings.AnswerSelection.Mode.FIXED:
++                    NovaFocusSettings.AnswerSelection.Mode.AUTO,scenario==2?"llmrouter.gemini-pro":null,routing);
++                var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selection,0);
++                adapter.answer(7L,"Synthetic question",memory);
++                var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
++                verify(chat).continueChat(request.capture(),isNull(),any());
++                assertEquals(scenario==0?"llmrouter.gemini-cue":"llmrouter.gemini-pro",request.getValue().getModel());
++                assertTrue(request.getValue().isStrictModelSelection());
++                clearInvocations(chat);
++            }
++        } finally { ReflectionTestUtils.invokeMethod(runs,"shutdown"); }
++    }
+     @Test void autoRoutingPrefersConfiguredFocusDefaultModelWhenSelectable() throws Exception{
+         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
+         ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
+--- a/src/test/java/com/example/lms/assist/UnknownAnswerPolicyTest.java
++++ b/src/test/java/com/example/lms/assist/UnknownAnswerPolicyTest.java
+@@ -6,6 +6,16 @@
+ 
+ /** P0-B precedence: the same fixed table drives cue supplement and Focus retry. */
+ class UnknownAnswerPolicyTest {
++    @Test void confidentProductClaimIsNotEvidenceOfFreshnessOrAnAsrCorrection() {
++        assertNull(UnknownAnswerPolicy.classify("HP Reverb G2 is Even Realities G2, according to old memory."));
++        var unavailable=UnknownAnswerPolicy.decide(UnknownAnswerPolicy.Mode.GENERAL,true,false,true,false,
++                UnknownAnswerPolicy.Trigger.EMPTY_ANSWER);
++        assertFalse(unavailable.webAllowed());assertEquals("request_web_off",unavailable.reason());
++        var alreadyAttempted=UnknownAnswerPolicy.decide(UnknownAnswerPolicy.Mode.WEB,false,true,true,true,
++                UnknownAnswerPolicy.Trigger.EXPLICIT_UNKNOWN);
++        assertFalse(alreadyAttempted.webAllowed());assertEquals("web_already_attempted",alreadyAttempted.reason());
++    }
++
+     @Test void generalWebHybridAllowUnknownWebRetryOnce(){
+         for(var mode:List.of(UnknownAnswerPolicy.Mode.GENERAL,UnknownAnswerPolicy.Mode.WEB,UnknownAnswerPolicy.Mode.HYBRID))
+             for(var trigger:UnknownAnswerPolicy.Trigger.values()){
+--- a/main/resources/application-meta-display.yml
++++ b/main/resources/application-meta-display.yml
+@@ -152,7 +152,7 @@
+     web-model: ${CONVERSATE_FOCUS_WEB_MODEL:llmrouter.gemini-pro}
+     # Soft default for AUTO-routing focus answers: must resolve to an existing
+     # selectable catalog route, otherwise the local default keeps its place.
+-    default-model: ${CONVERSATE_FOCUS_DEFAULT_MODEL:llmrouter.gemini-pro}
++    default-model: ${CONVERSATE_FOCUS_DEFAULT_MODEL:llmrouter.gemini-cue}
+     # Request ceiling is clamped at 10000ms in NovaFocusAnswerService; 10000 keeps
+     # >=2000ms for one fallback admission after a primary attempt burns its budget.
+     timeout-ms: ${CONVERSATE_FOCUS_TIMEOUT_MS:10000}

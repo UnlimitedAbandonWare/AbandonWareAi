@@ -12,6 +12,8 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
+import time
 import unittest
 
 
@@ -493,6 +495,91 @@ class CoopVerifyTest(unittest.TestCase):
         self.assertEqual(code, CV.EXIT_DEFERRED)
         self.assertEqual(res["deferReason"], "verifier-busy")
         self.assertFalse(self.counter.exists())
+
+    def held_verification_command(self, label, release):
+        """Actual child/CLI coordination with isolated synthetic outputs, not Gradle proof."""
+        output = self.root / ('output-' + label)
+        output.mkdir()
+        return [sys.executable, '-B', '-c',
+            "import sys,time,json; from pathlib import Path; "
+            "out,release=map(Path,sys.argv[1:]); started=time.perf_counter_ns(); "
+            "(out/'entered').write_text('ready'); deadline=time.monotonic()+15\n"
+            "while not release.exists() and time.monotonic()<deadline: time.sleep(.02)\n"
+            "assert release.exists(), 'fixture release deadline'\n"
+            "(out/'result.json').write_text(json.dumps({'started':started,'ended':time.perf_counter_ns(),'runs':1}))\n",
+            str(output), str(release)]
+
+    def start_verifier_cli(self, ticket, store=None):
+        return subprocess.Popen([sys.executable, '-B', str(SCRIPT), '--root', str(self.root),
+            '--store', store or self.store, '--set', 'source_quiet_seconds=0',
+            'run-once', '--ticket', ticket], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    def wait_for_output_entry(self, label, process):
+        deadline = time.monotonic() + 10
+        entered = self.root / ('output-' + label) / 'entered'
+        while not entered.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(.02)
+        self.assertTrue(entered.exists(), f'child never entered: exit={process.poll()}')
+        self.assertIsNone(process.poll())
+
+    def finish_verifier_cli(self, process):
+        stdout, stderr = process.communicate(timeout=20)
+        self.assertEqual(process.returncode, 0, stderr.decode('utf-8', 'replace'))
+        result = json.loads(stdout.decode('utf-8'))
+        self.assertEqual(result['state'], 'VERIFIED_PASS')
+        return result
+
+    def test_real_running_verifier_defers_same_shared_output_without_second_command(self):
+        release = self.root / 'release'
+        first = self.request(command=self.held_verification_command('shared', release))
+        process = self.start_verifier_cli(first['ticketId'])
+        try:
+            self.wait_for_output_entry('shared', process)
+            second = self.request(agent='other', command=self.counter_cmd())
+            command = [sys.executable, '-B', str(SCRIPT), '--root', str(self.root), '--store', self.store,
+                '--set', 'source_quiet_seconds=0', 'run-once', '--ticket', second['ticketId']]
+            blocked = subprocess.run(command, capture_output=True, timeout=10)
+            report = json.loads(blocked.stdout)
+            self.assertEqual(blocked.returncode, CV.EXIT_DEFERRED)
+            self.assertEqual(report['state'], 'DEFERRED')
+            self.assertNotEqual(report['state'], 'VERIFIED_PASS')
+            self.assertFalse(self.counter.exists())
+            self.assertIsNone(process.poll())
+            release.write_text('release')
+            self.finish_verifier_cli(process)
+            result = json.loads((self.root / 'output-shared/result.json').read_text())
+            self.assertEqual(result['runs'], 1)
+        finally:
+            release.write_text('release')
+            if process.poll() is None:
+                process.communicate(timeout=20)
+
+    def test_real_separated_output_resources_verify_in_overlapping_intervals(self):
+        release = self.root / 'release-separated'
+        processes = []
+        try:
+            for label in ['left', 'right']:
+                self.store = str(self.root / ('coop-' + label))
+                request = self.request(agent=label, command=self.held_verification_command(label, release))
+                processes.append((label, self.start_verifier_cli(request['ticketId'], self.store)))
+            for label, process in processes:
+                self.wait_for_output_entry(label, process)
+            self.assertTrue(all(p.poll() is None for _, p in processes))
+            release.write_text('release')
+            intervals = []
+            for label, process in processes:
+                result = self.finish_verifier_cli(process)
+                self.assertEqual(result['state'], 'VERIFIED_PASS')
+                intervals.append(json.loads((self.root / ('output-' + label) / 'result.json').read_text()))
+            self.assertLess(max(r['started'] for r in intervals), min(r['ended'] for r in intervals))
+            self.assertEqual([r['runs'] for r in intervals], [1, 1])
+            for label, _ in processes:
+                self.assertFalse((self.root / ('coop-' + label) / '.verify.lock').exists())
+        finally:
+            release.write_text('release')
+            for _, process in processes:
+                if process.poll() is None:
+                    process.communicate(timeout=20)
 
     # -- T3: duplicate requests merge, oldest requestedAtUtc kept ------------
     def test_t3_duplicate_requests_merge_keep_oldest(self):

@@ -3178,13 +3178,14 @@ public class ChatWorkflow {
                 ? modelRouter.resolveModelName(model) : mainDecision.selectedKey();
 
         var ctxBuilder = com.example.lms.prompt.PromptContext.builder()
-                // Use the rewritten/final query so retrieval signals, section templates and
-                // follow-up checks stay consistent.
-                .userQuery(finalQuery)
+                // Focus supplies the confirmed question separately from retrieval hints.
+                // Keep it authoritative in USER QUESTION as well as the final UserMessage.
+                .userQuery(conversationContext.present() ? userQuery : finalQuery)
                 .lastAssistantAnswer(lastAnswer)
                 .history(historyStr)
                 .responsePreferences(responsePreferences(req))
                 .focusAnswerLengthChars(conversationContext.focusAnswerLengthChars())
+                .focusAnswerInstruction(conversationContext.focusAnswerInstruction())
                 .intent(intent)
                 .domain(domain)
                 .subject(analysis != null ? analysis.getTargetObject() : null)

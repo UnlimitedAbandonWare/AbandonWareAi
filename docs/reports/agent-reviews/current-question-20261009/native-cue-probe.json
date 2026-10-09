@@ -1,0 +1,15 @@
+{
+  "checkedAtUtc": "2026-10-09T09:05:30.103960+00:00",
+  "surface": "main-sync-strict-native-construction",
+  "selectedAlias": "llmrouter.gemini-cue",
+  "syntheticInput": true,
+  "searchMode": "OFF",
+  "httpStatus": 200,
+  "requestHash": "fdac70b43eb9",
+  "safeMetadata": {
+    "modelUsed": "gemini-3.5-flash-lite"
+  },
+  "bodyChars": 6,
+  "bodyHash": "334d016f755c",
+  "FocusEvidence": false
+}

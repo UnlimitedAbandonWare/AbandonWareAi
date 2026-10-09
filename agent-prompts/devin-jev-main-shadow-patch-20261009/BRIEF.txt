@@ -1,0 +1,127 @@
+[ANTI-STOP] WP0~WP4 + A1-A8 REPORT 완료 후 종료. 읽고 멈추지 말 것.
+COMMON_RULES: .agents/rules/demo1-common-brief-rules.md 적용
+Project Root: C:\AbandonWare\demo-1\demo-1\src
+
+# [PASTE_DEVIN] 메인 /chat AUTO 검색판단 Jev shadow 훅 + (조건부) release-hedge
+작성: devin-assist 세션 | 날짜: 2026-10-09 | 대상: Devin SWE-2 (ambitious-request)
+
+Set-Location -LiteralPath 'C:\AbandonWare\demo-1\demo-1\src'
+
+## 한 줄 목표
+`ChatApiController.shouldUseWebForSearchMode` AUTO 브랜치에 `JevDecisionAdvisor.advise("main", query, baseline)` shadow 훅을 배선한다 — 판단 결과는 바꾸지 않고 trace 키 2개만 남긴다. release-hedge seam은 리스 해소 시에만.
+
+## 사실 (어시스트 세션 라이브 확인, 2026-10-09 ~22:50 KST)
+- 원본 계획: `data/agent-handoff/devin-jev-llm-decision-combo-8d094e46/FOR_CODEX.md` §1-§4
+- 오프라인 근거: rules-only search_acc 50.0% → combo 91.1% (`data/eval/decision-combo/latest/comparison.md`, 56 cases)
+- 앵커 드리프트 있음: `service.decide(query, SearchMode.AUTO, ...)` 실제 ~:227(문서 :228), sync 호출지점 :4502-4503(문서 :4492), ChatWorkflow seam +8(8219/8229/8447/8462/8527). 라인번호 대신 식별자로 고정할 것.
+- `demo.jev.surface.main.mode` 이미 존재(`JevSurfacePolicy.resolve`가 `demo.jev.surface.<surface>.mode` 읽음, "main"은 known surface). **새 knob 추가 금지.** 전역 `demo.jev.mode=off`가 모든 surface override보다 우선(JevSurfacePolicyTest `globalOffDominatesSurfaceOn`).
+- `JevDecisionAdvisor`는 `@ConditionalOnProperty(conversate.enabled)` — `conversate.enabled` 미설정 시 빈 자체가 없다. **@Autowired(required=false) + null 가드 필수** (기존 패턴: `ConversateApiCueService:46`, `:107`). FOR_CODEX의 "inject like searchDecisionService"는 required 주입이라 그대로 베끼면 /chat 부트가 깨진다.
+- `ChatWorkflow.java`는 `devin-nova-answer-prompt` 라이브 리스 내부(`__patch_drop__/source-edit-locks/default.lock`, expiresAtUtc 2026-10-09T17:32Z) + in_progress 저널 `nova-focus-24393-v2-6e1a5eda` plannedScope에도 포함. 강제 해제 금지.
+- 어시스트 킷: `scripts/jev_main_shadow_assist_20261009.py` + `var/devin-assist-jev-main-shadow-20261009/` (pin/cover/scope/hold/verify-plan/diff-forbid/product-gate)
+
+## 수정 허용 (이 경로만)
+- `main/java/com/example/lms/api/ChatApiController.java`
+- `src/test/java/com/example/lms/api/JevMainSurfaceShadowTest.java` (신규 — assist/ 디렉터리 아님, 다른 저널 스코프와 무충돌)
+- `src/test/java/com/example/lms/api/ChatApiControllerAutoSearchDecisionTest.java` / `src/test/java/com/example/lms/gptsearch/decision/SearchDecisionServiceTest.java` (케이스 추가만)
+- 조건부(WP3 리스 해소 시): `main/java/com/example/lms/service/ChatWorkflow.java`, `main/java/com/example/lms/orchestration/control/RagControlRuntimeAdapter.java`, `src/test/java/com/example/lms/service/EvidenceReleaseHedgeTest.java` (신규)
+- `var/`, `data/agent-handoff/` 하위 자유
+
+## 수정 금지 / 절대 금지
+- `chat.js`, `chat-ui.html`, `assets/display`, `assets/interview`, `assets/meta` — 금지
+- `JevDecisionAdvisor.java`, `JevEvaluationRuntime.java`, `JevSurfacePolicy.java`, `JevGatewayClient.java` — 이미 완성된 기계, 수정 금지
+- `NovaFocus*`, `Conversate*`, `Display*` assist 패키지 — 다른 세션 소유
+- `zeroDataRetention`/`zero_data_retention` 필드·전송 금지, 401/403/429 retry 금지
+- `demo.jev.main-surface` 등 새 knob 금지, `SearchDecisionService` 규칙/정규식 확장 금지
+- OFF / FORCE_* 브랜치에 advise 훅 금지 — AUTO 브랜치만
+- git push / commit / add -A / add . / remote 추가 금지
+- 전체 테스트 스위트 실행 금지 (`--tests` 지정만), 비밀값 출력 금지
+
+## WP0 — 사전 확인 (읽기 전용)
+```powershell
+python -B scripts/jev_main_shadow_assist_20261009.py pin --root .
+python -B scripts/jev_main_shadow_assist_20261009.py scope --root .
+python -B scripts/jev_main_shadow_assist_20261009.py hold --root .
+python -B scripts/jev_main_shadow_assist_20261009.py verify-plan --root .
+```
+통과: pin FRESH(DRIFT면 파일 재독, 복원 금지). hold OPEN 항목은 REPORT에 기록. scope OVERLAP이면 해당 경로는 건드리지 않는다.
+
+## WP1 — shadow 훅 배선 (ChatApiController.java)
+- 지점: `shouldUseWebForSearchMode` AUTO 브랜치, `service.decide(query, SearchMode.AUTO, null, topK)` 호출 뒤·yield 직전 (~:227-229)
+- 주입: `@Autowired(required=false) private JevDecisionAdvisor jevDecisionAdvisor;`
+- 로직(요지):
+  ```java
+  String baseline = "search=" + (decision.shouldSearch() ? "WEB" : "NONE")
+                  + " depth=" + decision.getDepth().name();
+  var adv = jevDecisionAdvisor == null ? null
+          : jevDecisionAdvisor.advise("main", query, baseline);
+  if (adv != null) {
+      TraceStore.put("chat.jev.main.verdict", adv.decision());
+      TraceStore.put("chat.jev.main.agree", agree);
+  }
+  yield decision != null && decision.shouldSearch();   // 기존 결과 그대로
+  ```
+- shadow 제약: adv 결과를 판단에 사용 금지 — trace만. OFF/FORCE_* 브랜치 접근 금지.
+
+## WP2 — 테스트 + 컴파일
+- 신규 `src/test/java/com/example/lms/api/JevMainSurfaceShadowTest.java`: (a) advise("main",...) verdict 반환, (b) shadow에서 `shouldUseWebForSearchMode` 출력 불변, (c) advisor null이면 동작 불변
+- `SearchDecisionServiceTest`에 prohibition-phrase AUTO 비검색 케이스 추가(FOR_CODEX §6)
+```powershell
+.\gradlew.bat :compileJava -x test
+.\gradlew.bat test --tests "*JevMainSurfaceShadow*" --tests "*SearchDecision*" --tests "*AutoSearchDecision*"
+```
+
+## WP3 — release-hedge (조건부: scope에서 chatworkflow.java CLEAR일 때만)
+- OVERLAP이면 waiter를 enqueue하고 WP3 전체 NOT_RUN + evidence_needed로 기록, WP4로 진행. force-release 금지:
+```powershell
+python -B scripts/codex_auto_unblock.py lease-wait --paths main/java/com/example/lms/service/ChatWorkflow.java --max-min auto --enqueue --task devin-jev-main-shadow
+```
+- `ChatWorkflow` ~:8219/8527: `verification_rejected`/`verification_insufficient` + 근거 부재·soft → ANSWER_HEDGED 본문(`finalAnswer.releaseReason="verification_rejected_hedged"`); 상호모순 근거만 HOLD 유지
+- `RagControlRuntimeAdapter` :230/:352 매핑 연장 — 평행 게이트 금지, 기존 seam 확장
+- 신규 `src/test/java/com/example/lms/service/EvidenceReleaseHedgeTest.java`
+
+## WP4 — diff 가드 + REPORT
+```powershell
+git diff --unified=5 > var/jev-main-shadow-diff-20261009.diff
+python -B scripts/jev_main_shadow_assist_20261009.py diff-forbid --root . --diff var/jev-main-shadow-diff-20261009.diff
+python -B scripts/jev_main_shadow_assist_20261009.py product-gate --root . --diff var/jev-main-shadow-diff-20261009.diff
+```
+product-gate는 `var/devin-assist-jev-main-shadow-20261009/red-boundary.json` 필요 — `red-boundary.example.json` 복사 후 boundary(`search-decision-seam` 또는 `release-hedge-seam`) + allowPaths 1-4 지정.
+
+## HOLD
+- hold.json OPEN 항목 미해소 상태로 Done 선언 금지
+- on-mode verdict 매핑(FOR_CODEX §3)은 이번 범위 밖 — shadow 증거 측정 후 별도 지시
+- LLM referee(§5)는 phase 2 — v1 불포함
+
+## ASK_ONCE
+없음. WP3 OVERLAP만 NOT_RUN 처리, 나머지 전부 자동 진행. FAIL 시 수리 후 1회 재시도, 그래도 FAIL이면 evidence_needed.
+
+## Acceptance
+| # | 조건 |
+|---|---|
+| A1 | pin FRESH 또는 DRIFT 재독 후 needle 전부 FOUND |
+| A2 | `compileJava -x test` exit 0 |
+| A3 | 지정 테스트 ALL PASS + 실제 실행 수 >0 (0건은 PASS 아님) |
+| A4 | shadow에서 `shouldUseWebForSearchMode` 출력 비트 동일(테스트 증거) |
+| A5 | diff-forbid DIFF_CLEAR + product-gate PRODUCT_SCOPED 또는 SEAM_ONLY |
+| A6 | `DEMO_JEV_MODE` 미설정 시 /chat AUTO 동작 동일 + Jev 전송 0 |
+| A7 | WP3 수행 시 EvidenceReleaseHedgeTest PASS / 미수행 시 NOT_RUN+리스 근거 |
+| A8 | push 0, commit 0, 비밀값 출력 0, 외부 API는 Jev shadow 경로만 |
+
+## 보고형식
+```
+## REPORT
+- 외부 API: (Jev shadow 전송 수 또는 "없음")
+- WP0: pin/scope/hold 결과
+- WP1: 변경 라인 수 + 주입 방식(required=false 확인)
+- WP2: 테스트 이름 + PASS 수
+- WP3: 수행 결과 또는 NOT_RUN(리스 근거)
+- WP4: diff-forbid/product-gate 상태 + diff 경로
+- Acceptance A1-A8 표, 실행 못 한 항목은 NOT_RUN + 이유
+- evidence_needed: [...]
+```
+
+## 범위 밖 (동시 패치 금지)
+- on-mode verdict 매핑, LLM referee, RulesBaseline 정규식 확장
+- Display/Nova/Conversate 표면, 모델 라우팅, application.yml 전면 정리
+
+[ANTI-STOP] WP0~WP4 + A1-A8 REPORT 완료 후 종료. 읽고 멈추지 말 것.

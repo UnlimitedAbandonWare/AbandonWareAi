@@ -182,15 +182,20 @@ test('settings load from server, send CAS version, and never write localStorage'
   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true,testStatus:null});await flush();
   assert.equal(element('nova-open').disabled,false);
   assert.equal(element('nf-speed').value,80);assert.equal(element('nf-enabled').checked,false);
+  assert.equal(element('nf-hold').value,5);
   assert.equal(element('nf-answer-length').value,480);
   assert.equal(element('nf-reasoning').value,'STANDARD');
   element('nf-reasoning').value='DEEP';
   element('nf-answer-length').value='320';element('nf-quick').checked=true;element('nf-web-search').value='false';
-  element('nf-speed').value='100';await element('nova-settings-form').onsubmit({preventDefault(){}});
+  element('nf-speed').value='100';element('nf-hold').value='3';await element('nova-settings-form').onsubmit({preventDefault(){}});
   assert.equal(calls.at(-1).body.settingsVersion,7);assert.equal(calls.at(-1).body.settings.presentation.charIntervalMs,100);
   assert.equal(calls.at(-1).body.settings.answerLengthChars,320);assert.equal(calls.at(-1).body.settings.quickAnswerEnabled,true);
   assert.equal(calls.at(-1).body.settings.webSearchEnabled,false);
   assert.equal(calls.at(-1).body.settings.reasoningPreset,'DEEP');
+  assert.equal(calls.at(-1).body.settings.presentation.tailHoldMs,3000);
+  settings.presentation.tailHoldMs=3000;await element('nf-reload').onclick();assert.equal(element('nf-hold').value,3);
+  element('nf-hold').value='5';await element('nova-settings-form').onsubmit({preventDefault(){}});
+  assert.equal(calls.at(-1).body.settings.presentation.tailHoldMs,5000);
   assert.equal(localWrites,0);controls.dispose();
 });
 test('late settings save cannot re-enable a previous producer after scope loss',async()=>{
@@ -258,7 +263,7 @@ test('catalog reload distinguishes known nonselectability from missing evidence 
   assert.equal(element('nf-answer-model').value,'fixture-b');assert.equal(choice().disabled,false);
   assert.doesNotMatch(choice().textContent,/현재 선택 불가|미확인/);
   await reload([{id:'fixture-a',provider:'synthetic',selectable:true}]);
-  assert.equal(element('nf-answer-model').value,'fixture-b');assert.match(choice().textContent,/미확인/);
+  assert.equal(element('nf-answer-model').value,'fixture-b');assert.match(choice().textContent,/미확인/);assert.equal(choice().disabled,true);
   assert.match(element('nf-model-status').textContent,/미확인/);
   assert.ok(calls.every(route=>route==='settings/read'));
  }finally{controls.dispose();}
@@ -308,24 +313,33 @@ test('main-model preset buttons exist next to the answer model settings',()=>{
  const html=require('node:fs').readFileSync(require('node:path').resolve(__dirname,'../../../main/resources/static/assets/display/index.html'),'utf8');
  assert.match(html,/id="nf-preset-luna"/);assert.match(html,/id="nf-preset-gemini"/);assert.match(html,/id="nf-preset-auto"/);assert.match(html,/id="nf-preset-status"/);
 });
-test('Luna preset selects the economy API model and saves a FIXED API_ONLY selection',async()=>{
+test('Luna preset selects admitted OAuth only and leaves fields intact when OAuth is unavailable',async()=>{
  const elements=new Map(),calls=[];
  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
  const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:true,presentation:{},
   answerSelection:{mode:'AUTO',modelId:null,routing:{executionTarget:'AUTO',fallbackAllowed:false,allowedFallbackIds:[]}}};
- const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.openai-economy',provider:'synthetic',selectable:true},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
+ let available=true;
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},fetch:async()=>({ok:true,json:async()=>[{id:'llmrouter.openai-economy',provider:'synthetic',selectable:false},{id:'chatgpt-oauth:gpt-5.6-luna',provider:'chatgpt-oauth',selectable:available},{id:'llmrouter.gemini-pro',provider:'synthetic',selectable:true}]})};
  const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
  try{
   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
   element('nf-preset-luna').onclick();
-  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
+  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'chatgpt-oauth:gpt-5.6-luna');
   assert.equal(element('nf-web-search').value,'false');assert.match(element('nf-preset-status').textContent,/루나/);
   await element('nova-settings-form').onsubmit({preventDefault(){}});
   const saved=calls.at(-1).body.settings;
-  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'llmrouter.openai-economy');
+  assert.equal(saved.answerSelection.mode,'FIXED');assert.equal(saved.answerSelection.modelId,'chatgpt-oauth:gpt-5.6-luna');
   assert.equal(saved.answerSelection.routing.executionTarget,'API_ONLY');assert.equal(saved.webSearchEnabled,false);
   assert.equal(calls.filter(c=>c.route==='input').length,0);
  }finally{controls.dispose();}
+ available=false;calls.length=0;
+ const blocked=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(){return {settingsVersion:1,settings};}}});
+ try{blocked.update({assistId:'s2',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+ const prior=[element('nf-answer-model').value,element('nf-answer-target').value,element('nf-web-search').value];
+ element('nf-preset-luna').onclick();
+ assert.deepEqual([element('nf-answer-model').value,element('nf-answer-target').value,element('nf-web-search').value],prior);
+ assert.match(element('nf-preset-status').textContent,/선택 가능한.*없/);assert.equal(calls.length,0);
+ }finally{blocked.dispose();}
 });
 test('Gemini preset selects the dedicated websearch route, prefers the pro route, and enables web search',async()=>{
  const elements=new Map(),calls=[];
@@ -348,7 +362,7 @@ test('Gemini preset selects the dedicated websearch route, prefers the pro route
   assert.equal(saved.webSearchEnabled,true);
  }finally{controls.dispose();}
 });
-test('auto preset restores server AUTO and presets still resolve without a catalog',async()=>{
+test('auto preset restores server AUTO while an unavailable Luna preset retains the selection',async()=>{
  const elements=new Map(),calls=[];
  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',children:[],textContent:'',append(...v){this.children.push(...v);},replaceChildren(){this.children=[];},removeAttribute(){}});return elements.get(id);};
  const settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,webSearchEnabled:false,presentation:{},
@@ -358,7 +372,8 @@ test('auto preset restores server AUTO and presets still resolve without a catal
  try{
   controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
   element('nf-preset-luna').onclick();
-  assert.equal(element('nf-answer-target').value,'API_ONLY');assert.equal(element('nf-answer-model').value,'llmrouter.openai-economy');
+  assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-model').value,'');
+  assert.match(element('nf-preset-status').textContent,/선택 가능한.*없/);
   element('nf-preset-auto').onclick();
   assert.equal(element('nf-answer-target').value,'AUTO');assert.equal(element('nf-answer-model').value,'');
   assert.match(element('nf-preset-status').textContent,/자동/);
@@ -366,5 +381,42 @@ test('auto preset restores server AUTO and presets still resolve without a catal
   const saved=calls.at(-1).body.settings;
   assert.equal(saved.answerSelection.mode,'AUTO');assert.equal(saved.answerSelection.modelId,null);
   assert.equal(saved.answerSelection.routing.executionTarget,'AUTO');assert.equal(saved.webSearchEnabled,false);
+ }finally{controls.dispose();}
+});
+
+
+test('late Focus input response cannot replace a newer epoch or fallback banner',async()=>{
+ const id='12345678-1234-4234-8234-123456789abc',timers=new Map();let n=0,epoch=1,complete;
+ const current={active:true,phase:'ANSWER_READY',serverInstanceId:'boot',activationId:'new',turnId:'new-turn',stateVersion:1,answerVersion:1,draftText:'',questionText:'',answerText:'normal',idleRemainingMs:0,renderTarget:'fold',isFallback:false};
+ const snapshot=()=>({assistId:id,epoch,ready:true,version:1,caption:null,card:null,captionTtlMs:0,cardTtlMs:0,audioAvailable:false,audioState:'READY',hintsEnabled:false,role:'STANDALONE',focus:current});
+ const client=createClient({transcription:true,standalone:true,setTimer(fn,ms){timers.set(++n,{fn,ms});return n;},clearTimer:id=>timers.delete(id),fetchImpl:async(url)=>{
+ if(url.endsWith('/focus/input'))return new Promise(resolve=>complete=()=>resolve({ok:true,json:async()=>({...current,stateVersion:99,activationId:'old',isFallback:true})}));
+ return {ok:true,json:async()=>snapshot()};}});
+ try{client.start();await flush();const pending=client.focusRequest('input',{requestId:'fixture',text:'synthetic'});await flush();epoch=2;await client.reconnect();complete();await assert.rejects(pending,/focus_session_stale/);assert.equal(client.state.epoch,2);assert.equal(client.state.focus.isFallback,false);}
+ finally{client.dispose();}
+});
+
+test('answer instruction preset fills textarea, edits store CUSTOM, paint restores saved values',async()=>{
+ const elements=new Map(),calls=[];
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,type:'number',textContent:'',append(){},replaceChildren(){},removeAttribute(){}});return elements.get(id);};
+ let settings={enabled:false,wakeWord:'노바',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,quickAnswerEnabled:false,presentation:{},answerPreset:'INTERVIEW',answerInstruction:'저장된 지침'};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}}};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route,body){calls.push({route,body});if(route==='settings')settings=body.settings;return {settingsVersion:route==='settings'?2:1,settings};}}});
+ try{
+  controls.update({assistId:'s',epoch:1,ready:true,connection:'READY',focusProducer:true});await flush();
+  assert.equal(element('nf-answer-preset').value,'INTERVIEW');assert.equal(element('nf-answer-instruction').value,'저장된 지침');
+  element('nf-answer-preset').value='GENERAL';element('nf-answer-preset').onchange();
+  assert.equal(element('nf-answer-instruction').value,'');
+  element('nf-answer-preset').value='INTERVIEW';element('nf-answer-preset').onchange();
+  assert.equal(element('nf-answer-instruction').value.includes('면접 중인 사용자'),true);
+  element('nf-answer-instruction').value='고친 지침\n두 번째 줄';element('nf-answer-instruction').oninput();
+  assert.equal(element('nf-answer-preset').value,'CUSTOM');
+  assert.match(element('nf-answer-instruction-count').textContent,/^\d+\/1200$/);
+  await element('nova-settings-form').onsubmit({preventDefault(){}});
+  assert.equal(calls.at(-1).route,'settings');
+  assert.equal(calls.at(-1).body.settings.answerPreset,'CUSTOM');
+  assert.equal(calls.at(-1).body.settings.answerInstruction,'고친 지침\n두 번째 줄');
+  element('nf-answer-instruction-reset').onclick();await element('nova-settings-form').onsubmit({preventDefault(){}});
+  assert.equal(calls.at(-1).body.settings.answerPreset,'GENERAL');assert.equal(calls.at(-1).body.settings.answerInstruction,'');
  }finally{controls.dispose();}
 });

@@ -177,12 +177,14 @@ public final class ConversateCloudStt {
             };
             var notified=new AtomicBoolean();
             Consumer<String> failed=why->{ticket.close();if(notified.compareAndSet(false,true))failure.accept(why);};
-            ConversateAsrBridge.Factory primary=(e,f)->openSelectedProvider(ticket,first,initial,e,why->{if(streamRetryable(why))f.accept(why);else failed.accept(why);});
-            ConversateAsrBridge.Transport transport;
-            if(ticket.candidates.size()==2){
-                String second=ticket.candidates.get(1);
-                transport=new FailoverAsrTransport(json,primary,(e,f)->{synchronized(ticket){return openSelectedProvider(ticket,second,ticket.attempt(second,streamSeconds()+1,true),e,f);}},receive,failed);
-            }else transport=primary.launch(receive,failed);
+            // One retryable-failure retry on the same provider, then the configured alternate.
+            // A retryable reason reaches the failover callback; anything else is terminal now.
+            java.util.function.UnaryOperator<Consumer<String>> gate=next->why->{if(streamRetryable(why))next.accept(why);else failed.accept(why);};
+            ConversateAsrBridge.Factory primary=(e,f)->openSelectedProvider(ticket,first,initial,e,gate.apply(f));
+            ConversateAsrBridge.Factory retry=(e,f)->{synchronized(ticket){return openSelectedProvider(ticket,first,ticket.attempt(first,streamSeconds()+1,true),e,gate.apply(f));}};
+            ConversateAsrBridge.Factory alternate=ticket.candidates.size()>1?(e,f)->{String name=ticket.candidates.get(1);synchronized(ticket){return openSelectedProvider(ticket,name,ticket.attempt(name,streamSeconds()+1,true),e,gate.apply(f));}}:null;
+            ConversateAsrBridge.Transport transport=new FailoverAsrTransport(json,primary,
+                alternate==null?retry:(e,f)->new FailoverAsrTransport(json,retry,alternate,e,f),receive,failed);
             var timer=Mono.delay(Duration.ofSeconds(streamSeconds())).subscribe(ignored->{if(!ticket.closed.get()){transport.close().whenComplete((v,e)->ticket.close());failed.accept("ASR_CAPTURE_LIMIT");}});
             return new ConversateAsrBridge.Transport(){
                 public void send(String line)throws IOException{transport.send(line);}

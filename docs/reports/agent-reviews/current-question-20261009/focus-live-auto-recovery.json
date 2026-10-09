@@ -1,0 +1,51 @@
+{
+  "surface": "live-profile-AUTO-normal-save",
+  "syntheticInput": true,
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/close",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200
+    }
+  ],
+  "hardwareRenderedObserved": false,
+  "serverDefaultSelection": {
+    "mode": "AUTO",
+    "modelId": null,
+    "routing": {
+      "executionTarget": "AUTO",
+      "fallbackAllowed": true,
+      "allowedFallbackIds": [
+        "llmrouter.api3"
+      ],
+      "effectiveFallbackAllowed": true
+    }
+  },
+  "beforeSelection": {
+    "mode": "AUTO",
+    "modelId": null,
+    "routing": {
+      "executionTarget": "AUTO",
+      "fallbackAllowed": true,
+      "allowedFallbackIds": [
+        "llmrouter.api3"
+      ],
+      "effectiveFallbackAllowed": true
+    }
+  },
+  "beforeSettingsVersion": 0,
+  "verdict": "NOT_PROVEN",
+  "errorClass": "AssertionError",
+  "checkedAtUtc": "2026-10-09T10:25:13.354427+00:00"
+}

@@ -68,8 +68,10 @@ class NovaFocusSnapshotStateTest {
         s.receipt("server",request.activationId(),"t1",1,"tk","first_visible",16500);
         s.receipt("server",request.activationId(),"t1",1,"tk","presentation_done",17000);
         s.input(u("b","다음 질문"),17100);assertNull(s.tick(18300));
-        var next=s.pendingCommand(18300,1);assertNotNull(next);assertNotEquals(cmd.captureId(),next.captureId());
-        assertEquals(NovaFocusState.SNAPSHOT_STALE,s.acceptSnapshot(cmd.requestId(),cmd.captureId(),"QUJD","image/jpeg",18400));
+        // 음성 후속 질문은 답변 유지시간(tailHold)이 끝난 뒤에만 발행된다 — 17000+5000.
+        assertNull(s.tick(22000));
+        var next=s.pendingCommand(22000,1);assertNotNull(next);assertNotEquals(cmd.captureId(),next.captureId());
+        assertEquals(NovaFocusState.SNAPSHOT_STALE,s.acceptSnapshot(cmd.requestId(),cmd.captureId(),"QUJD","image/jpeg",22100));
     }
     @Test void claimIsIdempotentAndScopedToPendingCapture(){
         var s=state(true);s.input(u("a","노바 질문"),0);s.tick(1200);

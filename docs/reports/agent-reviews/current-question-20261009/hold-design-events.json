@@ -1,0 +1,169 @@
+{
+  "checkedAtUtc": "2026-10-09T11:29:29.797302+00:00",
+  "windowKst": "2026-10-09 20:05:10..20:05:55",
+  "sourcePresent": true,
+  "rows": [
+    {
+      "stage": "focus_presentation_done",
+      "requestHash": "hash:6a569879faeb",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 23125,
+      "observedAtMs": 1791543916582
+    },
+    {
+      "stage": "focus_question_confirmed",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "accepted",
+      "latencyMs": null,
+      "observedAtMs": 1791543916688
+    },
+    {
+      "stage": "focus_generation_started",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 4,
+      "observedAtMs": 1791543916694
+    },
+    {
+      "stage": "focus_model_attempt",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 4,
+      "observedAtMs": 1791543916695
+    },
+    {
+      "stage": "focus_terminal",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 10684,
+      "observedAtMs": 1791543927374
+    },
+    {
+      "stage": "focus_first_visible",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 10930,
+      "observedAtMs": 1791543927621
+    },
+    {
+      "stage": "focus_presentation_done",
+      "requestHash": "hash:55ad70374a9d",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 18078,
+      "observedAtMs": 1791543934769
+    },
+    {
+      "stage": "focus_question_confirmed",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "accepted",
+      "latencyMs": null,
+      "observedAtMs": 1791543934923
+    },
+    {
+      "stage": "focus_generation_started",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 5,
+      "observedAtMs": 1791543934931
+    },
+    {
+      "stage": "focus_model_attempt",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 6,
+      "observedAtMs": 1791543934931
+    },
+    {
+      "stage": "focus_terminal",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 6781,
+      "observedAtMs": 1791543941707
+    },
+    {
+      "stage": "focus_first_visible",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 7093,
+      "observedAtMs": 1791543942018
+    },
+    {
+      "stage": "focus_presentation_done",
+      "requestHash": "hash:7a4eff62dc36",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "success",
+      "latencyMs": 14088,
+      "observedAtMs": 1791543949013
+    },
+    {
+      "stage": "focus_question_confirmed",
+      "requestHash": "hash:d5b4162379d6",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "accepted",
+      "latencyMs": null,
+      "observedAtMs": 1791543949206
+    },
+    {
+      "stage": "focus_generation_started",
+      "requestHash": "hash:d5b4162379d6",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 4,
+      "observedAtMs": 1791543949213
+    },
+    {
+      "stage": "focus_model_attempt",
+      "requestHash": "hash:d5b4162379d6",
+      "sessionHash": "hash:211e685644a3",
+      "epoch": 4,
+      "reasonCode": "none",
+      "outcome": "attempted",
+      "latencyMs": 5,
+      "observedAtMs": 1791543949214
+    }
+  ],
+  "rawVoiceOrAnswerExported": false,
+  "interpretation": "bounded stage evidence; does not prove physical visible duration"
+}

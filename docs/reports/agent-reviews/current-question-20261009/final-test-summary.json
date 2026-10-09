@@ -1,0 +1,30 @@
+{
+  "checkedAtUtc": "2026-10-09T11:01:09.459468+00:00",
+  "java": {
+    "runId": "4a58d4ce-6abc-4f0e-9100-54224b85f761",
+    "status": "passed",
+    "exitCode": 0,
+    "verificationExitCode": 0,
+    "totals": {
+      "tests": 190,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "js": {
+    "runId": "4af16420-8144-414d-8230-0988a22830fd",
+    "status": "passed",
+    "exitCode": 0,
+    "verificationExitCode": 0,
+    "nodeSummary": {
+      "tests": 189,
+      "pass": 189,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0
+    },
+    "wrapperXmlTotalsNotUsed": true,
+    "logSha12": "cc4e2128f953"
+  }
+}

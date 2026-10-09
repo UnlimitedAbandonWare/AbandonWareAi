@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +84,8 @@ class Fixture:
             json.dumps(doc), encoding="utf-8")
 
     def lease(self, topic, targets, task_id, owner="fixture-owner",
-              expired=False, heartbeat=False, heartbeat_expired=False):
+              expired=False, heartbeat=False, heartbeat_expired=False,
+              proven_dead=False):
         lease_id = hashlib.md5(("lease-" + topic).encode()).hexdigest()
         lock = self.root / "__patch_drop__" / "source-edit-locks" / f"{topic}.lock"
         lock.mkdir(parents=True, exist_ok=True)
@@ -99,6 +101,10 @@ class Fixture:
                "expiresAt": iso(expiry), "mutationAllowed": True,
                "targetCount": len(targets), "operation": "worktree-edit",
                "targetPaths": targets, "coordinationMode": "target-scoped"}
+        if proven_dead:
+            doc.update(ownerHostHash=sha(os.environ["COMPUTERNAME"].lower()),
+                       ownerProcessId=2147483647,
+                       ownerProcessStartedAtUtc=iso(NOW - timedelta(hours=2)))
         path = lock / "lease.json"
         path.write_text(json.dumps(doc), encoding="utf-8")
         fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -219,26 +225,30 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
                          + self.my_task)
 
     def test_plan_waited_free_emits_resume_checks(self):
-        # W3: 기다린 뒤 free → RESUME + 재개 체크 3개
+        # Free is an acquisition opportunity, never write authority.
         proc = run_tool(self.fx.root, "plan", "--waited", "--goal-files",
                         "other.txt", "--task", self.my_task)
         row = last_json(proc)
         self.assertEqual(row["nextAction"], "RESUME")
         checks = row["resumeChecks"]
-        self.assertEqual(len(checks), 3)
+        self.assertEqual(len(checks), 5)
         blob = " ".join(checks)
-        self.assertIn("sha12", blob)
+        self.assertIn("SHA256", blob)
         self.assertIn("RED", blob)
         self.assertIn("begin", blob)
+        self.assertTrue(checks[0].startswith("acquire-fresh:"))
+        self.assertTrue(checks[1].startswith("compare-baseline:"))
+        self.assertFalse(row["resumeAllowed"])
+        self.assertEqual("fresh-acquisition-required", row["resumeStage"])
 
-    def test_plan_waited_live_emits_hold_resume_when(self):
-        # W3: 기다린 뒤에도 live → HOLD + machine-readable resumeWhen
+    def test_plan_waited_live_keeps_waiting_resume_when(self):
+        # Repeated live observation rounds stay WAITING.
         proc = run_tool(self.fx.root, "plan", "--waited", "--goal-files",
                         "main/java/x/llmrouteraspect.java",
                         "--task", self.my_task)
         self.assertEqual(proc.returncode, 7)
         row = last_json(proc)
-        self.assertEqual(row["nextAction"], "HOLD")
+        self.assertEqual(row["nextAction"], "WAITING")
         self.assertEqual(len(row["resumeWhen"]), 1)
         rw = row["resumeWhen"][0]
         self.assertEqual(rw["topic"], "exact-model-selection")
@@ -275,7 +285,7 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
     def test_stale_expired_lease_is_reclaimed_and_freed(self):
         # A 세션이 end 없이 끝나 TTL이 만료된 잔류 lease의 회수 시나리오.
         self.fx.lease("dead-session", ["stale.txt"], "dead-task-000001",
-                      expired=True)
+                      expired=True, proven_dead=True)
         proc = run_tool(self.fx.root, "reclaim", "--targets", "stale.txt",
                         "--task", self.my_task)
         self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -283,7 +293,7 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         self.assertEqual(row["counts"]["reclaimed"], 1)
         rec = row["reclaimed"][0]
         self.assertEqual(rec["state"], "quarantined")
-        self.assertEqual(rec["reason"], "stale-ttl-expired")
+        self.assertEqual(rec["reason"], "owner-process-exited")
         receipt = self.fx.root / rec["receipt"]
         self.assertTrue(receipt.is_file())
         self.assertEqual(json.loads(receipt.read_text())["state"], "quarantined")
@@ -292,7 +302,7 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         # stale-reclaim 이벤트가 leaseId jsonl에 남는다
         events = self.fx.root / "__patch_drop__/source-edit-events"
         blob = "".join(p.read_text() for p in events.glob("*.jsonl"))
-        self.assertIn("stale-reclaim", blob)
+        self.assertIn('"event":"recover"', blob)
         # 내 journal에 AUTO:lease-reclaimed=<owner|reason> 한 줄
         journal = json.loads(
             (self.fx.root / BASE / self.my_task / "journal.json").read_text())
@@ -302,6 +312,32 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         scan = last_json(run_tool(self.fx.root, "scan", "--targets", "stale.txt"))
         self.assertEqual(scan["freeTargets"], ["stale.txt"])
         self.assertEqual(scan["blockedTargets"], [])
+
+    def test_unknown_expired_owner_is_preserved_in_preview_and_execution(self):
+        path, _ = self.fx.lease("unknown-expired", ["target.txt"],
+                                "unknown-task", expired=True)
+        before = path.read_bytes()
+        for options in (("--dry-run",), ()):
+            with self.subTest(options=options):
+                row = last_json(run_tool(self.fx.root, "reclaim", "--targets",
+                                         "target.txt", *options))
+                self.assertEqual(row["counts"]["reclaimed"], 0)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse((self.fx.root / "__patch_drop__"
+                                  / "source-edit-quarantine").exists())
+        scan = last_json(run_tool(self.fx.root, "scan", "--targets",
+                                  "target.txt", "other.txt"))
+        self.assertEqual(scan["blockedTargets"], ["target.txt"])
+        self.assertEqual(scan["freeTargets"], ["other.txt"])
+
+    def test_corrupt_owner_is_preserved_even_with_include_orphan(self):
+        lock = self.fx.root / "__patch_drop__/source-edit-locks/corrupt.lock"
+        lock.mkdir()
+        path = lock / "lease.json"
+        path.write_bytes(b"{ invalid-owner")
+        row = last_json(run_tool(self.fx.root, "reclaim", "--include-orphan"))
+        self.assertEqual(row["counts"]["reclaimed"], 0)
+        self.assertEqual(path.read_bytes(), b"{ invalid-owner")
 
     def test_live_lease_is_never_reclaimed(self):
         proc = run_tool(self.fx.root, "reclaim", "--targets",
@@ -335,7 +371,7 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
 
     def test_reclaim_within_grace_holds(self):
         path, _ = self.fx.lease("fresh-expired", ["fresh.txt"],
-                                "fresh-task-000001", expired=True)
+                                "fresh-task-000001", expired=True, proven_dead=True)
         doc = json.loads(path.read_text())
         doc["expiresAtUtc"] = iso(NOW - timedelta(seconds=30))
         doc["expiresAt"] = doc["expiresAtUtc"]
@@ -347,7 +383,8 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         self.assertTrue(path.is_file())
 
     def test_reclaim_dry_run_moves_nothing(self):
-        self.fx.lease("dry", ["dry.txt"], "dry-task-00000001", expired=True)
+        self.fx.lease("dry", ["dry.txt"], "dry-task-00000001", expired=True,
+                      proven_dead=True)
         row = last_json(run_tool(self.fx.root, "reclaim", "--targets", "dry.txt",
                                  "--dry-run"))
         self.assertEqual(row["counts"]["reclaimed"], 1)
@@ -368,15 +405,14 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
         self.assertEqual(held["reason"], "orphan-manual-review")
         self.assertTrue(lock.is_dir())
         row = last_json(run_tool(self.fx.root, "reclaim", "--include-orphan"))
-        self.assertEqual(row["counts"]["reclaimed"], 1)
-        self.assertFalse(lock.exists())
-        archives = list((self.fx.root / "__patch_drop__/source-edit-quarantine")
-                        .glob("*/lock/lease.json"))
-        self.assertEqual(len(archives), 1)
+        self.assertEqual(row["counts"]["reclaimed"], 0)
+        self.assertTrue(lock.exists())
+        self.assertEqual((lock / "lease.json").read_bytes(), b"{ not json")
+        self.assertFalse((self.fx.root / "__patch_drop__/source-edit-quarantine").exists())
 
     def test_plan_execute_reclaims_stale_and_proceeds(self):
         self.fx.lease("stale-blocker", ["stale-target.txt"],
-                      "stale-task-0000001", expired=True)
+                      "stale-task-0000001", expired=True, proven_dead=True)
         row = last_json(run_tool(self.fx.root, "plan", "--execute",
                                  "--goal-files", "stale-target.txt",
                                  "other.txt", "--task", self.my_task))
@@ -397,7 +433,7 @@ class LeaseConflictAutoflowTests(unittest.TestCase):
 
     def test_plan_preview_lists_stale_reclaim_candidates(self):
         self.fx.lease("stale-preview", ["pv.txt"], "pv-task-00000001",
-                      expired=True)
+                      expired=True, proven_dead=True)
         row = last_json(run_tool(self.fx.root, "plan", "--no-mark",
                                  "--goal-files", "pv.txt"))
         candidates = row["staleReclaim"]["reclaimed"]
@@ -422,6 +458,8 @@ class SessionBackedTests(unittest.TestCase):
 
     def ps(self, code):
         bootstrap = ("$ErrorActionPreference='Stop'; "
+                     "$ProgressPreference='SilentlyContinue'; "
+                     "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1') -Force; "
                      "function Get-CimInstance { @() }; ")
         return subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy",
@@ -477,27 +515,104 @@ class SessionBackedTests(unittest.TestCase):
             "path": "other.txt",
             "sha256": hashlib.sha256(
                 (self.fx.root / "other.txt").read_bytes()).hexdigest()}]}))
-        result = self.ps(
-            f"& {ps_quote(SESSION)} -Root {ps_quote(self.fx.root)} -Action begin "
-            f"-Topic lane-a -OwnerId owner-a -TargetManifest {ps_quote(manifest)}; "
-            "exit $LASTEXITCODE")
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        command = ("$ProgressPreference='SilentlyContinue'; "
+                   "Import-Module (Join-Path $PSHOME 'Modules/Microsoft.PowerShell.Utility/Microsoft.PowerShell.Utility.psd1'); "
+                   "function Get-CimInstance { @() }; "
+                   f"& {ps_quote(SESSION)} -Root {ps_quote(self.fx.root)} -Action begin "
+                   f"-Topic lane-a -OwnerId owner-a -TargetManifest {ps_quote(manifest)} "
+                   "-OwnerProcessId ")
+        child_code = ("import os,subprocess,sys,json\n"
+                      "p=subprocess.run(['powershell','-NoProfile','-NonInteractive',"
+                      "'-ExecutionPolicy','Bypass','-Command',sys.argv[1]+str(os.getpid())],"
+                      "capture_output=True,text=True)\n"
+                      "print(json.dumps({'code':p.returncode,'output':p.stdout+p.stderr}))")
+        child = subprocess.run([sys.executable, "-B", "-c", child_code, command],
+                               env=self.env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
+        acquired = json.loads(child.stdout)
+        self.assertEqual(acquired["code"], 0, acquired["output"])
         lease_path = (self.fx.root / "__patch_drop__/source-edit-locks/"
                       "lane-a.lock/lease.json")
         doc = json.loads(lease_path.read_text())
         doc["expiresAtUtc"] = "2000-01-01T00:00:00Z"
         doc["expiresAt"] = doc["expiresAtUtc"]
-        lease_path.write_text(json.dumps(doc), encoding="utf-8")  # end 생략 + TTL 만료
+        lease_path.write_text(json.dumps(doc), encoding="utf-8")
         scan = last_json(run_tool(self.fx.root, "scan", "--targets", "other.txt"))
         self.assertEqual(scan["overlappingLeases"][0]["lifecycle"], "stale")
-        row = last_json(run_tool(self.fx.root, "reclaim",
-                                 "--targets", "other.txt"))
+        self.assertEqual(scan["overlappingLeases"][0]["ownerState"], "dead")
+        row = last_json(run_tool(self.fx.root, "reclaim", "--targets", "other.txt"))
         self.assertEqual(row["counts"]["reclaimed"], 1)
         result = self.ps(
             f"& {ps_quote(SESSION)} -Root {ps_quote(self.fx.root)} -Action begin "
             f"-Topic lane-b -OwnerId owner-b -TargetManifest {ps_quote(manifest)}; "
             "exit $LASTEXITCODE")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_targeted_recovery_preserves_other_dead_lease_and_new_generation(self):
+        import lease_conflict_autoflow as flow
+        first, _ = self.fx.lease("dead-first", ["target.txt"], "first",
+                                  expired=True, proven_dead=True)
+        other, _ = self.fx.lease("dead-other", ["other.txt"], "other",
+                                  expired=True, proven_dead=True)
+        other_before = other.read_bytes()
+        row = last_json(run_tool(self.fx.root, "scan", "--targets", "target.txt"))
+        candidate = row["overlappingLeases"][0]
+        real_run = flow.scope.run_ps
+        replacement = None
+
+        def replace_then_recover(*args, **kwargs):
+            nonlocal replacement
+            doc = json.loads(first.read_bytes())
+            doc["leaseId"] = "b" * 32
+            first.write_text(json.dumps(doc), encoding="utf-8")
+            replacement = first.read_bytes()
+            return real_run(*args, **kwargs)
+
+        with patch.object(flow.scope, "run_ps", side_effect=replace_then_recover):
+            result = flow.quarantine_stale(self.fx.root, candidate, 120, NOW, True)
+        self.assertEqual(result["state"], "hold")
+        self.assertEqual(first.read_bytes(), replacement)
+        self.assertEqual(other.read_bytes(), other_before)
+        current = last_json(run_tool(self.fx.root, "reclaim", "--targets", "target.txt"))
+        self.assertEqual(current["counts"]["reclaimed"], 1)
+        self.assertFalse(first.exists())
+        self.assertEqual(other.read_bytes(), other_before)
+
+    def test_dead_owner_with_fresh_heartbeat_is_not_recovered(self):
+        path, _ = self.fx.lease("dead-heartbeat", ["target.txt"], "dead-hb",
+                                expired=True, proven_dead=True, heartbeat=True)
+        before = path.read_bytes()
+        result = self.ps(
+            f"& {ps_quote(SESSION)} -Root {ps_quote(self.fx.root)} -Action recover -Json; "
+            "exit $LASTEXITCODE")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["recoveredCount"], 0)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_heartbeat_refresh_after_receipt_preparation_prevents_move(self):
+        path, fingerprint = self.fx.lease("race-heartbeat", ["target.txt"],
+                                          "race-hb", expired=True, proven_dead=True)
+        before = path.read_bytes()
+        doc = json.loads(before)
+        patch_drop = self.fx.root / "__patch_drop__"
+        heartbeat = patch_drop / "source-edit-heartbeats" / (doc["leaseId"] + ".json")
+        contract = ROOT / "__patch_drop__/source_edit_lease_contract.ps1"
+        code = f". {ps_quote(contract)}; "
+        code += "$originalWriter=${function:Write-AwxLeaseJsonAtomic}; "
+        code += "function Write-AwxLeaseJsonAtomic { param([string]$Path,[object]$Value); "
+        code += "& $originalWriter -Path $Path -Value $Value; if($Value.state -eq 'prepared') { "
+        code += f"$hb=@{{leaseId='{doc['leaseId']}';leaseFingerprint='{fingerprint}';"
+        code += "renewedAtUtc=[DateTimeOffset]::UtcNow.ToString('o');expiresAtUtc=[DateTimeOffset]::UtcNow.AddMinutes(30).ToString('o')}; "
+        code += f"& $originalWriter -Path {ps_quote(heartbeat)} -Value $hb }} }}; "
+        code += f"$handle=Open-AwxCoordinationHandle -Path {ps_quote(patch_drop / '.promotion.lock')}; "
+        code += f"try {{ Invoke-AwxAbandonedLeaseRecovery -PatchDropDir {ps_quote(patch_drop)} | ConvertTo-Json -Depth 6 -Compress }} finally {{ $handle.Dispose() }}"
+        result = self.ps(code)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        recovered = json.loads(result.stdout)
+        self.assertEqual(recovered["recoveredCount"], 0)
+        self.assertEqual(recovered["recoveries"][0]["state"], "hold")
+        self.assertEqual(path.read_bytes(), before)
+        self.assertTrue(heartbeat.exists())
 
 
 if __name__ == "__main__":

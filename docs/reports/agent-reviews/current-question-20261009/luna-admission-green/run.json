@@ -1,0 +1,157 @@
+{
+  "runId": "ff151776-9a3c-4e08-a185-933b0c2d873a",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:03:32.975068+00:00",
+  "status": "passed",
+  "executable": "gradlew.bat",
+  "argumentCount": 17,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.service.ChatModelCatalogServiceTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusHistoryTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "--tests",
+    "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+    "--tests",
+    "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusAnswerServiceTest",
+    "--tests",
+    "com.example.lms.assist.UnknownAnswerPolicyTest"
+  ],
+  "commandSha256": "023098d1b4f5cba5c4f742d9c53c1fda0474018a064ac78235bfb00f44077a2e",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\application-meta-display.yml",
+      "kind": "file",
+      "sha256": "92abcd8a0864461a2a71e0bde8614fbad7f1d6483e570ad07085487b3fdbf62f",
+      "bytes": 13768
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\service\\ChatModelCatalogServiceTest.java",
+      "kind": "file",
+      "sha256": "3941c92293ee7fb535652bc41830f07b393190b2f21dd3d75a115534f963adcd",
+      "bytes": 15900
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\java\\com\\example\\lms\\service\\ChatWorkflow.java",
+      "kind": "file",
+      "sha256": "7b73be7bfa12448456a431acb52b525b307ea6adb778146f8545a704a48b539c",
+      "bytes": 769987
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusAnswerServiceTest.java",
+      "kind": "file",
+      "sha256": "cfbc8340056b5e22cfcf9a9ff6e018f0e364a3fcacc4260ff375fe5a0965a4ee",
+      "bytes": 53640
+    }
+  ],
+  "expectedSuites": [
+    "com.example.lms.assist.NovaFocusAnswerServiceTest",
+    "com.example.lms.assist.NovaFocusHistoryTest",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "com.example.lms.assist.UnknownAnswerPolicyTest",
+    "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+    "com.example.lms.service.ChatModelCatalogServiceTest",
+    "com.example.lms.service.ChatWorkflowPromptMessageRoleTest"
+  ],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [
+    {
+      "suite": "com.example.lms.service.ChatModelCatalogServiceTest",
+      "path": "TEST-com.example.lms.service.ChatModelCatalogServiceTest.xml",
+      "sha256": "4daca6cd02634871c56b673a3b5036642a5a5007b6f7a76a40f980a632c95634",
+      "counts": {
+        "tests": 12,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusHistoryTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusHistoryTest.xml",
+      "sha256": "4bfa2840467cac6c330ceff214db47204e348a4b7b3e6bfe1768fde9551c9392",
+      "counts": {
+        "tests": 15,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusStateTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusStateTest.xml",
+      "sha256": "af77bd1a93c73aef1ba3f1c2ec972c732cad1c860f984ad7827a49251f145365",
+      "counts": {
+        "tests": 28,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.service.ChatWorkflowPromptMessageRoleTest",
+      "path": "TEST-com.example.lms.service.ChatWorkflowPromptMessageRoleTest.xml",
+      "sha256": "c6a4b1f9522caacf984f7245efefa7d6d63f9dfa429965a364fd2f7d06b7457f",
+      "counts": {
+        "tests": 36,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest",
+      "path": "TEST-com.example.lms.prompt.StandardPromptBuilderConversationHistoryTest.xml",
+      "sha256": "c966664a880c3d569c29e6525b7a78c899b8e566b045e3ca5098bbe663c21c55",
+      "counts": {
+        "tests": 11,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusAnswerServiceTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusAnswerServiceTest.xml",
+      "sha256": "abbf1d17ea331098081ea86fcc84f14ed8cebd6483515b3bc5031f4363ebfb5a",
+      "counts": {
+        "tests": 33,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.UnknownAnswerPolicyTest",
+      "path": "TEST-com.example.lms.assist.UnknownAnswerPolicyTest.xml",
+      "sha256": "c94439130994422ffc4b709a83eac5b71deea830aef5799a7eb2eae1eaf4d723",
+      "counts": {
+        "tests": 7,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "failures": [],
+  "log": "command.log",
+  "pid": 53976,
+  "endedAt": "2026-10-09T10:04:07.067179+00:00",
+  "elapsedMs": 34088,
+  "totals": {
+    "tests": 142,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

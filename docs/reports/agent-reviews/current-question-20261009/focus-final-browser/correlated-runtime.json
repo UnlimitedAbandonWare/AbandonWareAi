@@ -1,0 +1,89 @@
+{
+  "checkedAtUtc": "2026-10-09T11:10:28.882222+00:00",
+  "source": "single fresh browser input and sole accepted request in isolated session/epoch",
+  "browserEvidence": "focus-final-browser/evidence.json",
+  "turnIdHash": "hash:97a7878055ff",
+  "requestHash": "hash:77758c5c0dc3",
+  "sessionHash": "hash:97e0b75b7b0b",
+  "epoch": 1,
+  "correlation": "sole-accepted-request-in-own-session-epoch",
+  "metadata": {
+    "phase": "ANSWER_READY",
+    "reason": "",
+    "answerChars": 103,
+    "answerHash": "65b2af8fe85f",
+    "elapsedMs": 5083,
+    "isFallback": false,
+    "requestedModel": "chatgpt-oauth:gpt-5.6-luna",
+    "effectiveRoute": "chatgpt-oauth:gpt-5.6-luna",
+    "effectiveModel": "gpt-5.6-luna",
+    "fallbackReasonCode": "none"
+  },
+  "events": [
+    {
+      "stage": "focus_lifecycle_closed",
+      "requestHash": "hash:77758c5c0dc3",
+      "sessionHash": "hash:97e0b75b7b0b",
+      "serverInstanceHash": "hash:bb4384b3d041",
+      "epoch": 1,
+      "outcome": "closed",
+      "reasonCode": "user_closed",
+      "latencyMs": 3959
+    },
+    {
+      "stage": "focus_terminal",
+      "requestHash": "hash:77758c5c0dc3",
+      "sessionHash": "hash:97e0b75b7b0b",
+      "serverInstanceHash": "hash:bb4384b3d041",
+      "epoch": 1,
+      "outcome": "success",
+      "reasonCode": "none",
+      "latencyMs": 3553
+    },
+    {
+      "stage": "focus_model_attempt",
+      "requestHash": "hash:77758c5c0dc3",
+      "sessionHash": "hash:97e0b75b7b0b",
+      "serverInstanceHash": "hash:bb4384b3d041",
+      "epoch": 1,
+      "outcome": "attempted",
+      "reasonCode": "none",
+      "latencyMs": 4
+    },
+    {
+      "stage": "focus_generation_started",
+      "requestHash": "hash:77758c5c0dc3",
+      "sessionHash": "hash:97e0b75b7b0b",
+      "serverInstanceHash": "hash:bb4384b3d041",
+      "epoch": 1,
+      "outcome": "attempted",
+      "reasonCode": "none",
+      "latencyMs": 3
+    },
+    {
+      "stage": "focus_question_confirmed",
+      "requestHash": "hash:77758c5c0dc3",
+      "sessionHash": "hash:97e0b75b7b0b",
+      "serverInstanceHash": "hash:bb4384b3d041",
+      "epoch": 1,
+      "outcome": "accepted",
+      "reasonCode": "none",
+      "latencyMs": null
+    }
+  ],
+  "modelDiagnostic": {
+    "focus.selection.requestedModelHash": "75ffadddb58cd44ab8919d1b87ce839cba7caf268833e06ab9788d2ba6d08e60",
+    "focus.selection.selectedModelHash": "75ffadddb58cd44ab8919d1b87ce839cba7caf268833e06ab9788d2ba6d08e60",
+    "focus.selection.resultModelHash": "e33230db3dd7d2f0153debcbb9fabc3386faac005477571931af855d70c4ae9b",
+    "focus.selection.fallbackCount": 0,
+    "focus.selection.fallbackAllowed": false,
+    "focus.selection.effectiveFallbackAllowed": false,
+    "focus.search.webRequested": false,
+    "focus.search.allowed": false,
+    "focus.request.terminalClass": "success"
+  },
+  "runtimeVerdict": "PASS",
+  "originalInlineDomProbe": "NOT_PROVEN: inspected synchronously before requestAnimationFrame paint",
+  "providerWireObserved": false,
+  "hardwareRenderedObserved": false
+}

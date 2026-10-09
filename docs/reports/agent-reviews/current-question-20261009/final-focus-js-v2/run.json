@@ -1,0 +1,55 @@
+{
+  "runId": "f6f9fe68-4c17-4921-8e0f-b4935efe9370",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:45:03.373936+00:00",
+  "status": "passed",
+  "executable": "node",
+  "argumentCount": 7,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "node",
+    "--test",
+    "src/test/js/display-focus-client.test.cjs",
+    "src/test/js/display-focus-projection.test.cjs",
+    "src/test/js/display-focus-flow.test.cjs",
+    "src/test/js/display-focus-memory.test.cjs",
+    "src/test/js/display-focus-mount.test.cjs",
+    "src/test/js/display-focus-privacy.test.cjs"
+  ],
+  "commandSha256": "abbe4377d9343d7105060812db3c1f35c7ca6ebc26166b78a23817736de7ef0d",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus-controls.js",
+      "kind": "file",
+      "sha256": "cd10d09171505a2197a78fdd993149236261a0d1417a3946b134653ff5c8e291",
+      "bytes": 44000
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-focus.js",
+      "kind": "file",
+      "sha256": "f8a7d7474ea9747a9f6842e1de35e85f6f698dc20683da8eb54bd9dca7edcbbc",
+      "bytes": 16448
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\static\\assets\\display\\display-conversate.js",
+      "kind": "file",
+      "sha256": "8d2f229807b977d1da03a2a7eb14cdbee83e33ec57410954711fc116f80fef35",
+      "bytes": 30838
+    }
+  ],
+  "expectedSuites": [],
+  "exitCode": 0,
+  "verificationExitCode": 0,
+  "resultFiles": [],
+  "failures": [],
+  "log": "command.log",
+  "pid": 42956,
+  "endedAt": "2026-10-09T10:45:03.697345+00:00",
+  "elapsedMs": 321,
+  "totals": {
+    "tests": 0,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  }
+}

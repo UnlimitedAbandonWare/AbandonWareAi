@@ -1,0 +1,23 @@
+{
+  "checkedAtUtc": "2026-10-09T11:56:21.104Z",
+  "freshContext": true,
+  "restoredAuthState": false,
+  "providerGenerationCount": 0,
+  "userLiveProfileWriteCount": 0,
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200
+    }
+  ],
+  "rows": [],
+  "hardwareRenderedObserved": false,
+  "verdict": "NOT_PROVEN",
+  "errorClass": "TimeoutError",
+  "errorCode": "locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('",
+  "testProducerDisabled": true
+}

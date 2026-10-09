@@ -1,0 +1,74 @@
+{
+  "exitCode": 0,
+  "ok": true,
+  "via": "live-http",
+  "rowCount": 5,
+  "safeRows": [
+    {
+      "profilePrefix": "b22f968af973",
+      "ownerHash": "hash:c05091bcd646",
+      "matchesFailedOwner": false,
+      "settingsVersion": 3,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profilePrefix": "ea47bab48c4a",
+      "ownerHash": "hash:0711cbda88f3",
+      "matchesFailedOwner": false,
+      "settingsVersion": 0,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profilePrefix": "dfa4c4c2aa24",
+      "ownerHash": "hash:33d5f21b86f3",
+      "matchesFailedOwner": true,
+      "settingsVersion": 6,
+      "answerSelection": {
+        "mode": "FIXED",
+        "modelId": "llmrouter.openai-economy",
+        "routing": {
+          "executionTarget": "API_ONLY",
+          "fallbackAllowed": false,
+          "allowedFallbackIds": [],
+          "effectiveFallbackAllowed": false
+        }
+      },
+      "webSearchEnabled": false,
+      "reasoningPreset": "STANDARD",
+      "quickAnswerEnabled": false,
+      "snapshotEnabled": false
+    },
+    {
+      "profilePrefix": "21e09a73b5cc",
+      "ownerHash": "hash:23bc46f44887",
+      "matchesFailedOwner": false,
+      "settingsVersion": 0,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    },
+    {
+      "profilePrefix": "f7b6e76ef594",
+      "ownerHash": "hash:bb3007fd22b4",
+      "matchesFailedOwner": false,
+      "settingsVersion": 0,
+      "answerSelection": null,
+      "webSearchEnabled": null,
+      "reasoningPreset": null,
+      "quickAnswerEnabled": null,
+      "snapshotEnabled": null
+    }
+  ],
+  "errorClass": null,
+  "reason": null
+}

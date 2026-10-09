@@ -1,0 +1,95 @@
+{
+  "checkedAt": "2026-10-09T12:01:25.928605+00:00",
+  "files": [
+    {
+      "path": "main/java/com/example/lms/assist/NovaFocusState.java",
+      "preimageSha256": "6f95e7c0e6fc49f1314effb36c8680ff7f3dc38503baff56a14de62d168fe25b",
+      "sha256": "9e1332af6482ee2f43b1d7cef8f8182c83a1a14806e8bf4db8d7a11e312c76bc",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 0,
+        "loneLF": 323
+      },
+      "currentEOL": {
+        "CRLF": 0,
+        "loneLF": 330
+      },
+      "originalEOLPreserved": true
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/NovaFocusStateTest.java",
+      "preimageSha256": "3f563c4cf60fc4bd6daf748fdfb338b9ad005d7dcca14960e2d72e0481fd1ea2",
+      "sha256": "c614b204b4f2a22baf7e5516921aae97c4d2c9791bd3bdd81c09119c0375d028",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 0,
+        "loneLF": 263
+      },
+      "currentEOL": {
+        "CRLF": 0,
+        "loneLF": 340
+      },
+      "originalEOLPreserved": true
+    },
+    {
+      "path": "src/test/java/com/example/lms/assist/NovaFocusServiceTest.java",
+      "preimageSha256": "db5ec38a39cfa0b1a401ee2c7a4cec99ca04ee81aa4d07fa5e3793a6cf95a552",
+      "sha256": "79b6f32a6943cd24186dcf359e69f89bfde550804d18f9dcbbadd18bfb7a11cb",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 0,
+        "loneLF": 562
+      },
+      "currentEOL": {
+        "CRLF": 0,
+        "loneLF": 562
+      },
+      "originalEOLPreserved": true
+    },
+    {
+      "path": "main/resources/static/assets/display/display-focus-controls.js",
+      "preimageSha256": "d30f8ecfd09fad74d83b4c53846eca6a4655dc8cad903d0de1b62a439b1e16cd",
+      "sha256": "ae9429ed17894ac84a1d18aed585fbc48a849710a419c1d371ac4f457680f87b",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 0,
+        "loneLF": 462
+      },
+      "currentEOL": {
+        "CRLF": 0,
+        "loneLF": 462
+      },
+      "originalEOLPreserved": true
+    },
+    {
+      "path": "main/resources/static/assets/display/index.html",
+      "preimageSha256": "55c463ce66e1e473164b8b9ccc51a130c7d7ba7e72dc126654b041590431d107",
+      "sha256": "363ae4210e912b7dccfeaea388d9783d20dae64920200c0465eee417ab59f2bc",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 211,
+        "loneLF": 0
+      },
+      "currentEOL": {
+        "CRLF": 211,
+        "loneLF": 0
+      },
+      "originalEOLPreserved": true
+    },
+    {
+      "path": "src/test/js/display-focus-client.test.cjs",
+      "preimageSha256": "5ce89936c848732d272ce59673fcdbb03e64610afbe4c46feb701118db729328",
+      "sha256": "1ea9dc25e5fa4c77ad778bcf8e8dcc7dc57110f32d125efa0ffa0ed47abedc62",
+      "matchesVerifiedPostimage": true,
+      "beforeEOL": {
+        "CRLF": 0,
+        "loneLF": 393
+      },
+      "currentEOL": {
+        "CRLF": 0,
+        "loneLF": 397
+      },
+      "originalEOLPreserved": true
+    }
+  ]
+}

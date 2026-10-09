@@ -14,9 +14,11 @@ import os
 from pathlib import Path
 import re
 import stat
+import statistics
 import sys
 import uuid
 
+from codex_session_friction import TRUNC_TOKEN_RE, file_in_window
 from log_redact import redact_text
 
 VERSION = 'codex-nightly-review-v1'
@@ -25,6 +27,7 @@ KINDS = {'goal', 'correction', 'cancel', 'tool', 'error', 'change', 'verify'}
 HUMAN_KINDS = {'goal', 'correction', 'cancel'}
 EVENT_FIELDS = {'timestamp', 'sessionId', 'eventId', 'kind', 'origin', 'sanitized', 'text', 'outcome'}
 MAX_STATE_BYTES = 16 * 1024 * 1024
+OUTPUT_CAP_P90_WARN = 10000
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -558,11 +561,37 @@ def validate_agy_stream(text, requested_model, *, exit_code=0):
             'billingAccountVerified': False, 'sourceEvidenceBound': False, 'proposalApplied': False}
 
 
+def output_cap_metrics(sessions_dir, days):
+    """Count truncated tool-output markers in rollout *.jsonl; counts only."""
+    counts = []
+    root = Path(sessions_dir)
+    if root.is_dir():
+        for path in root.rglob('*.jsonl'):
+            if not path.is_file() or not file_in_window(path, days):
+                continue
+            try:
+                stream = open(path, 'rb')
+            except OSError:
+                continue
+            with stream:
+                for line in stream:
+                    for match in TRUNC_TOKEN_RE.finditer(line):
+                        counts.append(int(match.group(1)))
+    counts.sort()
+    return {'count': len(counts), 'token_sum': sum(counts),
+            'median': statistics.median(counts) if counts else 0,
+            'p90': counts[int(len(counts) * 0.9)] if counts else 0,
+            'max': counts[-1] if counts else 0, 'measured': True}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     subs = parser.add_subparsers(dest='action', required=True)
     local = subs.add_parser('run', help='Local indexing and report only; never calls an agent')
-    local.add_argument('--config', required=True)
+    local.add_argument('--config')
+    local.add_argument('--sessions-dir')
+    local.add_argument('--days', type=int, default=3)
+    local.add_argument('--json-out')
     check = subs.add_parser('validate-stream', help='Offline validation; no invocation or raw stream storage')
     check.add_argument('--input', required=True)
     check.add_argument('--model', required=True)
@@ -570,16 +599,33 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.action == 'run':
-            result = run(args.config)
-            # Do not print user summaries, paths or original session identifiers.
-            public = {k: result[k] for k in ('status', 'aiCalls', 'codexCalls', 'schedulerRegistered')}
-            public.update({k: result[k] for k in ('runId', 'holds', 'coverage') if k in result})
+            require(args.config or args.sessions_dir, 'config_or_sessions_dir_required')
+            require(1 <= args.days <= 366, 'days_range')
+            if args.config:
+                result = run(args.config)
+                # Do not print user summaries, paths or original session identifiers.
+                public = {k: result[k] for k in ('status', 'aiCalls', 'codexCalls', 'schedulerRegistered')}
+                public.update({k: result[k] for k in ('runId', 'holds', 'coverage') if k in result})
+            else:
+                public = {'status': 'METRICS_LOCAL', 'aiCalls': 0, 'codexCalls': 0,
+                          'schedulerRegistered': False}
+            public['truncated_output'] = (output_cap_metrics(args.sessions_dir, args.days)
+                                          if args.sessions_dir else
+                                          {'count': 0, 'token_sum': 0, 'median': 0, 'p90': 0,
+                                           'max': 0, 'measured': False})
+            if args.json_out:
+                out_path = Path(args.json_out)
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                out_path.write_text(json.dumps(public, sort_keys=True) + '\n', encoding='utf-8')
         else:
             checked = validate_agy_stream(stable_read(safe_path(str(Path(args.input).absolute())),
                                           1024 * 1024).decode('utf-8'), args.model, exit_code=args.exit_code)
             public = {k: checked[k] for k in ('status', 'requestedModel', 'observedModel', 'usage', 'aiCalls', 'codexCalls')}
             public['candidateCount'] = len(checked['candidates'])
         print(json.dumps(public, sort_keys=True))
+        truncated = public.get('truncated_output') or {}
+        if truncated.get('measured') and truncated.get('p90', 0) > OUTPUT_CAP_P90_WARN:
+            print('WARN_OUTPUT_CAP: p90=%d' % truncated['p90'])
         return 2 if public['status'] == 'HOLD' else 0
     except (ReviewError, OSError, UnicodeError, KeyError, TypeError) as error:
         reason = str(error) if isinstance(error, ReviewError) else 'local_io_or_schema_failure'

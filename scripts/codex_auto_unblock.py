@@ -17,15 +17,23 @@ Codex 목표 세션이 "되돌릴 수 있는 일"에서 멈추지 않게, 분류
           finalResponse}]}. sessionId·토큰류는 출력하지 않는다.
   lease-wait --paths <p...> [--max-min auto|N] [--interval 60] [--dry-run]
              [--enqueue] [--task ID] [--locks-dir DIR] [--root DIR]
+             [--wait-dir DIR] [--wait-id ID]
       겹침 lease가 풀릴 때까지 확인만 한다 -> JSON {result: free|stale|live|
       free_wait_turn, free, live, stale, waitedSeconds, waitedSec, budgetSec,
-      budgetBasis, lastStatus, blockers}. 해제·reclaim은 절대 하지 않는다.
+      budgetBasis, lastStatus, blockers, waitId, beforeJson, pendingLease,
+      pendingJson}. 해제·reclaim은 절대 하지 않는다.
       --max-min auto(기본값)는 막은 lease의 상태로 예산을 정한다:
       finishing/releasePending+heartbeat 정상 → 상대 만료+5분, active → 20분,
       stale/orphan → 기다리지 않음. 전체 상한 60분. --enqueue는
       <locks-dir>/waiters/<대상sha12>/<UTC>-<task>.json 대기표로 같은 대상을
-      기다리는 세션의 순번을 정한다(내 것만 생성·삭제). --task는 대기 중
+      기다리는 세션의 순번을 정한다(내 것만 생성·삭제, 단 막힌 채 끝나면
+      대기표를 남겨 순번을 유지한다). --task는 대기 중
       lease_conflict_autoflow.py heartbeat로 내 잠금을 갱신한다.
+      실제로 막혀 기다릴 때 --wait-dir(기본 <root>/var/lease-wait)/<waitId>/
+      before.json에 대상 파일 스냅샷(sha256·크기·mtime·git blob·before 바이트)을
+      남기고, 예산 소진/stale로 끝나면 pendingLease=true + pending.json을 남긴다
+      — 세션을 끝내지 말고 재확인하라는 신호다. 재개 판정은
+      scripts/lease_resume_check.py가 before.json 기준으로 한다.
   superseded --ledger <dir>
       같은 첨부 접두어(예: codex-api3-stream-failed-*)의 더 새 ledger가
       완료를 남겼는지 -> JSON {superseded, by, byResult, passItems, checked}
@@ -36,12 +44,17 @@ Usage:
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lease_lifetime
+import lease_resume_check
 
 KST = timezone(timedelta(hours=9))
 READ_MAX = 512 * 1024
@@ -312,25 +325,36 @@ def lease_scan(locks_dir, paths):
         for lock in sorted(locks.glob("*.lock")):
             jf = lock / "lease.json"
             try:
-                j = json.loads(jf.read_text(encoding="utf-8",
-                                            errors="replace"))
+                raw = jf.read_bytes()
+                j = json.loads(raw.decode("utf-8", errors="replace"))
+                if not isinstance(j, dict):
+                    raise ValueError("non-object-lease")
             except (OSError, ValueError):
                 live.append({"topic": lock.stem, "lifecycle": "orphan"})
                 continue
-            targets = [str(t) for t in
-                       (j.get("targetPaths") or j.get("targets") or [])]
-            if not any(_overlaps(t, paths) for t in targets):
+            native = j.get("schemaVersion") == "awx.source_edit_session.lease.v1"
+            if any(value is not None and (not isinstance(value, list)
+                   or any(not isinstance(item, str) or not item.strip() for item in value))
+                   for value in (j.get("targetPaths"), j.get("targets"), j.get("reservePaths"))):
+                live.append({"topic": lock.stem, "lifecycle": "orphan"})
+                continue
+            targets = [str(t) for t in (j.get("targetPaths") or j.get("targets") or [])]
+            targets += [str(t) for t in (j.get("reservePaths") or [])]
+            if not (native and not targets) and not any(_overlaps(t, paths) for t in targets):
                 continue
             topic = j.get("topic") or lock.stem
-            try:
-                exp = datetime.fromisoformat(
-                    str(j.get("expiresAtUtc", "")).replace("Z", "+00:00"))
-                expired = exp <= now
-            except ValueError:
-                expired = False
+            lifetime = lease_lifetime.lifetime(
+                lease_lifetime.heartbeats_dir_for_locks(locks), j, raw, now)
+            expired = (lifetime["expires"] is not None
+                       and lifetime["effective"] is not None
+                       and lifetime["effective"] <= now)
             row = {"topic": topic,
-                   "expiresAtUtc": j.get("expiresAtUtc", "")}
-            if j.get("status") != "active":
+                   "expiresAtUtc": (lease_lifetime.iso(lifetime["effective"])
+                                    or j.get("expiresAtUtc", "")),
+                   "heartbeatState": lifetime["heartbeatState"]}
+            # Native begin omits status; an existing native reservation with a
+            # valid future TTL is live observation, never a write/acquire grant.
+            if j.get("status") != "active" and not (native and j.get("status") is None):
                 row["lifecycle"] = "stale"
                 stale.append(row)
             elif expired:
@@ -429,14 +453,14 @@ def _waiter_dir(locks_dir, paths):
     return Path(locks_dir) / WAITERS_DIRNAME / key
 
 
-def _waiter_ticket(locks_dir, paths, task, budget_sec):
+def _waiter_ticket(locks_dir, paths, task, budget_sec, wait_id=None):
     """내 대기표만 생성. 반환: Path(실패 시 None)."""
     now = datetime.now(timezone.utc)
     safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task or "anon")
     d = _waiter_dir(locks_dir, paths)
     try:
         d.mkdir(parents=True, exist_ok=True)
-        ticket = d / (now.strftime("%Y%m%dT%H%M%SZ") + "-" + safe_task
+        ticket = d / ((wait_id or now.strftime("%Y%m%dT%H%M%SZ")) + "-" + safe_task
                       + ".json")
         payload = {"schemaVersion": "awx.lease-wait-waiter.v1",
                    "task": task or "anon",
@@ -444,10 +468,21 @@ def _waiter_ticket(locks_dir, paths, task, budget_sec):
                    "createdAtUtc": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
                    "expiresAtUtc": (now + timedelta(seconds=budget_sec))
                    .strftime("%Y-%m-%dT%H:%M:%SZ")}
-        ticket.write_text(json.dumps(payload, ensure_ascii=False,
-                                     indent=2), encoding="utf-8")
+        payload["waitId"] = wait_id
+        if ticket.exists():
+            if ticket.is_symlink():
+                return None
+            old = json.loads(ticket.read_bytes())
+            if (old.get("schemaVersion") != payload["schemaVersion"]
+                    or old.get("task") != payload["task"] or old.get("targets") != payload["targets"]
+                    or old.get("waitId") != wait_id or not _parse_utc(old.get("createdAtUtc"))
+                    or not _parse_utc(old.get("expiresAtUtc"))):
+                return None
+            return ticket  # Same active wait continues its original place across rounds.
+        with ticket.open("x", encoding="utf-8") as stream:
+            stream.write(json.dumps(payload, ensure_ascii=False, indent=2))
         return ticket
-    except OSError:
+    except (OSError, ValueError, AttributeError):
         return None
 
 
@@ -501,15 +536,163 @@ def _default_heartbeat(task, root):
         return None
 
 
+# ---------------------------------------------------------------------------
+# lease-wait before.json / pendingLease — 대기 전 스냅샷과 대기 지속 계약
+# ---------------------------------------------------------------------------
+def _git_blob_sha(root, rel):
+    """git hash-object로 blob sha만 계산한다(-w 없음, 인덱스/객체 쓰기 없음)."""
+    try:
+        proc = subprocess.run(
+            ["git", "hash-object", "--", rel],
+            cwd=str(root), capture_output=True, text=True, timeout=15)
+        if proc.returncode == 0:
+            return proc.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+def snapshot_before(root, paths, wait_dir, wait_id, task=None, context=None):
+    """lease-wait 시작 시점의 대상 파일 상태를 보존한다.
+    var/lease-wait/<waitId>/before.json + before/NN-<hash>.bin (복구용 바이트).
+    lease_resume_check.py가 여기의 snapshot으로 변경 범위를 계산한다."""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", str(wait_id)) or wait_id in (".", ".."):
+        return None
+    root = Path(root).resolve()
+    paths = list(paths)
+    context = context or {}
+    if not isinstance(context, dict):
+        return None
+    inputs = context.get("inputPaths", [])
+    if not isinstance(inputs, list) or not all(isinstance(p, str) for p in inputs):
+        return None
+    base = Path(wait_dir) / wait_id
+    before_path = base / "before.json"
+    hash_path = base / "before.sha256"
+    if before_path.exists():
+        try:
+            raw = before_path.read_bytes()
+            if hash_path.read_text(encoding="ascii").strip() != hashlib.sha256(raw).hexdigest():
+                return None
+            old = json.loads(raw)
+            if (old.get("root") != str(root) or old.get("task") != task
+                    or old.get("waitId") != wait_id or old.get("context", {}) != context
+                    or [r.get("path") for r in old.get("targets", [])] != paths):
+                return None
+            return str(before_path)
+        except (OSError, ValueError, AttributeError, TypeError):
+            return None
+    snap_dir = base / "before"
+    try:
+        snap_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return None
+    rows = []
+    input_rows = []
+    for i, p in enumerate(paths + inputs):
+        row, data = lease_resume_check.input_state(root, p)
+        rel = row["path"]
+        if data is not None and i < len(paths):
+            row["gitBlob"] = _git_blob_sha(root, rel)
+            name = "%02d-%s" % (i, hashlib.sha256(
+                rel.encode("utf-8")).hexdigest()[:8])
+            try:
+                with (snap_dir / name).open("xb") as stream:
+                    stream.write(data)
+                row["snapshot"] = "before/" + name
+            except OSError:
+                row["snapshot"] = None
+                row.update(state="UNKNOWN", reason="snapshot-write-failed")
+        (rows if i < len(paths) else input_rows).append(row)
+    try:
+        root_meta = root.stat()
+    except OSError:
+        return None
+    doc = {"schemaVersion": "awx.lease-wait-before.v1",
+           "waitId": wait_id, "task": task,
+           "createdAtUtc": datetime.now(timezone.utc).isoformat(),
+           "root": str(root), "context": context,
+           "rootIdentity": {"device": root_meta.st_dev, "inode": root_meta.st_ino},
+           "targets": rows, "inputs": input_rows}
+    try:
+        raw = json.dumps(doc, ensure_ascii=False, indent=2).encode("utf-8")
+        with before_path.open("xb") as stream:
+            stream.write(raw)
+        with hash_path.open("x", encoding="ascii") as stream:
+            stream.write(hashlib.sha256(raw).hexdigest() + "\n")
+    except OSError:
+        return None
+    return str(before_path)
+
+
+def write_pending(wait_dir, wait_id, rep, task=None, note=None):
+    """예산 소진/stale인데 아직 막혀 있을 때 대기 지속 티켓을 남긴다.
+    세션은 이 티켓을 보고 세션 종료 대신 다른 일을 하다가 다시 확인한다."""
+    base = Path(wait_dir) / wait_id
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / "pending.json"
+        previous = {}
+        if path.exists():
+            previous = json.loads(path.read_bytes())
+            if (path.is_symlink() or previous.get("schemaVersion") != "awx.lease-wait-pending.v1"
+                    or previous.get("task") != task or previous.get("waitId") != wait_id):
+                return None
+        state = rep.get("waitState")
+        terminal = state in ("CANCELLED", "READY_TO_ACQUIRE") or (
+            state == "BLOCKED" and rep.get("pendingLease") is not True)
+        doc = {"schemaVersion": "awx.lease-wait-pending.v1",
+               "waitId": wait_id, "task": task,
+               "status": state if terminal else "PENDING_LEASE",
+               "waitState": state,
+               "pendingLease": not terminal,
+               "note": note or "",
+               "recordedAtUtc": datetime.now(timezone.utc).isoformat(),
+               "blockers": [{"topic": b.get("topic"),
+                             "expiresAtUtc": b.get("expiresAtUtc"),
+                             "heartbeatState": b.get("heartbeatState"),
+                             "releasePending": b.get("releasePending")}
+                            for b in rep.get("blockers", [])],
+               "lastStatus": rep.get("lastStatus") or rep.get("result"),
+               "beforeJson": rep.get("beforeJson") or previous.get("beforeJson"),
+               "beforeSha256": rep.get("beforeSha256") or previous.get("beforeSha256"),
+               "waiterTicket": rep.get("waiterTicket") or previous.get("waiterTicket"),
+               "nextAction": "none" if state == "CANCELLED" else "acquire-fresh-own-lease"
+                             if state == "READY_TO_ACQUIRE" else "resolve-lane-evidence"
+                             if state == "BLOCKED" else "recheck-after-expiry-or-interval"}
+        path.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
+                        encoding="utf-8")
+        return str(path)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
+def _new_wait_id(task):
+    now = datetime.now(timezone.utc)
+    safe_task = re.sub(r"[^A-Za-z0-9_.-]+", "-", task or "anon")
+    return now.strftime("%Y%m%dT%H%M%SZ") + "-" + safe_task
+
+
 def lease_wait(paths, locks_dir, max_min="auto", interval=60, dry_run=False,
                enqueue=False, task=None, root=None, now_fn=None, sleep_fn=None,
                heartbeat_fn=None, scanner=None, authoritative=True,
-               wall_now_fn=None):
+               wall_now_fn=None, wait_dir=None, wait_id=None, cancel_fn=None,
+               context=None):
     """겹침 lease가 풀릴 때까지 기다린다. 읽기 전용(+--enqueue 시 내 대기표만).
     max_min: "auto"면 막은 lease 상태로 예산 계산, 숫자면 기존 고정값.
     authoritative+root면 heartbeat·finishing을 반영하는 권위 분류로 스캔하고
-    실패 시 경량 lease_scan으로 폴백한다."""
-    now_fn = now_fn or time.time
+    실패 시 경량 lease_scan으로 폴백한다.
+    wait_dir+wait_id가 있고 dry_run이 아니면: 실제로 막혀 기다리기 시작할 때
+    before.json 스냅샷을 남기고, 예산 소진/stale로 끝날 때 pending.json을 남긴다.
+    pendingLease=true는 '세션 종료가 아니라 나중에 다시 확인하라'는 뜻이다."""
+    interval = float(interval)
+    if not math.isfinite(interval) or interval <= 0:
+        raise ValueError("interval-must-be-finite-and-positive")
+    automatic = isinstance(max_min, str) and max_min.strip().lower() == "auto"
+    fixed_budget = None if automatic else float(max_min) * 60
+    if fixed_budget is not None and (not math.isfinite(fixed_budget) or fixed_budget < 0):
+        raise ValueError("round-budget-must-be-finite-and-nonnegative")
+    now_fn = now_fn or time.monotonic
     sleep_fn = sleep_fn or time.sleep
     wall_now_fn = wall_now_fn or (lambda: datetime.now(timezone.utc))
     if heartbeat_fn is None and task and not dry_run:
@@ -524,44 +707,122 @@ def lease_wait(paths, locks_dir, max_min="auto", interval=60, dry_run=False,
             scanner = lambda p: lease_scan(locks_dir, p)
 
     started = now_fn()
+    poll_delay = min(interval, 60.0)
     ticket = None
+    keep_ticket = False
+    before_written = False
+    before_path = None
+    before_sha = None
+    if wait_dir is not None and not wait_id:
+        wait_id = _new_wait_id(task)
+    if wait_id is not None and (not re.fullmatch(r"[A-Za-z0-9_.-]+", str(wait_id)) or wait_id in (".", "..")):
+        raise ValueError("invalid-wait-id")
     if enqueue and not dry_run:
         # 예산은 첫 스캔 뒤 알지만, 순번은 대기 시작 시점부터 잡아야 하므로
         # 잠정 예산(상한)으로 만들고 실제 만료는 첫 스캔 뒤 갱신하지 않는다.
-        ticket = _waiter_ticket(locks_dir, paths, task, AUTO_BUDGET_MAX_SEC)
+        ticket = _waiter_ticket(locks_dir, paths, task, AUTO_BUDGET_MAX_SEC, wait_id=wait_id)
+        if ticket is None:
+            return {"result": "blocked", "waitState": "BLOCKED", "ownsTargets": False,
+                    "reason": "waiter-ticket-unavailable", "pendingLease": False}
     try:
         budget_sec, basis = None, None
         while True:
+            if cancel_fn is not None and cancel_fn():
+                cancelled = {"result": "cancelled", "waitState": "CANCELLED",
+                        "pendingLease": False, "ownsTargets": False,
+                        "waitedSec": int(max(0, now_fn() - started))}
+                if wait_dir and wait_id and not dry_run and (Path(wait_dir) / wait_id / "pending.json").exists():
+                    cancelled["pendingJson"] = write_pending(wait_dir, wait_id, cancelled, task=task, note="cancelled")
+                    if cancelled["pendingJson"] is None:
+                        cancelled.update(result="blocked", waitState="BLOCKED", cancelled=True,
+                            reason="pending-retirement-unconfirmed", pendingRecordMayBeActive=True)
+                return cancelled
             rep = scanner(paths)
             if budget_sec is None:
-                if isinstance(max_min, str) and max_min.strip().lower() == "auto":
+                if automatic:
                     budget_sec, basis = _auto_budget(
                         rep.get("live", []), wall_now_fn())
                 else:
-                    budget_sec = int(float(max_min) * 60)
+                    budget_sec = fixed_budget
                     basis = "fixed"
                 budget_sec = min(budget_sec, AUTO_BUDGET_MAX_SEC)
-            waited = int(now_fn() - started)
+            waited = int(max(0, now_fn() - started))
             rep.update({"waitedSec": waited, "waitedSeconds": waited,
                         "budgetSec": budget_sec, "budgetBasis": basis,
                         "lastStatus": rep["result"],
+                        "waitState": "READY_TO_ACQUIRE" if rep["result"] == "free"
+                        else "WAITING" if rep["result"] == "live" else "BLOCKED",
+                        "ownsTargets": False,
                         "blockers": rep.get("live") or rep.get("stale", [])})
+            if wait_id:
+                rep["waitId"] = wait_id
+            if ticket:
+                rep["waiterTicket"] = str(ticket)
+            if (rep["result"] == "free" and enqueue and ticket is not None
+                    and not _waiter_turn_mine(ticket, now=wall_now_fn())):
+                rep["result"] = rep["lastStatus"] = "free_wait_turn"
+                rep["waitState"] = "WAITING"
+            if (not dry_run and not before_written and wait_dir
+                    and (rep["result"] in ("live", "free_wait_turn")
+                         or (Path(wait_dir) / wait_id / "before.json").exists())):
+                # 기다리기 직전 상태를 고정한다(재개 판정의 기준).
+                before_path = snapshot_before(
+                    Path(root or ".").resolve(), paths, wait_dir, wait_id,
+                    task=task, context=context)
+                before_written = True
+                if not before_path:
+                    rep.update(result="blocked", waitState="BLOCKED",
+                               reason="baseline-unavailable", pendingLease=False)
+                    return rep
+            if before_path:
+                rep["beforeJson"] = before_path
+                _, raw = lease_resume_check.input_state(Path(before_path).parent, "before.json")
+                current_sha = hashlib.sha256(raw).hexdigest() if raw is not None else None
+                if current_sha is None or (before_sha is not None and current_sha != before_sha):
+                    rep.update(result="blocked", waitState="BLOCKED", reason="baseline-changed-during-wait",
+                               pendingLease=False, beforeSha256=before_sha)
+                    return rep
+                before_sha = before_sha or current_sha
+                rep["beforeSha256"] = before_sha
             if dry_run or rep["result"] == "stale":
+                if rep["result"] == "stale" and not dry_run:
+                    # 만료 뒤에도 안 풀린 stale: 강제 해제 없이 대기 티켓만 남긴다.
+                    rep["pendingLease"] = True
+                    if wait_dir:
+                        rep["pendingJson"] = write_pending(
+                            wait_dir, wait_id, rep, task=task,
+                            note="stale-not-released")
+                    keep_ticket = ticket is not None
                 return rep
             if rep["result"] == "free":
-                if enqueue and ticket is not None \
-                        and not _waiter_turn_mine(ticket, now=wall_now_fn()):
-                    rep["result"] = rep["lastStatus"] = "free_wait_turn"
-                else:
-                    rep["result"] = rep["lastStatus"] = "free"
-                    return rep
-            if now_fn() >= started + budget_sec:
+                if wait_dir and wait_id and (Path(wait_dir) / wait_id / "pending.json").exists():
+                    rep["pendingJson"] = write_pending(wait_dir, wait_id, rep, task=task, note="normal-release")
+                    if rep["pendingJson"] is None:
+                        rep.update(result="blocked", waitState="BLOCKED", pendingLease=False,
+                            reason="pending-retirement-unconfirmed", pendingRecordMayBeActive=True)
+                        return rep
+                rep["pendingLease"] = False
+                return rep
+            remaining = started + budget_sec - now_fn()
+            if remaining <= 0:
+                # 예산 소진 — 막힌 채 끝나도 세션을 끝내지 않는다.
+                rep["pendingLease"] = True
+                if wait_dir and not dry_run:
+                    rep["pendingJson"] = write_pending(
+                        wait_dir, wait_id, rep, task=task,
+                        note="budget-exhausted-blocked")
+                keep_ticket = ticket is not None
                 return rep
             if heartbeat_fn is not None:
                 heartbeat_fn()
-            sleep_fn(interval)
+            # Heartbeat I/O also consumes the round; never sleep on stale time.
+            remaining = started + budget_sec - now_fn()
+            if remaining <= 0:
+                continue
+            sleep_fn(min(poll_delay, remaining))
+            poll_delay = min(poll_delay * 2, 60.0)
     finally:
-        if ticket is not None:
+        if ticket is not None and not keep_ticket:
             try:
                 ticket.unlink(missing_ok=True)
             except OSError:
@@ -645,7 +906,18 @@ def superseded_eval(ledger):
 
 
 # ---------------------------------------------------------------------------
+def _safe_console_streams():
+    """cp949 콘솔에서 도움말/출력의 비-CP949 문자(— 등)가 UnicodeEncodeError로
+    죽는 것을 막는다. 인코딩은 유지하고 대체 문자만 바꿔 출력한다."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv=None):
+    _safe_console_streams()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=
                                  argparse.RawDescriptionHelpFormatter)
@@ -681,6 +953,15 @@ def main(argv=None):
                          "명시하면 그 폴더만 경량 스캔")
     lw.add_argument("--root", default=".",
                     help="repo root — 권위 lease 분류(heartbeat 반영)용")
+    lw.add_argument("--wait-dir", default=None,
+                    help="before.json/pending.json 저장 폴더 "
+                         "(기본 <root>/var/lease-wait)")
+    lw.add_argument("--wait-id", default=None,
+                    help="대기 식별자 — before.json 재사용·추적용")
+    lw.add_argument("--goal-revision", default=None)
+    lw.add_argument("--plan-revision", default=None)
+    lw.add_argument("--input-path", action="append", default=[],
+                    help="재개 시 다시 비교할 비밀 아닌 test/config/plan 입력")
 
     sp = sub.add_parser("superseded",
                         help="D33 더 새 ledger 완료 여부")
@@ -695,10 +976,17 @@ def main(argv=None):
     elif args.cmd == "lease-wait":
         locks_dir = args.locks_dir or str(
             Path(args.root) / "__patch_drop__" / "source-edit-locks")
+        wait_dir = args.wait_dir or str(
+            Path(args.root) / "var" / "lease-wait")
         out = lease_wait(args.paths, locks_dir, args.max_min,
                          args.interval, args.dry_run, enqueue=args.enqueue,
                          task=args.task, root=args.root,
-                         authoritative=args.locks_dir is None)
+                         authoritative=args.locks_dir is None,
+                         wait_dir=None if args.dry_run else wait_dir,
+                         wait_id=args.wait_id,
+                         context={"goalRevision": args.goal_revision,
+                                  "planRevision": args.plan_revision,
+                                  "inputPaths": args.input_path})
     else:
         out = superseded_eval(args.ledger)
     print(json.dumps(out, ensure_ascii=False, indent=2))

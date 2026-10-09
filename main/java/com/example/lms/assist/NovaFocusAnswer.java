@@ -2,7 +2,11 @@ package com.example.lms.assist;
 
 /** Internal adapter: never exposed as a client-supplied history/model request. */
 public interface NovaFocusAnswer {
-    record Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding) {
+    record ModelOutcome(String requestedModel,String effectiveRoute,String effectiveModel,boolean isFallback,String reasonCode,String originalError) {
+        @Override public String toString(){return "FocusModelOutcome[redacted]";}
+    }
+    record Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding,ModelOutcome modelOutcome) {
+        public Result(String text,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounding){this(text,grounding,null);}
         @Override public String toString(){return "NovaFocusResult[redacted]";}
     }
     default Result answerResult(Long room,String question,String imageBase64,String imageMediaType,NovaFocusHistoryService.Context context,FocusMemoryScope scope,java.util.function.BooleanSupplier current){

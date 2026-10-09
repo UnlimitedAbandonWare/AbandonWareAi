@@ -23,7 +23,9 @@ import sys
 import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_error_miner import PATTERNS, SECRET_FRAGMENT_RE
+import lease_lifetime
 
 MAX_BYTES = 2 * 1024 * 1024
 GATES = {"bulkDelete", "unrecoverableOverwrite", "credentialChange", "externalRealData",
@@ -32,7 +34,9 @@ FACTORS = {"recovery", "blastRadius", "regression", "uncertainty", "cost"}
 
 
 class CheckpointError(ValueError):
-    pass
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.detail = detail
 
 
 def require(condition, reason):
@@ -938,9 +942,10 @@ def lease_check(root, manifest, allow_released=False):
         require(allow_released and lease_released(root, ref), "source-lease-drift")
         return
     if digest(data) != ref["sha256"]:
-        # A heartbeat renewal rewrites expiresAtUtc/heartbeat fields — same
-        # lease, changed bytes. Pass only when the identity fields recorded
-        # at begin still match; any identity change stays refused.
+        # lease.json is immutable after begin (a heartbeat renewal writes only
+        # the <leaseId>.json sidecar), so changed bytes mean drift. Pass only
+        # when the identity fields recorded at begin still match; any identity
+        # change stays refused.
         try:
             renewed = json.loads(data)
         except ValueError:
@@ -953,8 +958,15 @@ def lease_check(root, manifest, allow_released=False):
                 == sorted(ref.get("targetPaths") or []))
         require(same, "source-lease-drift")
     lease = json.loads(data)
-    expires = datetime.fromisoformat(lease.get("expiresAtUtc", "").replace("Z", "+00:00"))
-    require(expires.tzinfo is not None and expires > datetime.now(timezone.utc), "source-lease-expired")
+    lifetime = lease_lifetime.lifetime(
+        root / "__patch_drop__" / "source-edit-heartbeats", lease, data)
+    effective = lifetime["effective"]
+    if lifetime["expires"] is None or effective is None \
+            or effective <= datetime.now(timezone.utc):
+        raise CheckpointError("source-lease-expired", {
+            "leaseExpiresAtUtc": lease.get("expiresAtUtc"),
+            "effectiveExpiresAtUtc": lease_lifetime.iso(effective),
+            "heartbeatState": lifetime["heartbeatState"]})
     require(lease.get("mutationAllowed") is True and lease.get("coordinationMode") == "target-scoped"
             and bool(lease.get("ownerId")) and root_path(lease.get("root", "")) == root,
             "source-lease-invalid")
@@ -977,7 +989,8 @@ def overlap_warnings(root, targets, own_lease=None):
         if lease_file.relative_to(root).as_posix().casefold() == own:
             continue
         try:
-            data = json.loads(lease_file.read_bytes() or b"{}")
+            raw = lease_file.read_bytes()
+            data = json.loads(raw or b"{}")
         except (OSError, ValueError):
             continue
         covered = sorted({str(p).replace("\\", "/") for p in
@@ -985,11 +998,12 @@ def overlap_warnings(root, targets, own_lease=None):
                           if str(p).replace("\\", "/").casefold() in wanted})
         if not covered:
             continue
-        try:
-            expired = datetime.fromisoformat(
-                str(data.get("expiresAtUtc", "")).replace("Z", "+00:00")) <= now
-        except ValueError:
-            expired = False
+        lifetime = lease_lifetime.lifetime(
+            root / "__patch_drop__" / "source-edit-heartbeats",
+            data, raw, now)
+        expired = (lifetime["expires"] is not None
+                   and lifetime["effective"] is not None
+                   and lifetime["effective"] <= now)
         warnings.append("lease-overlap:" + lease_file.parent.name + ":" +
                         ("expired" if expired else "active") + ":" + ",".join(covered))
     return warnings
@@ -1344,6 +1358,9 @@ def finish(root, run_relative, exit_code, command_id, log=""):
                          blockingEvidence="current-hash-path-backup-or-lease-check-failed",
                          independentWorkCompleted="verification-result-recorded", repositoryWideHold=False,
                          nextAction="inspect-checkpoint-and-current-owner-before-recovery")
+            detail = getattr(error, "detail", None)
+            if detail:
+                state["blockingDetail"] = detail
         if state["status"] in ("verified", "rolled_back"):
             try:
                 try:
@@ -1506,6 +1523,9 @@ def main():
         hold = {"status": "hold", "firstBlockingRule": reason,
                 "holdScope": "checkpoint", "blockingEvidence": "local-validation-failed",
                 "independentWorkCompleted": "no-source-authority-granted", "repositoryWideHold": False}
+        detail = getattr(error, "detail", None)
+        if detail:
+            hold["blockingDetail"] = detail
         if args.action == "begin":
             flow = lease_conflict_autoflow(args.root, args.target, run=args.run)
             if flow is not None:

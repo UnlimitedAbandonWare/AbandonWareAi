@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusAnswerServiceTest" tests="33" skipped="0" failures="0" errors="0" timestamp="2026-10-09T10:03:50" hostname="DESKTOP-M5NOV6K" time="1.384">
+  <properties/>
+  <testcase name="scopedRagVerdictNeedsExplicitFlagForUnknownWeb()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.482"/>
+  <testcase name="autoRoutingPrefersConfiguredFocusDefaultModelWhenSelectable()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.073"/>
+  <testcase name="autoRoutingFallsBackToApiDefaultWhenFocusDefaultUnavailable()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.029"/>
+  <testcase name="explicitOnAllowsSelectedModelToChooseSearchWithoutForcingGenericRetrieval()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.022"/>
+  <testcase name="jevOffAndMissingAdvisorBothDefer()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.021"/>
+  <testcase name="fixedGeneralQuestionWithWebEnabledSkipsAdvisorAndGenericRetrieval()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.035"/>
+  <testcase name="fixedModeIgnoresFocusDefaultModel()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.016"/>
+  <testcase name="webAlreadyAttemptedNeverRetriesAgain()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.015"/>
+  <testcase name="defaultPolicyKeepsGeneralQuestionLocalAndUnpinned()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.015"/>
+  <testcase name="imageRequestAndRecentOnlyVerdictNeverRetryWeb()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.029"/>
+  <testcase name="explicitSearchOffBlocksInitialJevAndUnknownRetryWithoutChangingFixedModel()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.018"/>
+  <testcase name="blankAnswerRetriesOnceThenStillThrowsEmpty()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.018"/>
+  <testcase name="profileAutoDefaultUsesAdmittedFlashLiteAndPreservesExplicitChoices()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.045"/>
+  <testcase name="selectedGeminiGroundingKeepsOriginalAndPermissionInInternalContext()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.03"/>
+  <testcase name="jevVerdictReachesFocusTraceAndSteersSearchModeOnly()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.017"/>
+  <testcase name="[1] outcome=completed" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.039"/>
+  <testcase name="[2] outcome=changed" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.014"/>
+  <testcase name="[3] outcome=failed" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.012"/>
+  <testcase name="[1] question=HP Reverb G2 specs?" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.013"/>
+  <testcase name="[2] question=Ray-Ban Meta specs?" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.011"/>
+  <testcase name="[3] question=Meta Ray-Ban Display specs?" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.012"/>
+  <testcase name="nonWebAnswersAreNotCompacted()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.012"/>
+  <testcase name="visionUnavailableFallsBackToSameQuestionWithoutImageOnce()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.01"/>
+  <testcase name="unknownAnswerTriggersOneBoundedWebRetryOnSameRequest()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.01"/>
+  <testcase name="imageQuestionCarriesExactlyOneImageAndSnapshotSource()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.013"/>
+  <testcase name="serverDefaultEnabledArmsNewOwnersOnlyWhenFlagged()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.16"/>
+  <testcase name="unknownWebDisabledNeverRetries()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.013"/>
+  <testcase name="overBudgetDisplayKeepsTheGeneratedAnswerInsteadOfANotice()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.0"/>
+  <testcase name="ownerWebOnUnknownNarrowsButNeverWidensTheGlobalSwitch()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.031"/>
+  <testcase name="publicAutoEvidenceAndExactCancellationKeepHistoryOutOfPublicDto()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.053"/>
+  <testcase name="webOriginalIsKeptForFoldAndOnlyLensProjectionRemovesLinks()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.029"/>
+  <testcase name="jevShadowLeavesWebDecisionAndMarksDefer()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.014"/>
+  <testcase name="aggressiveAutoTurnsGeneralKnowledgeQuestionOnAndPrefersConfiguredWebModel()" classname="com.example.lms.assist.NovaFocusAnswerServiceTest" time="0.029"/>
+  <system-out><![CDATA[19:03:51.664 [Test worker] INFO com.example.lms.service.chat.ChatRunRegistry -- [LLM_CANCEL_ACCEPTED] runHash=hash:10efc21e6113 observedAtEpochMs=1791540231660 boundary=application_cancellation
+19:03:51.714 [jev-decision] INFO com.example.lms.assist.JevDecisionAdvisor -- [AWX][jev] surface=focus mode=shadow decision=RECENT_ONLY reasonCode=ok latencyMs=0 baseline=WEB httpStatus=200
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -36,8 +36,12 @@ import shutil
 import subprocess
 import sys
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lease_lifetime
+
 SCHEMA = "awx.agent-vibe-auto-decision.v1"
 LOCKS_GLOB = "__patch_drop__/source-edit-locks"
+HEARTBEATS_REL = "__patch_drop__/source-edit-heartbeats"
 SKILL_REF = ".agents/skills/demo1-vibe-selfask-judge-auto/SKILL.md"
 
 # --- NEGATIVE gates (never AUTO) --------------------------------------------
@@ -137,17 +141,16 @@ def foreign_leases(root: Path, agent: str) -> list[dict]:
     now = dt.datetime.now(dt.timezone.utc)
     for lease_file in sorted(locks.glob("*.lock/lease.json")):
         try:
-            lease = json.loads(lease_file.read_text(encoding="utf-8-sig"))
+            raw = lease_file.read_bytes()
+            lease = json.loads(raw)
         except (json.JSONDecodeError, OSError):
             out.append({"topic": lease_file.parent.name,
                         "state": "corrupt", "targetPaths": []})
             continue
-        exp = lease.get("expiresAtUtc", "")
-        try:
-            expires = dt.datetime.fromisoformat(exp.replace("Z", "+00:00"))
-            live = expires.tzinfo is not None and expires > now
-        except ValueError:
-            live = False
+        lifetime = lease_lifetime.lifetime(root / HEARTBEATS_REL, lease, raw, now)
+        live = (lifetime["expires"] is not None
+                and lifetime["effective"] is not None
+                and lifetime["effective"] > now)
         owner = str(lease.get("ownerId") or lease.get("taskId") or "")
         if live and owner and owner != agent:
             out.append({"topic": lease_file.parent.name,

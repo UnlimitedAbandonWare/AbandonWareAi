@@ -12,12 +12,10 @@
   - data/agent-handoff/codex-autonomy/<taskId>/ 의 scope-claim-*.json 과
     journal.json: taskIdHash -> ownerTaskId 해석.
   - lifecycle 분류: live(유효 TTL/최근 heartbeat/생존 owner)는 절대 강제
-    해제하지 않고, stale(TTL·heartbeat 만료 + owner 생존 증거 없음)만
-    quarantine으로 회수한다. orphan(판독 불가 lock)은 명시 플래그 시에만.
-  - stale 회수는 Invoke-AwxAbandonedLeaseRecovery와 같은 안전 절차를 따른다:
-    lock dir 경로·reparse·인벤토리·lease 지문·root 재검증, heartbeat 재확인
-    (TOCTOU), receipt 준비→이동→확정, source-edit-events/<leaseId>.jsonl에
-    stale-reclaim 이벤트, 내 journal에 AUTO:lease-reclaimed=<owner|reason>.
+    해제하지 않는다. stale은 시간 분류이며 회수 권한이 아니다.
+    unknown/remote/orphan은 보존한다. 동일 호스트의 종료가 증명된 owner만
+    기존 Invoke-AwxAbandonedLeaseRecovery에서 현재 지문·heartbeat를
+    재확인한 후 격리한다. 내 journal에는 AUTO:lease-reclaimed를 기록한다.
   - request-release: live lease 소유자 task dir에 LEASE_RELEASE_REQUEST.md
     하나만 둔다(소유자 에이전트 채널). 사용자에게 "그 작업에 전달해 주세요"라고
     중개를 요청하지 않는다 — 사용자 노출 문구는 live lease 현황 1줄 보고이며
@@ -42,6 +40,7 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_scope_lease as scope  # canon/overlap/run_ps/claim 읽기 재사용
+import lease_lifetime  # heartbeat sidecar merge (Get-AwxLeaseLifetime port)
 
 SCHEMA = "awx.lease-conflict-autoflow.v1"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -145,34 +144,10 @@ def atomic_write(path: Path, text: str) -> bool:
 
 
 def read_heartbeat(root: Path, lease: dict, lease_bytes, now: datetime):
-    # 계약과 동일한 heartbeat 유효성 검사(로컬 판독). 유효하면 유효 만료를 연장한다.
-    result = {"state": "absent", "renewedAtUtc": None, "expiresAtUtc": None}
-    lease_id = str(lease.get("leaseId") or "")
-    if not re.fullmatch(r"[a-f0-9]{32}", lease_id):
-        return result
-    hb_path = root / HEARTBEAT_DIR / (lease_id + ".json")
-    try:
-        raw = hb_path.read_bytes()
-    except OSError:
-        return result
-    result["state"] = "invalid"
-    try:
-        hb = json.loads(raw)
-        renewed = parse_time(hb.get("renewedAtUtc"))
-        until = parse_time(hb.get("expiresAtUtc"))
-        fingerprint = hashlib.sha256(lease_bytes).hexdigest()
-        valid = (hb.get("leaseId") == lease_id and renewed and until and
-                 str(hb.get("leaseFingerprint", "")).lower() == fingerprint and
-                 renewed <= now + timedelta(seconds=30) and until > renewed and
-                 until <= renewed + timedelta(minutes=540))
-        if not valid:
-            return result
-        result.update(state="valid", renewedAtUtc=iso(renewed),
-                      expiresAtUtc=iso(until),
-                      ageSeconds=max(0, int((now - renewed).total_seconds())))
-        return result
-    except (ValueError, OSError):
-        return result
+    # 계약과 동일한 heartbeat 유효성 검사 — 공유 헬퍼(lease_lifetime)가 판정한다.
+    # 유효할 때만 유효 만료 연장 재료(expiresAtUtc)를 돌려준다.
+    return lease_lifetime.read_heartbeat(root / HEARTBEAT_DIR, lease,
+                                         lease_bytes, now)
 
 
 def iter_lock_leases(root: Path):
@@ -364,7 +339,7 @@ def heartbeat_live(row: dict, now: datetime) -> bool:
 
 def lifecycle_of(row: dict, now: datetime) -> str:
     # live: 유효 TTL/최근 heartbeat/생존 owner -> 강제 해제 금지.
-    # stale: 만료 + owner 생존 증거 없음 -> 회수 허용. orphan: 판독 불가.
+    # stale: 만료 상태일 뿐 회수 권한 없음. orphan: 판독 불가.
     if row.get("rawStatus") == "corrupt":
         return "orphan"
     if (row.get("rawStatus") == "active" or row.get("ownerState") == "alive"
@@ -476,8 +451,8 @@ def _fresh_effective_expiry(lease: dict, hb: dict):
 
 def quarantine_stale(root: Path, row: dict, grace_seconds: int, now: datetime,
                      session_observed: bool) -> dict:
-    # Invoke-AwxAbandonedLeaseRecovery와 같은 증거 절차를 stale(TTL/heartbeat
-    # 만료 + owner 생존 증거 없음)로 확장한 회수. 증거가 바뀌면 hold로 끝낸다.
+    # Native recovery owns process proof and the existing registry handle.
+    # A scan or expiry alone never grants authority to move a foreign lease.
     out = {"topic": row.get("topic"), "leaseId": row.get("leaseId"),
            "lockDir": row.get("lockDir"), "state": "hold", "reason": ""}
 
@@ -522,76 +497,31 @@ def quarantine_stale(root: Path, row: dict, grace_seconds: int, now: datetime,
         return hold("refreshed-live")
     if effective > now - timedelta(seconds=grace_seconds):
         return hold("within-grace")
-    owner_pid = int(lease.get("ownerProcessId") or 0)
-    if row.get("ownerState") == "alive":
-        return hold("live-owner")
-    if owner_pid > 0 and not session_observed:
-        # PID 기반 owner인데 권위 관찰자가 없으면 생존 추정 금지.
+    if not session_observed or row.get("ownerState") != "dead":
         return hold("owner-state-unverifiable")
-
-    reason = ("stale-heartbeat-expired" if hb.get("state") == "valid"
-              else "stale-ttl-expired")
-    quarantine = root / QUARANTINE_DIR / uuid.uuid4().hex
-    receipt = {"state": "prepared", "leaseId": lease["leaseId"],
-               "leaseFingerprint": fingerprint, "reason": reason,
-               "targetPaths": list(row.get("targetPaths") or []),
-               "atUtc": iso(now)}
-    atomic_write(quarantine / "receipt.json",
-                 json.dumps(receipt, ensure_ascii=True, indent=2))
     try:
-        if (hashlib.sha256(lease_path.read_bytes()).hexdigest() != fingerprint
-                or len(list(lock_dir.iterdir())) != 1):
-            return hold("lease-identity-changed")
-        lock_dir.rename(quarantine / "lease")
-    except OSError:
-        return hold("quarantine-move-failed")
-    receipt["state"] = "quarantined"
-    atomic_write(quarantine / "receipt.json",
-                 json.dumps(receipt, ensure_ascii=True, indent=2))
-    write_lease_event(root, "stale-reclaim", lease,
-                      row.get("targetPaths") or [], reason)
-    out.update(state="quarantined", reason=reason,
-               receipt=rel(root, quarantine / "receipt.json"))
-    return out
-
-
-def quarantine_orphan(root: Path, row: dict, now: datetime) -> dict:
-    # 판독 불가 lock dir 전체를 보존 이동한다(명시 플래그 있을 때만 호출).
-    out = {"topic": row.get("topic"), "leaseId": row.get("leaseId"),
-           "lockDir": row.get("lockDir"), "state": "hold", "reason": ""}
-    locks_root = Path(os.path.realpath(root / LOCKS_DIR))
-    lock_dir = Path(os.path.realpath(root / LOCKS_DIR / str(row.get("lockDir"))))
-    if lock_dir.parent != locks_root or not lock_dir.is_dir():
-        out["reason"] = "recovery-path-invalid"
-        return out
-    if _is_reparse(lock_dir):
-        out["reason"] = "reparse-traversal"
-        return out
-    quarantine = root / QUARANTINE_DIR / uuid.uuid4().hex
-    receipt = {"state": "prepared", "leaseId": row.get("leaseId"),
-               "reason": "orphan-corrupt-lock",
-               "children": sorted(p.name for p in lock_dir.iterdir()),
-               "atUtc": iso(now)}
-    atomic_write(quarantine / "receipt.json",
-                 json.dumps(receipt, ensure_ascii=True, indent=2))
-    try:
-        lock_dir.rename(quarantine / "lock")
-    except OSError:
-        out["reason"] = "quarantine-move-failed"
-        return out
-    receipt["state"] = "quarantined"
-    atomic_write(quarantine / "receipt.json",
-                 json.dumps(receipt, ensure_ascii=True, indent=2))
-    write_lease_event(root, "orphan-reclaim", {"leaseId": row.get("leaseId")},
-                      row.get("targetPaths") or [], "orphan-corrupt-lock")
-    out.update(state="quarantined", reason="orphan-corrupt-lock",
-               receipt=rel(root, quarantine / "receipt.json"))
+        proc = scope.run_ps(root, "recover", fingerprint=fingerprint,
+                            recovery_lock=lock_dir.name, want_json=True)
+    except scope.ScopeError:
+        return hold("recovery-unavailable")
+    result = scope.parse_json_lines(proc.stdout)
+    if proc.returncode != 0 or not isinstance(result, dict):
+        return hold("recovery-unavailable")
+    matches = [r for r in result.get("recoveries", [])
+               if r.get("leaseId") == lease["leaseId"]]
+    if len(matches) != 1 or matches[0].get("state") != "quarantined":
+        return hold("recovery-evidence-changed")
+    if lock_dir.exists():
+        return hold("lease-identity-changed")
+    recovered = matches[0]
+    out.update(state="quarantined", reason=recovered["reason"],
+               receipt=rel(root, Path(recovered["receipt"])))
     return out
 
 
 def reclaim_leases(root: Path, report: dict, rows, grace_seconds: int,
                    include_orphan: bool, execute: bool, now: datetime):
-    # stale만 회수한다. live는 절대 건드리지 않고, orphan은 명시 플래그 필요.
+    # Unknown and corrupt owners stay reserved, including preview/include-orphan.
     reclaimed, skipped = [], []
     session_observed = bool(report.get("sessionStatusObserved"))
     for row in rows:
@@ -606,17 +536,19 @@ def reclaim_leases(root: Path, report: dict, rows, grace_seconds: int,
         if lifecycle == "live":
             skipped.append({**base, "reason": "live-lease"})
             continue
-        if lifecycle == "orphan" and not include_orphan:
+        if lifecycle == "orphan":
             skipped.append({**base, "reason": "orphan-manual-review"})
+            continue
+        if not session_observed or row.get("ownerState") != "dead":
+            skipped.append({**base, "reason": "owner-state-unverifiable"})
             continue
         if not execute:
             reclaimed.append({**base, "pending": True,
                               "expiredSeconds": row.get("expiredSeconds"),
                               "staleReason": row.get("staleReason")})
             continue
-        outcome = (quarantine_orphan(root, row, now) if lifecycle == "orphan"
-                   else quarantine_stale(root, row, grace_seconds, now,
-                                         session_observed))
+        outcome = quarantine_stale(root, row, grace_seconds, now,
+                                    session_observed)
         entry = {**base, **outcome}
         (reclaimed if outcome.get("state") == "quarantined"
          else skipped).append(entry)
@@ -849,7 +781,7 @@ def cmd_plan(root: Path, args) -> int:
     auto_actions = [{"action": "stale-reclaim", **r} for r in reclaimed]
     auto_actions += [{"action": "stale-reclaim", **r} for r in reclaim_skipped]
     if blocked_pairs:
-        # journal 문구는 기존 값 유지(호환), nextAction만 WAIT/HOLD로 간다
+        # A completed observation round does not terminate normal live contention.
         action_kind = "continue_partial" if proceed else "await_release"
         blocked_sorted = sorted({p for p, _ in blocked_pairs})
         wait_command = ("python -B scripts/codex_auto_unblock.py lease-wait "
@@ -862,7 +794,9 @@ def cmd_plan(root: Path, args) -> int:
                        for d in sorted(blocked_detail,
                                        key=lambda x: x.get("expiresAtUtc")
                                        or "")]
-        next_action = "HOLD" if args.waited else "WAIT"
+        next_action = (("WAITING" if args.waited else "WAIT")
+                       if all(d.get("lifecycle") == "live" for d in blocked_detail)
+                       else "HOLD")
     else:
         action_kind = "proceed"
         wait_command = None
@@ -871,12 +805,14 @@ def cmd_plan(root: Path, args) -> int:
     resume_checks = None
     if next_action == "RESUME":
         resume_checks = [
-            "record-sha12: 대상 파일 현재 sha12를 기록 — 처음 본 sha와 "
-            "다르면 EXTERNAL_DRIFT 기록 후 최신 파일 위에 다시 패치"
-            "(상대 hunk 덮어쓰기 금지)",
-            "rerun-red: 내 RED 테스트를 다시 실행해 여전히 실패하는지 확인",
-            "begin: 재확인·재계획 뒤 source_edit_session -Action begin/lease "
-            "claim을 다시 획득하고 편집",
+            "acquire-fresh: source_edit_session -Action begin으로 자기 새 lease를 "
+            "획득; root/task/leaseId/fingerprint/manifest를 고정 (free는 권한 아님)",
+            "compare-baseline: immutable 대기 전 baseline과 최신 target/test/config "
+            "full SHA256 및 path identity 비교; 판독 실패는 unknown",
+            "reread-replan: 변경된 입력을 재독하고 새 계획/RED로 판단; 이미 해결됐으면 "
+            "현재 검사를 확인한 뒤 SKIP_ALREADY_DONE, 쓰기 0",
+            "strict-verify: 쓰기 직전 소유권/preimage를 -RequireAbsentTargets로 재검사",
+            "verify-current: 실제 변경에 묶인 focused 검사를 실행; 과거 PASS 재사용 금지",
         ]
     if args.execute and blocked_pairs:
         refs = []
@@ -918,13 +854,56 @@ def cmd_plan(root: Path, args) -> int:
               "waitCommand": wait_command,
               "resumeWhen": resume_when,
               "resumeChecks": resume_checks,
+              "resumeAllowed": False,
+              "waitState": "WAITING" if next_action in ("WAIT", "WAITING") else None,
+              "resumeStage": "fresh-acquisition-required" if next_action == "RESUME" else None,
               "nextAction": next_action}
     print(json.dumps(result, ensure_ascii=True))
     return 7 if blocked_pairs and not proceed else 0
 
 
+def _claims_from_locks(root: Path, task_id: str):
+    """scope-claim 없이 ps1 begin만으로 딴 lease의 대체 claim 목록.
+    lease.json의 taskIdHash == sha256(taskId)이고 아직 만료 전인 것만."""
+    want = hashlib.sha256(str(task_id).encode("utf-8")).hexdigest()
+    locks = root / LOCKS_DIR
+    now = utcnow()
+    out = []
+    if not locks.is_dir():
+        return out
+    for lock in sorted(locks.glob("*.lock")):
+        jf = lock / "lease.json"
+        try:
+            raw = jf.read_bytes()
+            j = json.loads(raw.decode("utf-8", errors="replace"))
+        except (OSError, ValueError):
+            continue
+        if j.get("taskIdHash") != want or not j.get("ownerId"):
+            continue
+        exp = j.get("expiresAtUtc") or j.get("expiresAt")
+        if exp:
+            try:
+                expdt = datetime.fromisoformat(
+                    str(exp).replace("Z", "+00:00"))
+                if expdt.tzinfo is None:
+                    expdt = expdt.replace(tzinfo=timezone.utc)
+                if expdt <= now:
+                    continue  # 만료 lease에 heartbeat는 의미가 없다
+            except ValueError:
+                continue
+        out.append({"topic": j.get("topic") or lock.stem,
+                    "ownerId": j.get("ownerId") or "",
+                    "fingerprint": hashlib.sha256(raw).hexdigest(),
+                    "ttlMinutes": None,
+                    "source": "lease-taskIdHash"})
+    return out
+
+
 def cmd_heartbeat(root: Path, args) -> int:
     claims = [c for c in scope.task_claims(root, args.task) if not c.get("released")]
+    if not claims:
+        # ps1 begin 직행 lease는 scope-claim 문서가 없다 — taskIdHash로 찾는다.
+        claims = _claims_from_locks(root, args.task)
     if not claims:
         raise AutoflowError("scope-claim-missing")
     results, worst = [], 0

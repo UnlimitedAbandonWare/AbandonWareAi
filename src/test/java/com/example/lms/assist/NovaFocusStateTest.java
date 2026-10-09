@@ -4,6 +4,100 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NovaFocusStateTest {
+    @Test void selectedThreeAndFiveSecondHoldPreservesAnswerAndOneVoiceQuestionUntilDeadline() {
+        for(int hold: new int[]{3000,5000}){
+            var s=heldState(hold,20000);s.open(0,"fold");s.input(u("first",0,true,"첫 질문"),0);
+            var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","읽는 답변","ticket",1300);
+            s.input(u("next",0,false,"다음"),1350);s.input(u("next",1,true,"다음 질문"),1400);
+            s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
+            assertNull(s.tick(1450));
+            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
+            assertNull(s.tick(1700),"early voice handoff, hold="+hold);
+            assertThrows(IllegalArgumentException.class,()->s.typed("manual","덮어쓰기",1800));
+            s.input(u("extra",0,true,"추가 질문"),2800);
+            assertEquals("focus_next_question_full",s.view(2800).reason());
+            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",3000);
+            long deadline=1500+hold;assertNull(s.tick(deadline-1));
+            assertEquals("읽는 답변",s.view(deadline-1).answerText());assertEquals(1,s.view(deadline-1).answerVersion());
+            assertEquals("다음 질문",s.view(deadline-1).draftText());
+            var next=s.tick(deadline);assertNotNull(next);assertEquals("다음 질문",next.question());
+            assertNull(s.tick(deadline+1));
+        }
+    }
+    @Test void holdFreezesWithAcceptedQuestionAndStillRequiresFinalQuiet() {
+        var s=heldState(3000,20000);s.open(0,"fold");s.input(u("first",0,true,"질문"),0);
+        var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","답변","ticket",1300);
+        s.configure(heldState(5000,20000).settings,1400);
+        s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
+        s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
+        assertEquals(3000,s.view(1500).presentation().tailHoldMs());
+        s.input(u("next",0,false,"부분"),2000);assertNull(s.tick(4300));
+        s.input(u("next",1,true,"확정 질문"),4400);assertNull(s.tick(4500));assertNull(s.tick(5599));
+        var next=s.tick(5600);assertNotNull(next);assertEquals("확정 질문",next.question());
+        assertEquals(5000,s.view(5600).presentation().tailHoldMs());
+    }
+    @Test void shortIdleCannotPreemptHoldButStopAndOldReceiptRemainImmediate() {
+        var idle=heldState(15000,5000);idle.open(0,"fold");idle.input(u("first",0,true,"질문"),0);
+        var first=idle.tick(1200);idle.accepted(first,"turn");idle.answer(first,"turn","답변","ticket",1300);
+        idle.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
+        idle.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
+        assertNull(idle.tick(6500));assertTrue(idle.active());assertEquals("답변",idle.view(16499).answerText());
+        assertNull(idle.tick(16499));assertTrue(idle.active());idle.tick(16500);
+        assertFalse(idle.active());assertEquals("idle_timeout",idle.view(16500).reason());
+        var stop=heldState(5000,20000);stop.open(0,"fold");stop.input(u("first",0,true,"질문"),0);
+        var old=stop.tick(1200);stop.accepted(old,"turn");stop.answer(old,"turn","답변","ticket",1300);
+        stop.receipt("server",old.activationId(),"turn",1,"ticket","first_visible",1400);
+        stop.receipt("server",old.activationId(),"turn",1,"ticket","presentation_done",1500);
+        stop.close("user_closed");assertFalse(stop.active());assertEquals("",stop.view(1501).answerText());
+        stop.open(1600,"fold");assertFalse(stop.receipt("server",old.activationId(),"turn",1,"ticket","presentation_done",1700));
+        stop.input(u("fresh",0,true,"새 질문"),1600);assertNotNull(stop.tick(2800));
+    }
+    private NovaFocusState heldState(int hold,int idle){
+        var d=NovaFocusSettings.defaults();var p=d.presentation();
+        return new NovaFocusState("server",new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),idle,d.wakeListenTimeoutMs(),
+            new NovaFocusSettings.Presentation(p.sequentialTextEnabled(),p.charIntervalMs(),p.maxVisibleLines(),p.autoFadeEnabled(),hold,p.fadeMs())));
+    }
+    @Test void manualBypassWaitsForQuietAndCapacityWithoutOpeningVoiceMergeDuringHold() {
+        for(boolean capacity: new boolean[]{true,false}){
+            var s=heldState(5000,20000);s.open(0,"fold");s.input(u("first",0,true,"질문"),0);
+            var first=s.tick(1200);s.accepted(first,"turn");s.answer(first,"turn","읽는 답변","ticket",1300);
+            s.receipt("server",first.activationId(),"turn",1,"ticket","first_visible",1400);
+            s.receipt("server",first.activationId(),"turn",1,"ticket","presentation_done",1500);
+            s.typed("manual","수동 질문",1600);assertNull(s.tick(1601,capacity));
+            assertEquals("PRESENTING",s.view(1601).phase());assertEquals("읽는 답변",s.view(1601).answerText());
+            if(!capacity){assertNull(s.tick(2800,false));assertEquals("PRESENTING",s.view(2800).phase());}
+            s.input(u("voice",0,true,"합치면 안 되는 음성"),2801);
+            assertEquals("focus_next_question_full",s.view(2801).reason());assertEquals("수동 질문",s.view(2801).draftText());
+            var manual=s.tick(2802,true);assertNotNull(manual);assertEquals("수동 질문",manual.question());
+            assertEquals(NovaFocusState.typedRequestId("manual"),manual.requestId());assertNull(s.tick(2803));
+        }
+    }
+    @Test void fallbackOutcomeStaysWithAcceptedRequestAndOnlyFoldThenClearsOnNormalAnswer() {
+        var s=state(true);s.open(0,"fold");s.input(u("one",0,true,"첫 질문"),0);var first=s.tick(1200);s.accepted(first,"first");
+        var outcome=new NovaFocusAnswer.ModelOutcome("fixture-primary","llmrouter.gemini-cue","gemini-3.5-flash-lite",true,"backend_timeout","ModelSelectionException");
+        s.answer(first,"first","대체 응답","ticket",1300,null,outcome);
+        var json=new com.fasterxml.jackson.databind.ObjectMapper();var fold=json.valueToTree(s.view(1300).forTarget("fold"));
+        assertTrue(fold.path("isFallback").asBoolean());assertEquals("backend_timeout",fold.path("fallbackReasonCode").asText());
+        assertFalse(json.valueToTree(s.view(1300).forTarget("lens")).has("isFallback"));
+        s.close("user_closed");s.open(2000,"fold");s.input(u("two",0,true,"다음 질문"),2000);var next=s.tick(3200);s.accepted(next,"next");
+        s.answer(first,"first","늦은 대체","old-ticket",3300,null,outcome);assertFalse(json.valueToTree(s.view(3300).forTarget("fold")).has("isFallback"));
+        s.answer(next,"next","정상 응답","new-ticket",3400,null,new NovaFocusAnswer.ModelOutcome("llmrouter.gemini-cue","llmrouter.gemini-cue","gemini-3.5-flash-lite",false,"none",null));
+        assertFalse(json.valueToTree(s.view(3400).forTarget("fold")).path("isFallback").asBoolean());
+        assertEquals("정상 응답",s.view(3400).answerText());
+    }
+
+    @Test void threeSecondShortQuestionUsesCorrectedFinalOnceWithoutEightSecondOrLengthMinimum() {
+        var s=state(true);s.open(0,"fold");
+        s.input(u("current",0,false,"Even G2?"),100);
+        assertNull(s.tick(1800));
+        s.input(u("current",1,true,"HP Reverb G2?"),1800);
+        assertNull(s.tick(2999));
+        var request=s.tick(3000);assertNotNull(request);
+        assertEquals("HP Reverb G2?",request.question());
+        s.input(u("current",1,true,"HP Reverb G2?"),3100);
+        assertNull(s.tick(4300));assertTrue(s.accepts(request));
+    }
+
     @Test void recentPartialInputSurvivesListeningDeadlineWithoutSubmittingUnconfirmedText() {
         var s=state(true);s.open(0,"fold");
         s.input(u("ongoing",0,false,"부분 질문"),7000);
@@ -156,7 +250,10 @@ class NovaFocusStateTest {
         var first=s.tick(1200);s.accepted(first,"first");s.answer(first,"first","answer","ticket",1300);
         s.receipt("server",first.activationId(),"first",1,"ticket","first_visible",1400);
         s.receipt("server",first.activationId(),"first",1,"ticket","presentation_done",1500);
-        s.sourceNamespace("assist:2");s.input(u("a",0,true,"second"),1600);var second=s.tick(2800);
+        s.sourceNamespace("assist:2");s.input(u("a",0,true,"second"),1600);
+        long deadline=1500+s.view(1500).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
+        assertEquals("answer",s.view(deadline-1).answerText());assertEquals("second",s.view(deadline-1).draftText());
+        var second=s.tick(deadline);
         assertNotNull(second);assertTrue(s.accepts(second));assertFalse(s.accepts(first));
         s.failed(first,"late_failure");assertTrue(s.accepts(second));
     }
@@ -197,7 +294,10 @@ class NovaFocusStateTest {
         var s=state(true);s.input(u("a",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
         s.input(u("b",0,false,"질문"),1500);s.input(u("b",1,true,"질문"),1600);assertNull(s.tick(3000));
         s.answer(r,"turn","답변","ticket",3100);s.receipt("server",r.activationId(),"turn",1,"ticket","first_visible",3200);
-        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",4000);assertEquals("질문",s.tick(4001).question());
+        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",4000);
+        long deadline=4000+s.view(4000).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
+        assertEquals("답변",s.view(deadline-1).answerText());assertEquals("질문",s.view(deadline-1).draftText());
+        assertEquals("질문",s.tick(deadline).question());assertNull(s.tick(deadline+1));
     }
     @Test void typedRequestIdentitySurvivesServerAndActivationChange(){
         var first=state(false);first.sourceNamespace("old-capture");first.open(0,"fold");first.typed("request-1","question",0);var a=first.tick(1200);
@@ -220,9 +320,12 @@ class NovaFocusStateTest {
         var s=state(true);s.input(u("a",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
         s.input(u("b",0,true,"다음 질문"),1300);s.input(u("c",0,true,"추가 질문"),2600);
         assertEquals("다음 질문",s.view(2600).draftText());assertEquals("focus_next_question_full",s.view(2600).reason());
-        assertEquals(new java.util.HashSet<>(java.util.List.of("active","phase","stateVersion","answerVersion","bufferedQuestions","snapshotPending","captureAttempts","capturesCompleted","duplicateSuppressed","captureGrants","textFallbacks")),s.diagnostics().keySet());
+        assertEquals(new java.util.HashSet<>(java.util.List.of("active","phase","stateVersion","answerVersion","bufferedQuestions","snapshotPending","captureAttempts","capturesCompleted","duplicateSuppressed","captureGrants","textFallbacks","wakeKind","snapshot.trigger","snapshot.outcome")),s.diagnostics().keySet());
         s.answer(r,"turn","답변","ticket",2700);s.receipt("server",r.activationId(),"turn",1,"ticket","first_visible",2800);
-        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",3000);assertEquals("다음 질문",s.tick(3001).question());
+        s.receipt("server",r.activationId(),"turn",1,"ticket","presentation_done",3000);
+        long deadline=3000+s.view(3000).presentation().tailHoldMs();assertNull(s.tick(deadline-1));
+        assertEquals("답변",s.view(deadline-1).answerText());assertEquals("다음 질문",s.view(deadline-1).draftText());
+        assertEquals("다음 질문",s.tick(deadline).question());assertNull(s.tick(deadline+1));
     }
     @Test void sameCaptureFinalReplayIsStableButNewCaptureCanReuseAsrCounter(){
         var a=state(true);a.sourceNamespace("capture:1");a.input(u("asr-1",0,true,"노바 질문"),0);var first=a.tick(1200);

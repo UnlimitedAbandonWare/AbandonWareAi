@@ -193,6 +193,50 @@ class NovaFocusExecutionPolicyTest {
             assertEquals(B,f.calls.get(0).getModel());assertTrue(f.calls.get(0).isStrictModelSelection());
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"API_ONLY","AUTO"})
+    void automaticChoiceSkipsNonselectableConfiguredDefaults(String target) throws Exception {
+        try(var f=new Fixture()){
+            f.setIfPresent("defaultModel",A);f.setIfPresent("focusDefaultModel",A);
+            f.choices.put(A,new ChatModelCatalogService.Choice(A,"groq","api-a","fixture-api-a",
+                "disabled",false,"provider_disabled","unknown","server_catalog"));
+            f.answer(selection("AUTO",null,target,false,List.of()));
+            assertEquals(List.of(B),f.calls.stream().map(ChatRequestDto::getModel).toList());
+            assertTrue(f.calls.get(0).isStrictModelSelection());
+            assertEquals(0,TraceStore.get("focus.selection.fallbackCount"));
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"auth401","auth403","missing404","terminal","wrapped_terminal"})
+    void nonretryableFailureCannotBecomeSameModelSearchOffRetry(String kind) throws Exception {
+        try(var f=new Fixture()){
+            var terminal=new com.example.lms.llm.gateway.LlmResponseTerminalException("content_filter",
+                com.example.lms.llm.gateway.LlmFailureClass.PROVIDER_ERROR,"",null,"incomplete","content_filter",null);
+            RuntimeException failure=switch(kind){
+                case "auth401"->new dev.langchain4j.exception.HttpException(401,"synthetic_unauthorized");
+                case "auth403"->new dev.langchain4j.exception.HttpException(403,"synthetic_forbidden");
+                case "missing404"->new dev.langchain4j.exception.HttpException(404,"model not found");
+                case "wrapped_terminal"->new RuntimeException("synthetic_wrapper",terminal);
+                default->terminal;
+            };
+            f.response=r->{throw failure;};
+            var context=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selection("FIXED",A,"API_ONLY",false,List.of()),2);
+            assertSame(failure,assertThrows(RuntimeException.class,()->f.adapter.answer(7L,"공식 자료를 찾아 확인해줘",context,()->true)));
+            assertEquals(1,f.calls.size());assertTrue(f.calls.get(0).isUseWebSearch());
+            assertNull(TraceStore.get("focus.search.parametricRetry"));
+        }
+    }
+    @Test void retryableFailureRetainsBoundedSameModelSearchOffRecovery() throws Exception {
+        try(var f=new Fixture()){
+            f.response=r->{if(f.calls.size()==1)throw new dev.langchain4j.exception.HttpException(503,"synthetic_search_unavailable");return f.success(r);};
+            var context=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selection("FIXED",A,"API_ONLY",false,List.of()),2);
+            assertEquals("synthetic answer",f.adapter.answer(7L,"공식 자료를 찾아 확인해줘",context,()->true));
+            assertEquals(List.of(A,A),f.calls.stream().map(ChatRequestDto::getModel).toList());
+            assertTrue(f.calls.get(0).isUseWebSearch());assertFalse(f.calls.get(1).isUseWebSearch());
+            assertEquals(com.example.lms.gptsearch.dto.SearchMode.OFF,f.calls.get(1).getSearchMode());
+            assertEquals(Boolean.TRUE,TraceStore.get("focus.search.parametricRetry"));
+        }
+    }
     @Test void cancellationAfterFirstFailureStopsTheFallbackChain() throws Exception {
         try(var f=new Fixture()){
             var current=new AtomicBoolean(true);
@@ -255,6 +299,22 @@ class NovaFocusExecutionPolicyTest {
             assertTrue(f.calls.stream().allMatch(ChatRequestDto::isStrictModelSelection));
             assertNotNull(f.calls.get(1).getImageBase64());assertNull(f.calls.get(2).getImageBase64());
             assertEquals(1,TraceStore.get("focus.selection.fallbackCount"));
+        }
+    }
+    @Test void resultPreservesActualFallbackFailureAndNormalAutoIsNotFallback() throws Exception {
+        for(boolean fallback:List.of(true,false))try(var f=new Fixture()){
+            f.geminiChoices();f.setIfPresent("focusDefaultModel",A);
+            f.response=r->{if(fallback&&A.equals(r.getModel()))throw new ModelSelectionException("backend_timeout");return f.success(r);};
+            var selected=selection("AUTO",null,"API_ONLY",true,List.of(B));
+            var context=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selected,2);
+            var result=f.adapter.answerResult(7L,"Why are leaves green?",null,null,context,null,()->true);
+            var meta=JSON.valueToTree(result).path("modelOutcome");
+            assertEquals(fallback,meta.path("isFallback").asBoolean());
+            assertEquals(A,meta.path("requestedModel").asText());
+            assertEquals(fallback?"gemini-3.5-flash-lite":"gemini-3.8-flash",meta.path("effectiveModel").asText());
+            assertEquals(fallback?"backend_timeout":"none",meta.path("reasonCode").asText());
+            if(fallback)assertEquals("ModelSelectionException",meta.path("originalError").asText());
+            assertEquals(fallback?List.of(A,B):List.of(A),f.calls.stream().map(ChatRequestDto::getModel).toList());
         }
     }
     static final class Fixture implements AutoCloseable {

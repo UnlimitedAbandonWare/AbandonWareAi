@@ -23,6 +23,7 @@ try:
     import codex_work_checkpoint as ck
 except ImportError:  # pragma: no cover - direct module run fallback
     ck = None
+import lease_lifetime
 
 SCHEMA = "awx.parallel-lanes.v1"
 JOURNAL_BASE = "data/agent-handoff/codex-autonomy"
@@ -159,15 +160,29 @@ def iter_source_leases(root):
         doc = _read_json(path)
         if isinstance(doc, dict):
             doc["_topic"] = path.parent.name[:-5]
+            doc["_leaseFile"] = str(path)
             yield doc
 
 
 def lease_lifecycle(lease, now=None):
-    """live|stale|unknown from a raw lease.json row (no ps1 needed)."""
+    """live|stale|unknown from a raw lease.json row (no ps1 needed).
+
+    A valid heartbeat sidecar extends the effective expiry exactly like the
+    PS1 contract; rows without a readable _leaseFile keep the old verdict."""
     if not isinstance(lease, dict):
         return "unknown"
     now = now or datetime.now(timezone.utc)
     expiry = parse_iso(lease.get("expiresAtUtc") or lease.get("expiresAt"))
+    lease_file = lease.get("_leaseFile")
+    if lease_file and expiry is not None:
+        try:
+            lt = lease_lifetime.lifetime(
+                lease_lifetime.heartbeats_dir_for_lease_file(lease_file),
+                lease, Path(lease_file).read_bytes(), now)
+            if lt["expires"] is not None and lt["effective"] is not None:
+                expiry = lt["effective"]
+        except OSError:
+            pass
     pid = lease.get("ownerProcessId")
     if isinstance(pid, int) and pid > 0 and ck is not None and ck.pid_alive(pid):
         return "live"

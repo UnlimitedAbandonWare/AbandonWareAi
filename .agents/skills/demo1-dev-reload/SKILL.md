@@ -49,3 +49,13 @@ Spring Boot keeps the old classpath in a running JVM. Codex must not "restart th
 # alive only (no rebuild claim)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_rag_stack.ps1 -MetaDisplay -CheckOnly
 ```
+
+## Runtime-reloaded check (grokbot 2026-10-09)
+
+- Before any test after a change, confirm the running server took it: `var/dev-reload/watch.state.json` / `last-restart.out.log` newer than the edit, `/api/chat/models` reflects config, and `python C:\Users\nninn\grokbot-tools\served_asset_check.py <static file>` shows served sha = disk sha.
+- A reverted config with no restart since leaves the old state live (2026-10-09 19:09 revert vs 19:03:58 restart). See `$demo1-reachability-first-debug` R5.
+
+## Ready gate + restart notice (grokbot3 2026-10-09)
+- Before saying "서버 준비/테스트해도 됩니다": `python -B scripts\model_default_probe.py --ready` must print `NOVA_READY=READY`; otherwise relay its `한 줄:`.
+- User asked for restart notice → announce BEFORE saving into a watched root, then report `--restarts-since <HH:MM>` ("재시작 감지 HH:MM") and the `--ready` result.
+- `launcher-already-running` = run refused, JVM untouched → do not relaunch; run `--ready` and tell the user to close the new window. Details: `$demo1-reachability-first-debug` R7-R10.

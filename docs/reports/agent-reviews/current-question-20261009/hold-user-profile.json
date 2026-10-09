@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-10-09T11:57:24.986779+00:00",
+  "ownerHash": "33d5f21b86f3",
+  "profilePrefix": "dfa4c4c2aa24",
+  "settingsVersion": 7,
+  "settingsSha256": "309b41cad43d5be2e7d7aa6d7d3468acfec2cba4f4d7df4c3801fa97e1bfd0ce",
+  "answerSelection": {
+    "mode": "FIXED",
+    "modelId": "chatgpt-oauth:gpt-5.6-luna",
+    "routing": {
+      "executionTarget": "API_ONLY",
+      "fallbackAllowed": false,
+      "allowedFallbackIds": [],
+      "effectiveFallbackAllowed": false
+    }
+  },
+  "webSearchEnabled": false,
+  "answerLengthChars": 200,
+  "reasoningPreset": "STANDARD",
+  "tailHoldMs": 5000,
+  "agentUserWrites": 0
+}

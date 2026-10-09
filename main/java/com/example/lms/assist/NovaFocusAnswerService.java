@@ -1,6 +1,7 @@
 package com.example.lms.assist;
 
 import com.example.lms.api.PublicRequestBudgetGuard;
+import com.example.lms.api.PublicChatAdmissionGuard;
 import com.example.lms.dto.ChatRequestDto;
 import com.example.lms.gptsearch.decision.SearchDecisionService;
 import com.example.lms.gptsearch.dto.SearchMode;
@@ -106,6 +107,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         if(foldCandidate)run.installFoldTextConsumer(text->{requireCurrent(current);foldPartial.accept(text);});
         var previousBudget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
         if(previousBudget==null)com.abandonware.ai.addons.budget.TimeBudgetContext.set(new com.abandonware.ai.addons.budget.TimeBudget(Math.min(10000L,Math.max(3000L,focusTimeoutMs))));
+        long appliedBudgetMs=com.abandonware.ai.addons.budget.TimeBudgetContext.get().remainingMillis();
+        long observedStartNano=System.nanoTime();
         String timeline=null,terminal="error",terminalModel=request.getModel();
         try(var binding=ChatRunExecutionContext.bind(run)){
             if(modelHealth!=null){
@@ -146,7 +149,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             if(retrieval.status()==FocusMemoryService.Status.BLOCKED_SCOPE)throw new java.util.concurrent.CancellationException("focus_memory_revoked");
             var context=new ChatConversationContext(memory.recent().stream().map(NovaFocusAnswerService::pair).toList(),
                 memory.summary(),memory.relevant().stream().map(NovaFocusAnswerService::pair).toList(),true,retrieval.evidence(),memory.transcript(),memory.answerLengthChars())
-                .withFocusGoogleSearch(searchAllowed&&(exclusive||web||Boolean.TRUE.equals(memory.webSearchEnabled())),exclusive);
+                .withFocusGoogleSearch(searchAllowed&&(exclusive||web||Boolean.TRUE.equals(memory.webSearchEnabled())),exclusive)
+                .withFocusAnswerInstruction(memory.answerInstruction());
             var transcriptIds=memory.transcript().stream().map(t->t.sourceId()+":"+t.revision()+":"+t.contextEpoch()).toList();
             // Project bounded extra input into the existing public admission guard; the actual DTO remains unchanged.
             var projected=request.toBuilder().message(question+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
@@ -198,6 +202,10 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             TraceStore.put("focus.length.generatedGraphemes",graphemes(completed.text()));
             TraceStore.put("focus.length.visibleGraphemes",graphemes(memory.answerLengthChars()==null?answer:boundDisplay(answer,memory.answerLengthChars())));
             TraceStore.put("focus.length.targetChars",memory.answerLengthChars()==null?"legacy":memory.answerLengthChars());
+            String instruction=memory.answerInstruction()==null?"":memory.answerInstruction().strip();
+            TraceStore.put("focus.instruction.preset",memory.answerPreset()==null?"GENERAL":memory.answerPreset().name());
+            TraceStore.put("focus.instruction.chars",instruction.codePointCount(0,instruction.length()));
+            if(!instruction.isEmpty())TraceStore.put("focus.instruction.sha8",NovaFocusHistoryService.digest(instruction).substring(0,8));
             TraceStore.put("focus.quick",quick);
             TraceStore.put("focus.search.allowed",searchAllowed);
             TraceStore.put("focus.search.webRequested",exclusive||web);
@@ -231,10 +239,14 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             if(run.foldHasPublished())answer=answer.stripLeading();
             run.requireFoldPrefix(answer);
             terminal="success";terminalModel=result.modelUsed();
-            return new Result(answer,grounded?grounding:null);
+            return new Result(answer,grounded?grounding:null,new ModelOutcome(request.getModel(),completed.selectedModel(),result.modelUsed(),completed.fallbackCount()>0,completed.fallbackReason(),completed.originalError()));
         }catch(java.util.concurrent.CancellationException cancelled){terminal="cancelled";throw cancelled;
         }catch(ModelSelectionException failure){if("backend_timeout".equals(failure.code()))terminal="timeout";else if("request_cancelled".equals(failure.code()))terminal="cancelled";throw failure;
         }finally{
+            TraceStore.put("focus.request.configuredTimeoutMs",focusTimeoutMs);
+            TraceStore.put("focus.request.appliedBudgetMs",appliedBudgetMs);
+            TraceStore.put("focus.request.budgetSource",previousBudget==null?"focus":"inherited");
+            TraceStore.put("focus.request.elapsedMs",java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-observedStartNano));
             run.foldTimings().forEach(TraceStore::put);
             try{
                 // ChatWorkflow clears TraceStore per attempt; publish the bounded Jev verdict
@@ -255,7 +267,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
     private static final Set<String> ATTEMPT_FIELDS=Set.of("sequence","logicalCallOrdinal","attemptOrdinal","role",
         "routeKeyHash","modelHash","protocol","outcome","failureClass","terminalClass","evidenceBoundary",
         "modelAdapterAttemptObserved","clientHttpExchangeObserved","clientHttpResponseObserved",
-        "providerAttemptObserved","wireAttemptObserved","responseObserved","providerReceiptObserved");
+        "providerAttemptObserved","wireAttemptObserved","responseObserved","providerReceiptObserved","elapsedMs");
     private void publishAttemptEvidence(String timeline,String model,String terminal){
         List<Map<String,Object>> rows=List.of();
         try{
@@ -290,7 +302,9 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             "focus.stream.firstProviderDeltaMs","focus.stream.firstUsefulPublishedMs","focus.stream.finalValidatedMs","focus.stream.publishedChars",
             "focus.unknown.trigger","focus.unknown.mode","focus.unknown.webRetry","focus.unknown.reason","focus.unknown.outcome",
             "focus.request.attempts","focus.request.attemptCount","focus.request.attemptRowsOmitted","focus.request.evidenceBoundary","focus.request.terminalClass",
+            "focus.request.configuredTimeoutMs","focus.request.appliedBudgetMs","focus.request.budgetSource","focus.request.elapsedMs",
             "focus.length.generatedGraphemes","focus.length.visibleGraphemes","focus.length.targetChars","focus.quick",
+            "focus.instruction.preset","focus.instruction.chars","focus.instruction.sha8",
             "focus.search.allowed","focus.search.webRequested","focus.search.groundingStatus","focus.search.parametricRetry")){
             Object value=TraceStore.get(key);if(value!=null)safe.put(key,value);
         }
@@ -472,8 +486,8 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         var focusPreferred=StringUtils.hasText(focusDefaultModel)?modelCatalog.resolve(focusDefaultModel).orElse(null):null;
         if(focusPreferred!=null&&focusPreferred.selectable()&&allowedTarget(focusPreferred,policy))return focusDefaultModel;
         var preferred=StringUtils.hasText(defaultModel)?modelCatalog.resolve(defaultModel).orElse(null):null;
-        if(allowedTarget(preferred,policy))return defaultModel;
-        if(policy.executionTarget()==NovaFocusSettings.ExecutionTarget.API_ONLY&&routerConfig!=null){
+        if(preferred!=null&&preferred.selectable()&&allowedTarget(preferred,policy))return defaultModel;
+        if((policy.executionTarget()==NovaFocusSettings.ExecutionTarget.API_ONLY||policy.executionTarget()==NovaFocusSettings.ExecutionTarget.AUTO)&&routerConfig!=null){
             // Reuse configured route preference and catalog admission; never invent or enable a route.
             return routerConfig.getModels().entrySet().stream()
                 .filter(e->e.getValue().isEnabled()&&!e.getValue().isFallbackOnly())
@@ -486,24 +500,26 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
         if(StringUtils.hasText(defaultModel)&&preferred==null)return defaultModel;
         throw new ModelSelectionException("model_request_invalid");
     }
-    private record ModelAnswer(ChatResult result,String text,String selectedModel,int fallbackCount,String fallbackReason){
+    private record ModelAnswer(ChatResult result,String text,String selectedModel,int fallbackCount,String fallbackReason,String originalError){
         @Override public String toString(){return "FocusModelAnswer[redacted]";}
     }
     private static void requireCurrent(java.util.function.BooleanSupplier current){
         if(!current.getAsBoolean())throw new java.util.concurrent.CancellationException("focus_closed");
         ChatRunExecutionContext.throwIfCancelled();ChatRunExecutionContext.capRequestWait(Long.MAX_VALUE);
     }
-    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason,boolean searchRetryAllowed){
+    private ModelAnswer callModel(ChatRequestDto request,ChatConversationContext context,java.util.function.BooleanSupplier current,int fallbacks,String reason,String originalError,boolean searchRetryAllowed){
         requireCurrent(current);
         ChatResult result;
         try{
             result=chat.continueChat(request,null,context);
         }catch(ModelSelectionException|java.util.concurrent.CancellationException failure){throw failure;
+        }catch(IllegalArgumentException|PublicRequestBudgetGuard.Rejection|PublicChatAdmissionGuard.Rejection failure){throw failure;
         }catch(RuntimeException failure){
             // Same-model parametric recovery: a transient search/grounding failure on a
             // web-enabled call must not cascade into model fallback or stall the lens.
             if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!searchRetryAllowed||!Boolean.TRUE.equals(request.isUseWebSearch()))throw failure;
             requireCurrent(current);
+            if(!com.example.lms.llm.LlmErrorClassifier.classify(failure).retryable())throw failure;
             try{result=chat.continueChat(request.toBuilder().useWebSearch(false).searchMode(SearchMode.OFF)
                     .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(false,false)).webTopK(0).build(),null,context);
             }finally{com.example.lms.search.TraceStore.put("focus.search.parametricRetry",true);}
@@ -517,18 +533,18 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             answer=result.content();
             if(answer!=null&&!answer.isBlank())answer="사진 분석 모델이 준비되지 않아 사진 없이 답변합니다.\n\n"+answer;
         }
-        return new ModelAnswer(result,answer,request.getModel(),fallbacks,reason);
+        return new ModelAnswer(result,answer,request.getModel(),fallbacks,reason,originalError);
     }
     private ModelAnswer executeModels(ChatRequestDto request,ChatConversationContext context,NovaFocusSettings.AnswerSelection selection,
                                       java.util.function.BooleanSupplier current,boolean memoryEnabled){
         var entryBudget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
         if(entryBudget!=null&&entryBudget.remainingMillis()<2000)throw new java.util.concurrent.CancellationException("focus_budget_exhausted");
         var policy=selection.routing();
-        if(policy==null)return callModel(request,context,current,0,"none",true);
+        if(policy==null)return callModel(request,context,current,0,"none",null,true);
         var ids=new LinkedHashSet<String>();ids.add(request.getModel());
         boolean fallbackAllowed=policy.effectiveFallbackAllowed();
         if(fallbackAllowed)ids.addAll(policy.allowedFallbackIds());
-        int index=0,fallbacks=0;String reason="none";ModelSelectionException last=null;
+        int index=0,fallbacks=0;String reason="none",originalError=null;RuntimeException last=null;
         for(String id:ids){
             requireCurrent(current);
             boolean backup=index++>0;
@@ -542,15 +558,28 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
                 var projected=attempt.toBuilder().message(request.getMessage()+"\n"+context.memoryText()+"\n"+String.join("\n",context.interpretationHistory())).build();
                 budgets.validateChatProjected(projected,PlanHints.empty("nova-focus"),Boolean.TRUE.equals(request.isUseWebSearch()),memoryEnabled);
                 if(backup)fallbacks++;
-                return callModel(attempt,context,current,fallbacks,reason,
+                return callModel(attempt,context,current,fallbacks,reason,originalError,
                         policy.executionTarget()!=NovaFocusSettings.ExecutionTarget.GEMINI_WEBSEARCH_ONLY);
             }catch(ModelSelectionException failure){
                 requireCurrent(current);last=failure;
-                if("none".equals(reason))reason=failure.code();
+                if("none".equals(reason)){reason=failure.code();originalError="ModelSelectionException";}
                 com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",reason);
                 com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",fallbacks);
                 var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
                 if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!fallbackAllowed||Set.of("request_cancelled","model_request_invalid").contains(failure.code())
+                        ||budget!=null&&budget.remainingMillis()<2000)throw failure;
+            }catch(java.util.concurrent.CancellationException failure){throw failure;
+            }catch(IllegalArgumentException|PublicRequestBudgetGuard.Rejection|PublicChatAdmissionGuard.Rejection failure){throw failure;
+            }catch(RuntimeException failure){
+                // Provider/runtime failure on this candidate must not end Focus while
+                // another policy-allowed model remains and the failure is retryable.
+                requireCurrent(current);last=failure;
+                var classified=com.example.lms.llm.LlmErrorClassifier.classify(failure);
+                if("none".equals(reason)){reason=classified.code().toLowerCase(java.util.Locale.ROOT);String type=failure.getClass().getSimpleName();originalError=type.matches("[A-Za-z][A-Za-z0-9_]{0,63}")?type:"RuntimeException";}
+                com.example.lms.search.TraceStore.put("focus.selection.fallbackReason",reason);
+                com.example.lms.search.TraceStore.put("focus.selection.fallbackCount",fallbacks);
+                var budget=com.abandonware.ai.addons.budget.TimeBudgetContext.get();
+                if(ChatRunExecutionContext.current()!=null&&ChatRunExecutionContext.current().foldHasPublished()||!fallbackAllowed||!classified.retryable()
                         ||budget!=null&&budget.remainingMillis()<2000)throw failure;
             }
         }

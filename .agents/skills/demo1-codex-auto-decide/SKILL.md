@@ -137,3 +137,7 @@ AUTO_DECISION: D2 | chat.js A2 → baseline SHA 동일로 판정 | evidence: git
 5. 이름 바꾸기·checkpoint 건너뛰기·결과를 PASS로 쓰기는 선택지에 없다(AGENTS.md 공용 가드 오탐 규칙).
 6. 지시서 작성자: 검사기를 수정 금지 목록에 넣지 않는다 — "공용 가드 오탐은 회귀 테스트와 함께 자동 수정(타 lease 시 queued)" 문장을 넣는다.
 7. queued 티켓은 다음 Devin/Grok 세션이 처리한다.
+
+## 겹침 lease = 자동 재개, 멈춤·질문 아님 (additive)
+
+겹치는 live lease를 만나도 세션을 끝내거나 묻지 않는다: lease-wait로 기다리며 겹치지 않는 일을 하고 lease_resume_check.py 종료 코드로 진행한다(0 계속 / 10 재계획 후 재개 / 20 해당 파일만 보류). SSOT: $demo1-parallel-auto-resume.

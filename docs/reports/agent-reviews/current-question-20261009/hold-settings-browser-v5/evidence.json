@@ -1,0 +1,132 @@
+{
+  "checkedAtUtc": "2026-10-09T11:58:14.527Z",
+  "freshContext": true,
+  "restoredAuthState": false,
+  "providerGenerationCount": 0,
+  "userLiveProfileWriteCount": 0,
+  "requests": [
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/phone-test",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/focus/settings/read",
+      "status": 200
+    },
+    {
+      "endpoint": "/api/assist/display/relay/settings",
+      "status": 200
+    }
+  ],
+  "rows": [
+    {
+      "seconds": 3,
+      "form": {
+        "value": "5",
+        "min": "2",
+        "max": "15",
+        "step": "1",
+        "label": "답변 유지시간(초)"
+      },
+      "save": {
+        "route": "settings",
+        "status": 200,
+        "cas": 0,
+        "storedVersion": 1,
+        "tailHoldMs": 3000
+      },
+      "readTailHoldMs": 3000,
+      "readVersion": 1,
+      "otherSettingsHash": "0a572e27a8dd246b09d198d5d13a4068f708499649d65c429b7114b87f1e87c8",
+      "reconnectedTailHoldMs": 3000,
+      "reconnectedVersion": 1,
+      "hydratedSeconds": "3",
+      "verdict": "PASS"
+    },
+    {
+      "seconds": 5,
+      "form": {
+        "value": "3",
+        "min": "2",
+        "max": "15",
+        "step": "1",
+        "label": "답변 유지시간(초)"
+      },
+      "save": {
+        "route": "settings",
+        "status": 200,
+        "cas": 1,
+        "storedVersion": 2,
+        "tailHoldMs": 5000
+      },
+      "readTailHoldMs": 5000,
+      "readVersion": 2,
+      "otherSettingsHash": "0a572e27a8dd246b09d198d5d13a4068f708499649d65c429b7114b87f1e87c8",
+      "reconnectedTailHoldMs": 5000,
+      "reconnectedVersion": 2,
+      "hydratedSeconds": "5",
+      "verdict": "PASS"
+    }
+  ],
+  "hardwareRenderedObserved": false,
+  "fixtureAncestors": [
+    {
+      "id": "nova-settings",
+      "tag": "DETAILS",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "advanced-settings",
+      "tag": "DETAILS",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "app",
+      "tag": "MAIN",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "hidden": false,
+      "display": "flex",
+      "visibility": "visible"
+    },
+    {
+      "id": "",
+      "tag": "HTML",
+      "hidden": false,
+      "display": "block",
+      "visibility": "visible"
+    }
+  ],
+  "otherSettingsPreserved": true,
+  "verdict": "PASS",
+  "testProducerDisabled": true
+}

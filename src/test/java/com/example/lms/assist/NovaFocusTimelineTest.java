@@ -19,6 +19,30 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusTimelineTest {
+    @Test void diagnosticBudgetReportsConfiguredAppliedAndElapsedWithoutChangingBudget() {
+        try(var f=new Fixture()){
+            org.springframework.test.util.ReflectionTestUtils.setField(f.adapter,"focusTimeoutMs",12000L);
+            f.answer();
+            assertEquals(12000L,TraceStore.get("focus.request.configuredTimeoutMs"));
+            assertTrue(((Number)TraceStore.get("focus.request.appliedBudgetMs")).longValue()<=10000L);
+            assertEquals("focus",TraceStore.get("focus.request.budgetSource"));
+            assertTrue(((Number)TraceStore.get("focus.request.elapsedMs")).longValue()>=0);
+            assertTrue(((Number)attempts().get(0).get("elapsedMs")).longValue()>=0);
+        }
+    }
+    @Test void inheritedBudgetAndMissingAttemptRemainDistinctFromTimeout() {
+        var budget=new com.abandonware.ai.addons.budget.TimeBudget(1200);
+        com.abandonware.ai.addons.budget.TimeBudgetContext.set(budget);
+        try(var f=new Fixture()){
+            f.selectionOnly=true;f.answer();
+            assertSame(budget,com.abandonware.ai.addons.budget.TimeBudgetContext.get());
+            assertEquals("inherited",TraceStore.get("focus.request.budgetSource"));
+            assertTrue(((Number)TraceStore.get("focus.request.appliedBudgetMs")).longValue()<=1200L);
+            assertTrue(attempts().isEmpty());
+            assertEquals("not_observed",TraceStore.get("focus.request.evidenceBoundary"));
+            assertEquals("success",TraceStore.get("focus.request.terminalClass"));
+        }finally{com.abandonware.ai.addons.budget.TimeBudgetContext.clear();}
+    }
     @Test void controlledLoopbackReceiptSurvivesTheFocusBoundaryWithoutPayloads() throws Exception {
         var server=com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1",0),0);
         server.createContext("/api/chat",exchange->{

@@ -1,0 +1,63 @@
+{
+  "runId": "e06473ca-490b-422c-a324-7cdbb3b1e2bb",
+  "scope": "verification",
+  "startedAt": "2026-10-09T09:20:16.836016+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 5,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusAnswerServiceTest.profileAutoDefaultUsesAdmittedFlashLiteAndPreservesExplicitChoices"
+  ],
+  "commandSha256": "a7efcd87733c0a21dabe0a2eb3d23804fddddd049d2397251729ee872b1936bb",
+  "sourceIdentity": [
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\main\\resources\\application-meta-display.yml",
+      "kind": "file",
+      "sha256": "bda08a7bcceac75e703be34c6b71bec750081969cc6e34a21a7b2b5ab9a1b1a1",
+      "bytes": 13753
+    },
+    {
+      "path": "C:\\AbandonWare\\demo-1\\demo-1\\src\\src\\test\\java\\com\\example\\lms\\assist\\NovaFocusAnswerServiceTest.java",
+      "kind": "file",
+      "sha256": "cfbc8340056b5e22cfcf9a9ff6e018f0e364a3fcacc4260ff375fe5a0965a4ee",
+      "bytes": 53640
+    }
+  ],
+  "expectedSuites": [
+    "com.example.lms.assist.NovaFocusAnswerServiceTest"
+  ],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [
+    {
+      "suite": "com.example.lms.assist.NovaFocusAnswerServiceTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusAnswerServiceTest.xml",
+      "sha256": "c7cc4b5b731de8ecb02e68f051f26377ad8575d99c6fc2e8653361330dd52e65",
+      "counts": {
+        "tests": 1,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "failures": [
+    "junit_failure"
+  ],
+  "log": "command.log",
+  "pid": 3488,
+  "endedAt": "2026-10-09T09:22:17.972914+00:00",
+  "elapsedMs": 121135,
+  "totals": {
+    "tests": 1,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  }
+}

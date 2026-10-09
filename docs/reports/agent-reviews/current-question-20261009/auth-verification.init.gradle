@@ -1,0 +1,15 @@
+gradle.beforeProject { p ->
+    if (p != p.rootProject) return
+    p.afterEvaluate {
+        p.tasks.register('currentQuestionAuthVerification', Test) {
+            testClassesDirs = p.files(p.sourceSets.test.output.classesDirs.files)
+            classpath = p.files(p.sourceSets.test.runtimeClasspath.files)
+            useJUnitPlatform()
+            maxParallelForks = 1
+            outputs.upToDateWhen { false }
+            reports.junitXml.outputLocation = p.file('docs/reports/agent-reviews/current-question-20261009/auth/xml')
+            reports.html.outputLocation = p.file('docs/reports/agent-reviews/current-question-20261009/auth/html')
+            binaryResultsDirectory = p.file('docs/reports/agent-reviews/current-question-20261009/auth/binary')
+        }
+    }
+}

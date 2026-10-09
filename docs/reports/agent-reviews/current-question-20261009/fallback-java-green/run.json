@@ -1,0 +1,78 @@
+{
+  "runId": "27561557-e301-4533-8384-d6b1ec1db4d2",
+  "scope": "verification",
+  "startedAt": "2026-10-09T10:36:23.956843+00:00",
+  "status": "failed",
+  "executable": "gradlew.bat",
+  "argumentCount": 9,
+  "cwd": "C:\\AbandonWare\\demo-1\\demo-1\\src",
+  "commandArgv": [
+    "C:\\AbandonWare\\demo-1\\demo-1\\src\\gradlew.bat",
+    "--offline",
+    "--no-daemon",
+    "test",
+    "--tests",
+    "com.example.lms.assist.NovaFocusExecutionPolicyTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusStateTest",
+    "--tests",
+    "com.example.lms.assist.NovaFocusServiceTest"
+  ],
+  "commandSha256": "8fcbd2c12d88106523a582c6a277951c84831cf005e61863608a44f6c8d46a43",
+  "sourceIdentity": [],
+  "expectedSuites": [
+    "com.example.lms.assist.NovaFocusExecutionPolicyTest",
+    "com.example.lms.assist.NovaFocusServiceTest",
+    "com.example.lms.assist.NovaFocusStateTest"
+  ],
+  "exitCode": 1,
+  "verificationExitCode": 1,
+  "resultFiles": [
+    {
+      "suite": "com.example.lms.assist.NovaFocusExecutionPolicyTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusExecutionPolicyTest.xml",
+      "sha256": "b1c9e079fa2ceddd1e4cb15f5c3299036368e49066cc210fd6ff51ecdc6e15fb",
+      "counts": {
+        "tests": 32,
+        "failures": 1,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusStateTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusStateTest.xml",
+      "sha256": "f9e90860e5ecaff42a4244db350910f079ddaa7e14f98360f19fec41f5bf0f40",
+      "counts": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "suite": "com.example.lms.assist.NovaFocusServiceTest",
+      "path": "TEST-com.example.lms.assist.NovaFocusServiceTest.xml",
+      "sha256": "fef603b212215efb82dcafb7f4b9229817df0f058c792284069ae7d75856028f",
+      "counts": {
+        "tests": 29,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "failures": [
+    "junit_failure"
+  ],
+  "log": "command.log",
+  "pid": 64816,
+  "endedAt": "2026-10-09T10:36:57.629512+00:00",
+  "elapsedMs": 33673,
+  "totals": {
+    "tests": 90,
+    "failures": 1,
+    "errors": 0,
+    "skipped": 0
+  }
+}

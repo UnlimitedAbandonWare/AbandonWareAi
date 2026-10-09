@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.example.lms.assist.NovaFocusExecutionPolicyTest" tests="32" skipped="0" failures="1" errors="0" timestamp="2026-10-09T10:36:53" hostname="DESKTOP-M5NOV6K" time="2.847">
+  <properties/>
+  <testcase name="fallbackPreservesLegacyWebRequirementAndFrozenContext()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="1.877"/>
+  <testcase name="cancellationAfterFirstFailureStopsTheFallbackChain()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.038"/>
+  <testcase name="dedicatedTargetSurvivesJsonWithoutErasingTheGeneralFallbackPolicy()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.003"/>
+  <testcase name="dedicatedModeRejectsAutomaticNonGeminiUnknownAndMismatchedRoutesWithoutCalls()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.007"/>
+  <testcase name="admissionOrValidationFailureIsNotAProviderFallbackSignal()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.044">
+    <failure message="org.opentest4j.AssertionFailedError: expected: &lt;[llmrouter.api-a]&gt; but was: &lt;[llmrouter.api-a, llmrouter.api-b]&gt;" type="org.opentest4j.AssertionFailedError">org.opentest4j.AssertionFailedError: expected: &lt;[llmrouter.api-a]&gt; but was: &lt;[llmrouter.api-a, llmrouter.api-b]&gt;
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.build(AssertionFailureBuilder.java:151)
+	at app//org.junit.jupiter.api.AssertionFailureBuilder.buildAndThrow(AssertionFailureBuilder.java:132)
+	at app//org.junit.jupiter.api.AssertEquals.failNotEqual(AssertEquals.java:197)
+	at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:182)
+	at app//org.junit.jupiter.api.AssertEquals.assertEquals(AssertEquals.java:177)
+	at app//org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:1145)
+	at app//com.example.lms.assist.NovaFocusExecutionPolicyTest.admissionOrValidationFailureIsNotAProviderFallbackSignal(NovaFocusExecutionPolicyTest.java:209)
+	at java.base@17.0.13/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base@17.0.13/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base@17.0.13/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base@17.0.13/java.lang.reflect.Method.invoke(Method.java:568)
+	at app//org.junit.platform.commons.util.ReflectionUtils.invokeMethod(ReflectionUtils.java:728)
+	at app//org.junit.jupiter.engine.execution.MethodInvocation.proceed(MethodInvocation.java:60)
+	at app//org.junit.jupiter.engine.execution.InvocationInterceptorChain$ValidatingInvocation.proceed(InvocationInterceptorChain.java:131)
+	at app//org.junit.jupiter.engine.extension.TimeoutExtension.intercept(TimeoutExtension.java:156)
+	at app//org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestableMethod(TimeoutExtension.java:147)
+	at app//org.junit.jupiter.engine.extension.TimeoutExtension.interceptTestMethod(TimeoutExtension.java:86)
+	at app//org.junit.jupiter.engine.execution.InterceptingExecutableInvoker$ReflectiveInterceptorCall.lambda$ofVoidMethod$0(InterceptingExecutableInvoker.java:103)
+	at app//org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.lambda$invoke$0(InterceptingExecutableInvoker.java:93)
+	at app//org.junit.jupiter.engine.execution.InvocationInterceptorChain$InterceptedInvocation.proceed(InvocationInterceptorChain.java:106)
+	at app//org.junit.jupiter.engine.execution.InvocationInterceptorChain.proceed(InvocationInterceptorChain.java:64)
+	at app//org.junit.jupiter.engine.execution.InvocationInterceptorChain.chainAndInvoke(InvocationInterceptorChain.java:45)
+	at app//org.junit.jupiter.engine.execution.InvocationInterceptorChain.invoke(InvocationInterceptorChain.java:37)
+	at app//org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:92)
+	at app//org.junit.jupiter.engine.execution.InterceptingExecutableInvoker.invoke(InterceptingExecutableInvoker.java:86)
+	at app//org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.lambda$invokeTestMethod$7(TestMethodTestDescriptor.java:218)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.invokeTestMethod(TestMethodTestDescriptor.java:214)
+	at app//org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:139)
+	at app//org.junit.jupiter.engine.descriptor.TestMethodTestDescriptor.execute(TestMethodTestDescriptor.java:69)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:151)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at app//org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base@17.0.13/java.util.ArrayList.forEach(ArrayList.java:1511)
+	at app//org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at app//org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at java.base@17.0.13/java.util.ArrayList.forEach(ArrayList.java:1511)
+	at app//org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.invokeAll(SameThreadHierarchicalTestExecutorService.java:41)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$6(NodeTestTask.java:155)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$8(NodeTestTask.java:141)
+	at app//org.junit.platform.engine.support.hierarchical.Node.around(Node.java:137)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.lambda$executeRecursively$9(NodeTestTask.java:139)
+	at app//org.junit.platform.engine.support.hierarchical.ThrowableCollector.execute(ThrowableCollector.java:73)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.executeRecursively(NodeTestTask.java:138)
+	at app//org.junit.platform.engine.support.hierarchical.NodeTestTask.execute(NodeTestTask.java:95)
+	at app//org.junit.platform.engine.support.hierarchical.SameThreadHierarchicalTestExecutorService.submit(SameThreadHierarchicalTestExecutorService.java:35)
+	at app//org.junit.platform.engine.support.hierarchical.HierarchicalTestExecutor.execute(HierarchicalTestExecutor.java:57)
+	at app//org.junit.platform.engine.support.hierarchical.HierarchicalTestEngine.execute(HierarchicalTestEngine.java:54)
+	at app//org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:107)
+	at app//org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:88)
+	at app//org.junit.platform.launcher.core.EngineExecutionOrchestrator.lambda$execute$0(EngineExecutionOrchestrator.java:54)
+	at app//org.junit.platform.launcher.core.EngineExecutionOrchestrator.withInterceptedStreams(EngineExecutionOrchestrator.java:67)
+	at app//org.junit.platform.launcher.core.EngineExecutionOrchestrator.execute(EngineExecutionOrchestrator.java:52)
+	at app//org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:114)
+	at app//org.junit.platform.launcher.core.DefaultLauncher.execute(DefaultLauncher.java:86)
+	at app//org.junit.platform.launcher.core.DefaultLauncherSession$DelegatingLauncher.execute(DefaultLauncherSession.java:86)
+	at org.gradle.api.internal.tasks.testing.junitplatform.JUnitPlatformTestClassProcessor$CollectAllTestClassesExecutor.processAllTestClasses(JUnitPlatformTestClassProcessor.java:119)
+	at org.gradle.api.internal.tasks.testing.junitplatform.JUnitPlatformTestClassProcessor$CollectAllTestClassesExecutor.access$000(JUnitPlatformTestClassProcessor.java:94)
+	at org.gradle.api.internal.tasks.testing.junitplatform.JUnitPlatformTestClassProcessor.stop(JUnitPlatformTestClassProcessor.java:89)
+	at org.gradle.api.internal.tasks.testing.SuiteTestClassProcessor.stop(SuiteTestClassProcessor.java:62)
+	at java.base@17.0.13/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)
+	at java.base@17.0.13/jdk.internal.reflect.NativeMethodAccessorImpl.invoke(NativeMethodAccessorImpl.java:77)
+	at java.base@17.0.13/jdk.internal.reflect.DelegatingMethodAccessorImpl.invoke(DelegatingMethodAccessorImpl.java:43)
+	at java.base@17.0.13/java.lang.reflect.Method.invoke(Method.java:568)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:36)
+	at org.gradle.internal.dispatch.ReflectionDispatch.dispatch(ReflectionDispatch.java:24)
+	at org.gradle.internal.dispatch.ContextClassLoaderDispatch.dispatch(ContextClassLoaderDispatch.java:33)
+	at org.gradle.internal.dispatch.ProxyDispatchAdapter$DispatchingInvocationHandler.invoke(ProxyDispatchAdapter.java:94)
+	at jdk.proxy1/jdk.proxy1.$Proxy2.stop(Unknown Source)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker$3.run(TestWorker.java:193)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.executeAndMaintainThreadName(TestWorker.java:129)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:100)
+	at org.gradle.api.internal.tasks.testing.worker.TestWorker.execute(TestWorker.java:60)
+	at org.gradle.process.internal.worker.child.ActionExecutionWorker.execute(ActionExecutionWorker.java:56)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:113)
+	at org.gradle.process.internal.worker.child.SystemApplicationClassLoaderWorker.call(SystemApplicationClassLoaderWorker.java:65)
+	at app//worker.org.gradle.process.internal.worker.GradleWorkerMain.run(GradleWorkerMain.java:69)
+	at app//worker.org.gradle.process.internal.worker.GradleWorkerMain.main(GradleWorkerMain.java:74)
+</failure>
+  </testcase>
+  <testcase name="localOnlyRejectsFixedApiBeforeAnyCall()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.004"/>
+  <testcase name="resultPreservesActualFallbackFailureAndNormalAutoIsNotFallback()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.071"/>
+  <testcase name="latePrimarySuccessAfterExactCancellationCannotPublishOrStartFallback()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.041"/>
+  <testcase name="disabledFallbackDoesNotTryAnAllowedBackup()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.021"/>
+  <testcase name="dedicatedModeNeverFallsBackForAnyCategoricalProviderFailure()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.107"/>
+  <testcase name="explicitOffQuickImageAndCancelDominateDedicatedModeWithoutCalls()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.005"/>
+  <testcase name="automaticApiChoiceUsesConfiguredWeightAndNeverLocalDefault()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.017"/>
+  <testcase name="imageTextRetryRetainsTheSuccessfulFallbackCandidate()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.018"/>
+  <testcase name="dedicatedModePinsEitherGeminiAndUsesOnlyNativePermissionEvenForGreetings()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.155"/>
+  <testcase name="[1] status=400" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.062"/>
+  <testcase name="[2] status=401" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.029"/>
+  <testcase name="[3] status=403" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.031"/>
+  <testcase name="[4] status=408" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.03"/>
+  <testcase name="[5] status=429" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.026"/>
+  <testcase name="[6] status=500" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.035"/>
+  <testcase name="[7] status=503" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.027"/>
+  <testcase name="[8] status=504" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.027"/>
+  <testcase name="automaticLocalChoicePinsTheConfiguredLocalDefault()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.013"/>
+  <testcase name="apiOnlyRejectsFixedLocalBeforeAnyCall()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <testcase name="dedicatedSettingsExposeEffectiveOffWithoutErasingRawPreference()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.019"/>
+  <testcase name="configuredLocalRouteCannotBecomeApiBecauseCatalogLabelSaysCloud()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.003"/>
+  <testcase name="automaticApiChoiceDoesNotPromoteFallbackOnlyRoutes()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.014"/>
+  <testcase name="dedicatedResultRejectsDifferentModelOrLateCancellation()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.023"/>
+  <testcase name="unobservedSearchAndIncompleteAttributionDoNotPublishOrRetry()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.021"/>
+  <testcase name="fallbackListIsBoundedAtSettingsBoundary()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <testcase name="fallbackIsStrictOrderedAndNeverCrossesApiOnlyBoundary()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.01"/>
+  <testcase name="unknownConfiguredProviderCannotProveApiOnly()" classname="com.example.lms.assist.NovaFocusExecutionPolicyTest" time="0.002"/>
+  <system-out><![CDATA[19:36:55.265 [Test worker] INFO com.example.lms.service.chat.ChatRunRegistry -- [LLM_CANCEL_ACCEPTED] runHash=hash:a5e38851a47e observedAtEpochMs=1791542215262 boundary=application_cancellation
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

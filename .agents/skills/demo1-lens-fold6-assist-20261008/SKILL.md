@@ -30,6 +30,11 @@ python -B var/codex-assist-lens-fold6-20261008/selftest_spec.py
 `product-gate` unlocks product diffs only behind `red-boundary.json`
 (boundary + 1-4 allowPaths inside PRODUCT; copy `red-boundary.example.json`).
 
+## Closeout pointers
+
+- 마감 판정은 `scripts\goal_closeout_classify.py`(AGENT_BLOCKING/USER_ONLY/EXTERNAL 3분류) — USER_ONLY·EXTERNAL만 남으면 blocked가 아니라 complete+목록.
+- 런처 `project-settings-load-failed`는 이제 `stage=<read|parse|validate|apply>;source=<파일명>;kind=<IOException|JsonParse|MissingField|Locked>` 접미사로 원인을 읽는다(`scripts\use_project_keys.ps1`).
+
 ## Do not
 
 1. Edit product Java, product resources, display JS/HTML, or product tests from this skill.

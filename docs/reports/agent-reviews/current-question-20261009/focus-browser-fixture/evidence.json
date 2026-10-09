@@ -1,0 +1,31 @@
+{
+  "checkedAtUtc": "2026-10-09T11:13:32.295Z",
+  "fixtureOnly": true,
+  "providerGenerationCount": 0,
+  "userProfileWriteCount": 0,
+  "restoredAuthState": false,
+  "hardwareRenderedObserved": false,
+  "consoleErrorCount": 0,
+  "controls": {
+    "disabledSavedOption": true,
+    "validPreset": {
+      "model": "chatgpt-oauth:gpt-5.6-luna",
+      "target": "API_ONLY",
+      "search": "false",
+      "fallback": false
+    },
+    "unavailablePreservesFields": true,
+    "unavailableNoticeShown": true
+  },
+  "banner": {
+    "fallbackBannerVisible": true,
+    "reasonShown": true,
+    "modelShown": true,
+    "answerPainted": true,
+    "warningExcludedFromAnswer": true,
+    "normalClearsBanner": true,
+    "retiredStateCannotRestoreBanner": true,
+    "lensWarningHidden": true
+  },
+  "verdict": "PASS"
+}

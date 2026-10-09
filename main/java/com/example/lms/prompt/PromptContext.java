@@ -68,6 +68,7 @@ public class PromptContext {
     private final String systemInstruction;
     private final Map<String, String> responsePreferences;
     private final Integer focusAnswerLengthChars;
+    private final String focusAnswerInstruction;
     private final String verbosityHint;
     private final List<String> unsupportedClaims;
     private final String citationStyle;
@@ -140,6 +141,7 @@ public class PromptContext {
         this.systemInstruction = b.systemInstruction;
         this.responsePreferences = b.responsePreferences == null ? Map.of() : Map.copyOf(b.responsePreferences);
         this.focusAnswerLengthChars = b.focusAnswerLengthChars;
+        this.focusAnswerInstruction = b.focusAnswerInstruction;
         this.verbosityHint = b.verbosityHint;
         this.unsupportedClaims = snapshotList(b.unsupportedClaims);
         this.citationStyle = b.citationStyle;
@@ -203,6 +205,7 @@ public class PromptContext {
     public String systemInstruction() { return systemInstruction; }
     public Map<String, String> responsePreferences() { return responsePreferences; }
     public Integer focusAnswerLengthChars() { return focusAnswerLengthChars; }
+    public String focusAnswerInstruction() { return focusAnswerInstruction; }
     public String verbosityHint() { return verbosityHint; }
     public List<String> unsupportedClaims() { return unsupportedClaims; }
     public String citationStyle() { return citationStyle; }
@@ -265,6 +268,7 @@ public class PromptContext {
                 .systemInstruction(systemInstruction)
                 .responsePreferences(responsePreferences)
                 .focusAnswerLengthChars(focusAnswerLengthChars)
+                .focusAnswerInstruction(focusAnswerInstruction)
                 .verbosityHint(verbosityHint)
                 .unsupportedClaims(unsupportedClaims)
                 .citationStyle(citationStyle)
@@ -349,6 +353,7 @@ public class PromptContext {
         private String systemInstruction;
         private Map<String, String> responsePreferences;
         private Integer focusAnswerLengthChars;
+        private String focusAnswerInstruction;
         private String verbosityHint;
         private List<String> unsupportedClaims;
         private String citationStyle;
@@ -396,6 +401,7 @@ public class PromptContext {
         }
         public Builder verbosityHint(String s) { this.verbosityHint = s; return this; }
         public Builder focusAnswerLengthChars(Integer value) { if(value!=null&&(value<80||value>800))throw new IllegalArgumentException("invalid_focus_answer_length");this.focusAnswerLengthChars=value;return this; }
+        public Builder focusAnswerInstruction(String value) { if(value!=null&&(value.codePointCount(0,value.length())>com.example.lms.assist.NovaFocusSettings.ANSWER_INSTRUCTION_MAX_CHARS||value.codePoints().anyMatch(c->Character.isISOControl(c)&&c!='\n'&&c!='\t')))throw new IllegalArgumentException("invalid_focus_answer_instruction");this.focusAnswerInstruction=value;return this; }
         public Builder unsupportedClaims(List<String> list) { this.unsupportedClaims = list; return this; }
         public Builder citationStyle(String s) { this.citationStyle = s; return this; }
         // Newer builder methods for back-compat with legacy callers

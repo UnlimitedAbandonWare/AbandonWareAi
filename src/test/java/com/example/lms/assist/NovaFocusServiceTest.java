@@ -10,6 +10,200 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusServiceTest {
+    private static java.util.List<java.util.Map<String,Object>> observe(NovaFocusService service,
+            com.example.lms.debug.DebugEventStore sink) {
+        var rows=new java.util.concurrent.CopyOnWriteArrayList<java.util.Map<String,Object>>();
+        doAnswer(call->{rows.add(new java.util.LinkedHashMap<>(call.getArgument(5)));return null;})
+            .when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+        if(org.springframework.util.ReflectionUtils.findField(NovaFocusService.class,"debugEvents")!=null)
+            org.springframework.test.util.ReflectionTestUtils.setField(service,"debugEvents",sink);
+        return rows;
+    }
+    @Test void focusBoundariesJoinOneRequestWithoutTextOrDuplicateReceipts() throws Exception {
+        try(var f=new EpochFixture()){
+            var rows=observe(f.service,mock(com.example.lms.debug.DebugEventStore.class));
+            doReturn(new NovaFocusAnswer.Result("private-answer-fixture",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"private-question-fixture");f.awaitAnswer(1);
+            var v=f.service.view(f.owner,"assist",1);
+            f.presented(1);
+            for(String stage:List.of("first_visible","presentation_done"))
+                assertTrue(f.service.rendered(new NovaFocusService.Receipt(v.serverInstanceId(),v.activationId(),
+                    v.turnId(),v.answerVersion(),v.renderReceiptTicket(),stage)));
+            assertFalse(f.service.rendered(new NovaFocusService.Receipt(v.serverInstanceId(),v.activationId(),
+                v.turnId(),v.answerVersion()+1,v.renderReceiptTicket(),"first_visible")));
+            awaitRows(rows,"focus_presentation_done");
+            assertEquals(List.of("focus_question_confirmed","focus_generation_started","focus_model_attempt","focus_terminal",
+                "focus_first_visible","focus_presentation_done"),rows.stream().map(r->r.get("stage")).toList());
+            for(String key:List.of("ownerHash","sessionHash","activationHash","requestHash","serverInstanceHash")){
+                assertEquals(1,rows.stream().map(r->r.get(key)).distinct().count(),key);
+                assertTrue(((String)rows.get(0).get(key)).matches("hash:[0-9a-f]{12}"),key);
+            }
+            assertEquals(1L,rows.get(2).get("epoch"));
+            assertNotNull(rows.get(2).get("latencyMs"));
+            assertNull(rows.get(0).get("deviceHash"));
+            assertNull(rows.get(0).get("connectionGeneration"));
+            assertEquals("dom_callback_only",rows.get(4).get("evidenceBoundary"));
+            assertEquals(false,rows.get(4).get("hardwareRenderedObserved"));
+            String packet=rows.toString();
+            for(String value:List.of("private-question-fixture","private-answer-fixture",v.renderReceiptTicket(),f.owner))
+                assertFalse(packet.contains(value));
+        }
+    }
+    @Test void blockedDiagnosticSinkDoesNotHoldCaptureStateAndKeepsOriginalEpoch() throws Exception {
+        try(var f=new EpochFixture()){
+            var sink=mock(com.example.lms.debug.DebugEventStore.class);var rows=observe(f.service,sink);
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{
+                java.util.Map<String,Object> row=call.getArgument(5);rows.add(new java.util.LinkedHashMap<>(row));
+                if("focus_terminal".equals(row.get("stage"))){entered.countDown();assertTrue(release.await(3,TimeUnit.SECONDS));}
+                return null;
+            }).when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+            doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                f.ask(1,"question");assertTrue(entered.await(3,TimeUnit.SECONDS));
+                var capture=CompletableFuture.runAsync(()->{
+                    f.service.attach(f.owner,"live","assist",2);
+                    f.service.audio(f.owner,"assist",2,new ConversateQuestionPolicy.Utterance("next","next",1,true,"short"));
+                    assertNotNull(f.service.view(f.owner,"assist",2));
+                });
+                capture.get(1,TimeUnit.SECONDS);
+                release.countDown();f.awaitAnswer(2);f.presented(2);awaitRows(rows,"focus_first_visible");
+                var render=rows.stream().filter(r->"focus_first_visible".equals(r.get("stage"))).findFirst().orElseThrow();
+                assertEquals(1L,render.get("epoch"));assertEquals(2L,render.get("currentEpoch"));
+            }finally{release.countDown();}
+        }
+    }
+    @Test void failedDiagnosticSinkCannotChangeAnswerReceiptOrFollowup() throws Exception {
+        try(var f=new EpochFixture()){
+            var sink=mock(com.example.lms.debug.DebugEventStore.class);observe(f.service,sink);
+            doThrow(new IllegalStateException("synthetic_sink_failed"))
+                .when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+            doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"one");f.awaitAnswer(1);f.presented(1);
+            assertEquals("PRESENTING",f.service.view(f.owner,"assist",1).phase());
+            f.ask(1,"two");f.awaitAnswer(1);assertEquals("answer",f.service.view(f.owner,"assist",1).answerText());
+            verify(f.history,times(2)).terminal(any(),any(),any(),eq("COMPLETED"),any());
+        }
+    }
+    private static void awaitRows(List<Map<String,Object>> rows,String stage) throws Exception {
+        long until=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+        while(System.nanoTime()<until){if(rows.stream().anyMatch(r->stage.equals(r.get("stage"))))return;Thread.sleep(5);}
+        fail("diagnostic stage missing: "+stage);
+    }
+    @Test void slowRenderSinkReleasesTheHttpControllerMonitor() throws Exception {
+        try(var f=new EpochFixture()){
+            var sink=mock(com.example.lms.debug.DebugEventStore.class);observe(f.service,sink);
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{if("focus_first_visible".equals(((Map<?,?>)call.getArgument(5)).get("stage"))){
+                entered.countDown();assertTrue(release.await(3,TimeUnit.SECONDS));}return null;})
+                .when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+            doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");f.awaitAnswer(1);var v=f.service.view(f.owner,"assist",1);
+            var controller=new DisplayConversateController(mock(ConversateSessionService.class),
+                mock(com.example.lms.web.ClientOwnerKeyResolver.class),mock(InterviewDemoPublicAddress.class));
+            org.springframework.test.util.ReflectionTestUtils.setField(controller,"novaFocus",f.service);
+            var http=new org.springframework.mock.web.MockHttpServletRequest("POST","/api/conversate/display/focus/rendered");
+            http.setScheme("http");http.setServerName("127.0.0.1");http.setServerPort(18180);http.setRemoteAddr("127.0.0.1");
+            http.addHeader("X-Display-Client","1");http.addHeader("Origin","http://127.0.0.1:18180");
+            try{
+                CompletableFuture.runAsync(()->assertEquals(200,controller.focusRendered(new NovaFocusService.Receipt(
+                    v.serverInstanceId(),v.activationId(),v.turnId(),v.answerVersion(),v.renderReceiptTicket(),"first_visible"),http).getStatusCode().value())).get(1,TimeUnit.SECONDS);
+                assertTrue(entered.await(3,TimeUnit.SECONDS));
+                CompletableFuture.runAsync(()->{synchronized(controller){assertNotNull(f.service.view(f.owner,"assist",1));}}).get(1,TimeUnit.SECONDS);
+            }finally{release.countDown();}
+        }
+    }
+    @Test void generatedAnswerAndUnconfirmedPresentationHaveSeparateOutcomes() throws Exception {
+        try(var f=new EpochFixture()){
+            var rows=observe(f.service,mock(com.example.lms.debug.DebugEventStore.class));
+            doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");f.awaitAnswer(1);f.time.now+=180000;f.service.maintain();
+            awaitRows(rows,"focus_lifecycle_closed");
+            assertEquals("success",rows.stream().filter(r->"focus_terminal".equals(r.get("stage"))).findFirst().orElseThrow().get("outcome"));
+            var closed=rows.stream().filter(r->"focus_lifecycle_closed".equals(r.get("stage"))).findFirst().orElseThrow();
+            assertEquals("presentation_unconfirmed",closed.get("reasonCode"));assertEquals(false,closed.get("hardwareRenderedObserved"));
+        }
+    }
+    @Test void overflowAndShutdownNeverWaitForTheDiagnosticSink() throws Exception {
+        try(var f=new EpochFixture()){
+            var sink=mock(com.example.lms.debug.DebugEventStore.class);observe(f.service,sink);
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{entered.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));return null;})
+                .when(sink).emit(any(),any(),anyString(),anyString(),anyString(),anyMap(),isNull());
+            doReturn(new NovaFocusAnswer.Result("answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                for(int i=0;i<20;i++){
+                    f.ask(1,"short-"+i);f.awaitAnswer(1);f.presented(1);
+                    f.service.close(f.owner,"assist",1,"user_closed");f.service.open(f.owner,"assist",1,"fold");
+                }
+                assertTrue(entered.await(1,TimeUnit.SECONDS));
+                assertTrue(((Number)f.service.diagnostics(f.owner,"assist",1).get("diagnosticDropped")).longValue()>0);
+                CompletableFuture.runAsync(()->{
+                    f.service.audio(f.owner,"assist",1,new ConversateQuestionPolicy.Utterance("fresh","fresh",1,true,"short"));
+                    assertNotNull(f.service.view(f.owner,"assist",1));
+                }).get(1,TimeUnit.SECONDS);
+                CompletableFuture.runAsync(f.service::close).get(1,TimeUnit.SECONDS);
+            }finally{release.countDown();}
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"backend_timeout","backend_unavailable"})
+    void syntheticApiFailureRetainsItsCauseAndObservedElapsed(String code) throws Exception {
+        try(var f=new EpochFixture()){
+            var rows=observe(f.service,mock(com.example.lms.debug.DebugEventStore.class));
+            doThrow(new com.example.lms.llm.ModelSelectionException(code)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");awaitRows(rows,"focus_terminal");
+            var terminal=rows.stream().filter(r->"focus_terminal".equals(r.get("stage"))).findFirst().orElseThrow();
+            assertEquals(code,terminal.get("reasonCode"));assertEquals(code.equals("backend_timeout")?"timeout":"error",terminal.get("outcome"));
+            assertTrue(((Number)terminal.get("latencyMs")).longValue()>=0);assertNull(terminal.get("renderLatencyMs"));
+        }
+    }
+    @Test void firstAttemptRuntimeFailureRetriesAndDeliversTheAnswer() throws Exception {
+        try(var f=new EpochFixture()){
+            var rows=observe(f.service,mock(com.example.lms.debug.DebugEventStore.class));
+            f.service.close(f.owner,"assist",1,"user_closed");f.service.open(f.owner,"assist",1,"fold");
+            doThrow(new RuntimeException(new java.util.concurrent.TimeoutException("timed out")))
+                .doReturn(new NovaFocusAnswer.Result("recovered-answer",null))
+                .when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");f.awaitAnswer(1);
+            assertEquals("recovered-answer",f.service.view(f.owner,"assist",1).answerText());
+            assertTrue(f.service.view(f.owner,"assist",1).active());
+            verify(f.answer,times(2)).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            awaitRows(rows,"focus_terminal");
+            assertEquals(List.of("focus_started","focus_question_confirmed","focus_generation_started",
+                "focus_model_attempt","focus_model_attempt","focus_model_attempt","focus_terminal"),rows.stream().map(r->r.get("stage")).toList());
+            assertEquals("attempted",rows.get(3).get("outcome"));assertEquals(1,rows.get(3).get("attempt"));
+            assertEquals("failed",rows.get(4).get("outcome"));assertEquals(1,rows.get(4).get("attempt"));
+            assertEquals("llm_timeout",rows.get(4).get("reasonCode"));assertEquals("RuntimeException",rows.get(4).get("exceptionClass"));
+            assertEquals("attempted",rows.get(5).get("outcome"));assertEquals(2,rows.get(5).get("attempt"));
+            assertEquals("success",rows.get(6).get("outcome"));
+        }
+    }
+    @Test void allAttemptsFailingClosesWithUnavailableAndKeepsTheRealReasonCode() throws Exception {
+        try(var f=new EpochFixture()){
+            var rows=observe(f.service,mock(com.example.lms.debug.DebugEventStore.class));
+            doThrow(new IllegalStateException("synthetic_provider_failed")).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");awaitRows(rows,"focus_terminal");
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy"))&&System.nanoTime()<deadline)Thread.sleep(5);
+            verify(f.answer,times(2)).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            var terminal=rows.stream().filter(r->"focus_terminal".equals(r.get("stage"))).findFirst().orElseThrow();
+            assertEquals("llm_failed_unknown",terminal.get("reasonCode"));assertEquals("error",terminal.get("outcome"));
+            assertEquals("IllegalStateException",terminal.get("exceptionClass"));assertEquals("IllegalStateException",terminal.get("exceptionRootClass"));
+            var view=f.service.view(f.owner,"assist",1);
+            assertFalse(view.active());assertEquals("focus_answer_unavailable",view.reason());assertEquals("",view.answerText());
+        }
+    }
+    @Test void deterministicFocusFailuresDoNotSpendASecondAttempt() throws Exception {
+        try(var f=new EpochFixture()){
+            doThrow(new com.example.lms.llm.ModelSelectionException("model_unavailable")).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"short");
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy"))&&System.nanoTime()<deadline)Thread.sleep(5);
+            verify(f.answer,times(1)).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            assertEquals("focus_answer_unavailable",f.service.view(f.owner,"assist",1).reason());
+        }
+    }
     private static NovaFocusAnswer typedAdapter(){
         var adapter=mock(NovaFocusAnswer.class);
         doCallRealMethod().when(adapter).answerResult(any(),any(),any(),any(),any(),any(),any());
@@ -46,6 +240,59 @@ class NovaFocusServiceTest {
                 }else{
                     assertEquals("",f.service.view(f.owner,"assist",1).forTarget("fold").answerText());
                     assertEquals("",f.service.view(f.owner,"assist",1).forTarget("lens").answerText());
+                    verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
+                }
+            }finally{finish.countDown();}
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,true","true,true","false,false","true,false"})
+    void settingsSavePreservesAcceptedSnapshotWhenMemoryScopeIsCurrent(boolean streaming,boolean scopeCurrent) throws Exception {
+        try(var f=new EpochFixture()){
+            var memory=mock(FocusMemoryService.class);
+            var scope=new FocusMemoryScope("c".repeat(64),0,0,1,false);
+            when(memory.scope(f.owner,"live")).thenReturn(scope);when(memory.current(scope)).thenReturn(true);
+            org.springframework.test.util.ReflectionTestUtils.setField(f.service,"memories",memory);
+            var contexts=new java.util.concurrent.CopyOnWriteArrayList<NovaFocusHistoryService.Context>();
+            var started=new CountDownLatch(1);var finish=new CountDownLatch(1);
+            doAnswer(call->{
+                contexts.add(call.getArgument(4));java.util.function.Consumer<String> partial=call.getArgument(7);
+                if(streaming)partial.accept("첫 문장입니다.");
+                started.countDown();assertTrue(finish.await(3,TimeUnit.SECONDS));
+                if(streaming)partial.accept("첫 문장입니다. 두 번째 문장입니다.");
+                return new NovaFocusAnswer.Result("첫 문장입니다. 두 번째 문장입니다. 최종 문장입니다.",null);
+            }).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                f.ask(1,"first");assertTrue(started.await(3,TimeUnit.SECONDS));
+                var before=f.service.view(f.owner,"assist",1);
+                var tree=NovaFocusModelSelectionTest.JSON.valueToTree(NovaFocusSettings.defaults());
+                ((com.fasterxml.jackson.databind.node.ObjectNode)tree.path("presentation")).put("charIntervalMs",90);
+                ((com.fasterxml.jackson.databind.node.ObjectNode)tree).put("answerLengthChars",480);
+                ((com.fasterxml.jackson.databind.node.ObjectNode)tree).set("answerSelection",NovaFocusModelSelectionTest.JSON.readTree("{\"mode\":\"FIXED\",\"modelId\":\"fixture-model-b\"}"));
+                var changed=NovaFocusModelSelectionTest.JSON.treeToValue(tree,NovaFocusSettings.class);
+                when(f.history.settings(f.owner,"live",0,changed)).thenReturn(new NovaFocusHistoryService.Settings(1,changed));
+                assertEquals(1,f.service.configure(f.owner,"assist",1,0,changed).settingsVersion());
+                var saved=f.service.view(f.owner,"assist",1);
+                assertEquals(before.activationId(),saved.activationId());assertEquals(before.turnId(),saved.turnId());
+                assertEquals(before.presentation(),saved.presentation());assertEquals(before.answerLengthChars(),saved.answerLengthChars());
+                if(streaming)assertEquals("첫 문장입니다.",saved.answerText());
+                when(memory.current(scope)).thenReturn(scopeCurrent);finish.countDown();
+                long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+                while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy"))&&System.nanoTime()<deadline)Thread.sleep(5);
+                assertFalse(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy")));
+                if(scopeCurrent){
+                    var completed=f.service.view(f.owner,"assist",1);
+                    assertEquals("ANSWER_READY",completed.phase());assertEquals(before.presentation(),completed.presentation());
+                    assertEquals(before.answerLengthChars(),completed.answerLengthChars());
+                    assertEquals("첫 문장입니다. 두 번째 문장입니다. 최종 문장입니다.",completed.answerText());
+                    assertEquals(0,contexts.get(0).settingsVersion());
+                    f.presented(1);f.ask(1,"second");f.awaitAnswer(1);
+                    assertEquals(2,contexts.size());assertEquals(1,contexts.get(1).settingsVersion());
+                    assertEquals("fixture-model-b",contexts.get(1).answerSelection().modelId());
+                    assertEquals(480,f.service.view(f.owner,"assist",1).answerLengthChars());
+                    assertEquals(90,f.service.view(f.owner,"assist",1).presentation().charIntervalMs());
+                }else{
+                    assertEquals("",f.service.view(f.owner,"assist",1).answerText());
                     verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
                 }
             }finally{finish.countDown();}

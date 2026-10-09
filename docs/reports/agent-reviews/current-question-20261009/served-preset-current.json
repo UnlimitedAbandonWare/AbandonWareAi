@@ -1,0 +1,53 @@
+{
+  "assets": [
+    {
+      "source": "main/resources/static/assets/display/display-focus-controls.js",
+      "url": "http://127.0.0.1:18180/assets/display/display-focus-controls.js",
+      "sourceSha12": "cd10d0917150",
+      "status": 200,
+      "servedSha12": "cd10d0917150",
+      "cacheControl": "no-cache, no-store, max-age=0, must-revalidate",
+      "match": true
+    },
+    {
+      "source": "main/resources/static/assets/display/display-focus.js",
+      "url": "http://127.0.0.1:18180/assets/display/display-focus.js",
+      "sourceSha12": "f8a7d7474ea9",
+      "status": 200,
+      "servedSha12": "6ca5c02cf04c",
+      "cacheControl": "no-cache, no-store, max-age=0, must-revalidate",
+      "match": false
+    },
+    {
+      "source": "main/resources/static/assets/display/display-conversate.js",
+      "url": "http://127.0.0.1:18180/assets/display/display-conversate.js",
+      "sourceSha12": "8d2f229807b9",
+      "status": 200,
+      "servedSha12": "7724f2456c8d",
+      "cacheControl": "no-cache, no-store, max-age=0, must-revalidate",
+      "match": false
+    }
+  ],
+  "models": [
+    {
+      "id": "chatgpt-oauth:gpt-5.6-luna",
+      "present": true,
+      "provider": "chatgpt_oauth",
+      "modelId": "gpt-5.6-luna",
+      "selectable": true,
+      "reason": "",
+      "status": "configured"
+    },
+    {
+      "id": "llmrouter.openai-economy",
+      "present": true,
+      "provider": "openai",
+      "modelId": "gpt-5.6-luna",
+      "selectable": false,
+      "reason": "remote_selection_disabled",
+      "status": "unavailable"
+    }
+  ],
+  "checkerExit": 1,
+  "checkerMeaning": "nonselectable general API intentionally yields exit1; OAuth and asset match independently evaluated"
+}
