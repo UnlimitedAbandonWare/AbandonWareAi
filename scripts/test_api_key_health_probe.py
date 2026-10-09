@@ -241,10 +241,10 @@ class ProviderChecksWithStubHttp(unittest.TestCase):
 
 class CompositeKeysAndAltProbe(unittest.TestCase):
     def test_merged_row_per_name_match(self):
-        row = m.merged_key_row("naver", "NAVER_CLIENT_ID+NAVER_CLIENT_SECRET",
-                               [("NAVER_CLIENT_ID",
+        row = m.merged_key_row("naver", "NAVER_APIHUB_CLIENT_ID+NAVER_APIHUB_CLIENT_SECRET",
+                               [("NAVER_APIHUB_CLIENT_ID",
                                  {"process": "cid", "secrets": "cid"}, "cid"),
-                                ("NAVER_CLIENT_SECRET",
+                                ("NAVER_APIHUB_CLIENT_SECRET",
                                  {"process": "sec", "secrets": "sec"}, "sec")])
         self.assertEqual(row["source_match"], "match")
         self.assertTrue(row["key_present"])

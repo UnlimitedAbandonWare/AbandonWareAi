@@ -10,7 +10,7 @@ final class DisplayRelay {
     static final String VERSION="fold-meta-relay-20260916.1";
     record Producer(String owner,String client,String assistId) {}
     record Event(String serverId,long eventId,long generation,long sentAt,boolean enabled,boolean producerConnected,
-                 DisplayContentView.Transcript caption,DisplayContentView.TextCard hint,LensDisplayPrefs display,NovaFocusState.View focus) {}
+                 DisplayContentView.Transcript caption,DisplayContentView.TextCard hint,LensDisplayPrefs display,NovaFocusState.View focus,Map<String,Object> autoVoiceTrigger) {}
     private final Clock clock;
     private final String serverId=UUID.randomUUID().toString();
     private final Map<String,Channel> channels=new HashMap<>();
@@ -52,6 +52,9 @@ final class DisplayRelay {
         return poll(key,subscriber,display,false);
     }
     synchronized Event poll(String key,String subscriber,LensDisplayPrefs display,boolean preview){
+        return poll(key,subscriber,display,preview,Map.of());
+    }
+    synchronized Event poll(String key,String subscriber,LensDisplayPrefs display,boolean preview,Map<String,Object> autoVoiceTrigger){
         Channel c=channel(key);long now=clock.millis();
         Subscriber sub=null;
         if(!preview){
@@ -63,7 +66,7 @@ final class DisplayRelay {
         if(c.hint!=null&&c.hint.expiresAt()<=now){c.hint=null;c.eventId++;}
         if(sub!=null&&sub.sent!=c.eventId){sub.sent=c.eventId;c.lastSentAt=now;}
         boolean connected=c.producer!=null&&now-c.lastProducerSeen<=10000;
-        return new Event(serverId,c.eventId,c.generation,now,c.enabled,connected,c.enabled?c.caption:null,c.enabled?c.hint:null,display,c.enabled&&connected?c.focus:null);
+        return new Event(serverId,c.eventId,c.generation,now,c.enabled,connected,c.enabled?c.caption:null,c.enabled?c.hint:null,display,c.enabled&&connected?c.focus:null,autoVoiceTrigger);
     }
     synchronized void ack(String key,String subscriber,long eventId){
         Channel c=channel(key);Subscriber sub=c.subscribers.get(subscriber);

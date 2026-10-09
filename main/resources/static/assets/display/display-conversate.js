@@ -32,8 +32,29 @@
     let revision = 0, submittedRevision = -1, generation = 0, pollGeneration = 0, session = null, active = false;
     let timer = null, flight = null, connecting = null, retry = 1000, reconnectAt = 0, restored = true, lastCard = '';
     const requests = new Set(), events = [];
+    let diagnosticSequence=0,diagnosticWindow=0,diagnosticCount=0;const diagnosticSeen=new Map();
+    async function captureDiagnostic(fields){
+      const stages=['precheck','mic_open','audio_graph','server_begin','transport'];if(!stages.includes(fields?.stage))return;
+      const stamp=now();if(stamp-diagnosticWindow>=60000){diagnosticWindow=stamp;diagnosticCount=0;diagnosticSeen.clear();}
+      const errorCode=/^[a-z_][a-z0-9_]{0,63}$/.test(fields.errorCode||'')?fields.errorCode:'audio_transport_failed';
+      const key=fields.stage+':'+errorCode;if(diagnosticCount>=16||diagnosticSeen.has(key)&&stamp-diagnosticSeen.get(key)<15000)return;
+      diagnosticSeen.set(key,stamp);diagnosticCount++;
+      const httpStatus=Number.isInteger(fields.httpStatus)&&(fields.httpStatus===0||fields.httpStatus>=100&&fields.httpStatus<=599)?fields.httpStatus:0;
+      const payload={runtimeId:clientId,event:'capture_error',sequence:++diagnosticSequence,visible:globalThis.document?.hidden!==true,
+        code:httpStatus?'http_'+httpStatus:/timeout/.test(errorCode)?'timeout':fields.stage==='precheck'?'unsupported':'network',
+        stage:fields.stage,httpStatus,epoch:Number.isSafeInteger(fields.epoch)&&fields.epoch>=0?fields.epoch:0,
+        producerMismatch:fields.producerMismatch===true,lastFrameAgeMs:Number.isFinite(fields.lastFrameAgeMs)?Math.max(0,Math.min(600000,Math.round(fields.lastFrameAgeMs))):null,errorCode};
+      const controller=new AbortController(),timeout=setTimer(()=>controller.abort(),3000);requests.add(controller);
+      try{await fetchImpl('/api/assist/display/relay/diagnostics',{method:'POST',credentials:'same-origin',signal:controller.signal,
+        headers:{'Content-Type':'application/json','X-Display-Client':'1','X-Display-Runtime':clientId,...(options.testChannel?{'X-Display-Test-Channel':options.testChannel}:{})},body:JSON.stringify(payload)});}catch{}
+      finally{clearTimer(timeout);requests.delete(controller);}
+    }
     let voice = null, voiceStopping = false, seenVersion = -1;
     let shownHintKey='',captionTimer=null, hintTimer=null, resultTimer=null, joinRequest=null, errors=0;
+    let presentationRevision=0,localAutoHints=null,autoGrantTimer=null;
+    const retiredAutoHints=new Set();
+    function setAutoVoicePresentation(enabled){presentationRevision++;localAutoHints=enabled===true;if(!enabled){if(shownHintKey)retiredAutoHints.add(shownHintKey);clearTimer(hintTimer);state.hint=null;state.result=null;notify();}}
+    function autoVoicePresentation(){return state.autoVoiceSettings?.modeEnabled?{autoVoiceTrigger:{presentationRevision,hintsEnabled:localAutoHints!==false&&state.autoVoiceSettings.hintsEnabled!==false}}:{};}
     state.clientId=clientId;state.caption=null;state.hint=null;state.role='DISPLAY';state.linked=false;state.linkPending=false;state.reconnects=0;
     function recordEvent(event) { events.push(event); if (events.length > 12) events.shift(); }
     function setMessage(value) { if (String(value) !== state.message) { revision++; state.message = String(value); } notify(); }
@@ -81,6 +102,7 @@
     function connection() { return { assistId: session?.assistId || null, epoch: session?.epoch || 0, clientId }; }
     function connect() { if (!connecting) connecting = post(transcription?(options.standalone===true?'phone-test':'transcription'):'bootstrap', {...connection(),activate:claimPending}).then(v=>{claimPending=false;return v;}).finally(() => { connecting = null; }); return connecting; }
     function apply(view) {
+      const newAssist=session?.assistId!==view.assistId;
       if(transcription&&session?.assistId===view.assistId&&view.epoch<session.epoch)return;
       if (session?.assistId === view.assistId && session.epoch === view.epoch && Number.isSafeInteger(view.version) && view.version < seenVersion) return;
       const currentLens=state.testStatus,incomingLens=view.testStatus;
@@ -97,6 +119,14 @@
       state.focusProducer = view.focusProducer === true;
       // 생산자 폴링 응답에만 담기는 단발 촬영 명령 — 비생산자/구독자에게는 서버가 null을 돌려준다.
       state.focusControl = view.focusControl || null;
+      if(newAssist){localAutoHints=null;presentationRevision=0;retiredAutoHints.clear();shownHintKey='';clearTimer(hintTimer);state.hint=null;}
+      if(!preserveLens)state.autoVoiceSettings=view.autoVoiceSettings||null;
+      state.autoVoiceRuntime=view.autoVoiceRuntime||{state:'DISARMED'};
+      let autoGrantLife=Infinity;
+      if(state.autoVoiceSettings?.modeEnabled){const grant=state.autoVoiceRuntime;autoGrantLife=Math.min(grant.activationValidUntil||0,grant.hintDisplayValidUntil||0)-(options.wallNow||Date.now)();
+        clearTimer(autoGrantTimer);const withdraw=()=>{if(shownHintKey)retiredAutoHints.add(shownHintKey);state.hint=null;state.result=null;notify();};
+        if(grant.state!=='ACTIVE'||autoGrantLife<=0){autoGrantLife=0;withdraw();}else autoGrantTimer=setTimer(withdraw,Math.min(5000,autoGrantLife));
+      }
       applyFocus(view.focus||null);
       if(transcription){
         errors=0;state.reason=view.reason;state.role=view.role;state.linked=view.linked;state.linkPending=view.linkPending;state.confirmation=view.confirmation;
@@ -106,9 +136,15 @@
         const captionLife=Math.min(120000,Math.max(0,view.captionTtlMs-view.roundTripMs));
         if(view.ready&&(view.caption?.rolling===true||captionLife>0)&&view.caption?.text?.trim())state.caption=view.caption;
         const hintLife=Math.min(120000,Math.max(0,view.cardTtlMs-view.roundTripMs));
-        const candidate=view.ready&&(options.lens===true||view.hintsEnabled)&&hintLife>0&&['ANSWER','SUGGESTION','TERM','PERSON','CONCEPT','BIO','FACT','RAG','CUE','RAG_CUE','API_DIRECT'].includes(view.card?.kind)?view.card:null;
-        if(view.hintsEnabled===false&&options.lens!==true){clearTimer(hintTimer);state.hint=null;}
-        else if(candidate){shownHintKey=candidate.requestId||String(candidate.expiresAt);clearTimer(hintTimer);state.hint=candidate;}
+        const candidate=view.ready&&(options.lens===true||view.hintsEnabled)&&hintLife>0&&autoGrantLife>0&&['ANSWER','SUGGESTION','TERM','PERSON','CONCEPT','BIO','FACT','RAG','CUE','RAG_CUE','API_DIRECT'].includes(view.card?.kind)?view.card:null;
+        if(state.autoVoiceSettings?.modeEnabled&&(!candidate||view.hintsEnabled===false||localAutoHints===false)){
+          if(shownHintKey)retiredAutoHints.add(shownHintKey);clearTimer(hintTimer);state.hint=null;state.result=null;
+        }
+        else if(view.hintsEnabled===false&&options.lens!==true){clearTimer(hintTimer);state.hint=null;}
+        else if(candidate){const key=candidate.requestId||String(candidate.expiresAt);
+          if(!state.autoVoiceSettings?.modeEnabled){shownHintKey=key;clearTimer(hintTimer);state.hint=candidate;}
+          else if(key!==shownHintKey&&!retiredAutoHints.has(key)){if(shownHintKey)retiredAutoHints.add(shownHintKey);shownHintKey=key;clearTimer(hintTimer);state.hint=candidate;hintTimer=setTimer(()=>{retiredAutoHints.add(key);if(shownHintKey===key){state.hint=null;notify();}},hintLife);}
+        }
         state.error=null;
         if(flight&&view.requestId===flight.id&&!view.processing&&/^OPENAI_DIRECT_(OK|ERROR)$/.test(view.reason)){
           state.phase=view.reason==='OPENAI_DIRECT_OK'?'RESULT':'ERROR';
@@ -192,18 +228,20 @@
       return completed;
     }
     function cancel() { if (!flight) return; generation++; for (const request of requests) request.abort(); fail('outcome-unknown','대기를 끝냈습니다. 같은 질문은 다시 보내지 않았습니다.'); schedule(1000); }
-    async function beginVoice({continuation=false,sttPolicy=null}={}) {
+    async function beginVoice({continuation=false,sttPolicy=null,autoVoiceConsent=false}={}) {
       if (flight || voice || voiceStopping) throw Error('display-busy');
       const policy=sttPolicy?{...sttPolicy,allowedFallbacks:[...(sttPolicy.allowedFallbacks||[])]}:null;
       const mode = { ready: false }; voice = mode; state.voiceActive = true; restored = false; notify();
       try{
+        const previousAssist=session?.assistId;const auto=state.autoVoiceSettings?.modeEnabled;
         const ready = await connect(); if (voice !== mode) throw Error('voice-cancelled');
+        if(auto&&(previousAssist&&ready.assistId!==previousAssist||continuation&&ready.autoVoiceRuntime?.state==='DISARMED'))throw Error('auto_voice_reprepare_required');
         if(transcription&&!(options.standalone===true&&ready.role==='STANDALONE')&&(ready.role!=='PHONE'||!ready.linked))throw Error('paired_phone_required');
         session = { assistId: ready.assistId, epoch: ready.epoch }; mode.epoch = ready.epoch; mode.baseline = ready.requestId;
         if (!ready.audioAvailable || !ready.ready) throw Error('audio-unavailable');
         // A lost first request leaves the server OFF; no segment exists to renew.
         mode.bound=connection();
-        const view = await post('audio/start', {...mode.bound,continuation:continuation&&ready.audioState!=='OFF',...(policy?{sttPolicy:policy}:{})});
+        const view = await post('audio/start', {...mode.bound,continuation:continuation&&ready.audioState!=='OFF',...(policy?{sttPolicy:policy}:{}),...(state.autoVoiceSettings?.modeEnabled?{autoVoiceConsent:!!autoVoiceConsent}:{})});
         if (voice !== mode) throw Error('voice-cancelled');
         mode.bound={assistId:view.assistId,epoch:view.epoch,clientId};
         if (!view.ready || !['READY','STREAMING'].includes(view.audioState)) throw Error('audio-not-ready');
@@ -219,7 +257,7 @@
     }
     async function voiceChunk(sequence, pcm) {
       const mode = voice;if (!mode?.ready) throw Error('audio-not-ready');
-      const view = await post('audio/chunk', { ...connection(), epoch: mode.epoch, sequence, pcm });
+      const view = await post('audio/chunk', { ...connection(), epoch: mode.epoch, sequence, pcm,...autoVoicePresentation() });
       if (voice !== mode) return;
       apply(view);
       if (view.epoch !== mode.epoch || !view.ready) throw Error('audio-stopped');
@@ -228,22 +266,23 @@
       const mode=voice;if(!mode?.ready)throw Error('audio-not-ready');
       if(!Array.isArray(frames)||frames.length<1||frames.length>8||frames.some((f,i)=>
         !Number.isSafeInteger(f?.sequence)||f.sequence<0||f.sequence!==frames[0].sequence+i||typeof f.pcm!=='string'||f.pcm.length>10240))throw Error('invalid_audio_batch');
-      const ack=await post('audio/chunk-batch',{...connection(),epoch:mode.epoch,frames});
+      const ack=await post('audio/chunk-batch',{...connection(),epoch:mode.epoch,frames,...autoVoicePresentation()});
       if(voice!==mode)return;apply(ack.view);
       if(ack.view.epoch!==mode.epoch||!ack.view.ready)throw Error('audio-stopped');
       return ack;
     }
-    async function endVoice({finish:drain=false}={}) {
+    async function endVoice({finish:drain=false,autoVoiceStop=false}={}) {
       if (!voice) return; const bound = connection(); voice = null; voiceStopping = true; state.voiceActive = false;
       const stamp = ++generation, pollStamp = ++pollGeneration; notify();
-      try { const view = await post('audio/stop', drain ? {...bound,finish:true} : bound); if (stamp === generation && pollStamp === pollGeneration) apply(view); return view; }
+      if(autoVoiceStop&&state.autoVoiceSettings?.modeEnabled){state.autoVoiceRuntime={state:'DISARMED'};state.hint=null;state.result=null;notify();}
+      try { const view = await post('audio/stop', {...bound,...(drain?{finish:true}:{}),...(autoVoiceStop?{autoVoiceStop:true}:{})}); if (stamp === generation && pollStamp === pollGeneration) apply(view); return view; }
       catch (error) {
         if (stamp !== generation || pollStamp !== pollGeneration) throw error;
         if (['stale_epoch','assist_paused'].includes(error.message)) {
           try { const ready = await connect();
             if (stamp !== generation || pollStamp !== pollGeneration) throw error;
             session = { assistId: ready.assistId, epoch: ready.epoch };
-            const view = await post('audio/stop', drain ? {...connection(),finish:true} : connection());
+            const view = await post('audio/stop', {...connection(),...(drain?{finish:true}:{}),...(autoVoiceStop?{autoVoiceStop:true}:{})});
             if (stamp === generation && pollStamp === pollGeneration) apply(view); return view; } catch {}
         }
         if (stamp === generation && pollStamp === pollGeneration) state.connection = 'RECONNECTING'; throw error; }
@@ -313,8 +352,8 @@
     function acknowledge(version,phase){return post('ack',{...connection(),version,phase});}
     async function stopAudio(){apply(await connect());return action('audio/stop');}
     function clearDraft() { if (flight) cancel(); generation++; restored = false; revision++; submittedRevision = -1; state.message = ''; state.phase = 'IDLE'; state.result = null; state.error = null; notify(); schedule(0); }
-    function dispose() { pause();clearTimer(captionTimer);clearTimer(hintTimer);clearTimer(resultTimer);if (flight) cancel(); for (const request of requests) request.abort(); }
-return { state, setMessage, canSubmit, submit, cancel, clearDraft, recordEvent, start, pause, dispose, beginVoice, voiceChunk, voiceBatch, endVoice,pairingCode,lensLink,storedLensLink,join,approve,unlink,hints,contextReset,background,relaySettings,lensSettings,relayTest,reconnect,acknowledge,stopAudio,focusRequest };
+    function dispose() { pause();clearTimer(captionTimer);clearTimer(hintTimer);clearTimer(autoGrantTimer);clearTimer(resultTimer);if (flight) cancel(); for (const request of requests) request.abort(); }
+return { state, setMessage, canSubmit, submit, cancel, clearDraft, recordEvent, start, pause, dispose, beginVoice, voiceChunk, voiceBatch, endVoice,setAutoVoicePresentation,pairingCode,lensLink,storedLensLink,join,approve,unlink,hints,contextReset,background,relaySettings,lensSettings,relayTest,reconnect,acknowledge,stopAudio,focusRequest,captureDiagnostic };
   }
   return { createClient, createCommitter };
 });

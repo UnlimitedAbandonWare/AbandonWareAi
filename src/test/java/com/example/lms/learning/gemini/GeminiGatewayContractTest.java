@@ -35,6 +35,41 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GeminiGatewayContractTest {
+    @Test void compatibleFocusReasoningUsesOnlyTheSupportedWireField() throws Exception {
+        var payload=new AtomicReference<com.fasterxml.jackson.databind.JsonNode>();
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/",exchange->{
+            payload.set(new ObjectMapper().readTree(exchange.getRequestBody()));
+            byte[] response="{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"fixture\"}}]}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type","application/json");exchange.sendResponseHeaders(200,response.length);
+            try(var body=exchange.getResponseBody()){body.write(response);}
+        });server.start();
+        try{
+            var gateway=gateway(baseEnvironment().withProperty("GEMINI_API_KEY","synthetic-focus-key").withProperty("gemini.gateway.purpose.router.enabled","true"),request->Mono.error(new AssertionError("native unused")));
+            String base="http://127.0.0.1:"+server.getAddress().getPort()+"/v1beta/openai";
+            for(String model:List.of("gemini-3.8-flash","gemini-3-pro-preview"))for(String effort:List.of("low","medium","high")){
+                var spec=new GeminiGateway.RouterSpec(base,model,Duration.ofSeconds(2),0,null,null,null,null,128,effort);
+                assertEquals("fixture",gateway.buildOpenAiCompatibleChatModel(spec,false).chat(List.of(UserMessage.from("fixture"))).aiMessage().text());
+                if(model.equals("gemini-3.8-flash"))assertEquals(effort,payload.get().path("reasoning_effort").asText());
+                else assertFalse(payload.get().has("reasoning_effort"));
+                assertFalse(payload.get().has("thinking_level"));assertFalse(payload.get().has("thinking_budget"));assertFalse(payload.get().has("generationConfig"));
+            }
+        }finally{server.stop(0);}
+    }
+    @Test void nativeFocusReasoningUsesThinkingLevelAndOmitsUnsupportedModel() throws Exception {
+        var mapper=new ObjectMapper().findAndRegisterModules();
+        for(String effort:List.of("low","medium","high")) {
+            var legacy=new GeminiGateway.RouterSpec("https://generativelanguage.googleapis.com/v1beta/openai","gemini-3.8-flash",Duration.ofSeconds(2),0,0.2,0.9,null,null,500);
+            var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(legacy);node.put("focusReasoningEffort",effort);
+            var spec=mapper.treeToValue(node,GeminiGateway.RouterSpec.class);
+            var body=mapper.valueToTree(GeminiGateway.nativeChatBody(List.of(UserMessage.from("fixture")),spec,false));
+            assertEquals(effort,body.path("generationConfig").path("thinkingConfig").path("thinkingLevel").asText());
+            assertFalse(body.path("generationConfig").has("temperature"));assertFalse(body.path("generationConfig").has("topP"));
+            node.put("model","gemini-3-pro-preview");
+            var unsupported=mapper.valueToTree(GeminiGateway.nativeChatBody(List.of(UserMessage.from("fixture")),mapper.treeToValue(node,GeminiGateway.RouterSpec.class),false));
+            assertFalse(unsupported.path("generationConfig").has("thinkingConfig"));
+        }
+    }
     @Test void nativeStrictTimeoutKeepsItsReasonInsteadOfBecomingBackendUnavailable() {
         for(boolean timeout:List.of(true,false)){
             var env=baseEnvironment().withProperty("GEMINI_API_KEY","synthetic-focus-key")

@@ -460,6 +460,16 @@ public class DynamicChatModelFactory {
                 timeoutSeconds,maxRetriesOverride,observedContext,routingInvocation,focusGoogleSearchAllowed,false);
     }
 
+    /** The router Aspect carries this frozen Focus hint only to capable Gemini serializers. */
+    public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
+            Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
+            int timeoutSeconds, Integer maxRetriesOverride,
+            com.example.lms.llm.spec.ModelSpecSnapshot observedContext,
+            com.example.lms.routing.RoutingInvocation routingInvocation,boolean focusGoogleSearchAllowed,boolean requireNativeGoogleSearch,String focusReasoningEffort) {
+        return lcWithTimeout(modelName,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,
+                timeoutSeconds,maxRetriesOverride,observedContext,routingInvocation,focusGoogleSearchAllowed,requireNativeGoogleSearch);
+    }
+
     public ChatModel lcWithTimeout(String modelName, Double temperature, Double topP,
             Double frequencyPenalty, Double presencePenalty, Integer maxTokens,
             int timeoutSeconds, Integer maxRetriesOverride,

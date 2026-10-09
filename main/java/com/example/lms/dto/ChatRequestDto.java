@@ -67,6 +67,9 @@ public class ChatRequestDto {
          * Prefer logical ids like "llmrouter.auto" if enabled.
          */
         private String model;
+        /** Frozen Display-only provider hint. Public chat JSON cannot set it. */
+        @JsonIgnore
+        private String focusReasoningEffort;
         /** Exact manual selection: fail visibly instead of changing provider/model. */
         private Boolean strictModelSelection;
         public boolean isStrictModelSelection() { return Boolean.TRUE.equals(strictModelSelection); }

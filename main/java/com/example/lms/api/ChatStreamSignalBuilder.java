@@ -209,12 +209,72 @@ final class ChatStreamSignalBuilder {
 
     private static ChatStreamEvent.AgentWebSearchSnapshot agentWebSearchSnapshot(Map<String, Object> meta) {
         Object status = meta.get("agent.webSearch.prompt.status");
-        if (!(status instanceof String state) || !Set.of("OK", "FAIL_SOFT", "SKIPPED").contains(state)) {
+        String state = status instanceof String value && Set.of("OK", "FAIL_SOFT", "SKIPPED").contains(value) ? value : null;
+        var providers = searchProviderSnapshots(meta);
+        if (state == null && providers.isEmpty()) {
             return null;
         }
         Object reason = meta.get("agent.webSearch.prompt.reasonCode");
         return new ChatStreamEvent.AgentWebSearchSnapshot(state, reason instanceof String label ? label : null,
-                countValue(meta.get("agent.webSearch.prompt.returnedCount")));
+                countValue(meta.get("agent.webSearch.prompt.returnedCount")), providers);
+    }
+
+    private static List<ChatStreamEvent.SearchProviderSnapshot> searchProviderSnapshots(Map<String, Object> meta) {
+        List<ChatStreamEvent.SearchProviderSnapshot> out = new ArrayList<>();
+        for (String provider : List.of("naver", "brave")) {
+            String key = provider.equals("naver") ? "web.naver.filter.runs" : "web.brave.attempt.runs";
+            if (!(meta.get(key) instanceof List<?> rows)) continue;
+            for (Object item : rows) {
+                if (out.size() >= 32) return List.copyOf(out);
+                if (!(item instanceof Map<?, ?> row)) continue;
+                if (meta.get("requestId") != null && row.get("requestId") != null
+                        && !meta.get("requestId").equals(row.get("requestId"))) continue;
+                if (List.of("retrievalExecutionId", "searchExecutionId").stream().anyMatch(id ->
+                        meta.get(id) != null && !meta.get(id).equals(row.get(id)))) continue;
+                boolean attempted = Boolean.TRUE.equals(row.get("clientAttemptObserved"));
+                boolean receipt = Boolean.TRUE.equals(row.get("providerReceiptObserved"));
+                boolean cache = Boolean.TRUE.equals(row.get("cacheHit"))
+                        || (!attempted && Boolean.TRUE.equals(meta.get("web." + provider + ".cacheOnly.hit")));
+                String failure = safeString(firstNonNull(row.get("failureReason"), row.get("failureClass")));
+                String raw = safeString(firstNonNull(row.get("outcome"), row.get("failureClass")));
+                String outcome = "NONE".equals(raw) ? "OK" : Set.of("OK", "TRUE_ZERO", "FILTER_ZERO").contains(raw == null ? "" : raw)
+                        ? raw : Set.of("DISABLED", "COOLDOWN", "RATE_LIMIT_LOCAL").contains(raw == null ? "" : raw)
+                        ? "SKIPPED" : "unknown".equalsIgnoreCase(raw) || raw == null ? "UNKNOWN" : "FAIL_SOFT";
+                if (cache) outcome = "CACHE_HIT";
+                else if (!attempted) outcome = "UNKNOWN";
+                else if (!receipt && Set.of("OK", "TRUE_ZERO", "FILTER_ZERO").contains(outcome)) outcome = "UNKNOWN";
+                String freshness = "not_observed";
+                if (row.get("finishedAtEpochMs") instanceof Number time) {
+                    long age = System.currentTimeMillis() - time.longValue();
+                    freshness = age >= 0 && age < 600_000L ? "recent" : "stale";
+                }
+                String maskedBy = attempted && !cache ? safeString(row.get("maskedBy")) : null;
+                if (provider.equals("naver") && attempted && !cache && "FAIL_SOFT".equals(outcome)
+                        && row.get("providerAttemptId") instanceof String attemptId && row.get("searchExecutionId") != null
+                        && meta.get("web.naver.masked.runs") instanceof List<?> masks) {
+                    int checked = 0;
+                    for (Object marker : masks) {
+                        if (++checked > 32) break;
+                        if (marker instanceof Map<?, ?> mask && attemptId.equals(mask.get("providerAttemptId"))
+                                && row.get("searchExecutionId").equals(mask.get("searchExecutionId"))) {
+                            maskedBy = safeString(mask.get("maskedBy"));
+                            break;
+                        }
+                    }
+                }
+                out.add(new ChatStreamEvent.SearchProviderSnapshot(provider, outcome, failure,
+                        countValue(row.get("httpStatus")),
+                        row.get("clientAttemptObserved") instanceof Boolean value ? value : null,
+                        row.get("providerReceiptObserved") instanceof Boolean value ? value : null,
+                        countValue(firstNonNull(row.get("returnedCount"), row.get("rawSize"))),
+                        countValue(row.get("afterFilterCount")),
+                        cache ? true : row.get("cacheHit") instanceof Boolean value ? value : null,
+                        maskedBy,
+                        attempted && receipt && Set.of("OK", "TRUE_ZERO", "FILTER_ZERO").contains(outcome)
+                                ? safeString(row.get("recoveredAt")) : null, freshness));
+            }
+        }
+        return List.copyOf(out);
     }
 
     private static String planWhenState(Object value) {

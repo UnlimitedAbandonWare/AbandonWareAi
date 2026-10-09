@@ -1,6 +1,6 @@
 ---
 name: dot-brief-save
-description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF] 태그와 함께 들어온 경우 Downloads + agent-prompts 저장 경로 실행."
+description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF] 태그와 함께 들어온 경우 Downloads 저장 경로 실행(agent-prompts 사본은 R6 폐기)."
 ---
 
 # dot-brief-save
@@ -21,9 +21,11 @@ description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF]
    ```
 
    (`--date YYYYMMDD`는 선택. 기본은 오늘. 파일명은 `PASTE_<AGENT>_<topic>_<date>.txt`.
-   Downloads + `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt`에 새 파일로만
-   저장 — 덮어쓰기·삭제 0.) 출력 JSON 한 줄의 `paths`, `size`, `sha12`를 그대로
-   보고한다.
+   Downloads에 새 파일로만 저장 — 덮어쓰기·삭제 0.
+   **폐기(R6, 2026-10-06): `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt`
+   사본은 더 이상 기본 저장하지 않는다 — 기준은 Downloads + sha12 MATCH 하나.
+   옵트인만 `DOT_BRIEF_SAVE_PROMPTS_COPY=1`.) 출력 JSON 한 줄의 `paths`,
+   `size`, `sha12`를 그대로 보고한다.
 3. (보조) ChatGPT Library **파일 카드**로도 첨부할 수 있다 — 상세:
    `docs/agents-rules/DEMO1-DOT-FILE-CARD.md`. 카드 실패·미첨부는 Downloads
    MATCH가 있으면 FAIL이 아니다. 사용자는 Downloads의 파일을 손수 대상 세션에
@@ -54,8 +56,9 @@ description: "점(dot)이 Codex에 지시서 작성을 위임할 때 [DOT-BRIEF]
 ## 범위
 
 - 기본 쓰기 대상: 작업 폴더 파일 + Downloads `PASTE_<AGENT>_*.txt` +
-  `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt` (`dot_brief_save.py` 경유) +
   `data/agent-handoff/dot-brief-save/log.jsonl` (경로·크기·sha만).
+  `agent-prompts/<agent>-<topic>-<date>/BRIEF.txt` 사본은 R6 폐기 —
+  `DOT_BRIEF_SAVE_PROMPTS_COPY=1` 옵트인일 때만 쓴다.
   ChatGPT Library 파일 카드는 보조 채널.
 - 상세 계약·테스트: `scripts/dot_brief_save.py` docstring, `scripts/test_dot_brief_save.py`.
 - 사용자 카드: `docs/codex/DOT_BRIEF_SAVE_KO.md`.

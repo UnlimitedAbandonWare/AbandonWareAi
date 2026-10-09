@@ -20,7 +20,32 @@
       transcriptTtlMs:clamp(d.transcriptTtlMs,1000,100000,DISPLAY_DEFAULTS.transcriptTtlMs),
       hintTtlMs:clamp(d.hintTtlMs,1000,100000,DISPLAY_DEFAULTS.hintTtlMs),
       autoPageMs:d.autoPageMs===0?0:clamp(d.autoPageMs,1000,100000,DISPLAY_DEFAULTS.autoPageMs),
-      hintTargetChars:clamp(d.hintTargetChars,240,1100,DISPLAY_DEFAULTS.hintTargetChars)};
+      hintTargetChars:clamp(d.hintTargetChars,240,1100,DISPLAY_DEFAULTS.hintTargetChars),
+      ...(d.autoVoiceTrigger?{autoVoiceTrigger:{modeEnabled:d.autoVoiceTrigger.modeEnabled===true,hintsEnabled:d.autoVoiceTrigger.hintsEnabled===true,
+        hintLines:clamp(d.autoVoiceTrigger.hintLines,3,9,3),hintChars:clamp(d.autoVoiceTrigger.hintChars,200,500,200),language:d.autoVoiceTrigger.language==='en'?'en':'ko'}}:{})};
+  }
+  /** Candidate measurements are hidden; the caller commits only the returned complete text. */
+  function fitAtomicHint(el,text,lines,chars,language='ko'){
+    const clean=String(text||'').normalize('NFC').replace(/\r\n?/g,'\n').split('\n').map(s=>s.trimEnd()).join('\n').trim();
+    const probe=el.cloneNode(false),doc=el.ownerDocument,computed=doc.defaultView.getComputedStyle(el);
+    probe.removeAttribute?.('id');probe.hidden=false;
+    const parentStyle=doc.defaultView.getComputedStyle(el.parentNode),width=el.clientWidth||el.parentNode.clientWidth-(parseFloat(parentStyle.paddingLeft)||0)-(parseFloat(parentStyle.paddingRight)||0);
+    Object.assign(probe.style,{position:'absolute',visibility:'hidden',pointerEvents:'none',width:width+'px',height:'auto',maxHeight:'none',overflow:'visible',
+      fontFamily:computed.fontFamily,fontSize:computed.fontSize,fontWeight:computed.fontWeight,lineHeight:computed.lineHeight,letterSpacing:computed.letterSpacing,
+      whiteSpace:'normal',overflowWrap:'anywhere',padding:computed.padding,boxSizing:computed.boxSizing});
+    el.parentNode.appendChild(probe);
+    const lineHeight=parseFloat(computed.lineHeight)||parseFloat(computed.fontSize)*1.25;
+    const segments=typeof Intl.Segmenter==='function'?[...new Intl.Segmenter(undefined,{granularity:'sentence'}).segment(clean)].map(x=>x.segment.trim()):clean.match(/[^.!?。！？]+[.!?。！？]+(?:\s|$)/g)||[];
+    let accepted='';
+    try{for(const sentence of segments){const next=(accepted?accepted+' ':'')+sentence;
+      if(Array.from(next).length>chars)break;probe.textContent=next;
+      if(probe.scrollHeight>Math.min(lines*lineHeight,el.clientHeight||Infinity)+0.5)break;accepted=next;
+    }
+      if(!accepted&&clean){const notice=language==='en'?'Hint is too long.':'힌트가 너무 길어요.';
+        if(Array.from(notice).length<=chars){probe.textContent=notice;if(probe.scrollHeight<=Math.min(lines*lineHeight,el.clientHeight||Infinity)+0.5)accepted=notice;}
+      }
+    }finally{probe.remove();}
+    return accepted;
   }
   function createReceiver(options={}){
     const host=options.host||(typeof globalThis!=='undefined'?globalThis:window);
@@ -30,7 +55,7 @@
     if(host.AwxDisplayBoot)headers['X-Display-Runtime']=host.AwxDisplayBoot.id;
     if(options.channel)headers['X-Display-Test-Channel']=options.channel;
     const state={connection:'CONNECTING',caption:'',hint:'',eventId:0,serverId:'',generation:0,reconnects:0,enabled:true,producerConnected:false,errorCode:'',display:{...DISPLAY_DEFAULTS}};
-    let active=false,timer,expiry,hintExpiry,shownHintKey='',retry=1000,inflight=false,disposed=false;
+    let active=false,timer,expiry,hintExpiry,autoExpiry,shownHintKey='',retry=1000,inflight=false,disposed=false;
     const retiredHintKeys=new Set();
     const notify=()=>options.onChange?.(state);
     async function post(route,body){
@@ -55,6 +80,13 @@
       state.serverId=v.serverId;state.eventId=v.eventId;state.generation=v.generation;state.enabled=v.enabled;state.producerConnected=v.producerConnected===true;
       state.caption=v.enabled&&v.caption?.expiresAt>v.sentAt?v.caption.text:'';
       state.focus=v.enabled&&v.producerConnected?v.focus||null:null;
+      if(state.display.autoVoiceTrigger?.modeEnabled){
+        const grant=v.autoVoiceTrigger||{},remaining=Math.min(grant.activationValidUntil||0,grant.hintDisplayValidUntil||0)-v.sentAt;
+        state.autoVoiceTrigger=grant;
+        const withdraw=()=>{if(shownHintKey)retiredHintKeys.add(shownHintKey);clearTimer(hintExpiry);state.hint='';notify();};
+        clearTimer(autoExpiry);if(grant.state!=='ACTIVE'||!state.display.autoVoiceTrigger.hintsEnabled||remaining<=0||!v.hint)withdraw();else autoExpiry=setTimer(withdraw,Math.min(5000,remaining));
+        if(grant.state!=='ACTIVE'||remaining<=0||!state.display.autoVoiceTrigger.hintsEnabled)v={...v,hint:null};
+      }
       if(v.enabled&&v.hint?.expiresAt>v.sentAt){const key=v.hint.requestId||String(v.hint.expiresAt);if(!retiredHintKeys.has(key)&&key!==shownHintKey){if(shownHintKey)retiredHintKeys.add(shownHintKey);shownHintKey=key;clearTimer(hintExpiry);state.hint=v.hint.text;hintExpiry=setTimer(()=>{state.hint='';notify();},Math.min(state.display.hintTtlMs,Math.max(0,v.hint.expiresAt-v.sentAt)));}}
       state.connection='CONNECTED';state.errorCode='';clearTimer(expiry);
       if(state.caption&&!v.caption.rolling)expiry=setTimer(()=>{state.caption='';notify();},Math.min(state.display.transcriptTtlMs,v.caption.expiresAt-v.sentAt));notify();
@@ -63,7 +95,7 @@
     async function acknowledge(eventId){if(eventId!==state.eventId||eventId<1)return;try{await post('ack',{eventId});}catch{}}
     function start(){if(active||disposed)return;active=true;void poll();}
     function pause(){active=false;clearTimer(timer);}
-    function dispose(){disposed=true;pause();clearTimer(expiry);clearTimer(hintExpiry);}
+    function dispose(){disposed=true;pause();clearTimer(expiry);clearTimer(hintExpiry);clearTimer(autoExpiry);}
     return {state,poll,start,pause,dispose,acknowledge};
   }
   // A #view capability reads text only. It never registers with the relay or ACKs.
@@ -73,7 +105,7 @@
     const setTimer=options.setTimer||setTimeout,clearTimer=options.clearTimer||clearTimeout;
     const valid=/^[a-f0-9]{64}$/.test(options.token||'');
     const state={connection:valid?'CONNECTING':'DISCONNECTED',conversation:'',conversationExpiresAt:0,hint:'',hintId:'',hintFirstShownAt:0,hintExpiresAt:0,errorCode:valid?'':options.token?'lens_link_invalid':'lens_link_missing',action:valid?'':'reconnect_from_phone',display:{...DISPLAY_DEFAULTS},focus:null};
-    let active=false,disposed=false,terminal=!valid,inflight=false,timer,hintTimer,captionTimer,cancelRequest,retry=1000,lastHintKey='',captionKey='',suppressedCaptionKey='',captionShownAt=0;
+    let active=false,disposed=false,terminal=!valid,inflight=false,pollGeneration=0,timer,hintTimer,captionTimer,autoLeaseTimer,cancelRequest,retry=1000,lastHintKey='',captionKey='',suppressedCaptionKey='',captionShownAt=0;
     const retiredHintKeys=new Set();
     const nowFn=typeof options.now==='function'?options.now:()=>Date.now();
     const notify=()=>options.onChange?.(state);
@@ -112,7 +144,7 @@
       const text=typeof value.hint==='string'?value.hint:'';if(!text.trim())return;
       const key=hintKeyOf(value),now=nowFn();
       if(retiredHintKeys.has(key)){diagnostic('hint_suppressed',{});return;}
-      if(key===lastHintKey){if(state.hintExpiresAt>now)state.hint=text;return;}
+      if(key===lastHintKey){if(!state.display.autoVoiceTrigger?.modeEnabled&&state.hintExpiresAt>now)state.hint=text;return;}
       retireHint(lastHintKey);lastHintKey=key;
       state.hint=text;state.hintId=typeof value.hintId==='string'?value.hintId:'';
       state.hintFirstShownAt=now;const serverCap=value.hintExpiresAt>0?value.hintExpiresAt:Infinity;
@@ -136,16 +168,25 @@
     }
     async function poll(){
       if(inflight||disposed||terminal)return;inflight=true;
+      const stamp=pollGeneration;
       try{
-        const value=await read();if(disposed)return;
+        const value=await read();if(disposed||stamp!==pollGeneration)return;
         if(!value||typeof value.conversation!=='string'||typeof value.hint!=='string'||value.hintId!=null&&typeof value.hintId!=='string'||value.hintExpiresAt!=null&&!Number.isFinite(value.hintExpiresAt)||value.conversationExpiresAt!=null&&!Number.isFinite(value.conversationExpiresAt)||value.display!=null&&typeof value.display!=='object'||Array.from(value.conversation).length>280||Array.from(value.hint).length>LENS_HINT_CHARS_MAX)throw Error('contract');
         if(value.display){const next=normDisplay(value.display);if(JSON.stringify(next)!==JSON.stringify(state.display)){state.display=next;diagnostic('display_applied',{...next,at:nowFn()});}}
         applyConversation(value);
-        applyHint(value);
+        const auto=state.display.autoVoiceTrigger;
+        if(auto?.modeEnabled){
+          const grant=value.autoVoiceTrigger||{},until=Math.min(grant.activationValidUntil||0,grant.hintDisplayValidUntil||0);
+          clearTimer(autoLeaseTimer);
+          const withdraw=()=>{retireHint(lastHintKey);lastHintKey='';state.hint='';state.hintId='';clearTimer(hintTimer);notify();};
+          if(!auto.hintsEnabled||grant.state!=='ACTIVE'||until<=nowFn()||!value.hint.trim())withdraw();
+          else {applyHint(value);autoLeaseTimer=setTimer(withdraw,Math.max(1,until-nowFn()));}
+          state.autoVoiceTrigger=grant;
+        }else applyHint(value);
         state.focus=value.focus||null;
         state.connection='CONNECTED';state.errorCode='';state.action='';retry=1000;notify();
       }catch(error){
-        if(disposed||error.message==='cancelled')return;
+        if(disposed||stamp!==pollGeneration||error.message==='cancelled')return;
         terminal=error.status===403||error.status===404;
         state.connection=terminal?'DISCONNECTED':'RECONNECTING';
         state.errorCode=error.status===404?'lens_link_expired':error.status===403?'lens_link_denied':error.message==='contract'||error instanceof SyntaxError?'contract':error.message==='unsupported'?'unsupported':error.message==='timeout'||error.name==='AbortError'?'timeout':error.status?'http_'+error.status:'network';
@@ -154,8 +195,8 @@
       }finally{inflight=false;if(active&&!disposed&&!terminal)timer=setTimer(poll,retry);}
     }
     function start(){if(active||disposed||terminal)return;active=true;void poll();}
-    function pause(){active=false;clearTimer(timer);cancelRequest?.();}
-    function dispose(){disposed=true;pause();clearTimer(hintTimer);clearTimer(captionTimer);}
+    function pause(){active=false;pollGeneration++;clearTimer(timer);cancelRequest?.();}
+    function dispose(){disposed=true;pause();clearTimer(hintTimer);clearTimer(captionTimer);clearTimer(autoLeaseTimer);}
     return {state,poll,start,pause,dispose};
   }
   // Lens line budget (FIELD_TESTED): the cue card and the transcript share
@@ -243,16 +284,16 @@
     const diagnostic=options.preview===true?()=>{}:(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
     const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:options.preview===true?()=>{}:window.NovaFocus.receiptSender(window),diagnostic}):null;
     let hintRenderKey='',lastCueText='',hintPages=[],hintPage=0,hintPageTimer=null,lastState=null;
-    const cfg=()=>lastState?.display||DISPLAY_DEFAULTS;
+    const cfg=()=>{const d=lastState?.display||DISPLAY_DEFAULTS,a=lastState?.autoVoiceTrigger;return d.autoVoiceTrigger?.modeEnabled&&lastState.hint&&a?{...d,autoVoiceTrigger:{...d.autoVoiceTrigger,hintLines:a.appliedHintLines||d.autoVoiceTrigger.hintLines,hintChars:a.appliedHintChars||d.autoVoiceTrigger.hintChars}}:d;};
     function paint(){
       const state=lastState||{},c=cfg();
-      if(stage)for(const [k,v] of [['--cap-font',c.transcriptFontPx],['--hint-font',c.hintFontPx],['--cap-lines',c.transcriptMaxLines],['--hint-lines',c.hintPageLines]])stage.style.setProperty(k,v+(k.endsWith('font')?'px':''));
+      if(stage)for(const [k,v] of [['--cap-font',c.transcriptFontPx],['--hint-font',c.hintFontPx],['--cap-lines',c.transcriptMaxLines],['--hint-lines',c.autoVoiceTrigger?.modeEnabled?c.autoVoiceTrigger.hintLines:c.hintPageLines]])stage.style.setProperty(k,v+(k.endsWith('font')?'px':''));
       const focused=focus?.update(state.focus,state.connection==='CONNECTED')===true;
       if(focused){if(hint)hint.hidden=true;if(transcript)transcript.hidden=true;if(status)status.hidden=true;return;}
       if(transcript)transcript.hidden=false;
       const hasCue=hintPages.length>0;
       if(stage)stage.classList.toggle('has-cue',hasCue);
-      if(hint){hint.textContent=hasCue?hintPages[hintPage]:'';hint.hidden=!hasCue;}
+      if(hint){const text=hasCue?hintPages[hintPage]:'';if(hint.textContent!==text)hint.textContent=text;hint.hidden=!hasCue;}
       // Transcript keeps its configured small band; a cue never restyles it.
       let capLines=c.transcriptMaxLines;
       if(hasCue){const lines=measuredLines(hint);if(lines>0)capLines=Math.max(MIN_CAPTION_LINES,Math.min(c.transcriptMaxLines,LENS_LINE_BUDGET-lines));}
@@ -266,6 +307,7 @@
     }
     function schedulePages(){
       clearTimeout(hintPageTimer);hintPageTimer=null;
+      if(cfg().autoVoiceTrigger?.modeEnabled)return;
       const ms=cfg().autoPageMs;
       // The configured interval is used exactly as set: a hint that expires
       // before the next page turn simply disappears — the interval is never
@@ -284,10 +326,18 @@
       if(!cue){hintRenderKey='';lastCueText='';hintPages=[];hintPage=0;clearTimeout(hintPageTimer);hintPageTimer=null;}
       else if(key!==hintRenderKey){
         hintRenderKey=key;lastCueText=cue;
-        if(hint){hint.hidden=false;hintPages=splitHintPages(hint,cue,cfg().hintPageLines);hintPage=0;}else hintPages=[cue];
+        if(hint){
+          if(cfg().autoVoiceTrigger?.modeEnabled){
+            const lines=state.autoVoiceTrigger?.appliedHintLines||cfg().autoVoiceTrigger.hintLines,chars=state.autoVoiceTrigger?.appliedHintChars||cfg().autoVoiceTrigger.hintChars;
+            if(stage){stage.style.setProperty('--hint-font',cfg().hintFontPx+'px');stage.style.setProperty('--hint-lines',lines);}
+            const fitted=fitAtomicHint(hint,cue,lines,chars,cfg().autoVoiceTrigger.language);
+            hintPages=fitted?[fitted]:[];diagnostic('atomic_hint_fit',{visible:!!fitted,chars:Array.from(fitted).length});
+          }else{hint.hidden=false;hintPages=splitHintPages(hint,cue,cfg().hintPageLines);}
+          hintPage=0;
+        }else hintPages=[cue];
         diagnostic('lens_hint_render',{pages:hintPages.length,chars:Array.from(cue).length});
         schedulePages();
-      }else if(cue!==lastCueText){
+      }else if(cue!==lastCueText&&!cfg().autoVoiceTrigger?.modeEnabled){
         // Same hint identity with a revised body: re-split but keep the page being read.
         lastCueText=cue;const keep=hintPage;
         hintPages=hint?splitHintPages(hint,cue,cfg().hintPageLines):[cue];hintPage=Math.min(keep,hintPages.length-1);
@@ -362,6 +412,7 @@
     }
     function schedule(){
       clearTimer(timer);
+      if(snapshot.display?.autoVoiceTrigger?.modeEnabled)return;
       const ms=snapshot.display?.autoPageMs??DISPLAY_DEFAULTS.autoPageMs;
       if(!disposed&&snapshot.hint&&pages.length>1&&ms>=1000)timer=setTimer(()=>{page=(page+1)%pages.length;render();schedule();},ms);
     }
@@ -371,12 +422,13 @@
       const next=(value.hint?'hint:':'caption:')+text;
       if(next!==key){
         key=next;const points=Array.from(text);pages=[];
-        for(let i=0;i<points.length;i+=120)pages.push(points.slice(i,i+120).join(''));
+        if(value.hint&&value.display?.autoVoiceTrigger?.modeEnabled){const auto=value.display.autoVoiceTrigger,grant=value.autoVoiceTrigger;const fitted=options.hintElement?fitAtomicHint(options.hintElement,text,grant?.appliedHintLines||auto.hintLines,grant?.appliedHintChars||auto.hintChars,auto.language):text;pages=fitted?[fitted]:[];}
+        else for(let i=0;i<points.length;i+=120)pages.push(points.slice(i,i+120).join(''));
         page=value.hint?0:Math.max(0,pages.length-1);schedule();
       }
       render();
     }
-    function move(delta){if(disposed||!pages.length)return;page=(page+delta+pages.length)%pages.length;render();schedule();}
+    function move(delta){if(disposed||!pages.length||snapshot.display?.autoVoiceTrigger?.modeEnabled&&snapshot.hint)return;page=(page+delta+pages.length)%pages.length;render();schedule();}
     function dispose(){disposed=true;clearTimer(timer);}
     return {update,move,dispose};
   }
@@ -387,7 +439,7 @@
     if(hash.has('view')||query.get('clientRole')!=='test')return mountLens(hash.get('view')||'',{preview});
     const diagnostic=preview?()=>{}:(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
     const channel=query.get('clientRole')==='test'?(query.get('channel')||'test-'+createClientId(window)):null;
-    const card=createPresentation({onChange(view){
+    const card=createPresentation({hintElement:document.getElementById('transcript'),onChange(view){
       document.getElementById('transcript').textContent=receiver?.state.caption||receiver?.state.hint?view.text:'';
       const hint=document.getElementById('hint');hint.textContent='';hint.hidden=true;
     }});
@@ -414,5 +466,5 @@
     });
     receiver.start();return receiver;
   }
-  return {createReceiver,createLensReceiver,mount,createClientId,createPresentation,splitHintPages,fitCaption,normDisplay,DISPLAY_DEFAULTS};
+  return {createReceiver,createLensReceiver,mount,createClientId,createPresentation,splitHintPages,fitCaption,fitAtomicHint,normDisplay,DISPLAY_DEFAULTS};
 });

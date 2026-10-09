@@ -715,6 +715,7 @@ public class LlmRouterAspect {
         copy.cueJson=ca.cueJson;copy.cueJsonSchema=ca.cueJsonSchema;copy.cueTimeoutMs=ca.cueTimeoutMs;
         copy.focusGoogleSearchAllowed=ca.focusGoogleSearchAllowed;
         copy.requireNativeGoogleSearch=ca.requireNativeGoogleSearch;
+        copy.focusReasoningEffort=ca.focusReasoningEffort;
         return copy;
     }
 
@@ -1603,7 +1604,7 @@ public class LlmRouterAspect {
                             topP,
                             freq,
                             pres,
-                            ca.maxTokens);
+                            ca.maxTokens,ca.focusReasoningEffort);
             ChatModel gatewayModel = ca.requireNativeGoogleSearch
                     ? geminiGateway.buildOpenAiCompatibleChatModel(selectedSpec,ca.cueJson,ca.cueJsonSchema,ca.focusGoogleSearchAllowed,true)
                     : geminiGateway.buildOpenAiCompatibleChatModel(selectedSpec,ca.cueJson,ca.cueJsonSchema,ca.focusGoogleSearchAllowed);
@@ -2580,6 +2581,7 @@ public class LlmRouterAspect {
         boolean cueJson;
         boolean focusGoogleSearchAllowed;
         boolean requireNativeGoogleSearch;
+        String focusReasoningEffort;
         dev.langchain4j.model.chat.request.json.JsonSchema cueJsonSchema;
         long cueTimeoutMs;
 
@@ -2647,7 +2649,7 @@ public class LlmRouterAspect {
             }
 
             // overload 3: (String, Double, Double, Double, Double, Integer, int, Integer)
-            if (args.length >= 8 && args.length <= 12) {
+            if (args.length >= 8 && args.length <= 13) {
                 CallArgs parsed = new CallArgs(
                         modelId,
                         safeDouble(args[1]),
@@ -2660,7 +2662,8 @@ public class LlmRouterAspect {
                         args.length>=9 && args[8] instanceof com.example.lms.llm.spec.ModelSpecSnapshot snapshot ? snapshot : null,
                         args.length>=10 && args[9] instanceof com.example.lms.routing.RoutingInvocation invocation ? invocation : null);
                 parsed.focusGoogleSearchAllowed=args.length>=11&&Boolean.TRUE.equals(args[10]);
-                parsed.requireNativeGoogleSearch=args.length==12&&Boolean.TRUE.equals(args[11]);
+                parsed.requireNativeGoogleSearch=args.length>=12&&Boolean.TRUE.equals(args[11]);
+                parsed.focusReasoningEffort=args.length==13&&args[12] instanceof String effort?effort:null;
                 return parsed;
             }
 

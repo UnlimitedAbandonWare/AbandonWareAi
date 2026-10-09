@@ -40,8 +40,9 @@ try {
         # Normal launches refresh current Windows settings even from an old
         # terminal. Explicit manual use without -Runtime still selects the store.
         $runtimeNames = @($catalog.runtimeEnvironmentNames)
+        $publicRuntimeNames = @('NAVER_SEARCH_PROVIDER','NAVER_APIHUB_BASE_URL','NAVER_SEARCH_API_BASE_URL','NAVER_APIHUB_APP_NAME')
         foreach ($name in $runtimeNames) {
-            if ($null -ne $name -and ($name -notmatch '^CONVERSATE_[A-Z0-9_]{1,69}$' -or $name -match 'openssl|opnessl')) { throw 'invalid-runtime-setting' }
+            if ($null -ne $name -and (($name -notmatch '^CONVERSATE_[A-Z0-9_]{1,69}$' -and $name -notin $publicRuntimeNames) -or $name -match 'openssl|opnessl')) { throw 'invalid-runtime-setting' }
         }
         foreach ($name in @($allowed + $runtimeNames | Where-Object { $null -ne $_ } | Select-Object -Unique)) {
             $value = [Environment]::GetEnvironmentVariable($name, 'User')

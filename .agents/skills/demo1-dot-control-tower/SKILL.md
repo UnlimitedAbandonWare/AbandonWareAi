@@ -98,6 +98,13 @@ lease 잔존·NOT_RUN)을 갖춘다. 칸 누락 시 되묻지 말고 검사 결�
 3. **companion(보조 지시서)로 끼어들 때**: dot 지시서가 잡은 파일과 disjoint
    유지. 같은 파일이면 companion은 도구·검증·문서 보조만.
 
+## 장애 라우팅
+
+- PC 명령이 `helper_unknown_error`·`setup refresh had errors`로 실행 전 실패 →
+  먼저 `scripts\codex_sandbox_doctor.ps1 -Action Check`.
+- dot이 Downloads 지시서를 `Access denied`로 못 읽으면 → `… -BriefRead -Check`
+  (LEAK_FOLDER·MISSING_EXPLICIT이면 `-BriefRead -Heal`).
+
 ## 원복 방지 (ratchet)
 
 - dot이 패치 성공 뒤 룰·스킬을 갱신하면 옛 문구로 되돌리지 않는다(갱신 자체는
@@ -134,3 +141,8 @@ lease 잔존·NOT_RUN)을 갖춘다. 칸 누락 시 되묻지 말고 검사 결�
 - ChatGPT/OpenAI 토큰·쿠키·자격 증명 읽기·복사·출력, 비밀값 출력
 - "구독 = 무제한" 단정, 영구 1등 모델 하드코딩, 다른 CLI로 토큰 옮기기 권장
 - 스킬·`[DOT-BRIEF]`·첨부 지시서 없는 맨명령으로 제품 수정 시작
+
+## 문서 편집 위임 포인터
+
+- dot이 이력서·경력기술서 등 Google Drive .docx 편집을 지시서로 위임할 때 실행 스킬은
+  `demo1-gdrive-docx-inplace-edit`로 지정하고, 같은 문서를 만지는 세션은 동시에 1명뿐임을 명시한다.

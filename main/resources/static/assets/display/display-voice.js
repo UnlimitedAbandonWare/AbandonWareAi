@@ -1,11 +1,18 @@
 (function(root,factory){if(typeof module==='object'&&module.exports)module.exports=factory();else root.DisplayVoice=factory();})(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
-  function createCapture({client,env=globalThis,onChange=()=>{},setTimer=setTimeout,clearTimer=clearTimeout,continuous=false,now=()=>performance.now(),deviceId=()=>'',onDeviceFallback=()=>{},segmentSeconds=()=>0,sttPolicy=()=>null}){
+  function createCapture({client,env=globalThis,onChange=()=>{},setTimer=setTimeout,clearTimer=clearTimeout,continuous=false,now=()=>performance.now(),deviceId=()=>'',onDeviceFallback=()=>{},segmentSeconds=()=>0,sttPolicy=()=>null,autoVoiceConsent=()=>false}){
     const state={phase:'OFF',message:'음성 시작을 누른 동안만 서버로 전송합니다.',frames:0,bytes:0,level:0,reconnects:0,segments:0,events:[],sttPausedReason:null,droppedAudioMs:0,deviceLabel:'',permission:'not_requested',inputRate:null,audioContext:null,errorCode:null,errorStage:null,lastFrameAt:null,lastSendAt:null};let current=null,completing=null,wanted=false,run=0,recoveryTimer=null;
     const standalone=()=>client.state.role==='STANDALONE';
     const supported=()=>!!(env.isSecureContext&&env.navigator?.mediaDevices?.getUserMedia&&env.AudioContext&&env.AudioWorkletNode);
     function report(phase,message){state.phase=phase;state.message=message;onChange(state);}
     function event(name,fields={}){state.events.push({event:name,at:Math.round(now()),...fields});if(state.events.length>12)state.events.shift();}
+    function diagnostic(error,stage,m){
+      const errorCode=/^[a-z_][a-z0-9_]{0,63}$/.test(error?.message||'')?error.message:error?.message==='display-timeout'?'display_timeout':state.errorCode||'audio_transport_failed';
+      const fields={stage,httpStatus:Number.isInteger(error?.status)?error.status:0,epoch:client.state.epoch||0,
+        producerMismatch:error?.message==='event_owner_required'||client.state.testStatus?.relay?.eventOwner==='OTHER CLIENT',
+        lastFrameAgeMs:state.frames&&m?Math.max(0,Math.min(600000,Math.round(now()-m.lastFrame))):null,errorCode};
+      event('capture_error',fields);try{void client.captureDiagnostic?.(fields)?.catch?.(()=>{});}catch{}
+    }
     const apiLimit=error=>/^(?:asr_(?:budget_[a-z_]+|quota_exceeded|rate_limited|auth_failed|audio_format_invalid)|display_rate_limited)$/.test(error?.message||'');
     const apiMessage='수음 유지 · 전사 API 제한으로 전사 대기 중 (대기 구간은 저장하지 않습니다).';
     async function pauseApi(m,error){
@@ -76,7 +83,7 @@
           await Promise.race([(async()=>{await tail;await pump(m);})(),new Promise((_,reject)=>{deadline=setTimer(()=>reject(Error('audio_drain_timeout')),5000);})]);
           if(m.closed)return;
         }
-        if(m.serverAttempted){await client.endVoice(drain?{finish:true}:undefined);if(drain&&client.state.audioFinished!==true){message='마이크는 꺼졌지만 마지막 전사 완료는 확인되지 않았습니다.';failed=true;}}
+        if(m.serverAttempted){await client.endVoice({...drain?{finish:true}:{},autoVoiceStop:!rolling});if(drain&&!client.state.autoVoiceSettings?.modeEnabled&&client.state.audioFinished!==true){message='마이크는 꺼졌지만 마지막 전사 완료는 확인되지 않았습니다.';failed=true;}}
       }catch{state.errorCode='audio_finish_unconfirmed';message='마이크는 꺼졌지만 마지막 전사 완료는 확인되지 않았습니다.';failed=true;await client.endVoice().catch(()=>{});}
       finally{clearTimer(deadline);m.closed=true;wakePump(m);discard(m,'capture_stopped');m.node?.disconnect();if(m.context&&!m.contextClosed){m.contextClosed=true;void m.context.close().catch(()=>{});}if(completing===m)completing=null;}
       report(failed?'ERROR':'OFF',message);
@@ -104,11 +111,11 @@
         await client.endVoice({finish:true});if(m.closed)return;
         if(planned&&client.state.audioFinished!==true)throw Error('audio_finish_unconfirmed');
         if(reconnect)await client.reconnect({preserveSession:true});if(m.closed||!wanted)return;
-        m.serverAttempted=true;await client.beginVoice({continuation:true,sttPolicy:m.sttPolicy});if(m.closed)return;
+        m.serverAttempted=true;await client.beginVoice({continuation:true,sttPolicy:m.sttPolicy,autoVoiceConsent:m.autoVoiceConsent});if(m.closed)return;
         m.sequence=0;m.paceAt=now();m.paceCredit=0;m.serverAttempted=true;m.apiPaused=false;m.waiting=false;m.serverReady=true;state.sttPausedReason=null;state.errorCode=null;state.reconnects=0;event('audio_resumed');state.segments++;trim(m);m.reconnecting=false;m.plannedRenewal=false;
         void pump(m).catch(()=>{});if(!m.finishing&&!m.closed){m.roll=setTimer(()=>renew(m,true),renewalMs());report('LISTENING','수음 중 · 즉시 중지할 수 있습니다.');}
       }
-      catch(error){if(continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(continuous&&recoverable(error)){waitForAudio(m,error);return;}state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'asr_reconnect_failed';await stop('전사 재연결에 실패했습니다. 오류 코드와 연결을 확인해 주세요.',true);}
+      catch(error){diagnostic(error,'server_begin',m);if(continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(continuous&&recoverable(error)){waitForAudio(m,error);return;}state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'asr_reconnect_failed';await stop('전사 재연결에 실패했습니다. 오류 코드와 연결을 확인해 주세요.',true);}
       finally{m.renewalDone=null;renewalDone();}
     }
     function pump(m){if(m.busy||m.closed||m.reconnecting||!m.serverReady)return m.pending||Promise.resolve();m.busy=true;m.pending=(async()=>{
@@ -130,17 +137,19 @@
         catch(error){state.droppedAudioMs+=byteCount/32;event('audio_gap',{reason:'delivery_unconfirmed'});throw error;}
         finally{for(const bytes of buffers)bytes.fill(0);}
       }}
-      catch(error){if(continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(m.finishing||m.plannedRenewal)throw error;if(current===m){state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'audio_transport_failed';
+      catch(error){diagnostic(error,'transport',m);if(continuous&&apiLimit(error)){await pauseApi(m,error);return;}if(m.finishing||m.plannedRenewal)throw error;if(current===m){state.errorCode=/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'audio_transport_failed';
         if(continuous&&!m.reconnecting&&recoverable(error)){waitForAudio(m,error);}
         else if(!m.reconnecting)await stop('음성 연결이 끊겼습니다. 상태를 확인하고 다시 시작해 주세요.',true);}}finally{m.busy=false;}})();return m.pending;
     }
     async function start(continuation=false,resuming=false){
       if(current||completing)return false;
+      if(client.state.autoVoiceSettings?.modeEnabled&&!autoVoiceConsent()){state.errorCode='auto_voice_consent_required';report('ERROR','먼저 안내와 동의를 확인하고 대화 준비를 눌러 주세요.');return false;}
       if(!resuming){wanted=true;run++;state.segments=0;state.reconnects=0;}else if(!wanted)return false;
-      if(!supported()||!client.state.audioAvailable||(continuous&&!standalone()&&(client.state.role!=='PHONE'||!client.state.linked))){state.errorCode=null;state.errorStage='precheck';report('ERROR','휴대폰 연결, 마이크 지원과 전사 서버 설정을 확인해 주세요.');return false;}
+      if(!supported()||!client.state.audioAvailable||(continuous&&!standalone()&&(client.state.role!=='PHONE'||!client.state.linked))){state.errorCode=null;state.errorStage='precheck';diagnostic(Error('capture_precheck_failed'),'precheck');report('ERROR','휴대폰 연결, 마이크 지원과 전사 서버 설정을 확인해 주세요.');return false;}
       const m={queue:[],queuedBytes:0,sequence:0,closed:false,busy:false,serverReady:false,starting:true,lastFrame:now()};current=m;state.frames=state.bytes=state.level=0;state.errorCode=null;state.errorStage=null;state.permission='requesting';report('STARTING',resuming?'다음 전사 구간을 시작합니다.':'마이크 권한을 확인하고 있습니다.');
       try{
         const selected=sttPolicy();m.sttPolicy=selected?Object.freeze({...selected,allowedFallbacks:Object.freeze([...(selected.allowedFallbacks||[])])}):null;
+        m.autoVoiceConsent=autoVoiceConsent()===true;
         // Permission can remain unanswered. Late permission resolution must release tracks.
         m.permission=setTimer(()=>{state.errorCode='microphone_permission_timeout';stop('마이크 권한 응답을 기다리다 중지했습니다. 권한을 확인하고 다시 시작해 주세요.',true);},15000);
         const requested=deviceId();m.requestedDevice=requested;
@@ -169,9 +178,9 @@
         bindTracks(m);void permissionStatus(m);
         m.source=m.context.createMediaStreamSource(m.media);const mute=m.context.createGain();mute.gain.value=0;m.source.connect(m.node).connect(mute).connect(m.context.destination);
         state.errorStage='server_begin';
-        m.serverAttempted=true;try{await client.beginVoice({continuation,sttPolicy:m.sttPolicy});m.serverReady=true;m.paceAt=now();m.paceCredit=0;}
-        catch(error){if(continuous&&apiLimit(error))await pauseApi(m,error);
-          else if(error?.message==='assist_not_found'&&!m.beginRetried&&typeof client.reconnect==='function'){m.beginRetried=true;event('audio_waiting',{reason:'assist_rebind'});report('RECONNECTING','서버 세션을 다시 연결하고 수음을 다시 시작합니다.');
+        m.serverAttempted=true;try{await client.beginVoice({continuation,sttPolicy:m.sttPolicy,autoVoiceConsent:m.autoVoiceConsent});m.serverReady=true;m.paceAt=now();m.paceCredit=0;}
+        catch(error){diagnostic(error,'server_begin',m);if(continuous&&apiLimit(error))await pauseApi(m,error);
+          else if(error?.message==='assist_not_found'&&!client.state.autoVoiceSettings?.modeEnabled&&!m.beginRetried&&typeof client.reconnect==='function'){m.beginRetried=true;event('audio_waiting',{reason:'assist_rebind'});report('RECONNECTING','서버 세션을 다시 연결하고 수음을 다시 시작합니다.');
             try{await client.reconnect({preserveSession:true});if(m.closed)return false;await client.beginVoice({continuation:false,sttPolicy:m.sttPolicy});m.serverReady=true;m.paceAt=now();m.paceCredit=0;}
             catch(again){if(continuous&&apiLimit(again))await pauseApi(m,again);else if(continuous&&recoverable(again))waitForAudio(m,again);else throw again;}}
           else if(continuous&&recoverable(error))waitForAudio(m,error);else throw error;}
@@ -182,7 +191,7 @@
           if(env.navigator.wakeLock)env.navigator.wakeLock.request('screen').then(lock=>{if(m.closed)lock.release();else m.wake=lock;}).catch(()=>{});}
         state.errorStage=null;
         event('MIC_SESSION_START');report(m.waiting?'WAITING':'LISTENING',m.waiting?'전사 연결 대기 · 마이크와 마지막 글자를 유지합니다.':m.apiPaused?apiMessage:continuous?'수음 중 · 전사를 유지하며 필요한 때만 힌트를 표시합니다.':'듣고 있습니다 · 질문이 확정되면 답변합니다.');return true;
-      }catch(error){if(error?.name==='NotAllowedError')state.permission='denied';state.errorCode=({NotAllowedError:'microphone_permission_denied',NotFoundError:'microphone_device_missing',NotReadableError:'microphone_device_busy',OverconstrainedError:'microphone_device_changed'})[error?.name]||(/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'microphone_start_failed');if(current===m)await stop(error?.name==='NotAllowedError'?'마이크 권한이 허용되지 않았습니다. 휴대폰 사이트 권한을 확인해 주세요.':'음성 입력을 준비하지 못했습니다. 오류 코드를 확인해 주세요.',true);return false;}
+      }catch(error){if(error?.name==='NotAllowedError')state.permission='denied';state.errorCode=({NotAllowedError:'microphone_permission_denied',NotFoundError:'microphone_device_missing',NotReadableError:'microphone_device_busy',OverconstrainedError:'microphone_device_changed'})[error?.name]||(/^[a-z_]{1,64}$/.test(error?.message||'')?error.message:'microphone_start_failed');diagnostic(error,state.errorStage||'mic_open',m);if(current===m)await stop(error?.name==='NotAllowedError'?'마이크 권한이 허용되지 않았습니다. 휴대폰 사이트 권한을 확인해 주세요.':'음성 입력을 준비하지 못했습니다. 오류 코드를 확인해 주세요.',true);return false;}
     }
     // Page visibility return: thaw a suspended audio graph and re-arm the wake
     // lock without dropping the mic, the queue, or the server segment.

@@ -66,6 +66,9 @@ public class ConversateApiCueService {
         return answer(question,recent,materials,publicDisplay,forceHint,hintTargetChars,null);
     }
     public ConversateAnswerPipeline.Outcome answer(String question,List<String> recent,List<PreparedMaterialReader.Material> materials,boolean publicDisplay,boolean forceHint,int hintTargetChars,LensDisplayPrefs displayPrefs){
+        return answer(question,recent,materials,publicDisplay,forceHint,hintTargetChars,displayPrefs,null);
+    }
+    public ConversateAnswerPipeline.Outcome answer(String question,List<String> recent,List<PreparedMaterialReader.Material> materials,boolean publicDisplay,boolean forceHint,int hintTargetChars,LensDisplayPrefs displayPrefs,LensDisplayPrefs.AutoVoiceTrigger autoVoice){
         int targetChars=hintTargetChars>0?Math.min(hintTargetChars,LensDisplayPrefs.MAX_TARGET_CHARS):limit("hint-target-chars",540,LensDisplayPrefs.MIN_TARGET_CHARS,LensDisplayPrefs.MAX_TARGET_CHARS);
         long began=System.nanoTime();var prior=TimeBudgetContext.get();
         long budget=prior==null?limit("total-timeout-ms",12000,2000,20000):prior.capWaitMillis(limit("total-timeout-ms",12000,2000,20000));
@@ -167,7 +170,7 @@ public class ConversateApiCueService {
             debug.put("evidenceChars",evidence.stream().mapToInt(e->e.text().length()).sum());
             captureEvidenceDigests(debug,evidence);
             var finalContext=selected;var finalEvidence=List.copyOf(evidence);
-            var hint=callGroundedHint(question,finalContext,finalEvidence,cueDecision.equals("RAG_CUE"),gate.quality(),cost,targetChars);
+            var hint=callGroundedHint(question,finalContext,finalEvidence,cueDecision.equals("RAG_CUE"),gate.quality(),cost,targetChars,autoVoice);
             attempts+=hint.attempts();long generationMs=hint.elapsedMs();
             var hintDiagnostics=new ArrayList<Map<String,Object>>(hint.diagnostics());
             if(!cost.oauthRequired&&hint.value()!=null&&hint.value().insufficient()&&canSupplement(retrievalTrace)&&!cancelled()
@@ -194,7 +197,7 @@ public class ConversateApiCueService {
                     var supplemented=List.copyOf(evidence);
                     int usableCount=usableEvidence(supplemented).size();
                     debug.put("usableEvidenceCount",usableCount);debug.put("evidenceStatus",usableCount==0?"FRAGMENTED":"AVAILABLE");
-                    var enriched=callGroundedHint(question,finalContext,supplemented,true,gate.quality(),cost,targetChars);
+                    var enriched=callGroundedHint(question,finalContext,supplemented,true,gate.quality(),cost,targetChars,autoVoice);
                     attempts+=enriched.attempts();generationMs+=enriched.elapsedMs();hintDiagnostics.addAll(enriched.diagnostics());
                     if(enriched.value()!=null&&!enriched.value().insufficient()){
                         hint=enriched;debug.put("supplementStatus","GROUNDED");debug.put("evidenceStatus","AVAILABLE");
@@ -238,7 +241,7 @@ public class ConversateApiCueService {
                     var supplemented=List.copyOf(evidence);
                     int usableCount=usableEvidence(supplemented).size();
                     debug.put("usableEvidenceCount",usableCount);debug.put("evidenceStatus",usableCount==0?"FRAGMENTED":"AVAILABLE");
-                    var enriched=callGroundedHint(question,finalContext,supplemented,true,gate.quality(),cost,targetChars);
+                    var enriched=callGroundedHint(question,finalContext,supplemented,true,gate.quality(),cost,targetChars,autoVoice);
                     attempts+=enriched.attempts();generationMs+=enriched.elapsedMs();hintDiagnostics.addAll(enriched.diagnostics());
                     if(enriched.value()!=null&&!enriched.value().insufficient()&&UnknownAnswerPolicy.classify(enriched.value().text())==null){
                         hint=enriched;debug.put("supplementStatus","GROUNDED_UNKNOWN_WEB");debug.put("evidenceStatus","AVAILABLE");
@@ -719,11 +722,11 @@ public class ConversateApiCueService {
         return evidence.stream().filter(e->!e.text().startsWith("[WEB:")
                 ||java.util.regex.Pattern.compile("\\.{3,}|…").matcher(e.text()).results().limit(2).count()<2).toList();
     }
-    private CallResult<Hint> callGroundedHint(String question,List<String> context,List<ConversateCardPrompt.Evidence> evidence,boolean rag,int quality,RequestCost cost,int targetChars){
+    private CallResult<Hint> callGroundedHint(String question,List<String> context,List<ConversateCardPrompt.Evidence> evidence,boolean rag,int quality,RequestCost cost,int targetChars,LensDisplayPrefs.AutoVoiceTrigger autoVoice){
         // Fragmented search snippets cannot support exact claims, but must not
         // suppress a useful general cue or restart the shared generation budget.
         var usable=rag?usableEvidence(evidence):evidence;
-        return call(ConversateCardPrompt.cueHint(question,context,usable,rag,targetChars),false,quality,cost,node->parseHint(node,usable,rag));
+        return call(ConversateCardPrompt.cueHint(question,context,usable,rag,targetChars,autoVoice),false,quality,cost,node->parseHint(node,usable,rag));
     }
     static List<UnifiedRagOrchestrator.Doc> selectCueDocuments(String query,List<UnifiedRagOrchestrator.Doc> docs){
         if(docs==null)return List.of();

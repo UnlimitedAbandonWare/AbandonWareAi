@@ -12,6 +12,32 @@ import static org.mockito.Mockito.*;
 
 class DisplayLensSettingsTest {
     final ObjectMapper mapper=new ObjectMapper();
+    @Test void autoVoiceSettingsAreIndependentStrictAndRoundTrip() throws Exception {
+        var defaults=LensDisplayPrefs.defaults(540);
+        var patch=mapper.readValue("""
+            {"autoVoiceTrigger":{"modeEnabled":true,"hintsEnabled":false,"language":"ko",
+              "hintLines":3,"hintChars":200,"phrases":[{"id":"one","language":"ko","text":"  안녕  "},
+              {"id":"two","language":"ko","text":"안녕"}]}}
+            """,LensDisplayPrefs.Patch.class);
+        var applied=defaults.patch(patch);
+        var json=mapper.valueToTree(applied).path("autoVoiceTrigger");
+        assertTrue(json.path("modeEnabled").asBoolean());assertFalse(json.path("hintsEnabled").asBoolean());
+        assertEquals(1,json.path("phrases").size());assertEquals("안녕",json.path("phrases").get(0).path("text").asText());
+        assertEquals(defaults.hintTargetChars(),applied.hintTargetChars());
+        assertEquals(defaults,defaults.patch(mapper.readValue("{}",LensDisplayPrefs.Patch.class)));
+        assertEquals(applied,defaults.patch(mapper.readValue(mapper.writeValueAsString(applied),LensDisplayPrefs.Patch.class)));
+        assertFalse(mapper.writeValueAsString(applied.describe()).contains("안녕"));
+        var off=applied.patch(mapper.readValue("{\"autoVoiceTrigger\":{\"modeEnabled\":false}}",LensDisplayPrefs.Patch.class));
+        assertFalse(mapper.valueToTree(off).path("autoVoiceTrigger").path("modeEnabled").asBoolean());
+    }
+    @Test void autoVoiceInvalidValuesAreRejectedWithoutClamp() {
+        for(String json:new String[]{"{\"hintLines\":2}","{\"hintLines\":10}","{\"hintChars\":199}",
+                "{\"hintChars\":501}","{\"hintLines\":3.5}","{\"hintChars\":\"200\"}",
+                "{\"language\":\"xx\"}","{\"modeEnabled\":true}","{\"phrases\":[{\"id\":\"x\",\"language\":\"ko\",\"text\":\" \"}]}",
+                "{\"phrases\":[{\"id\":\"x\",\"language\":\"ko\",\"text\":\"a\\u0000b\"}]}",
+                "{\"phrases\":[{\"id\":\"x\",\"language\":\"ko\",\"text\":\"\\ud800\"}]}"})
+            assertThrows(Exception.class,()->LensDisplayPrefs.defaults(540).patch(mapper.readValue("{\"autoVoiceTrigger\":"+json+"}",LensDisplayPrefs.Patch.class)),json);
+    }
     @Test void fontJsonRejectsFractionAndBlankInsteadOfCoercing() throws Exception {
         for(String raw:new String[]{"20.5","\"\"","\"26\"","2147483648"})
             assertThrows(Exception.class,()->mapper.readValue("{\"hintFontPx\":"+raw+"}",LensDisplayPrefs.Patch.class),raw);

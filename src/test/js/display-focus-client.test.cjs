@@ -163,11 +163,14 @@ test('settings load from server, send CAS version, and never write localStorage'
   assert.equal(element('nova-open').disabled,false);
   assert.equal(element('nf-speed').value,80);assert.equal(element('nf-enabled').checked,false);
   assert.equal(element('nf-answer-length').value,480);
+  assert.equal(element('nf-reasoning').value,'STANDARD');
+  element('nf-reasoning').value='DEEP';
   element('nf-answer-length').value='320';element('nf-quick').checked=true;element('nf-web-search').value='false';
   element('nf-speed').value='100';await element('nova-settings-form').onsubmit({preventDefault(){}});
   assert.equal(calls.at(-1).body.settingsVersion,7);assert.equal(calls.at(-1).body.settings.presentation.charIntervalMs,100);
   assert.equal(calls.at(-1).body.settings.answerLengthChars,320);assert.equal(calls.at(-1).body.settings.quickAnswerEnabled,true);
   assert.equal(calls.at(-1).body.settings.webSearchEnabled,false);
+  assert.equal(calls.at(-1).body.settings.reasoningPreset,'DEEP');
   assert.equal(localWrites,0);controls.dispose();
 });
 test('late settings save cannot re-enable a previous producer after scope loss',async()=>{

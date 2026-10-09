@@ -411,6 +411,9 @@ public class GeminiGateway {
                 builder.maxTokens(effective.maxTokens());
             }
         }
+        if(!cueJson&&focusReasoningSupported(effective.model())&&effective.focusReasoningEffort()!=null)
+            builder.defaultRequestParameters(dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder()
+                    .reasoningEffort(effective.focusReasoningEffort()).build());
         if (cueJson) builder.defaultRequestParameters(dev.langchain4j.model.openai.OpenAiChatRequestParameters.builder()
                 .responseFormat(cueJsonSchema != null
                         ? dev.langchain4j.model.chat.request.ResponseFormat.builder()
@@ -938,7 +941,14 @@ public class GeminiGateway {
             Double topP,
             Double frequencyPenalty,
             Double presencePenalty,
-            Integer maxTokens) {
+            Integer maxTokens,String focusReasoningEffort) {
+        public RouterSpec(String baseUrl,String model,Duration timeout,int maxRetries,Double temperature,Double topP,Double frequencyPenalty,Double presencePenalty,Integer maxTokens){
+            this(baseUrl,model,timeout,maxRetries,temperature,topP,frequencyPenalty,presencePenalty,maxTokens,null);
+        }
+        public RouterSpec {
+            if(focusReasoningEffort!=null&&!java.util.Set.of("low","medium","high").contains(focusReasoningEffort))
+                throw new IllegalArgumentException("invalid_focus_reasoning_effort");
+        }
 
         private static RouterSpec defaults(Environment environment) {
             String baseUrl = environment.getProperty(
@@ -968,7 +978,7 @@ public class GeminiGateway {
                     topP,
                     frequencyPenalty,
                     presencePenalty,
-                    maxTokens);
+                    maxTokens,focusReasoningEffort);
         }
     }
 
@@ -1182,9 +1192,18 @@ public class GeminiGateway {
         if(allowed)body.put("tools",List.of(Map.of("google_search",Map.of())));
         var config=new LinkedHashMap<String,Object>();
         if(spec.maxTokens()!=null)config.put("maxOutputTokens",spec.maxTokens());
-        if(spec.temperature()!=null)config.put("temperature",spec.temperature());if(spec.topP()!=null)config.put("topP",spec.topP());
+        boolean omitSampling=spec.model()!=null&&spec.model().startsWith("gemini-3.8-");
+        if(!omitSampling&&spec.temperature()!=null)config.put("temperature",spec.temperature());
+        if(!omitSampling&&spec.topP()!=null)config.put("topP",spec.topP());
+        if(focusReasoningSupported(spec.model())&&spec.focusReasoningEffort()!=null)
+            config.put("thinkingConfig",Map.of("thinkingLevel",spec.focusReasoningEffort()));
         if(!config.isEmpty())body.put("generationConfig",config);
         return body;
+    }
+    /** GenerateContent + compatible contracts checked against Google docs on 2026-10-08. */
+    public static boolean focusReasoningSupported(String model){
+        return java.util.Set.of("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash",
+                "gemini-3.5-flash","gemini-3.5-flash-lite","gemini-3.1-pro-preview","gemini-3-flash-preview").contains(model==null?"":model);
     }
 
     private static boolean isMissingDoChatContract(RuntimeException failure) {

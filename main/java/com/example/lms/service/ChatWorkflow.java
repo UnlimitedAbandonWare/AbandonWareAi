@@ -1367,6 +1367,7 @@ public class ChatWorkflow {
         if (requestSearchBudget == null) requestSearchBudget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(req.getExecutionMode());
         Object requestTimelineIdBeforeTraceClear =
                 TraceStore.get(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY);
+        var controllerPrefetch = ChatWorkflowRequestTraceEnvelope.takeControllerPrefetch(req);
 
         // ?? ?몄뀡???뺢퇋???⑥씪 ???꾪뙆) ???????????????????????????????
         String sessionKey = Optional.ofNullable(req.getSessionId())
@@ -1403,6 +1404,7 @@ public class ChatWorkflow {
                                 || Boolean.TRUE.equals(req.getUseRag()))));
 
         ChatWorkflowRequestTraceEnvelope.seed(req, sessionKey);
+        ChatWorkflowRequestTraceEnvelope.restoreControllerPrefetch(req, controllerPrefetch);
         com.example.lms.llm.RequestedModelSelection.begin(req.isStrictModelSelection() ? req.getModel() : null,
                 req.getVerifiedRequestOwnerHash());
         if (NoEvidenceChatFallback.isLocalSocialReplyRequest(req)) {
@@ -7492,7 +7494,13 @@ public class ChatWorkflow {
         if (dto != null && dynamicChatModelFactory != null) {
             TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_ENDPOINT_CAPTURE_TRACE_KEY, true);
             try {
-                modelForCall = requireNativeGoogleSearch
+                modelForCall = dto.getFocusReasoningEffort()!=null
+                        ? dynamicChatModelFactory.lcWithTimeout(resolved,dto.getTemperature(),dto.getTopP(),
+                                dto.getFrequencyPenalty(),dto.getPresencePenalty(),
+                                com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),
+                                callTimeoutBudgetSeconds,strictSingleAttempt?0:null,observedContext,null,
+                                focusGoogleSearchAllowed,requireNativeGoogleSearch,dto.getFocusReasoningEffort())
+                        : requireNativeGoogleSearch
                         ? dynamicChatModelFactory.lcWithTimeout(resolved,dto.getTemperature(),dto.getTopP(),
                                 dto.getFrequencyPenalty(),dto.getPresencePenalty(),
                                 com.example.lms.llm.RequestedModelSelection.outputLimit(resolved,dto.getMaxTokens()),
@@ -8950,6 +8958,13 @@ public class ChatWorkflow {
     }
 
     /** Internal admitted-request supplier; typed evidence never enters diagnostic maps. */
+    public static void captureControllerSearchReceipts(ChatRequestDto request, long startedAtEpochMs, String retrievalExecutionId) {
+        try { ChatWorkflowRequestTraceEnvelope.captureControllerPrefetch(request, startedAtEpochMs, retrievalExecutionId); }
+        catch (RuntimeException unavailableTrace) {
+            ChatWorkflowTraceSuppressions.traceSuppressed("controllerPrefetch.capture", unavailableTrace);
+        }
+    }
+
     public interface WebEvidenceSupplier extends Function<String, List<String>> {
         List<Content> evidence(String query);
         default boolean priorTurnEvidence() { return false; }

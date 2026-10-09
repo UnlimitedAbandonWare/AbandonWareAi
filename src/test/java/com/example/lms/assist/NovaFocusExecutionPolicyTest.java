@@ -149,6 +149,37 @@ class NovaFocusExecutionPolicyTest {
             assertEquals(1,TraceStore.get("focus.selection.fallbackCount"));
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={400,401,403,408,429,500,503,504})
+    void generalApiHttpFailureUsesOnlyTheDeclaredBackupWhenPolicyAllowsIt(int status) throws Exception {
+        String reason=switch(status){case 400->"model_request_invalid";case 401,403->"provider_unauthorized";case 408,504->"backend_timeout";case 429->"rate_limited";default->"backend_unavailable";};
+        for(boolean fallback:List.of(false,true))try(var f=new Fixture()){
+            var upstream=org.springframework.web.reactive.function.client.WebClientResponseException.create(status,"synthetic",org.springframework.http.HttpHeaders.EMPTY,new byte[0],java.nio.charset.StandardCharsets.UTF_8);
+            var failure=ModelSelectionException.failure(upstream);assertEquals(reason,failure.code());
+            f.response=r->{if(A.equals(r.getModel()))throw failure;return f.success(r);};
+            var selected=selection("FIXED",A,"API_ONLY",fallback,List.of(A,B,B));
+            if(fallback&&status!=400){
+                assertEquals("synthetic answer",f.answer(selected));
+                assertEquals(List.of(A,B),f.calls.stream().map(ChatRequestDto::getModel).toList());
+                assertEquals(1,TraceStore.get("focus.selection.fallbackCount"));
+            }else{
+                assertSame(failure,assertThrows(ModelSelectionException.class,()->f.answer(selected)));
+                assertEquals(List.of(A),f.calls.stream().map(ChatRequestDto::getModel).toList());
+            }
+            assertTrue(f.calls.stream().allMatch(ChatRequestDto::isStrictModelSelection));
+        }
+    }
+    @Test void latePrimarySuccessAfterExactCancellationCannotPublishOrStartFallback() throws Exception {
+        try(var f=new Fixture()){
+            var published=new ArrayList<String>();
+            f.response=r->{f.adapter.cancel(7L);return f.success(r);};
+            var selected=selection("FIXED",A,"API_ONLY",true,List.of(B));
+            var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),selected,2);
+            assertThrows(CancellationException.class,()->f.adapter.answerResult(7L,"synthetic",null,null,memory,null,()->true,published::add));
+            assertEquals(List.of(A),f.calls.stream().map(ChatRequestDto::getModel).toList());
+            assertTrue(published.isEmpty());
+        }
+    }
     @Test void disabledFallbackDoesNotTryAnAllowedBackup() throws Exception {
         try(var f=new Fixture()){
             f.response=r->{throw new ModelSelectionException("backend_timeout");};

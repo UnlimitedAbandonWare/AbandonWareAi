@@ -4,19 +4,86 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class NovaFocusStateTest {
-    @Test void foldPartialKeepsLensEmptyAndFinalVersionStable() {
+    @Test void reasoningFreezesWithModelBeforeSnapshotAndNextQuestionUsesNewSetting() throws Exception {
+        var mapper=new com.fasterxml.jackson.databind.ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(NovaFocusSettings.defaults());
+        node.put("enabled",true);node.put("reasoningPreset","FAST");
+        node.set("snapshot",mapper.valueToTree(new NovaFocusSettings.Snapshot(true,"FOLD_REAR")));
+        var s=new NovaFocusState("server",mapper.treeToValue(node,NovaFocusSettings.class));s.open(0,"lens");
+        s.input(u("freeze",0,true,"질문"),0);assertNull(s.tick(1200,true,1));
+        node.put("reasoningPreset","DEEP");s.configure(mapper.treeToValue(node,NovaFocusSettings.class),1201);
+        var frozen=s.tick(20000,true,2);
+        assertEquals("FAST",mapper.valueToTree(frozen).path("reasoningPreset").asText());
+        assertEquals(1,frozen.settingsVersion());
+        s.close("user_closed");s.open(20001,"lens");s.input(u("next",0,true,"다음 질문"),20002);
+        assertNull(s.tick(21202,true,2));var next=s.tick(40000,true,2);
+        assertEquals("DEEP",mapper.valueToTree(next).path("reasoningPreset").asText());
+        assertEquals(frozen.answerSelection(),next.answerSelection());
+    }
+    @Test void safePartialReachesLensAndFinalVersionStaysStable() {
         var s=state(true);s.input(u("partial",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
         org.springframework.test.util.ReflectionTestUtils.invokeMethod(s,"foldPartial",r,"turn","첫 문장입니다.");
         var early=s.view(1300);assertEquals("THINKING",early.phase());
         assertEquals("첫 문장입니다.",early.forTarget("fold").answerText());
-        assertEquals("",early.forTarget("lens").answerText());assertEquals("",early.renderReceiptTicket());
+        assertEquals("첫 문장입니다.",early.forTarget("lens").answerText());assertEquals("",early.renderReceiptTicket());
         var wire=new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(early.forTarget("fold"));
         assertFalse(wire.path("answerComplete").booleanValue());assertTrue(wire.path("answerPrefixStable").booleanValue());
-        assertEquals("",new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(early.forTarget("lens")).path("answerText").asText());
+        assertEquals("첫 문장입니다.",new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(early.forTarget("lens")).path("answerText").asText());
         long reserved=early.answerVersion();
         s.answer(r,"turn","첫 문장입니다. 다음 문장입니다.","ticket",1400);
         assertEquals(reserved,s.view(1400).answerVersion());
         assertEquals("첫 문장입니다. 다음 문장입니다.",s.view(1400).forTarget("lens").answerText());
+    }
+    @Test void lensProjectsUsefulLabelsAndKeepsOriginalOnFold() {
+        var s=state(true);s.open(0,"lens");s.input(u("links",0,true,"노바 공식 사이트는?"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        String original="검색 중...\n공식 안내는 [스프링 문서](https://docs.spring.io/security)입니다.\n주소: https://example.org/help\n출처:\n- https://example.org/a\n- https://example.org/b";
+        s.answer(r,"turn",original,"ticket",1300);
+        assertEquals(original,s.view(1300).forTarget("fold").answerText());
+        String lens=s.view(1300).forTarget("lens").answerText();
+        assertTrue(lens.contains("공식 안내는 스프링 문서입니다."));
+        assertFalse(lens.contains("https"));assertFalse(lens.contains("출처"));assertFalse(lens.contains("검색 중"));
+        assertEquals("ticket",s.view(1300).forTarget("lens").renderReceiptTicket());
+    }
+    @Test void splitLinkPartialNeverFlashesAndProjectionOnlyAppends() {
+        var s=state(true);s.input(u("split",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        String previous="";
+        for(String raw:java.util.List.of("첫 답입니다. [공식", "첫 답입니다. [공식 문서](htt", "첫 답입니다. [공식 문서](https://example.org)", "첫 답입니다. [공식 문서](https://example.org) 참고하세요.")) {
+            s.foldPartial(r,"turn",raw);
+            String visible=s.view(1300).forTarget("lens").answerText();
+            assertTrue(visible.startsWith(previous),visible);assertFalse(visible.contains("htt"));assertFalse(visible.contains("["));
+            previous=visible;
+        }
+        s.answer(r,"turn","첫 답입니다. [공식 문서](https://example.org) 참고하세요.","ticket",1400);
+        assertTrue(s.view(1400).forTarget("lens").answerText().startsWith(previous));
+        assertTrue(s.view(1400).forTarget("lens").answerText().contains("공식 문서 참고하세요."));
+        s.close("user_closed");assertEquals("",s.view(1500).forTarget("lens").answerText());
+    }
+    @Test void urlOnlyFinalHasShortSafeNotice() {
+        var s=state(true);s.input(u("url-only",0,true,"노바 주소는?"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        s.answer(r,"turn","https://example.org","ticket",1300);
+        String lens=s.view(1300).forTarget("lens").answerText();assertFalse(lens.isBlank());assertFalse(lens.contains("https"));
+    }
+    @Test void markdownPartialsKeepThePublishedPrefixWhenFormattingCloses() {
+        var s=state(true);s.input(u("bold",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");
+        s.foldPartial(r,"turn","**중요합니다.");
+        String first=s.view(1300).forTarget("lens").answerText();assertEquals("중요합니다.",first);
+        s.foldPartial(r,"turn","**중요합니다.** 다음");
+        assertEquals(first,s.view(1350).forTarget("lens").answerText());
+        s.answer(r,"turn","**중요합니다.** 다음입니다.","ticket",1400);
+        assertTrue(s.view(1400).forTarget("lens").answerText().startsWith(first));
+    }
+    @Test void literalBracketAndProseAfterSourceListRemainUseful() {
+        String original="권장 입력은 [0, 1 범위입니다. 끝값 1은 제외하세요.\n출처:\n- [공식 문서](https://example.org)\n다음 단계는 설정을 저장하세요.";
+        String lens=NovaFocusAnswerService.lensText(original,true);
+        assertTrue(lens.contains("[0, 1 범위입니다. 끝값 1은 제외하세요."));
+        assertTrue(lens.contains("다음 단계는 설정을 저장하세요."));
+        assertFalse(lens.contains("https"));assertFalse(lens.contains("공식 문서"));
+        assertEquals("출처가 없는 주장은 믿지 마세요.",NovaFocusAnswerService.lensText("출처가 없는 주장은 믿지 마세요.",true));
+        assertEquals("공식 문서를 참고하세요.",NovaFocusAnswerService.lensText("[공식 문서][docs]를 참고하세요.\n[docs]: https://example.org",true));
+    }
+    @Test void comparisonsRemainProseWhileActualHtmlAndAutolinksDisappear() {
+        assertEquals("조건은 x < 5이고 y > 2입니다.",NovaFocusAnswerService.lensText("조건은 x < 5이고 y > 2입니다.",true));
+        assertEquals("공식 안내를 확인하세요.",NovaFocusAnswerService.lensText("<b>공식 안내</b>를 확인하세요. <https://example.org>",true));
     }
     @Test void stalePartialAndFailedStreamCannotPublishOrComplete() {
         var s=state(true);s.input(u("partial-fail",0,true,"노바 질문"),0);var r=s.tick(1200);s.accepted(r,"turn");

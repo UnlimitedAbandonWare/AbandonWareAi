@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "codex-nightly-config-v1",
+  "enabled": false,
+  "mode": "report-only",
+  "timezone": "Asia/Seoul",
+  "aiEnabled": false,
+  "codexFallback": false,
+  "firstDate": null,
+  "maxCatchupDays": 3,
+  "allowedRoots": [],
+  "inputManifest": null,
+  "outputRoot": null,
+  "deliveryRoot": null,
+  "maxFileBytes": 2097152,
+  "maxInputBytes": 8388608,
+  "maxEvents": 10000,
+  "maxContextEvents": 40,
+  "maxTextChars": 4000,
+  "maxPacketChars": 24000,
+  "maxCandidates": 10,
+  "requestedModel": null
+}

@@ -20,12 +20,17 @@ final class SonioxAsrTransport implements ConversateAsrBridge.Transport {
     private final CompletableFuture<Void> finished=new CompletableFuture<>();
     private final String captureId="sx-"+UUID.randomUUID();private long bytes,revision;
     SonioxAsrTransport(ObjectMapper json,SonioxSttService service,Consumer<JsonNode> events,Consumer<String> failure)throws IOException {
+        this(json,service,events,failure,null);
+    }
+    SonioxAsrTransport(ObjectMapper json,SonioxSttService service,Consumer<JsonNode> events,Consumer<String> failure,String language)throws IOException {
         if(service==null||!service.isConfigured())throw new IOException("asr_unavailable");
         this.json=json;this.events=events;this.failure=failure;
         deadline.update(Mono.delay(Duration.ofSeconds(600)).subscribe(ignored->fail("ASR_CAPTURE_LIMIT")));
-        wire.update(service.transcribePcm16Mono(audio.asFlux().doOnDiscard(byte[].class,b->Arrays.fill(b,(byte)0)),()->{
+        Runnable connected=()->{
             if(!closed.get()){ready=true;events.accept(json.createObjectNode().put("type","ready"));}
-        }).subscribe(result->{if(!closed.get())events.accept(json.createObjectNode().put("type","transcript")
+        };
+        var pcm=audio.asFlux().doOnDiscard(byte[].class,b->Arrays.fill(b,(byte)0));
+        wire.update((language==null?service.transcribePcm16Mono(pcm,connected):service.transcribePcm16Mono(pcm,connected,language)).subscribe(result->{if(!closed.get())events.accept(json.createObjectNode().put("type","transcript")
                 .put("utteranceId",captureId+"-"+result.utterance()).put("revision",++revision).put("text",result.text()).put("final",result.isFinal()));},
                 error->fail(error.getMessage()!=null&&error.getMessage().matches("soniox:[a-z_]+")?error.getMessage():"ASR_STREAM_FAILED"),()->{
                     if(finishing&&closed.compareAndSet(false,true)){deadline.dispose();finished.complete(null);}else fail("ASR_STREAM_ENDED");

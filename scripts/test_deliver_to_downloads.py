@@ -65,7 +65,9 @@ def hook_stop_event(transcript=None, session_id=None, stop_active=False,
 
 class Fixture(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp(prefix="dtd-test-"))
+        self.fixture_root = ROOT / "var" / "artifact-storage-tests"
+        self.fixture_root.mkdir(parents=True, exist_ok=True)
+        self.tmp = Path(tempfile.mkdtemp(prefix="dtd-test-", dir=self.fixture_root))
         self.src = self.tmp / "src"
         self.dl = self.tmp / "downloads"
         self.log = self.tmp / "log" / "deliver.jsonl"
@@ -74,10 +76,12 @@ class Fixture(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+        self.assertEqual(self.tmp.resolve().parent, self.fixture_root.resolve())
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def tool(self, *args):
-        return run_tool(*args, "--downloads", str(self.dl), "--log", str(self.log))
+        return run_tool(*args, "--role", "dot", "--artifact-kind", "final-directive",
+                        "--downloads", str(self.dl), "--log", str(self.log))
 
     def write_src(self, name, content=b"x", subdir=""):
         d = self.src / subdir if subdir else self.src
@@ -152,7 +156,8 @@ class TestDeliver(Fixture):
         r = self.tool("--scan", "--since-minutes", "240", "--roots", str(self.src))
         self.assertEqual(r.returncode, 0)
         names = [p.name for p in self.dl.iterdir()]
-        self.assertEqual(names, [good.name])
+        self.assertEqual(names, [])
+        self.assertIn("automatic-delivery-disabled", r.stdout)
 
     def test_t7_no_writes_outside_downloads(self):
         self.write_src("demo1_d_directive_20261004.md", b"q")
@@ -170,7 +175,7 @@ class TestDeliver(Fixture):
         r = self.tool("--scan", "--since-minutes", "60",
                       "--roots", str(self.tmp / "no-such-dir"))
         self.assertEqual(r.returncode, 0)
-        self.assertIn("WARN", r.stderr + r.stdout)
+        self.assertIn("REFUSED", r.stdout)
 
     def test_t9_hooks_json_dot_scoped_deliver_hook(self):
         data = json.loads(HOOKS.read_text(encoding="utf-8"))
@@ -214,17 +219,11 @@ class TestDeliver(Fixture):
         elapsed = time.monotonic() - t0
         self.assertEqual(r.returncode, 0)
         self.assertLess(elapsed, 3.0, f"scan took {elapsed:.2f}s")
-        self.assertEqual(len(list(self.dl.iterdir())), 50)
+        self.assertEqual(len(list(self.dl.iterdir())), 0)
 
 
 class TestHookStop(Fixture):
-    """D1-D8: --hook-stop delivers only for [DOT-BRIEF]-first-message sessions.
-
-    Contract PASTE_DEVIN_dot-only-downloads_20261004: the Stop hook never does
-    a global scan; it reads the hook event on stdin, opens the transcript, and
-    only when the FIRST user-role message carries the literal tag does it copy
-    matching deliverables. stdout is always a single `{}` JSON line.
-    """
+    """D1-D8: Stop hooks never inspect sessions or automatically copy artifacts."""
 
     def hook(self, event_obj, roots_dir=None):
         """Run --hook-stop; event cwd is pointed at the temp fixture dir."""
@@ -254,7 +253,7 @@ class TestHookStop(Fixture):
         self.assertEqual(list(self.dl.iterdir()), [])
         rec = self.read_log()
         self.assertFalse(rec["dot"])
-        self.assertEqual(rec["reason"], "tag-absent")
+        self.assertEqual(rec["reason"], "automatic-delivery-disabled")
 
     def test_d2_tag_in_skill_context_not_user_message(self):
         tr = write_transcript(
@@ -266,7 +265,7 @@ class TestHookStop(Fixture):
         self.assertEqual(r.stdout.strip(), "{}")
         self.assertEqual(list(self.dl.iterdir()), [])
 
-    def test_d3_first_user_message_tag_delivers(self):
+    def test_d3_dot_tag_does_not_prove_final_delivery(self):
         tr = write_transcript(self.tmp / "rollout-dot.jsonl",
                               "[DOT-BRIEF] write the Codex directive")
         self.write_src("PASTE_CODEX_SOME_BRIEF_20261005.md", b"dot brief body")
@@ -275,12 +274,12 @@ class TestHookStop(Fixture):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout.strip(), "{}")
         names = [p.name for p in self.dl.iterdir()]
-        self.assertIn("PASTE_CODEX_SOME_BRIEF_20261005.md", names)
+        self.assertEqual(names, [])
         self.assertNotIn("unrelated.bin", names)
         rec = self.read_log()
-        self.assertTrue(rec["dot"])
-        self.assertEqual(rec["delivered"], 1)
-        self.assertEqual(rec["session8"], "fixture-")
+        self.assertFalse(rec["dot"])
+        self.assertEqual(rec["delivered"], 0)
+        self.assertNotIn("session8", rec)
 
     def test_d4_tag_in_later_user_message_only_no_delivery(self):
         tr = write_transcript(
@@ -290,7 +289,7 @@ class TestHookStop(Fixture):
         r = self.hook(hook_stop_event(transcript=tr))
         self.assertEqual(r.returncode, 0)
         self.assertEqual(list(self.dl.iterdir()), [])
-        self.assertEqual(self.read_log()["reason"], "tag-absent")
+        self.assertEqual(self.read_log()["reason"], "automatic-delivery-disabled")
 
     def test_d5_broken_transcript_and_stdin_fail_closed(self):
         broken = self.tmp / "rollout-broken.jsonl"
@@ -311,7 +310,7 @@ class TestHookStop(Fixture):
         r = self.hook(hook_stop_event(transcript=tr, stop_active=True))
         self.assertEqual(r.returncode, 0)
         self.assertEqual(list(self.dl.iterdir()), [])
-        self.assertEqual(self.read_log()["reason"], "stop-hook-active")
+        self.assertEqual(self.read_log()["reason"], "automatic-delivery-disabled")
 
     def test_d7_dot_session_refused_files_stay_out(self):
         tr = write_transcript(self.tmp / "rollout-dotrefuse.jsonl",
@@ -322,8 +321,8 @@ class TestHookStop(Fixture):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(list(self.dl.iterdir()), [])
         rec = self.read_log()
-        self.assertTrue(rec["dot"])
-        self.assertEqual(rec["refused"], 2)
+        self.assertFalse(rec["dot"])
+        self.assertEqual(rec["delivered"], 0)
 
     def test_d8_scan_still_ignores_stdin(self):
         self.write_src("demo1_x_directive_20261005.md", b"scan me")
@@ -332,7 +331,73 @@ class TestHookStop(Fixture):
                      "--downloads", str(self.dl), "--log", str(self.log),
                      stdin_text="{not-json on stdin")
         self.assertEqual(r.returncode, 0)
+        self.assertIn("REFUSED", r.stdout)
+        self.assertEqual(list(self.dl.iterdir()), [])
+
+
+class TestStorageScope(Fixture):
+    """Current role/artifact declaration owns delivery, never a model or filename."""
+
+    def request(self, src, role=None, artifact=None, *extra):
+        args = ["--file", str(src), "--downloads", str(self.dl), "--log", str(self.log)]
+        if role is not None:
+            args += ["--role", role]
+        if artifact is not None:
+            args += ["--artifact-kind", artifact]
+        return run_tool(*args, *extra)
+
+    def test_explicit_dot_final_directive_and_readback(self):
+        src = self.write_src("ordinary-name.txt", b"final instructions")
+        r = self.request(src, "dot", "final-directive")
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("DELIVERED", r.stdout)
+        self.assertEqual((self.dl / src.name).read_bytes(), src.read_bytes())
+
+    def test_unclassified_paste_filename_is_not_authority(self):
+        src = self.write_src("PASTE_CODEX_FINAL.md", b"unclassified")
+        r = self.request(src)
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("REFUSED", r.stdout)
+        self.assertEqual(list(self.dl.iterdir()), [])
+
+    def test_reviews_drafts_and_other_roles_never_deliver(self):
+        src = self.write_src("PASTE_CODEX_FINAL.md", b"keep original")
+        for role, artifact in [("dot", "review"), ("dot", "draft-directive"),
+                               ("codex", "final-directive"), ("gpt-6-sol", "final-directive")]:
+            with self.subTest(role=role, artifact=artifact):
+                r = self.request(src, role, artifact)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertIn("REFUSED", r.stdout)
+                self.assertEqual(list(self.dl.iterdir()), [])
+                self.assertEqual(src.read_bytes(), b"keep original")
+
+    def test_scan_cannot_be_enabled_by_dot_declaration(self):
+        src = self.write_src("PASTE_CODEX_FINAL.md", b"not an explicit final handoff")
+        r = run_tool("--scan", "--role", "dot", "--artifact-kind", "final-directive",
+                     "--roots", str(self.src), "--downloads", str(self.dl), "--log", str(self.log))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("REFUSED", r.stdout)
+        self.assertEqual(list(self.dl.iterdir()), [])
+        self.assertTrue(src.exists())
+
+    def test_no_copy_hook_cannot_write_a_downloads_log(self):
+        forbidden = self.dl / "review.jsonl"
+        r = run_tool("--hook-stop", "--downloads", str(self.dl), "--log", str(forbidden))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(r.stdout.strip(), "{}")
+        self.assertFalse(forbidden.exists())
+        self.assertEqual(list(self.dl.iterdir()), [])
+
+    def test_external_log_destination_is_refused_before_copy(self):
+        with tempfile.TemporaryDirectory() as outside:
+            forbidden = Path(outside) / "review.jsonl"
+            src = self.write_src("final.txt", b"final directive")
+            r = run_tool("--file", str(src), "--role", "dot", "--artifact-kind", "final-directive",
+                         "--downloads", str(self.dl), "--log", str(forbidden))
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("REFUSED project-log-required", r.stdout)
+            self.assertFalse(forbidden.exists())
+            self.assertEqual(list(self.dl.iterdir()), [])
 
 
 if __name__ == "__main__":

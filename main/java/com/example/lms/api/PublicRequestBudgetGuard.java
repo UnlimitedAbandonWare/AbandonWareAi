@@ -531,27 +531,30 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
                     searchPolicyEngine.tuneVecTopK(ragTopK, searchPolicy));
         }
 
+        ChatQueryCounts queryCounts = projection == null
+                ? new ChatQueryCounts(Math.max(1, searchQueries + 1L), Math.max(1, searchQueries + 1L))
+                : projectedChatQueryCount(request, plan, searchPolicy, webAxisActive, searchQueries);
+        long queryMultiplier = queryCounts.retrieval();
+        long webQueryMultiplier = queryCounts.web();
+        TraceStore.put("public.request.budget.queryMultiplier", queryMultiplier);
+        TraceStore.put("public.request.budget.webQueryMultiplier", webQueryMultiplier);
         long retrievalWork = 0L;
         long branchCount = 0L;
         if (useRag) {
-            retrievalWork = safeAdd(retrievalWork, ragTopK);
-            branchCount = safeAdd(branchCount, 1L);
+            retrievalWork = safeAdd(retrievalWork, safeMultiply(ragTopK, queryMultiplier));
+            branchCount = safeAdd(branchCount, queryMultiplier);
         }
         boolean liveWebSearch = useWeb
                 && request.getSearchMode() != SearchMode.OFF;
         if (liveWebSearch) {
-            retrievalWork = safeAdd(retrievalWork, webTopK);
-            branchCount = safeAdd(branchCount, 1L);
+            retrievalWork = safeAdd(retrievalWork, safeMultiply(webTopK, webQueryMultiplier));
+            branchCount = safeAdd(branchCount, webQueryMultiplier);
         }
         if (precisionSearch) {
-            retrievalWork = safeAdd(retrievalWork, precisionTopK > 0 ? precisionTopK : webTopK);
-            branchCount = safeAdd(branchCount, 1L);
+            retrievalWork = safeAdd(retrievalWork,
+                    safeMultiply(precisionTopK > 0 ? precisionTopK : webTopK, queryMultiplier));
+            branchCount = safeAdd(branchCount, queryMultiplier);
         }
-        long queryMultiplier = projection == null
-                ? Math.max(1, searchQueries + 1L)
-                : projectedChatQueryCount(request, plan, searchPolicy, webAxisActive, searchQueries);
-        retrievalWork = safeMultiply(retrievalWork, queryMultiplier);
-        branchCount = safeMultiply(branchCount, queryMultiplier);
         long modeMultiplier = 1L;
         if (isDeepMode(request)) modeMultiplier = safeMultiply(modeMultiplier, 2L);
         if (Boolean.TRUE.equals(request.getAccumulation())) modeMultiplier = safeMultiply(modeMultiplier, 2L);
@@ -572,7 +575,7 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
             // 상한으로 두 배(12)를 둔다.
             providerAttemptMultiplier = containsHangul(request.getMessage()) ? 12L : 6L;
             providerWork = safeMultiply(callsPerPhase, providerAttemptMultiplier,
-                    webTopK, queryMultiplier, modeMultiplier);
+                    webTopK, webQueryMultiplier, modeMultiplier);
         }
         TraceStore.put("public.request.budget.providerAttemptMultiplier", providerAttemptMultiplier);
         traceBudget(totalTokens, retrievalWork, providerWork, branchCount,
@@ -584,6 +587,7 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
                             "projectedRetrievalWork", retrievalWork,
                             "maxRetrievalWork", maxRetrievalWork,
                             "queryMultiplier", queryMultiplier,
+                            "webQueryMultiplier", webQueryMultiplier,
                             "modeMultiplier", modeMultiplier,
                             "dominantTerm", dominantRetrievalTerm(
                                     useRag ? ragTopK : 0,
@@ -597,7 +601,7 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
                             "maxProviderWork", maxProviderWork,
                             "callsPerPhase", callsPerPhase,
                             "providerAttemptMultiplier", providerAttemptMultiplier,
-                            "queryMultiplier", queryMultiplier,
+                            "queryMultiplier", webQueryMultiplier,
                             "modeMultiplier", modeMultiplier));
         }
         accept(started);
@@ -660,13 +664,16 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
         }
     }
 
-    private long projectedChatQueryCount(ChatRequestDto request,
+    private record ChatQueryCounts(long retrieval, long web) {
+    }
+
+    private ChatQueryCounts projectedChatQueryCount(ChatRequestDto request,
                                          PlanHints plan,
                                          SearchPolicyDecision policy,
                                          boolean retrievalActive,
                                          int searchQueries) {
         int clientQueries = Math.max(1, searchQueries + 1);
-        if (!retrievalActive) return clientQueries;
+        if (!retrievalActive) return new ChatQueryCounts(clientQueries, clientQueries);
 
         // 실행 어댑터와 동일한 경로로 플맜 컨텍스트를 한 번만 투영한다 —
         // 버스트 knob, aggressive 플래그, extremeZ 중칩 파라미터가 같은 우선순위를 따른다.
@@ -708,6 +715,10 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
                 policy == null ? null : policy.maxFinalQueries());
         TraceStore.put("public.request.budget.workflowQueries", workflowQueries);
         long projected = Math.max(clientQueries, workflowQueries);
+        // ExtremeZ vector retrieval has independent fanout. Its web adapters share
+        // the request-owned SelfAskSearchBudget with workflow queries, so adding
+        // ExtremeZ variants again to web/provider work charges unexecutable queries.
+        long webQueries = projected;
         TraceStore.put("public.request.budget.plannedQueries", projected);
         TraceStore.put("public.request.budget.extremeZQueries", 0);
         if (plan != null && Boolean.TRUE.equals(plan.extremeZEnabled())) {
@@ -720,11 +731,11 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
             int extremeQueries = direct > 0 ? direct
                     : plan.queryBurstCount() != null && plan.queryBurstCount() > 0
                         ? plan.queryBurstCount() : Math.max(0, configured);
-            // Planner queries and post-retrieval ExtremeZ variants are additive.
+            // Preserve the full additive envelope for vector/precision retrieval.
             TraceStore.put("public.request.budget.extremeZQueries", extremeQueries);
             projected = safeAdd(projected, extremeQueries);
         }
-        return projected;
+        return new ChatQueryCounts(projected, webQueries);
     }
 
     /**
@@ -1121,6 +1132,8 @@ public class PublicRequestBudgetGuard extends OncePerRequestFilter {
         TraceStore.put("public.request.budget.retrievalWork", null);
         TraceStore.put("public.request.budget.providerWork", null);
         TraceStore.put("public.request.budget.branchCount", null);
+        TraceStore.put("public.request.budget.queryMultiplier", null);
+        TraceStore.put("public.request.budget.webQueryMultiplier", null);
         TraceStore.put("public.request.budget.requestedTopK", null);
         TraceStore.put("public.request.budget.effectiveTopK", null);
         TraceStore.put("public.request.budget.effectiveProviderCount", null);

@@ -18,7 +18,7 @@ class NovaFocusServiceTest {
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings={"completed","failed","changed","closed"})
-    void earlyFoldSentenceWaitsForTerminalAndCannotPersistFailedRevision(String outcome) throws Exception {
+    void earlySafeSentenceReachesLensButCannotPersistFailedRevision(String outcome) throws Exception {
         try(var f=new EpochFixture()){
             var first=new CountDownLatch(1);var finish=new CountDownLatch(1);
             doAnswer(call->{
@@ -32,7 +32,8 @@ class NovaFocusServiceTest {
                 f.ask(1,"early");assertTrue(first.await(3,TimeUnit.SECONDS));
                 var early=f.service.view(f.owner,"assist",1);
                 assertEquals("THINKING",early.phase());assertEquals("첫 문장입니다.",early.forTarget("fold").answerText());
-                assertEquals("",early.forTarget("lens").answerText());
+                assertEquals("첫 문장입니다.",early.forTarget("lens").answerText());
+                assertFalse(early.answerComplete());assertTrue(early.answerPrefixStable());
                 verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
                 if(outcome.equals("closed"))f.service.close(f.owner,"assist",1,"user_closed");
                 finish.countDown();
@@ -44,6 +45,7 @@ class NovaFocusServiceTest {
                     verify(f.history).terminal(any(),any(),any(),eq("COMPLETED"),eq("첫 문장입니다. 최종 문장입니다."));
                 }else{
                     assertEquals("",f.service.view(f.owner,"assist",1).forTarget("fold").answerText());
+                    assertEquals("",f.service.view(f.owner,"assist",1).forTarget("lens").answerText());
                     verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
                 }
             }finally{finish.countDown();}
@@ -88,6 +90,63 @@ class NovaFocusServiceTest {
                 release.countDown();f.awaitAnswer(2);
                 assertEquals("answer",f.service.view(f.owner,"assist",2).answerText());
             }finally{release.countDown();}
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"assist_replaced","explicit_reopen"})
+    void oldProviderCompletionCannotCloseTheReplacementActivation(String boundary) throws Exception {
+        try(var f=new EpochFixture()){
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{
+                if("first".equals(call.getArgument(1))){entered.countDown();assertTrue(release.await(3,TimeUnit.SECONDS));return new NovaFocusAnswer.Result("old-late",null);}
+                return new NovaFocusAnswer.Result("replacement-answer",null);
+            }).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                f.ask(1,"first");assertTrue(entered.await(3,TimeUnit.SECONDS));
+                String oldActivation=f.service.view(f.owner,"assist",1).activationId();
+                String replacement=boundary.equals("assist_replaced")?"replacement":"assist";
+                if(boundary.equals("assist_replaced")){
+                    f.service.attach(f.owner,"live",replacement,1);
+                    assertNull(f.service.view(f.owner,"assist",1));
+                    assertFalse(f.service.audio(f.owner,"assist",1,new ConversateQuestionPolicy.Utterance("old","old",1,true,"stale")));
+                }else f.service.close(f.owner,"assist",1,"user_closed");
+                f.service.open(f.owner,replacement,1,"fold");
+                var reopened=f.service.view(f.owner,replacement,1);
+                assertNotEquals(oldActivation,reopened.activationId());assertEquals("LISTENING",reopened.phase());
+                verify(f.answer).cancel(7L);
+                release.countDown();
+                long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+                while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,replacement,1).get("busy"))&&System.nanoTime()<deadline)Thread.sleep(5);
+                assertFalse(Boolean.TRUE.equals(f.service.diagnostics(f.owner,replacement,1).get("busy")));
+                var after=f.service.view(f.owner,replacement,1);
+                assertTrue(after.active(),"old completion must leave the replacement activation active");
+                assertEquals(reopened.activationId(),after.activationId());assertEquals(reopened.stateVersion(),after.stateVersion());
+                assertEquals("LISTENING",after.phase());assertEquals("",after.answerText());
+                verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
+                f.service.input(f.owner,replacement,1,"next","next");f.time.now+=1200;f.service.maintain();
+                deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+                while(!"ANSWER_READY".equals(f.service.view(f.owner,replacement,1).phase())&&System.nanoTime()<deadline)Thread.sleep(5);
+                assertEquals("replacement-answer",f.service.view(f.owner,replacement,1).answerText());
+                verify(f.history).terminal(any(),any(),any(),eq("COMPLETED"),eq("replacement-answer"));
+            }finally{release.countDown();}
+        }
+    }
+    @Test void currentRequestWithChangedMemoryStillClosesActivation() throws Exception {
+        try(var f=new EpochFixture()){
+            var memories=mock(FocusMemoryService.class);
+            var scope=new FocusMemoryScope("c".repeat(64),1,1,1,true);
+            when(memories.scope(f.owner,"live")).thenReturn(scope);
+            when(memories.current(scope)).thenReturn(false);
+            org.springframework.test.util.ReflectionTestUtils.setField(f.service,"memories",memories);
+            doReturn(new NovaFocusAnswer.Result("obsolete-memory-answer",null)).when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            f.ask(1,"current");
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);
+            while(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy"))&&System.nanoTime()<deadline)Thread.sleep(5);
+            assertFalse(Boolean.TRUE.equals(f.service.diagnostics(f.owner,"assist",1).get("busy")));
+            var after=f.service.view(f.owner,"assist",1);
+            assertFalse(after.active());assertEquals("memory_changed",after.reason());assertEquals("",after.answerText());
+            verify(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            verify(f.history,never()).terminal(any(),any(),any(),eq("COMPLETED"),any());
         }
     }
     @Test void audioEpochRebindPreservesRecentPairsButExplicitCloseClearsThem() throws Exception {

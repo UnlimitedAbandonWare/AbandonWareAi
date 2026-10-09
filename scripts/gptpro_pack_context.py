@@ -585,13 +585,14 @@ def _js_functions(text: str) -> list[tuple[int, str]]:
     return found
 
 
-def build_code_map(root: Path, included: list[str]) -> str:
+def build_code_map(root: Path, included: list[str], *, selected_only: bool = False,
+                   source_texts: dict[str, str] | None = None) -> str:
     out = ["# _CODE_MAP — 엔드포인트·설정·패키지·큰 파일 색인", ""]
 
     java_files = [r for r in included if r.lower().endswith(".java")]
     texts: dict[str, str] = {}
     for rel in java_files:
-        t = _read(root / rel)
+        t = source_texts.get(rel) if source_texts is not None else _read(root / rel)
         if t is not None:
             texts[rel] = t
 
@@ -649,7 +650,7 @@ def build_code_map(root: Path, included: list[str]) -> str:
             "| key | yaml default | file:line |", "|---|---|---|"]
     defaults: dict[str, str] = {}
     res = root / "main" / "resources"
-    if res.is_dir():
+    if not selected_only and res.is_dir():
         for f in sorted(res.glob("application*.yml")) + sorted(res.glob("application*.yaml")):
             for k, v in _flatten_yml(f).items():
                 defaults.setdefault(k, v)
@@ -666,7 +667,7 @@ def build_code_map(root: Path, included: list[str]) -> str:
             if vm:
                 key, dflt = vm.group(1), vm.group(2)
                 yd = defaults.get(key, "")
-                shown = dflt if dflt else (yd if yd else "")
+                shown = "(value omitted)" if selected_only else (dflt if dflt else (yd if yd else ""))
                 out.append(f"| {key} | {shown} | {rel}:{i} |")
                 key_rows += 1
             cm = CONFIG_PROPS_ANN.search(ln)
@@ -705,7 +706,7 @@ def build_code_map(root: Path, included: list[str]) -> str:
     big.sort(key=lambda t: -t[1])
     for rel, sz in big:
         out.append(f"### `{rel}` ({sz // 1024}KB)")
-        t = texts.get(rel) or _read(root / rel) or ""
+        t = (source_texts.get(rel, "") if source_texts is not None else texts.get(rel) or _read(root / rel) or "")
         if rel.lower().endswith(".java"):
             members = _java_methods(t)
         elif rel.lower().endswith((".js", ".ts", ".jsx", ".tsx")):
@@ -732,15 +733,16 @@ def build_code_map(root: Path, included: list[str]) -> str:
     out += ["## 프론트엔드 라우트 (frontend/src)", "", "| route | file |", "|---|---|"]
     fsrc = root / "frontend" / "src"
     fr_rows = 0
-    if fsrc.is_dir():
-        for f in sorted(fsrc.rglob("*")):
-            rel = f.relative_to(root).as_posix()
-            if FRONT_ROUTE.search(rel):
-                parts = f.relative_to(fsrc).parts
-                segs = [s for s in parts[:-1] if s != "app"]
-                route = "/" + "/".join(segs)
-                out.append(f"| {route} | {rel} |")
-                fr_rows += 1
+    routes = (root / rel for rel in included if rel.startswith("frontend/src/")) if selected_only else (
+        sorted(fsrc.rglob("*")) if fsrc.is_dir() else [])
+    for f in routes:
+        rel = f.relative_to(root).as_posix()
+        if FRONT_ROUTE.search(rel):
+            parts = f.relative_to(fsrc).parts
+            segs = [s for s in parts[:-1] if s != "app"]
+            route = "/" + "/".join(segs)
+            out.append(f"| {route} | {rel} |")
+            fr_rows += 1
     if fr_rows == 0:
         out.append("| (발견 없음) | |")
     out.append("")
@@ -1053,3 +1055,220 @@ def build_all(root: Path, profile: str, include_match, changed: list[str],
 
     ordered = [("_START_HERE.md", start)] + [(n, sections[n]) for n in CTX_ORDER if n in sections]
     return ordered, meta
+
+
+# Task-scoped local path. No build_all, runtime/session discovery, or network calls.
+SELECTION_VERSION = "local-selection-v1"
+
+
+def selection_json(pack: dict) -> str:
+    return json.dumps(pack, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _selection_path(root: Path, rel: str, *, state: bool = False) -> Path:
+    from codex_work_checkpoint import relative_path, require
+    path = relative_path(root, rel)
+    # Importing the evidence orchestrator also loads its global path registry.
+    # Keep this read-only lane on checkpoint path validation, without discovery.
+    parts = [part.casefold() for part in path.relative_to(root).parts]
+    require(not any(part in {".secrets", ".codex", ".gradle", "var", "logs", "build",
+            "node_modules", "__patch_drop__", "archives", "backups"} for part in parts)
+            and not path.name.casefold().startswith(".env")
+            and not re.search(r"(?i)(credential|private[-_]?key|auth\.json|providers\.json)", path.name),
+            "protected-selection-path")
+    template = bool(re.search(r"\.(example|sample|template)\.", path.name, re.I))
+    require(template or not (path.suffix.lower() in {".yml", ".yaml", ".properties"}
+            or parts[0] in {"configs", "config"}), "protected-selection-path")
+    if state:
+        require("data" not in parts or parts[:3] == ["data", "agent-handoff", "codex-autonomy"],
+                "protected-selection-path")
+    if not state:
+        require("data" not in parts
+                and path.suffix.lower() in {".md", ".txt", ".json", ".java", ".py", ".js", ".ts",
+                    ".tsx", ".jsx", ".kt", ".kts", ".yaml", ".yml", ".properties", ".ps1", ".bat"},
+                "protected-selection-path")
+    return path
+
+
+def _selection_read(path: Path, limit: int) -> bytes:
+    from codex_work_checkpoint import no_links, require
+    no_links(path)
+    with path.open("rb") as stream:
+        raw = stream.read(limit + 1)
+    require(len(raw) <= limit, "selection-read-limit")
+    return raw
+
+
+def build_selection_pack(root: Path, contract: dict, candidates: list[dict], *,
+                         allowed: list[str], query: str, latest_ref: str,
+                         max_bytes: int = 32768, comparison: dict | None = None,
+                         rule_version: str = SELECTION_VERSION) -> dict:
+    """Select whole caller-declared spans; all hashes refer to original UTF-8 bytes.
+
+    The checkpoint contract is pinned, never ranked or treated as authorization.
+    `comparison` is an optional offline ID permutation, not an external API client.
+    Recompute every run; cacheKey binds all inputs but no cache/state store is added.
+    """
+    from checkpoint_doctor import validate_contract
+    from codex_work_checkpoint import root_path, require, digest, secret_free, MAX_BYTES
+    import copy
+    root = root_path(root)
+    contract = copy.deepcopy(validate_contract(contract))
+    require(contract["instructionRef"] == latest_ref, "latest-instruction-mismatch")
+    require(type(max_bytes) is int and 0 < max_bytes <= 8 * MAX_BYTES, "selection-budget-invalid")
+    require(isinstance(query, str) and isinstance(rule_version, str) and rule_version, "selection-input-invalid")
+    require(isinstance(allowed, list) and isinstance(candidates, list)
+            and len(allowed) <= 64 and len(candidates) <= 128, "selection-candidate-limit")
+    # Validate the entire scope before any source read, even excluded candidates.
+    paths = {rel: _selection_path(root, rel) for rel in allowed}
+    for row in candidates:
+        require(isinstance(row, dict) and row.get("path") in paths, "candidate-outside-allowlist")
+        require(set(row) <= {"path", "start", "end", "sha256", "required", "role", "version", "source"},
+                "candidate-schema-invalid")
+        require(type(row.get("required", False)) is bool, "candidate-schema-invalid")
+        require(all(isinstance(row.get(k, ""), str) for k in ("role", "version", "source")), "candidate-schema-invalid")
+    snapshots, rows, excerpts, requery = {}, [], {}, []
+    for candidate in candidates:
+        rel = candidate["path"]
+        required = candidate.get("required", False) or candidate.get("role") in {"current", "acceptance", "counterevidence", "failure"}
+        row = dict(path=rel, required=required, role=candidate.get("role", "evidence"),
+                   version=candidate.get("version", "worktree-unversioned"),
+                   source=candidate.get("source", rel), sha256=None, sourceModifiedAt=None,
+                   reason="missing", start=candidate.get("start", 1), end=candidate.get("end"))
+        path = paths[rel]
+        if not path.is_file():
+            require(not required, "required-evidence-missing")
+            row["id"] = f"{rel}:missing"
+            requery.append(rel)
+            rows.append(row)
+            continue
+        if rel not in snapshots:
+            require(path.stat().st_size <= MAX_BYTES, "selection-source-too-large")
+            raw = _selection_read(path, MAX_BYTES)
+            require(len(raw) <= MAX_BYTES and b"\x00" not in raw, "selection-source-too-large-or-binary")
+            raw.decode("utf-8")  # Do not silently replace malformed text.
+            secret_free(raw, rel)
+            snapshots[rel] = raw
+            require(sum(map(len, snapshots.values())) <= 8 * MAX_BYTES, "selection-input-budget")
+        raw = snapshots[rel]
+        require(candidate.get("sha256", digest(raw)) == digest(raw), "source-version-mismatch")
+        lines = raw.decode("utf-8").splitlines(keepends=True)
+        start, end = candidate.get("start", 1), candidate.get("end", len(lines))
+        require(type(start) is int and type(end) is int and 1 <= start <= end <= len(lines), "line-range-invalid")
+        excerpt = "".join(lines[start - 1:end])
+        # Structured input is retained as a complete JSON record, never a partial cut.
+        if path.suffix.lower() == ".json":
+            require(start == 1 and end == len(lines), "json-range-must-be-whole")
+            json.loads(excerpt.encode("utf-8"))
+        row.update(id=f"{rel}:{start}-{end}", start=start, end=end, sha256=digest(raw),
+                   sourceModifiedAt=datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(),
+                   excerptSha256=digest(excerpt.encode("utf-8")), reason="budget")
+        require(row["id"] not in excerpts, "duplicate-locator")
+        rows.append(row)
+        excerpts[row["id"]] = excerpt
+    # Merge duplicate content without losing adverse/required provenance.
+    unique, aliases, seen = [], [], {}
+    for row in sorted(rows, key=lambda r: (not r["required"], r["id"])):
+        key = row.get("excerptSha256")
+        if key and key in seen:
+            alias = dict(row, reason="duplicate", duplicateOf=seen[key]["id"])
+            aliases.append(alias)
+        else:
+            unique.append(row)
+            if key:
+                seen[key] = row
+    signature = dict(contract=contract, query=query, rules=rule_version, allowed=sorted(paths),
+                     candidates=rows, maxBytes=max_bytes)
+    pack = dict(schemaVersion="awx.context-selection.v1", ruleVersion=rule_version,
+                cacheKey=digest(selection_json(signature).encode("utf-8")), contract=contract,
+                selected=[], excluded=copy.deepcopy(unique + aliases), requery=sorted(set(requery)),
+                maxBytes=max_bytes, externalCalls=0, comparisonStatus="NOT_RUN",
+                codeMap="", codeMapStatus="omitted-budget", approxTokens=0,
+                tokenEstimateMethod="len(text)//4 heuristic; maxBytes is authoritative",
+                capturedAtUtc=datetime.now(timezone.utc).isoformat())
+    terms = set(re.findall(r"[\w.-]+", query.casefold()))
+    score = lambda r: len(terms & set(re.findall(r"[\w.-]+", (r["path"] + " " + excerpts.get(r["id"], "")).casefold())))
+    ordered = sorted(unique, key=lambda r: (not r["required"], -score(r), r["id"]))
+    if comparison is not None:
+        ids = [r["id"] for r in ordered if r["id"] in excerpts and not r["required"]]
+        ranks = comparison.get("rankedIds") if isinstance(comparison, dict) else None
+        if (isinstance(comparison, dict) and comparison.get("status") == "ok"
+                and comparison.get("cacheKey") == pack["cacheKey"] and isinstance(ranks, list)
+                and all(isinstance(x, str) for x in ranks) and len(ranks) == len(ids)
+                and len(set(ranks)) == len(ranks) and set(ranks) == set(ids) and ids):
+            ordered.sort(key=lambda r: (not r["required"], ranks.index(r["id"]) if r["id"] in ranks else -1))
+            pack["comparisonStatus"] = "offline-order-applied"
+        else:
+            pack["comparisonStatus"] = "local-fallback"
+    def fits():
+        pack["approxTokens"] = approx_tokens(selection_json(pack))
+        return len(selection_json(pack).encode("utf-8")) <= max_bytes
+    require(fits(), "mandatory-budget-exceeded")  # Reserve contract + provenance first.
+    for row in ordered:
+        if row["id"] not in excerpts:
+            continue
+        selected = dict(row, reason="pinned" if row["required"] else "query-overlap", excerpt=excerpts[row["id"]])
+        pack["excluded"].remove(row)
+        pack["selected"].append(selected)
+        if not fits():
+            require(not row["required"], "mandatory-budget-exceeded")
+            pack["selected"].pop()
+            pack["excluded"].append(row)
+    included = sorted({r["path"] for r in pack["selected"]})
+    pack["codeMap"] = build_code_map(root, included, selected_only=True,
+                                    source_texts={rel: snapshots[rel].decode("utf-8") for rel in included})
+    pack["codeMapStatus"] = "selected-only"
+    if not fits():
+        pack.update(codeMap="", codeMapStatus="omitted-budget")
+    require(fits(), "mandatory-budget-exceeded")
+    for rel, raw in snapshots.items():
+        require(_selection_read(paths[rel], MAX_BYTES) == raw, "source-drift")
+    secret_free(selection_json(pack).encode("utf-8"), "selection.json")
+    return pack
+
+
+def selection_main(argv=None) -> int:
+    import argparse
+    from checkpoint_doctor import CONTRACT_PREFIX, MAX_STATE_BYTES, validate_contract
+    from codex_work_checkpoint import root_path, require, secret_free, MAX_BYTES
+    parser = argparse.ArgumentParser(description="Read-only local context selection; no provider or hook calls")
+    parser.add_argument("command", choices=["select"])
+    parser.add_argument("--root", default=".")
+    parser.add_argument("--state", required=True, help="Repo-relative existing checkpoint state.md")
+    parser.add_argument("--manifest", required=True, help="Repo-relative explicit candidate JSON")
+    parser.add_argument("--latest-instruction-ref", required=True, help="Independently confirmed current instruction ref")
+    args = parser.parse_args(argv)
+    try:
+        root = root_path(args.root)
+        state = _selection_path(root, args.state, state=True)
+        manifest = _selection_path(root, args.manifest, state=True)
+        require(state.name == "state.md" and manifest.suffix.lower() == ".json", "control-input-type-invalid")
+        require(manifest.is_file() and manifest.stat().st_size <= MAX_BYTES, "manifest-too-large-or-missing")
+        raw = _selection_read(manifest, MAX_BYTES)
+        secret_free(raw, "selection.json")
+        cfg = json.loads(raw.decode("utf-8-sig"))
+        require(isinstance(cfg, dict) and set(cfg) <= {"allowed", "candidates", "query", "maxBytes", "comparison"},
+                "manifest-schema-invalid")
+        # Reuse the existing continuity framing/schema with a bounded reader.
+        lines = _selection_read(state, MAX_STATE_BYTES).decode("utf-8-sig").splitlines()
+        contracts = [line[len(CONTRACT_PREFIX):] for line in lines if line.startswith(CONTRACT_PREFIX)]
+        require(len(contracts) == 1, "continuity-contract-required")
+        contract = validate_contract(json.loads(contracts[0]))
+        pack = build_selection_pack(root, contract, cfg["candidates"], allowed=cfg["allowed"],
+                query=cfg["query"], max_bytes=cfg.get("maxBytes", 32768), comparison=cfg.get("comparison"),
+                latest_ref=args.latest_instruction_ref)
+        sys.stdout.buffer.write(selection_json(pack).encode("utf-8"))
+        return 0
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        # Sanitized reason only: never echo source, contract, query or exception values.
+        reasons = {"mandatory-budget-exceeded", "latest-instruction-mismatch", "source-drift",
+                   "source-version-mismatch", "required-evidence-missing", "selection-read-limit",
+                   "protected-selection-path", "candidate-outside-allowlist", "duplicate-locator",
+                   "control-input-type-invalid", "continuity-contract-required", "line-range-invalid"}
+        reason = exc.args[0] if exc.args and exc.args[0] in reasons else "context-selection-input-or-budget"
+        sys.stderr.write(f"HOLD: {reason}; verify scope, checkpoint and source hashes\n")
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(selection_main())

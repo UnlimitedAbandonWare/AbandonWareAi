@@ -71,6 +71,33 @@ public class ConversateSessionService implements AutoCloseable {
     private volatile java.util.function.Function<String,LensDisplayPrefs> displayPrefs;
     public void displayPrefs(java.util.function.Function<String,LensDisplayPrefs> lookup){displayPrefs=lookup;}
     private LensDisplayPrefs lensPrefs(String owner){var lookup=displayPrefs;return lookup==null?null:lookup.apply(owner);}
+    private LensDisplayPrefs.AutoVoiceTrigger autoPrefs(Session s){var p=lensPrefs(s.owner);return p==null?LensDisplayPrefs.AutoVoiceTrigger.defaults():p.autoVoiceTrigger();}
+    private boolean autoMode(Session s){return s.publicDisplay&&autoPrefs(s).modeEnabled();}
+    private boolean autoDisplay(Session s){return !autoMode(s)||s.autoState.equals("ACTIVE")&&autoPrefs(s).hintsEnabled()&&s.autoHintsEnabled&&s.activationValidUntil>clock.millis()&&s.hintDisplayValidUntil>clock.millis();}
+    public void armAutoVoice(String owner,String id,long epoch,boolean continuation,boolean consent){var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
+        if(!autoMode(s))return;
+        if(continuation){if(s.autoState.equals("DISARMED"))throw error(HttpStatus.CONFLICT,"auto_voice_reprepare_required");return;}
+        if(!consent)throw error(HttpStatus.BAD_REQUEST,"auto_voice_consent_required");
+        if(autoPrefs(s).phrases().isEmpty())throw error(HttpStatus.BAD_REQUEST,"auto_voice_phrases_required");
+        cancelWork(s);s.card=null;s.context.clear();s.autoState="ARMED";s.activationId=null;s.captureGeneration++;
+        s.activationValidUntil=clock.millis()+GRACE_MS;s.hintDisplayValidUntil=0;s.presentationRevision=-1;s.autoHintsEnabled=autoPrefs(s).hintsEnabled();s.version++;
+    }}
+    public void disarmAutoVoice(String owner,String id,long epoch){var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);s.autoState="DISARMED";s.activationValidUntil=0;s.hintDisplayValidUntil=0;s.activationId=null;s.captureGeneration++;s.epoch++;closeCapture(s);cancelWork(s);s.card=null;s.version++;}}
+    public Map<String,Object> autoVoiceState(String owner,String id){var s=owned(owner,id);synchronized(s){return Map.of("state",s.autoState,"activationValidUntil",s.activationValidUntil,"hintDisplayValidUntil",s.hintDisplayValidUntil,"captureGeneration",s.captureGeneration,"appliedHintLines",s.appliedHintLines,"appliedHintChars",s.appliedHintChars);}}
+    public void autoVoiceSettingsChanged(String owner,String id,long epoch,LensDisplayPrefs.AutoVoiceTrigger before,LensDisplayPrefs.AutoVoiceTrigger after){
+        if(before.equals(after))return;var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
+            if(before.modeEnabled()!=after.modeEnabled()||!before.phrases().equals(after.phrases())||!before.language().equals(after.language())||!before.preset().equals(after.preset()))disarmAutoVoice(owner,id,epoch);
+            else if(before.hintsEnabled()!=after.hintsEnabled()){cancelWork(s);s.card=null;s.autoHintsEnabled=after.hintsEnabled();s.hintDisplayValidUntil=0;s.version++;}
+        }
+    }
+    /** Called only after the existing bridge accepts an increasing PCM sequence. */
+    public void autoVoiceFrame(String owner,String id,long epoch,long revision,boolean hints){var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
+        if(!autoMode(s)||s.autoState.equals("DISARMED"))return;
+        if(revision<s.presentationRevision)return;
+        s.activationValidUntil=clock.millis()+GRACE_MS;s.presentationRevision=revision;boolean enabled=hints&&autoPrefs(s).hintsEnabled();
+        if(!enabled&&s.autoHintsEnabled){cancelWork(s);s.card=null;s.version++;}
+        s.autoHintsEnabled=enabled;s.hintDisplayValidUntil=enabled?clock.millis()+GRACE_MS:0;
+    }}
     private int hintTargetChars(String owner){var prefs=lensPrefs(owner);return prefs==null?0:prefs.hintTargetChars();}
     @org.springframework.beans.factory.annotation.Value("${conversate.context-ttl-ms:120000}") private long contextTtlMs=120000;
     private final ThreadPoolExecutor workers=new ThreadPoolExecutor(4,4,30,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16),r->{var t=new Thread(null,r,"conversate-answer",0,false);t.setDaemon(true);return t;},new ThreadPoolExecutor.AbortPolicy());
@@ -108,7 +135,7 @@ public class ConversateSessionService implements AutoCloseable {
         }
     }
     private static int outputCount(Session s){return s.outputs+s.pollOutputs.size();}
-    boolean hintsEnabled(String owner,String id){var s=owned(owner,id);synchronized(s){return s.hintsEnabled;}}
+    boolean hintsEnabled(String owner,String id){var s=owned(owner,id);synchronized(s){return autoMode(s)?autoDisplay(s):s.hintsEnabled;}}
     boolean usesApiCues(){return pipeline.usesApiCues();}
     /** Client-declared receipt only: does not prove hardware visibility or human reading. */
     public Snapshot acknowledge(String owner,String id,long epoch,long version){var s=owned(owner,id);synchronized(s){
@@ -124,7 +151,7 @@ public class ConversateSessionService implements AutoCloseable {
             var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
                 if(!s.state.equals("RUNNING")||outputCount(s)==0||s.caption==null||s.caption.expiresAt()<=clock.millis()
                         ||version<s.captionVersion||version>s.version)throw error(HttpStatus.CONFLICT,"invalid_caption_ack");
-                if(s.captionRenderedVersion!=s.captionVersion){s.captionRenderedVersion=s.captionVersion;s.captionRenderedAt=clock.millis();}
+                if(s.captionRenderedVersion!=s.captionVersion){s.captionRenderedVersion=s.captionVersion;s.captionRenderedAt=clock.millis();diagnostic(s,"CAPTION_RENDERED",Map.of("version",s.captionVersion));}
                 return snapshot(s);
             }
         }
@@ -132,7 +159,7 @@ public class ConversateSessionService implements AutoCloseable {
         var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
             if(!s.state.equals("RUNNING")||outputCount(s)==0||s.card==null||s.card.expiresAt()<=clock.millis()
                     ||version<s.cueVersion||version>s.version)throw error(HttpStatus.CONFLICT,"invalid_render_ack");
-            if(s.renderedEpoch!=epoch||s.renderedVersion<s.cueVersion){s.renderedEpoch=epoch;s.renderedVersion=s.cueVersion;s.renderedCount++;s.hintRenderedAt=clock.millis();}
+            if(s.renderedEpoch!=epoch||s.renderedVersion<s.cueVersion){s.renderedEpoch=epoch;s.renderedVersion=s.cueVersion;s.renderedCount++;s.hintRenderedAt=clock.millis();diagnostic(s,"HINT_RENDERED",Map.of("version",s.cueVersion));}
             return snapshot(s);
         }
     }
@@ -167,12 +194,13 @@ public class ConversateSessionService implements AutoCloseable {
     }
     void registerCapture(String owner,String id,long epoch,AutoCloseable capture){var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);if(!s.state.equals("RUNNING"))throw error(HttpStatus.CONFLICT,"assist_paused");if(s.capture!=null)throw error(HttpStatus.CONFLICT,"capture_active");
         // Provider utterance IDs restart only with a new capture; text fallback retains deduplication.
-        s.policy.clear();s.capture=capture;diagnostic(s,"audio_resumed",Map.of("transcriptPreserved",s.caption!=null));}}
+        s.policy.clear();s.capture=capture;s.captureRun++;s.captureEpoch=epoch;s.captureClosed=false;diagnostic(s,"audio_resumed",Map.of("transcriptPreserved",s.caption!=null));}}
     // Keep the final caption and its pending hint while detaching only this finished capture.
     // The next audio/start advances the existing epoch before accepting new PCM.
     void captureFinished(String owner,String id,long epoch,AutoCloseable capture){var s=sessions.get(id);if(s==null||!s.owner.equals(owner))return;synchronized(s){if(s.epoch==epoch&&s.capture==capture){s.capture=null;s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),s.publicDisplay&&!"finished".equals(s.audio.runtime().get("stopReason"))?"WAITING":"STOPPED",s.audio.runtime());s.version++;}}}
     void audioMetrics(String owner,String id,long epoch,AudioMetrics metrics){var s=sessions.get(id);if(s==null||!s.owner.equals(owner))return;synchronized(s){if(s.epoch==epoch&&s.state.equals("RUNNING")){s.audio=metrics;s.version++;}}}
     void captureFailed(String owner,String id,long epoch,String reason){var s=sessions.get(id);if(s==null||!s.owner.equals(owner))return;synchronized(s){if(s.epoch==epoch&&s.state.equals("RUNNING")){
+        if(autoMode(s)){disarmAutoVoice(owner,id,epoch);s.reason=reason;return;}
         if(s.publicDisplay||rollingEnabled&&apiLimited(reason)){var capture=s.capture;s.capture=null;s.reason=reason;s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),apiLimited(reason)?"API_PAUSED":"WAITING",s.audio.runtime());s.version++;diagnostic(s,"audio_waiting",Map.of("reason",reason));diagnostic(s,"transcript_preserved",Map.of("present",s.caption!=null));if(capture!=null)try{capture.close();}catch(Exception ignored){} }
         else pause(s,reason,true);
     }}}
@@ -186,8 +214,9 @@ public class ConversateSessionService implements AutoCloseable {
             if("phone_voice".equals(inputPath)&&staleAudio(s,utterance)){s.duplicates++;return snapshot(s);}
             if("phone_voice".equals(inputPath)&&preResetAudio(s,utterance)){s.duplicates++;diagnostic(s,"CONTEXT_STALE_AUDIO",Map.of("contextEpoch",s.contextEpoch));return snapshot(s);}
             boolean rolling=rollingEnabled&&"phone_voice".equals(inputPath);
-            boolean focusInput="phone_voice".equals(inputPath)&&novaFocus!=null&&novaFocus.audio(owner,id,epoch,utterance);
-            var decision=(pipeline.usesApiCues()||rolling)?s.policy.acceptForCue(utterance):s.publicDisplay&&!"phone_voice".equals(inputPath)?s.policy.acceptExplicit(utterance):s.policy.accept(utterance);s.reason=decision.kind();s.version++;
+            boolean autoInput=autoMode(s)&&"phone_voice".equals(inputPath);
+            boolean focusInput=!autoInput&&"phone_voice".equals(inputPath)&&novaFocus!=null&&novaFocus.audio(owner,id,epoch,utterance);
+            var decision=(autoInput||pipeline.usesApiCues()||rolling)?s.policy.acceptForCue(utterance):s.publicDisplay&&!"phone_voice".equals(inputPath)?s.policy.acceptExplicit(utterance):s.policy.accept(utterance);s.reason=decision.kind();s.version++;
             s.inputDecision=decision.kind();s.inputPath=inputPath;
             if(utterance.isFinal()&&!Set.of("DUPLICATE","STALE").contains(decision.kind())){
                 s.lastFinalAt=clock.millis();s.lastFinalNanos=System.nanoTime();
@@ -195,6 +224,14 @@ public class ConversateSessionService implements AutoCloseable {
                         "assist-"+org.apache.commons.codec.digest.DigestUtils.sha256Hex(s.id+":"+epoch+":"+utterance.utteranceId()).substring(0,24);
             }
             if(decision.kind().equals("DUPLICATE")||decision.kind().equals("STALE")){s.duplicates++;return snapshot(s);}
+            boolean activated=false;
+            if(autoInput){
+                if(s.autoState.equals("DISARMED")){s.suppressed++;return snapshot(s);}
+                if(s.autoState.equals("ARMED")&&utterance.isFinal()&&autoPrefs(s).match(utterance.text())!=null){
+                    s.autoState="ACTIVE";s.activationId=s.id+":"+epoch+":"+s.captureGeneration+":"+utterance.utteranceId();activated=true;
+                    s.hintDisplayValidUntil=s.autoHintsEnabled?clock.millis()+GRACE_MS:0;
+                }
+            }
             if("phone_voice".equals(inputPath)){
                 rememberAudioOrder(s,utterance);
                 long now=clock.millis();
@@ -209,22 +246,23 @@ public class ConversateSessionService implements AutoCloseable {
                 s.caption=new Caption(utterance.utteranceId(),utterance.revision(),utterance.isFinal(),visible,utterance.confidence(),rolling?List.of():utterance.words(),now,rolling?ROLLING_EXPIRY:now+captionTtl(s.owner));
                 diagnostic(s,utterance.isFinal()?"STT_FINAL":"STT_PARTIAL",Map.of("chars",utterance.text().length()));
                 s.captionVersion=s.version;s.captionEpoch=s.epoch;s.captionRenderedAt=null;
-                if(!s.hintsEnabled){if(utterance.isFinal()){pruneContext(s,now);remember(s,rolling?s.epoch+":"+utterance.questionId():utterance.questionId(),utterance.text(),now);}s.suppressed++;return snapshot(s);}
+                if(autoInput&&(!s.autoState.equals("ACTIVE")||!autoDisplay(s))){s.suppressed++;return snapshot(s);}
+                if(!autoInput&&!s.hintsEnabled){if(utterance.isFinal()){pruneContext(s,now);remember(s,rolling?s.epoch+":"+utterance.questionId():utterance.questionId(),utterance.text(),now);}s.suppressed++;return snapshot(s);}
             }
             if(!utterance.isFinal()){s.suppressed++;return snapshot(s);}
             if(utterance.text().isBlank()){s.suppressed++;return snapshot(s);}
-            if(!rolling&&!pipeline.usesApiCues()&&decision.kind().equals("RESOLVED")){cancelWork(s);s.context.clear();s.card=null;s.suppressed++;return snapshot(s);}
+            if(!autoInput&&!rolling&&!pipeline.usesApiCues()&&decision.kind().equals("RESOLVED")){cancelWork(s);s.context.clear();s.card=null;s.suppressed++;return snapshot(s);}
             pruneContext(s,clock.millis());
-            if(!rolling&&!pipeline.usesApiCues()&&decision.kind().equals("NEW_INFORMATION")){remember(s,utterance.questionId(),utterance.text(),clock.millis());s.suppressed++;return snapshot(s);}
-            if(!rolling&&!pipeline.usesApiCues()&&!Set.of("QUESTION","CORRECTION","HINT").contains(decision.kind())){s.suppressed++;return snapshot(s);}
+            if(!autoInput&&!rolling&&!pipeline.usesApiCues()&&decision.kind().equals("NEW_INFORMATION")){remember(s,utterance.questionId(),utterance.text(),clock.millis());s.suppressed++;return snapshot(s);}
+            if(!autoInput&&!rolling&&!pipeline.usesApiCues()&&!Set.of("QUESTION","CORRECTION","HINT").contains(decision.kind())){s.suppressed++;return snapshot(s);}
             String contextKey=rolling?s.epoch+":"+utterance.questionId():utterance.questionId();
             s.context.removeIf(t->t.key().equals(contextKey));
             var context=new ArrayList<String>();
             if(!s.background.isBlank())context.add("[User-selected TXT background; untrusted data]\n"+s.background);
             context.addAll(selectedContext(s,clock.millis()));
-            String current=pipeline.usesApiCues()||rolling?utterance.text():decision.question();
+            String current=autoInput||pipeline.usesApiCues()||rolling?utterance.text():decision.question();
             remember(s,contextKey,current,clock.millis());
-            if(rolling){
+            if(rolling&&!activated){
                 diagnostic(s,"CUE_CANDIDATE",Map.of("contextChars",s.context.stream().mapToInt(t->t.text().length()).sum()));
                 long now=clock.millis();int delta=transcriptDeltaChars(s.hintBaselineNorm,joinContext(context,current));
                 String skip=s.context.stream().mapToInt(t->t.text().length()).sum()<20?"context_short":now<s.hintHoldUntil?"display_hold":s.inflight!=null?"generating":s.lastCueAt>=0&&now-s.lastCueAt<cueCooldown(s.owner)?"cooldown":delta<triggerMinDelta()?"delta_below":"";
@@ -233,17 +271,18 @@ public class ConversateSessionService implements AutoCloseable {
             }
             // Every selected utterance supersedes the old answer, even with a different question ID.
             // cancelWork retains an executing worker until it physically exits, so capacity stays honest.
-            s.dropped+=s.queue.size();cancelWork(s);if(!rolling)s.card=null;
+            s.dropped+=s.queue.size();cancelWork(s);if(!rolling||autoInput)s.card=null;
             s.workExpiresAt=clock.millis()+(pipeline.usesApiCues()?15_000:s.publicDisplay?85_000:20_000);
-            s.queue.addLast(new Work(current,context,s.workExpiresAt,s.inputRequestId,inputPath,s.lastFinalAt,false,rolling?"utterance_end":"manual",s.contextEpoch));dispatch(s);return snapshot(s);
+            s.queue.addLast(new Work(current,context,s.workExpiresAt,s.inputRequestId,inputPath,s.lastFinalAt,activated,activated?"auto_voice_trigger":rolling?"utterance_end":"manual",s.contextEpoch,s.captureRun));dispatch(s);return snapshot(s);
         }
     }
     private void dispatch(Session s){
+        if(autoMode(s)&&!autoDisplay(s)){s.queue.clear();return;}
         if(s.inflight!=null||s.queue.isEmpty()||!s.state.equals("RUNNING"))return;
         while(!s.queue.isEmpty()&&s.queue.peekFirst().expiresAt()<=clock.millis()){s.queue.removeFirst();s.expired++;s.dropped++;}
         if(s.queue.isEmpty())return;
         var work=s.queue.removeFirst();String question=work.question();long generation=++s.generation,epoch=s.epoch;var material=s.materials;
-        s.inflightGeneration=generation;
+        s.inflightGeneration=generation;var autoOptions=autoMode(s)?autoPrefs(s):null;String activation=s.activationId;
         try{s.inflight=workers.submit(()->{
             synchronized(s){if(s.generation!=generation||!hintEpoch(s,epoch)||!s.state.equals("RUNNING")||work.ctxEpoch()!=s.contextEpoch)return;s.executing=true;}
             long began=System.nanoTime();
@@ -252,15 +291,20 @@ public class ConversateSessionService implements AutoCloseable {
             try(var lease=admission.tryAcquire(s.owner).orElseThrow(()->error(HttpStatus.TOO_MANY_REQUESTS,"assist_generation_capacity"))){
                 s.costCheck.run();
                 synchronized(s){if(s.generation!=generation||!hintEpoch(s,epoch)||!s.state.equals("RUNNING")||work.ctxEpoch()!=s.contextEpoch)return;s.started++;}
-                var answer=s.publicDisplay&&"openai_direct".equals(work.inputPath())?pipeline.answerPublicDisplayDirect(question,work.requestId()):s.publicDisplay?pipeline.answerPublicDisplay(question,work.context(),clock.millis(),work.requestId()):pipeline.answerLive(question,work.context(),material,clock.millis(),work.inputPath(),work.requestId(),work.forceHint(),hintTargetChars(s.owner));
+                if(autoOptions!=null&&!autoDisplay(s))return;
+                var answer=s.publicDisplay&&"openai_direct".equals(work.inputPath())?pipeline.answerPublicDisplayDirect(question,work.requestId()):s.publicDisplay?(autoOptions==null?pipeline.answerPublicDisplay(question,work.context(),clock.millis(),work.requestId()):pipeline.answerPublicDisplay(question,work.context(),clock.millis(),work.requestId(),work.forceHint(),autoOptions)):pipeline.answerLive(question,work.context(),material,clock.millis(),work.inputPath(),work.requestId(),work.forceHint(),hintTargetChars(s.owner));
+                synchronized(s){if(autoOptions!=null&&(!Objects.equals(activation,s.activationId)||!autoDisplay(s)))return;}
                 synchronized(s){s.searchAttempts+=answer.searchAttempts();s.queryRefinements+=answer.queryRefinements();s.generationAttempts+=answer.generationAttempts();s.complexJudgments+=answer.complexJudgments();s.lastGenerationMs=answer.generationMs();if(answer.generationAttempts()>0&&!answer.reason().equals("GENERATED"))s.verificationHolds++;if(s.generation==generation&&hintEpoch(s,epoch)&&s.state.equals("RUNNING")&&work.ctxEpoch()==s.contextEpoch&&work.expiresAt()>clock.millis()){s.stages=answer.stages();var card=answer.card();long displayExpires=clock.millis()+displayTtl(s.owner);s.card=card==null?null:new Card(card.decision(),card.kind(),card.text(),card.sourceIds(),displayExpires,work.requestId(),card.sourceTitles(),card.detailPages());
+                    boolean budgetExceeded=false;
+                    if(autoOptions!=null&&s.card!=null){var shown=s.card;s.appliedHintLines=autoOptions.hintLines();s.appliedHintChars=autoOptions.hintChars();String fitted=atomicHintText(shown.text(),autoOptions.hintChars(),autoOptions.language());budgetExceeded=fitted.isBlank()&&!shown.text().isBlank();
+                        s.card=budgetExceeded?new Card("SHOW","CUE",autoOptions.language().equals("en")?"Hint is too long.":"힌트가 너무 길어요.",List.of(),shown.expiresAt(),shown.requestId(),List.of()):fitted.isBlank()?null:new Card(shown.decision(),shown.kind(),fitted,shown.sourceIds(),shown.expiresAt(),shown.requestId(),shown.sourceTitles());card=s.card;}
                     if(pipeline.usesApiCues()){
                         s.inputDecision=String.valueOf(answer.stages().cue().getOrDefault("cueDecision",answer.reason()));
                         var prefs=lensPrefs(s.owner);
                         if(Boolean.TRUE.equals(answer.stages().cue().get("topicChanged"))&&(prefs==null||prefs.topicResetEnabled())){long cut=clock.millis();s.context.clear();s.contextEpoch++;s.contextEpochStartAt=cut;s.contextResetAudioMark=new HashMap<>(s.audioOrder);diagnostic(s,"CONTEXT_EPOCH",Map.of("reason","topic_changed","contextEpoch",s.contextEpoch));remember(s,"current:"+work.requestId(),work.question(),cut);}
-                        if(!rollingEnabled&&card!=null&&"SHOW".equals(card.decision()))remember(s,"hint:"+work.requestId(),"[assistant cue] "+card.text(),clock.millis());
+                        if(!rollingEnabled&&card!=null&&"SHOW".equals(card.decision())&&!budgetExceeded)remember(s,"hint:"+work.requestId(),"[assistant cue] "+card.text(),clock.millis());
                         if("NO_CUE".equals(answer.reason()))s.suppressed++;
-                        if(card!=null&&"SHOW".equals(card.decision())){
+                        if(card!=null&&"SHOW".equals(card.decision())&&!budgetExceeded){
                             long okAt=clock.millis();s.lastSuccessfulHintAt=okAt;s.hintBaselineAt=okAt;s.hintHoldUntil=okAt+displayTtl(s.owner);
                             s.hintBaselineNorm=normalizeTranscript(joinContext(work.context(),work.question()));
                             diagnostic(s,"HINT_GENERATED",Map.of(
@@ -277,9 +321,9 @@ public class ConversateSessionService implements AutoCloseable {
                     if(!rollingEnabled&&card!=null&&s.caption!=null&&Objects.equals(s.finalTranscriptAt,work.finalAt())){
                         var caption=s.caption;s.caption=new Caption(caption.utteranceId(),caption.revision(),caption.isFinal(),caption.text(),caption.confidence(),caption.words(),caption.receivedAt(),displayExpires);
                     }
-                    s.reason=answer.reason();s.hintCompletedAt=card==null?null:clock.millis();s.hintForFinalAt=card==null?null:work.finalAt();s.hintRenderedAt=null;s.version++;s.cueVersion=s.version;}else {s.dropped++;if(work.expiresAt()<=clock.millis())s.expired++;}}
+                    s.reason=budgetExceeded?"HINT_BUDGET_EXCEEDED":answer.reason();s.hintCompletedAt=card==null?null:clock.millis();s.hintForFinalAt=card==null?null:work.finalAt();s.hintRenderedAt=null;s.version++;s.cueVersion=s.version;if(card!=null)diagnostic(s,"HINT_COMPLETED",Map.of("at",s.hintCompletedAt,"epoch",epoch,"captureRun",work.captureRun(),"outcome","returned_card"));}else {s.dropped++;if(work.expiresAt()<=clock.millis())s.expired++;}}
             }catch(RuntimeException failure){synchronized(s){
-                if(s.generation==generation&&hintEpoch(s,epoch)&&s.state.equals("RUNNING")&&work.ctxEpoch()==s.contextEpoch&&work.expiresAt()>clock.millis()){
+                if(s.generation==generation&&hintEpoch(s,epoch)&&s.state.equals("RUNNING")&&work.ctxEpoch()==s.contextEpoch&&work.expiresAt()>clock.millis()&&(autoOptions==null||autoDisplay(s))){
                     s.reason=failure instanceof ResponseStatusException r
                             ?(r.getStatusCode().value()==429?"RATE_LIMITED":r.getStatusCode().value()==503?"ADMISSION_UNAVAILABLE":"PROCESSING_FAILED")
                             :s.publicDisplay?ConversateLocalCardGenerator.classify(failure):"PROCESSING_FAILED";
@@ -298,9 +342,20 @@ public class ConversateSessionService implements AutoCloseable {
             finally{if(previousBudget==null)com.abandonware.ai.addons.budget.TimeBudgetContext.clear();else com.abandonware.ai.addons.budget.TimeBudgetContext.set(previousBudget);synchronized(s){s.samples++;s.lastProcessingMs=TimeUnit.NANOSECONDS.toMillis(System.nanoTime()-began);if(s.inflightGeneration==generation){s.executing=false;s.inflight=null;dispatch(s);}}}
         });}catch(RejectedExecutionException busy){s.reason="QUEUE_LIMIT";s.dropped++;s.version++;}
     }
+    static String atomicHintText(String text,int maxChars,String language){
+        String value=java.text.Normalizer.normalize(text,java.text.Normalizer.Form.NFC).strip();
+        var sentences=java.text.BreakIterator.getSentenceInstance(Locale.forLanguageTag(language));sentences.setText(value);
+        int end=0;for(int next=sentences.next();next!=java.text.BreakIterator.DONE;next=sentences.next()){if(value.codePointCount(0,next)>maxChars)break;end=next;}
+        return value.substring(0,end).strip();
+    }
     public Snapshot control(String owner,String id,long epoch,String action){
         var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
             switch(action){
+                case "producer_reclaimed" -> {
+                    var caption=s.caption;long captionEpoch=s.captionEpoch;var visible=new ArrayDeque<>(s.visible);pause(s,"producer_changed",true);
+                    s.state="RUNNING";s.caption=caption;s.captionEpoch=captionEpoch;s.visible.addAll(visible);
+                    s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),"WAITING",s.audio.runtime());s.reason="READY";
+                }
                 case "producer_changed" -> {pause(s,"producer_changed");s.state="RUNNING";s.caption=null;s.captionEpoch=0;s.audioOrder.clear();s.reason="READY";}
                 case "hints_on", "hints_off" -> {s.hintsEnabled=action.equals("hints_on");cancelWork(s);resetCueTracking(s);s.card=null;s.version++;}
                 case "pause" -> pause(s,"user_pause");
@@ -376,6 +431,10 @@ public class ConversateSessionService implements AutoCloseable {
         }
     }
     void maintain(){long now=clock.millis();for(var s:sessions.values())synchronized(s){
+        if(autoMode(s)&&!s.autoState.equals("DISARMED")){
+            if(s.activationValidUntil<=now){disarmAutoVoice(s.owner,s.id,s.epoch);s.reason="AUTO_VOICE_LEASE_EXPIRED";}
+            else if(s.hintDisplayValidUntil>0&&s.hintDisplayValidUntil<=now){cancelWork(s);s.card=null;s.hintDisplayValidUntil=0;s.version++;}
+        }
         if(s.publicDisplay&&s.inflight!=null&&s.workExpiresAt>0&&now>=s.workExpiresAt){cancelWork(s);s.workExpiresAt=0;s.card=null;s.reason="RAG_TIMEOUT";s.version++;}
         if(s.pollOutputs.entrySet().removeIf(entry->now-entry.getValue()>GRACE_MS)){s.version++;if(outputCount(s)==0&&s.disconnectedAt<0)s.disconnectedAt=now;}
         pruneContext(s,now);
@@ -384,7 +443,7 @@ public class ConversateSessionService implements AutoCloseable {
         else {
             if(s.focusWasActive){s.focusWasActive=false;s.hintBaselineAt=now;s.lastSuccessfulHintAt=now;s.lastCueAt=now;
                 s.hintBaselineNorm=normalizeTranscript(joinContext(s.context.stream().map(Turn::text).toList(),s.caption==null?"":s.caption.text()));}
-            maybeAccumulatedHint(s,now);maybeForceRollingHint(s,now);
+            if(!autoMode(s)||autoDisplay(s)){maybeAccumulatedHint(s,now);maybeForceRollingHint(s,now);}
         }
         if(s.state.equals("PAUSED")&&s.capture==null&&outputCount(s)==0&&s.disconnectedAt>=0&&now-s.disconnectedAt>=DISCONNECTED_RETENTION_MS){stop(s,"disconnected_cleanup");sessions.remove(s.id,s);continue;}
         if(s.state.equals("RUNNING")&&outputCount(s)==0&&s.disconnectedAt>=0&&now-s.disconnectedAt>=GRACE_MS&&!(s.publicDisplay&&(s.capture!=null||Set.of("WAITING","API_PAUSED").contains(s.audio.state()))&&now-s.disconnectedAt<DISCONNECTED_RETENTION_MS))pause(s,"output_lost",true);
@@ -394,8 +453,12 @@ public class ConversateSessionService implements AutoCloseable {
     private void pause(Session s,String reason){pause(s,reason,false);}
     private void pause(Session s,String reason,boolean retainEvidence){if(novaFocus!=null)novaFocus.detach(s.id,reason);s.state="PAUSED";s.reason=reason;s.epoch++;s.pollOutputs.clear();
         if(!retainEvidence){s.policy.clear();s.context.clear();s.card=null;}else {pruneContext(s,clock.millis());if(s.card!=null&&s.card.expiresAt()<=clock.millis())s.card=null;}
+        s.autoState="DISARMED";s.activationId=null;s.activationValidUntil=0;s.hintDisplayValidUntil=0;
         resetCueTracking(s);s.version++;closeCapture(s);cancelPending(s);}
-    private void closeCapture(Session s){var capture=s.capture;s.capture=null;s.caption=null;s.visible.clear();s.firstTranscriptAt=null;s.finalTranscriptAt=null;s.captionRenderedAt=null;s.audioOrder.clear();s.contextResetAudioMark=Map.of();if(capture!=null)try{capture.close();}catch(Exception ignored){}s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),"STOPPED",s.audio.runtime());}
+    private void closeCapture(Session s){
+        // Preserve numeric/allowlisted evidence before clearing content, using the existing bounded buffer.
+        if(s.publicDisplay&&s.captureRun>0&&!s.captureClosed){diagnostic(s,"CAPTURE_CLOSED",captureSummary(s,"closed"));s.captureClosed=true;}
+        var capture=s.capture;s.capture=null;s.caption=null;s.visible.clear();s.firstTranscriptAt=null;s.finalTranscriptAt=null;s.captionRenderedAt=null;s.audioOrder.clear();s.contextResetAudioMark=Map.of();if(capture!=null)try{capture.close();}catch(Exception ignored){}s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),"STOPPED",s.audio.runtime());}
     private void stop(Session s,String reason){pause(s,reason);s.state="STOPPED";s.materials=List.of();s.policy.clear();}
     private static boolean hintEpoch(Session s,long epoch){return s.epoch==epoch||s.segmentHintEpoch==epoch;}
     private void cancelWork(Session s){s.segmentHintEpoch=0;s.generation++;s.hintCompletedAt=null;s.hintRenderedAt=null;s.hintForFinalAt=null;s.stages=ConversateAnswerPipeline.Stages.unobserved();if(s.inflight!=null){if(s.inflight.cancel(true))s.cancelled++;if(!s.executing){s.inflight=null;workers.purge();}}s.queue.clear();}
@@ -529,7 +592,7 @@ public class ConversateSessionService implements AutoCloseable {
         diagnostic(s,"ACCUM_HINT_TRIGGERED",Map.of("triggerReason","transcript_delta","elapsedSinceLastHint",s.lastSuccessfulHintAt<0?-1:now-s.lastSuccessfulHintAt,"transcriptDeltaChars",delta,"quietMs",now-quietSince,"normalHintTrigger",true,"forcedHintTrigger",false));
         s.lastCueAt=now;s.dropped+=s.queue.size();cancelWork(s);
         s.workExpiresAt=now+15_000;
-        s.queue.addLast(new Work(question,context,s.workExpiresAt,s.inputRequestId==null?"accum-hint":s.inputRequestId,"phone_voice",s.lastFinalAt,false,"transcript_delta",s.contextEpoch));
+        s.queue.addLast(new Work(question,context,s.workExpiresAt,s.inputRequestId==null?"accum-hint":s.inputRequestId,"phone_voice",s.lastFinalAt,false,"transcript_delta",s.contextEpoch,s.captureRun));
         dispatch(s);
     }
     private void maybeForceRollingHint(Session s,long now){
@@ -558,11 +621,36 @@ public class ConversateSessionService implements AutoCloseable {
         diagnostic(s,"FORCE_HINT_TRIGGERED",Map.of("triggerReason","3min_watchdog","elapsedSinceLastHint",elapsed,"transcriptDeltaChars",delta,"forcedHintTrigger",true,"normalHintTrigger",false));
         s.lastCueAt=now;s.dropped+=s.queue.size();cancelWork(s);
         s.workExpiresAt=now+15_000;
-        s.queue.addLast(new Work(question,context,s.workExpiresAt,s.inputRequestId==null?"force-hint":s.inputRequestId,"phone_voice",s.lastFinalAt,true,"3min_watchdog",s.contextEpoch));
+        s.queue.addLast(new Work(question,context,s.workExpiresAt,s.inputRequestId==null?"force-hint":s.inputRequestId,"phone_voice",s.lastFinalAt,true,"3min_watchdog",s.contextEpoch,s.captureRun));
         dispatch(s);
     }
 
-    private void diagnostic(Session s,String event,Map<String,Object> fields){var row=new LinkedHashMap<String,Object>(fields);row.put("event",event);row.put("at",clock.millis());s.events.addLast(Map.copyOf(row));while(s.events.size()>24)s.events.removeFirst();}
+    private void diagnostic(Session s,String event,Map<String,Object> fields){var row=new LinkedHashMap<String,Object>(fields);row.put("event",event);row.putIfAbsent("at",clock.millis());row.putIfAbsent("epoch",s.epoch);row.putIfAbsent("captureRun",s.captureRun);s.events.addLast(Map.copyOf(row));while(s.events.size()>24)s.events.removeFirst();}
+    /** Reads the same owner-bound session buffer without renewing output presence. */
+    Map<String,Object> captureDiagnostics(String owner,String id){var s=owned(owner,id);synchronized(s){
+        if(s.captureClosed){var rows=s.events.descendingIterator();while(rows.hasNext()){var row=rows.next();if("CAPTURE_CLOSED".equals(row.get("event"))&&Objects.equals(row.get("captureRun"),s.captureRun))return row;}
+            return Map.of("state","not_observed","coverage","bounded_window","hardwareRendered","not_observed");}
+        return s.captureRun==0?Map.of("state","not_observed","hardwareRendered","not_observed"):captureSummary(s,s.capture!=null?"active":"STOPPED".equals(s.audio.state())?"ended":"waiting");
+    }}
+    private Map<String,Object> captureSummary(Session s,String state){
+        var result=new LinkedHashMap<String,Object>();result.put("state",state);result.put("epoch",s.captureEpoch);result.put("captureRun",s.captureRun);
+        result.put("hardwareRendered","not_observed");result.put("ackMeaning","dom_callback_only");result.put("clockDomain","server_wall_clock");
+        result.put("coverage","bounded_window");result.put("eventCapacity",24);
+        for(String field:List.of("startedAt","firstTranscriptAt","finalTranscriptAt","hintCompletedAt","captionRenderedAt","hintRenderedAt","closedAt"))result.put(field,"not_observed");
+        int observed=0;for(var row:s.events){
+            if(!Objects.equals(row.get("captureRun"),s.captureRun)||!Objects.equals(row.get("epoch"),s.captureEpoch))continue;
+            observed++;String event=Objects.toString(row.get("event"),"");
+            if(event.equals("audio_resumed"))result.put("startedAt",row.get("at"));
+            if(event.equals("STT_PARTIAL")||event.equals("STT_FINAL")){if(result.get("firstTranscriptAt").equals("not_observed"))result.put("firstTranscriptAt",row.get("at"));if(event.equals("STT_FINAL"))result.put("finalTranscriptAt",row.get("at"));}
+            if(event.equals("HINT_COMPLETED"))result.put("hintCompletedAt",row.get("at"));
+            if(event.equals("CAPTION_RENDERED")){result.put("captionRenderedAt",row.get("at"));result.put("captionVersion",row.get("version"));}
+            if(event.equals("HINT_RENDERED")){result.put("hintRenderedAt",row.get("at"));result.put("hintVersion",row.get("version"));}
+        }
+        result.put("eventsObserved",observed);
+        if(result.get("startedAt").equals("not_observed"))result.put("firstTranscriptAt","not_observed");
+        if(state.equals("closed"))result.put("closedAt",clock.millis());
+        return Map.copyOf(result);
+    }
     Map<String,Object> transcriptDiagnostics(String owner,String id){var s=owned(owner,id);synchronized(s){
         var prefs=lensPrefs(s.owner);
         var history=new LinkedHashMap<String,Object>();
@@ -583,8 +671,9 @@ public class ConversateSessionService implements AutoCloseable {
     int sessionCount(){return sessions.size();}
     @PreDestroy public synchronized void close(){for(var s:sessions.values())synchronized(s){stop(s,"server_shutdown");}sessions.clear();scheduler.shutdownNow();workers.shutdownNow();}
     private record Turn(String key,String text,long at,long expiresAt){@Override public String toString(){return "Turn[redacted]";}}
-    private record Work(String question,List<String> context,long expiresAt,String requestId,String inputPath,long finalAt,boolean forceHint,String triggerReason,long ctxEpoch){@Override public String toString(){return "Work[redacted]";}}
+    private record Work(String question,List<String> context,long expiresAt,String requestId,String inputPath,long finalAt,boolean forceHint,String triggerReason,long ctxEpoch,long captureRun){@Override public String toString(){return "Work[redacted]";}}
     private static final class Session {
+        String autoState="DISARMED",activationId;long captureGeneration,activationValidUntil,hintDisplayValidUntil,presentationRevision=-1;boolean autoHintsEnabled=true;int appliedHintLines=3,appliedHintChars=200;
         final ArrayDeque<Turn> visible=new ArrayDeque<>();final ArrayDeque<Map<String,Object>> events=new ArrayDeque<>();long lastCueAt=-1;long lastSuccessfulHintAt=-1;long hintBaselineAt=-1;String hintBaselineNorm="";long hintHoldUntil=-1;long lastTranscriptChangeAt=-1;String observedTranscriptNorm="";
         String background="";boolean focusWasActive;
         final Map<String,Long> pollOutputs=new HashMap<>();
@@ -592,7 +681,7 @@ public class ConversateSessionService implements AutoCloseable {
         final List<Future<?>> pending=new ArrayList<>(2);
         final ConversateQuestionPolicy policy=new ConversateQuestionPolicy();final ArrayDeque<Work> queue=new ArrayDeque<>(1);final ArrayDeque<Turn> context=new ArrayDeque<>(4);
         List<PreparedMaterialReader.Material> materials=List.of();Future<?> inflight;
-        AutoCloseable capture;AudioMetrics audio=new AudioMetrics(0,0,0,0,0,"OFF");
+        AutoCloseable capture;long captureRun,captureEpoch;boolean captureClosed;AudioMetrics audio=new AudioMetrics(0,0,0,0,0,"OFF");
         long generation,inflightGeneration,started,suppressed,duplicates,dropped,samples,lastProcessingMs,generationAttempts,complexJudgments,verificationHolds,lastGenerationMs,searchAttempts,queryRefinements,cancelled,expired,workExpiresAt;boolean executing;
         long outputAcks,lastOutputAckEpoch,lastOutputAckVersion,lastOutputAckAt,fixtureRuns;
         String inputPath="unobserved",inputRequestId,inputDecision="unobserved";

@@ -2270,6 +2270,12 @@ public class ChatApiController {
                 NaverSearchService.SearchTrace rawTrace = null;
                 List<String> rawSnips = java.util.Collections.emptyList();
                 String traceHtml = null;
+                final var controllerPrefetchParent = TraceStore.context();
+                final var controllerPrefetchContext = TraceStore.searchContext(controllerPrefetchParent, "retrievalExecutionId");
+                final String controllerPrefetchExecutionId = (String) controllerPrefetchContext.get("retrievalExecutionId");
+                final long controllerPrefetchStartedAtEpochMs = System.currentTimeMillis();
+                try {
+                    TraceStore.installContext(controllerPrefetchContext);
                 if (allowWeb && !agentWebRequest && !__reusePriorWebForCall) {
                     try {
                         Long remainingMs = __capturedBudget == null ? null : __capturedBudget.remainingMillis();
@@ -2359,6 +2365,9 @@ public class ChatApiController {
                     if (debug) {
                         sink.tryEmitNext(sse(ChatStreamEvent.status("web search skipped")));
                     }
+                }
+                } finally {
+                    TraceStore.installContext(controllerPrefetchParent);
                 }
                 recordWebPrefetchTrace(
                         "stream",
@@ -2526,6 +2535,7 @@ public class ChatApiController {
                         __capturedRequestId, currentSessionKeyHolder[0], dtoForCall.getModel());
                 dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(_username, preResolvedOwnerKey));
                 bindGeneralGraphScope(dtoForCall, session, _username, preResolvedOwnerKey);
+                ChatWorkflow.captureControllerSearchReceipts(dtoForCall, controllerPrefetchStartedAtEpochMs, controllerPrefetchExecutionId);
                 ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
                 boolean finalAnswerMemorySaveAllowed =
                         !Boolean.FALSE.equals(TraceStore.get("finalAnswer.memorySaveAllowed"));
@@ -4497,10 +4507,17 @@ public class ChatApiController {
         GuardContext __preSearchCtx = GuardContextHolder.get();
         markCheapSearchMode(__preSearchCtx, effectiveSearchMode, "sync.preSearch");
         final String __providerSearchQuery = providerSearchQuery(dto.getMessage());
+        final var controllerPrefetchParent = TraceStore.context();
+        final var controllerPrefetchContext = TraceStore.searchContext(controllerPrefetchParent, "retrievalExecutionId");
+        final String controllerPrefetchExecutionId = (String) controllerPrefetchContext.get("retrievalExecutionId");
+        final long controllerPrefetchStartedAtEpochMs = System.currentTimeMillis();
         if (performSearch) {
             recordSearchModeRewriteHint(effectiveSearchMode);
         }
-        NaverSearchService.SearchResult sr = performSearch && !agentWebRequest && !__reusePriorWeb
+        NaverSearchService.SearchResult sr;
+        try {
+            TraceStore.installContext(controllerPrefetchContext);
+        sr = performSearch && !agentWebRequest && !__reusePriorWeb
                 ? webSearchProvider.searchWithTrace(__providerSearchQuery, topKParam)
                 : new NaverSearchService.SearchResult(List.of(), null);
         if (performSearch && !agentWebRequest && sr != null) {
@@ -4546,6 +4563,9 @@ public class ChatApiController {
             sr = new NaverSearchService.SearchResult(
                     rawSnips,
                     sr.trace());
+        }
+        } finally {
+            TraceStore.installContext(controllerPrefetchParent);
         }
         recordWebPrefetchTrace(
                 "sync",
@@ -4678,6 +4698,7 @@ public class ChatApiController {
         }
         dtoForCall.bindVerifiedRequestOwner(AttachmentOwnerIdentity.forActor(username, preResolvedOwnerKey));
         bindGeneralGraphScope(dtoForCall, session, username, preResolvedOwnerKey);
+        ChatWorkflow.captureControllerSearchReceipts(dtoForCall, controllerPrefetchStartedAtEpochMs, controllerPrefetchExecutionId);
         ChatResult result = chatService.continueChat(dtoForCall, __webSupplier);
         runRegistry.stageWebEvidence(syncRun, dtoForCall.getVerifiedRequestOwnerHash(), result.retainedWebEvidence());
         boolean finalAnswerMemorySaveAllowed =

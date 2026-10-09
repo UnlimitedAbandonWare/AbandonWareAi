@@ -13,9 +13,8 @@
     }
   },
   "allowedEnvRefs": [
-    "NAVER_KEYS",
-    "NAVER_CLIENT_ID",
-    "NAVER_CLIENT_SECRET",
+    "NAVER_APIHUB_CLIENT_ID",
+    "NAVER_APIHUB_CLIENT_SECRET",
     "SUPABASE_PROJECT_REF",
     "SUPABASE_ACCESS_TOKEN"
   ],

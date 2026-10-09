@@ -24,11 +24,15 @@ description: Use when a demo-1 Codex goal, objective, or acceptance check is don
    VERSION/CHANGELOG/RELEASE files.
 4. **Before declaring done**, pass the sentence you are about to report as
    completion through the goal-switch barrier:
-   `python -B scripts/demo1_goal_switch_barrier.py reject-complete --text "<claim>"`
+   `python -B scripts/demo1_goal_switch_barrier.py reject-complete --task <taskId> --text "<claim>" --latest-instruction-ref <currentUserRef> --expected-revision <currentRevision> --environment <verifiedHost>`
    — exit 0 required. A non-zero `instructional-not-acceptance` verdict (e.g.
    "Read AGENTS.md before continuing", `Use $skill`, a bare tool command) means
    it was a directive preamble, not an acceptance result: do NOT stop, keep
    working or report the blocker.
+   New/updated tasks use the existing state.md continuity contract. Delivery
+   failure also returns exit 5 even when the prose says tests passed. Read the
+   latest user instruction independently; do not derive current bindings solely
+   from old state. Legacy prose-only calls remain compatible, not delivery proof.
 5. Before the final, close this session's leases: `agent_scope_lease.py done --task <id>` (or `-Action end` with owner+fingerprint) for any claim/begin this session still holds — release on complete, defer, or abort alike; a leftover becomes the next session's stale cleanup.
 6. Give a short final: what changed, how verified, what remains (if any).
 7. **Stop.** Do not invent the next feature, do not keep "vibe continuing", do not open TLS/DAT/relay rabbit holes.

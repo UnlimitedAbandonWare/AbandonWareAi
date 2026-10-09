@@ -28,6 +28,7 @@ This skill owns only the work-type allowlist and the per-plugin contract.
 | Jev / AI Gateway | Superpowers, Vercel (auth·env·quota·evaluate docs only), Exa (official docs only), AWX, GLM assist (`$demo1-glm-route-guard`) | Vercel deploys/config changes, Ads, Browser admin repro |
 | Chat / RAG / Security | Superpowers, Browser (only that goal's HOLD/backend/admin scenario), GitHub (related diff), Exa (Spring Security official docs), AWX, GLM assist (`$demo1-glm-route-guard`) | Vercel when unrelated, Meta Wearables |
 | General Java edit | Superpowers, AWX, GitHub, GLM assist (`$demo1-glm-route-guard`), Computer (only if a Windows UI fact is decision-changing) | Browser is never mandatory |
+| Google Drive .docx 원본 편집(이력서·경력기술서) | Browser (Drive '편집하기' 탭) | 사본·다운로드·빈 문서 우회 금지 — 전 절차는 `$demo1-gdrive-docx-inplace-edit` |
 
 ## Per-plugin contract
 

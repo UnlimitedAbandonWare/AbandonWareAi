@@ -13,8 +13,10 @@ GrokBot workflow shapes (triage, PASTE anatomy, session texts): [grokbot-playboo
 Fragmentary-idea amplification (burst → adversarial → triad → THE ONE): [idea-burst-rubric](references/idea-burst-rubric.md).
 
 ## 0. Posture
-- Read-only on the repo and user files. The ONLY writes: the directive file in
-  %USERPROFILE%\Downloads\ (+ optional copies of referenced source docs next to it).
+- Read-only on product source and user files. Artifact writes follow sender role and stage:
+  only dot's final user-facing directive goes to the user's OS Downloads; reviews,
+  drafts, logs, and intermediate outputs use existing project report paths
+  (or `docs/reports/agent-reviews/<task-id>/` for a new report).
 - agy is a pure amplifier (STRICT_ZERO): never edits product source — ideas go
   out as directives for Codex/Devin/Grok/Clean. See `agy-korean-grokbot-role.md`.
 - No gradle, no app start, no paid/live API, no git mutation, no lease claim
@@ -108,9 +110,11 @@ Verify every FQCN/path/script you cite exists (Test-Path / Select-String) before
 ### 채팅 HOLD/검증 보류 지시서 체크 (2026-10-05 실수 재발 방지)
 - `applyEvidenceReleasePolicy`(근거 0 → 공개)와 `applyFinalVerificationReleaseGate`(검증 결과)를 분리해 적는다.
 - fail-soft/unknown(`markFailSoft`·`outcomeKnown=false`)은 "검증 실패"가 아니라 판정불능 — Codex 지시서에 `verification_unknown_release`(본문 유지·releaseAllowed=true·knowledgeWriteAllowed=false) 계약이 빠지면 반려. 상세 `docs/agents-rules/DEMO1-EVIDENCE-ZERO-RELEASE.md` fail-soft 절.
-- Codex 지시서는 Downloads + `scripts/brief_save.py` 경로로만 저장 — `src\agent-prompts\...\BRIEF.txt` 사본 금지, Devin용 lint 규격으로 Codex 브리프를 재저장하지 않는다.
+- dot의 최종 사용자 지시서만 Downloads + `scripts/brief_save.py` 경로로 저장 — `src\agent-prompts\...\BRIEF.txt` 사본 금지, Devin용 lint 규격으로 Codex 브리프를 재저장하지 않는다.
 
 ## 6. Save and verify
+
+- 아래 Downloads 저장 절차는 **dot가 전달하는 최종 사용자 지시서에만** 적용한다. Codex 리뷰·초안·로그·중간 산출물은 기존 프로젝트 보고서 경로를 사용한다. 대상 에이전트명·파일명은 Downloads 저장 권한이 아니다. SSOT: [delivery scope](../../../docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md).
 - Name: `PASTE_<TARGET>_<TOPIC>_<YYYYMMDD>.txt` (TARGET ∈ CODEX|DEVIN|GROK|CLEAN|GPTPRO|…, TOPIC UPPER_SNAKE).
   Never overwrite an existing file: if the name exists, add `_R2`, `_R3`.
 - **저장은 `scripts/brief_save.py`가 한다** (2026-10-02 인계 팩 §3, 2026-10-03 R6 갱신):

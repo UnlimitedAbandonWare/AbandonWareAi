@@ -34,7 +34,9 @@ def catalog(root):
             if not re.fullmatch(r'[A-Z][A-Z0-9_]{1,80}', name) or re.search('openssl|opnessl', name, re.I):
                 raise Conflict('protected-or-invalid-env-name')
     for name in value.get('runtimeEnvironmentNames', []):
-        if not re.fullmatch(r'CONVERSATE_[A-Z0-9_]{1,69}', name) or re.search('openssl|opnessl', name, re.I):
+        if (name not in {'NAVER_SEARCH_PROVIDER', 'NAVER_APIHUB_BASE_URL',
+                         'NAVER_SEARCH_API_BASE_URL', 'NAVER_APIHUB_APP_NAME'}
+                and not re.fullmatch(r'CONVERSATE_[A-Z0-9_]{1,69}', name)) or re.search('openssl|opnessl', name, re.I):
             raise Conflict('protected-or-invalid-env-name')
     return value
 

@@ -280,7 +280,7 @@ public class NovaFocusService implements AutoCloseable {
                     var sourceIds=accepted.sourceIds();
                     s.preparedContext=new NovaFocusHistoryService.Context(List.copyOf(s.recent),"",List.of(),
                         s.finalized.values().stream().filter(t->!sourceIds.contains(t.sourceId())).toList(),
-                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled(),accepted.webSearchEnabled());
+                        accepted.answerSelection(),accepted.settingsVersion(),accepted.answerLengthChars(),accepted.quickAnswerEnabled(),accepted.webSearchEnabled(),accepted.reasoningPreset());
                     s.preparedRequestId=accepted.requestId();
                 }
                 if(request!=null){
@@ -318,7 +318,8 @@ public class NovaFocusService implements AutoCloseable {
             });
             String answer=result.text();
             synchronized(s){
-                if(!s.state.accepts(request)||(memories!=null&&!memories.current(scope))){history.terminal(s.owner,s.channel,id,"CANCELLED",null);s.state.close("memory_changed");return;}
+                if(!s.state.accepts(request)){history.terminal(s.owner,s.channel,id,"CANCELLED",null);return;}
+                if(memories!=null&&!memories.current(scope)){history.terminal(s.owner,s.channel,id,"CANCELLED",null);s.state.close("memory_changed");return;}
                 s.answerDiagnostics=NovaFocusAnswerService.diagnosticTrace();
                 if(!s.state.foldPrefixMatches(answer))throw new IllegalStateException("focus_stream_final_mismatch");
                 if(history.terminal(s.owner,s.channel,id,"COMPLETED",answer)){

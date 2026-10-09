@@ -31,7 +31,7 @@
         try{await options.receipt?.(entry.name,entry.detail);entry.done=true;}catch{}finally{entry.sending=false;}
       }
     }
-    const flow=Flow.createFlow({host,element:options.answer,requestFrame:options.requestFrame,cancelFrame:options.cancelFrame,fitsLine:options.fitsLine,onEvent(name,detail){
+    const flow=Flow.createFlow({host,element:options.answer,retainAfterPresentation:options.target==='lens',requestFrame:options.requestFrame,cancelFrame:options.cancelFrame,fitsLine:options.fitsLine,onEvent(name,detail){
       // The ticket is passed only to the receipt request, never to diagnostics.
       options.diagnostic?.(name,{answerVersion:detail.answerVersion,mode:detail.mode});
       if((name==='first_visible'||name==='presentation_done')&&current?.renderTarget===options.target&&detail.renderReceiptTicket){

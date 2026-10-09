@@ -34,9 +34,8 @@ except ModuleNotFoundError:
 SCHEMA_VERSION = "awx.mcp.node_setup.v1"
 DESKTOP_CANONICAL = Path(_awx_resolve("repo.root"))
 ALLOWED_ENV_REFS = (
-    "NAVER_KEYS",
-    "NAVER_CLIENT_ID",
-    "NAVER_CLIENT_SECRET",
+    "NAVER_APIHUB_CLIENT_ID",
+    "NAVER_APIHUB_CLIENT_SECRET",
 )
 SECRET_RE = re.compile(
     r"sk-[A-Za-z0-9_-]{20,}|AIza[A-Za-z0-9_-]{20,}|gsk_[A-Za-z0-9_-]{20,}|"

@@ -311,9 +311,8 @@ $envNames = @(
     "LLM_BASE_URL",
     "LLM_CHAT_MODEL",
     "LLM_API_KEY",
-    "NAVER_KEYS",
-    "NAVER_CLIENT_ID",
-    "NAVER_CLIENT_SECRET",
+    "NAVER_APIHUB_CLIENT_ID",
+    "NAVER_APIHUB_CLIENT_SECRET",
     "BRAVE_API_KEY",
     "SERPAPI_API_KEY",
     "TAVILY_API_KEY",
@@ -335,7 +334,7 @@ try {
     New-Item -ItemType Directory -Force -Path $env:GRADLE_USER_HOME, $ProjectCacheDir | Out-Null
 
     if (-not $AssumeRunning) {
-        $env:SPRING_APPLICATION_JSON = '{"naver":{"keys":"","client-id":"","client-secret":""}}'
+        $env:SPRING_APPLICATION_JSON = '{"naver":{"keys":"","client-id":"","client-secret":"","apihub":{"client-id":"","client-secret":""}}}'
         $env:SPRING_PROFILES_ACTIVE = "local"
         $env:SERVER_PORT = [string]$Port
         $env:MANAGEMENT_SERVER_PORT = [string]$ManagementPort
@@ -355,9 +354,8 @@ try {
         $env:LLM_CHAT_MODEL = $Model
     }
     $env:LLM_API_KEY = ""
-    $env:NAVER_KEYS = ""
-    $env:NAVER_CLIENT_ID = ""
-    $env:NAVER_CLIENT_SECRET = ""
+    $env:NAVER_APIHUB_CLIENT_ID = ""
+    $env:NAVER_APIHUB_CLIENT_SECRET = ""
     $env:BRAVE_API_KEY = ""
     $env:SERPAPI_API_KEY = ""
     $env:TAVILY_API_KEY = ""

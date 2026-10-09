@@ -282,6 +282,10 @@ public class ChatModelCatalogService {
         }
         metadata.put("googleSearchSupported","supported".equals(reason));
         metadata.put("googleSearchReason",reason);
+        boolean reasoning="gemini".equalsIgnoreCase(provider)&&cfg!=null
+                &&java.util.Objects.equals(model,cfg.getName())&&com.example.lms.learning.gemini.GeminiGateway.focusReasoningSupported(model);
+        metadata.put("focusReasoningSupported",reasoning);
+        metadata.put("focusReasoningReason",reasoning?"supported":"provider_model_contract_unverified");
         return Map.copyOf(metadata);
     }
 

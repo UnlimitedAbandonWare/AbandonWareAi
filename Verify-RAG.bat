@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" begin "%~nx0" %*
 title AbandonWare RAG Verify (dev)
 rem Headless/agent mode: AWX_RAG_JSON=1, AWX_AGENT or CI appends -JsonStdout so
 rem the PowerShell stage emits exactly one JSON document on stdout, and pause is
@@ -24,4 +25,5 @@ if defined RAG_JSON_ARG (
   if not "%RAG_VRF_EXIT%"=="0" echo [RESULT] RAG verify exit code: %RAG_VRF_EXIT% ^(0=verified, 3=not-running, 6=checks-failed, 1=tool error^). See [DBG ...] output above and var\debug\ logs.
 )
 if defined RAG_PAUSE pause
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %RAG_VRF_EXIT%
 exit /b %RAG_VRF_EXIT%

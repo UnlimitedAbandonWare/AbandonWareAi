@@ -3725,7 +3725,9 @@ exit 0
         allowed_refs = config["allowedEnvRefs"]
         self.assertIn("SUPABASE_PROJECT_REF", allowed_refs)
         self.assertIn("SUPABASE_ACCESS_TOKEN", allowed_refs)
-        self.assertIn("NAVER_KEYS", allowed_refs)
+        self.assertIn("NAVER_APIHUB_CLIENT_ID", allowed_refs)
+        self.assertIn("NAVER_APIHUB_CLIENT_SECRET", allowed_refs)
+        self.assertNotIn("NAVER_KEYS", allowed_refs)
         self.assertNotIn("Bearer ", config_text)
         self.assertNotIn("service_role", config_text)
         self.assertNotRegex(

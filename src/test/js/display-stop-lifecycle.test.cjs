@@ -80,7 +80,7 @@ test('pagehide and bfcache restore never restart capture before an explicit star
   let active=true;
   const voice={isActive:()=>active,stop(){counts.stop++;active=false;return Promise.resolve();},start(){counts.start++;active=true;return Promise.resolve();},reconnect(){return Promise.resolve();}};
   const client={dispose(){counts.dispose++;},start(){counts.connectionStart++;}};
-  vm.runInNewContext(source.slice(begin,end),{window:{addEventListener:(name,fn)=>handlers.set(name,fn)},voice,client,clearTimeout(){},codeTimer:null,lensRestoreTimer:null});
+  vm.runInNewContext(source.slice(begin,end),{window:{addEventListener:(name,fn)=>handlers.set(name,fn)},voice,client,saveResumeIntent(){},resumeAllowed:true,resumeAttempt:0,clearTimeout(){},codeTimer:null,lensRestoreTimer:null});
   handlers.get('pagehide')();await flush();
   assert.equal(counts.stop,1);assert.equal(counts.dispose,1);assert.equal(active,false);
   handlers.get('pageshow')({persisted:true});await flush();

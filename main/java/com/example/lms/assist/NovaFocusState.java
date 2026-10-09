@@ -5,7 +5,10 @@ import java.util.*;
 /** Pure, clock-driven Focus state; callers serialize access per assist session. */
 final class NovaFocusState {
     record Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,
-                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled) {
+                   NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,int answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled,NovaFocusSettings.ReasoningPreset reasoningPreset) {
+        Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version,int length,boolean quick,Boolean web){
+            this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,selection,version,length,quick,web,NovaFocusSettings.ReasoningPreset.STANDARD);
+        }
         Request(String activationId,String requestId,String question,String imageBase64,String imageMediaType,Set<String> sourceIds,NovaFocusSettings.AnswerSelection selection,long version,int length,boolean quick){
             this(activationId,requestId,question,imageBase64,imageMediaType,sourceIds,selection,version,length,quick,null);
         }
@@ -42,7 +45,7 @@ final class NovaFocusState {
         @com.fasterxml.jackson.annotation.JsonProperty("answerPrefixStable")
         public boolean answerPrefixStable(){return !answerComplete;}
         View forTarget(String surface){boolean lens="lens".equals(surface);
-            String visible=lens&&!answerComplete?"":lens&&grounding!=null?"검색 답변은 휴대폰에서 확인하세요.":lens?NovaFocusAnswerService.boundDisplay(answerText,answerLengthChars):answerText;
+            String visible=lens&&grounding!=null?"검색 답변은 휴대폰에서 확인하세요.":lens?NovaFocusAnswerService.lensText(answerText,answerComplete):answerText;
             boolean clipped=answerTruncated||!Objects.equals(visible,answerText);
             return new View(serverInstanceId,activationId,turnId,stateVersion,answerVersion,active,phase,draftText,questionText,visible,renderTarget,renderTarget.equals(surface)?renderReceiptTicket:null,idleRemainingMs,reason,presentation,clipped,clipped,answerLengthChars,lens?null:grounding,answerComplete);}
     }
@@ -179,7 +182,7 @@ final class NovaFocusState {
         if(phase.equals("SNAPSHOT")&&!snapshotReady&&now>=snapshotUntil)snapshotFailed("snapshot_timeout",now);
         if(capacity&&phase.equals("SNAPSHOT")&&snapshotReady){
             var request=new Request(activation,pendingRequest.requestId(),pendingRequest.question(),snapshotImageBase64,snapshotImageMediaType,pendingRequest.sourceIds(),
-                pendingRequest.answerSelection(),pendingRequest.settingsVersion(),pendingRequest.answerLengthChars(),pendingRequest.quickAnswerEnabled(),pendingRequest.webSearchEnabled());
+                pendingRequest.answerSelection(),pendingRequest.settingsVersion(),pendingRequest.answerLengthChars(),pendingRequest.quickAnswerEnabled(),pendingRequest.webSearchEnabled(),pendingRequest.reasoningPreset());
             pendingRequest=null;snapshotImageBase64=null;snapshotImageMediaType=null;clearCapture();snapshotReady=false;
             phase="THINKING";inFlight=true;inFlightRequest=request.requestId();generationUntil=now+90000;version++;return request;
         }
@@ -188,7 +191,7 @@ final class NovaFocusState {
             String source=String.join("\n",draftKeys);
             String requestKey=NovaFocusHistoryService.digest((draftKeys.size()==1&&source.startsWith("typed-")?"typed:":"")+source);
             var request=new Request(activation,requestKey,question,null,null,draftKeys.stream().map(NovaFocusHistoryService::digest).collect(java.util.stream.Collectors.toSet()),
-                settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer(),settings.webSearchEnabled());
+                settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer(),settings.webSearchEnabled(),settings.effectiveReasoningPreset());
             runPresentation=settings.effectivePresentation();
             committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
             draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";

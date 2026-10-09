@@ -49,6 +49,10 @@ public class ConversateAnswerPipeline {
     public Outcome answerPublicDisplay(String question,List<String> context,long now,String requestId){
         return answerLive(question,context,List.of(),now,"glasses_input",requestId,true,false);
     }
+    public Outcome answerPublicDisplay(String question,List<String> context,long now,String requestId,boolean forceHint,LensDisplayPrefs.AutoVoiceTrigger options){
+        if(cues!=null)return cues.answer(question,context,List.of(),true,forceHint,options.hintChars(),null,options);
+        return answerLive(question,context,List.of(),now,"glasses_input",requestId,true,forceHint,options.hintChars());
+    }
     public Outcome answerPublicDisplayDirect(String question,String requestId){
         return cues==null?new Outcome("OPENAI_DIRECT_ERROR",null):cues.answerDirectOpenAi(question,requestId);
     }

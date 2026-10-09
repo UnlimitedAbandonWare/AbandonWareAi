@@ -14,13 +14,13 @@ function transport(handler,options={}){
 }
 function capture(start=async()=>{},options={}){
   let time=0,n=0,acquisitions=0,starts=0,stops=0;
-  const nodes=[],tracks=[],sent=[],constraints=[],timers=new Map(),permission={state:'granted',addEventListener(_name,fn){this.listener=fn;},removeEventListener(){this.listener=null;}};
+  const nodes=[],sources=[],tracks=[],sent=[],constraints=[],timers=new Map(),permission={state:'granted',addEventListener(_name,fn){this.listener=fn;},removeEventListener(){this.listener=null;}};
   const stream=()=>{const track={readyState:'live',label:'synthetic',getSettings:()=>({deviceId:'input-one'}),stop(){this.readyState='ended';}};
     tracks.push(track);return{getTracks:()=>[track],getAudioTracks:()=>[track]};};
   class Context{
     constructor(){this.state='running';this.sampleRate=48000;this.destination={};this.audioWorklet={addModule:async()=>{}};}
     async resume(){this.state='running';}async close(){this.state='closed';}
-    createMediaStreamSource(){return{connect:node=>node,disconnect(){}};}createGain(){return{gain:{value:1},connect(){}};}
+    createMediaStreamSource(media){const source={media,disconnects:0,connect:node=>node,disconnect(){this.disconnects++;}};sources.push(source);return source;}createGain(){return{gain:{value:1},connect(){}};}
   }
   class Worklet{constructor(){this.port={postMessage(){}};nodes.push(this);}connect(node){return node;}disconnect(){}}
   const client={state:{audioAvailable:true,role:'STANDALONE',audioFinished:true,audioRenewAfterMs:60000,connection:'READY'},
@@ -31,11 +31,97 @@ function capture(start=async()=>{},options={}){
       getUserMedia:async args=>{constraints.push(args);acquisitions++;return stream();},enumerateDevices:async()=>[{kind:'audioinput',deviceId:'input-one'}]}}};
   const voice=createCapture({client,env,continuous:true,now:()=>time,...options,
     setTimer(fn,ms){timers.set(++n,{fn,ms,due:time+ms});return n;},clearTimer:k=>timers.delete(k)});
-  return{voice,client,env,nodes,tracks,sent,timers,permission,constraints,get starts(){return starts;},get acquisitions(){return acquisitions;},
+  return{voice,client,env,nodes,sources,tracks,sent,timers,permission,constraints,get starts(){return starts;},get acquisitions(){return acquisitions;},
     pcm(marker=1000){const samples=new Int16Array(320);samples.fill(marker);nodes.at(-1).port.onmessage({data:{pcm:samples.buffer}});},
     async advance(ms){time+=ms;for(const[k,timer]of [...timers].sort((a,b)=>a[1].due-b[1].due)){if(timer.due<=time&&timers.delete(k))timer.fn();}await flush();await flush();}
   };
 }
+
+// Execute the real app across two documents, retaining only tab sessionStorage.
+function reloadApp({store=new Map(),permission='granted',initial={},time=1000,permissionGate}={}){
+  const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+  const nodes=new Map(),handlers=new Map();let f,clientOptions;
+  const storage={getItem:key=>store.get(key)||null,setItem:(key,value)=>store.set(key,value),removeItem:key=>store.delete(key)};
+  const document={body:{hasAttribute:()=>true},visibilityState:'visible',hidden:false,addEventListener(){},
+    getElementById(key){if(!nodes.has(key))nodes.set(key,{value:'',hidden:true,checked:false,style:{setProperty(){}},classList:{toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},focus(){},add(){},replaceChildren(){}});return nodes.get(key);}};
+  const client={state:{assistId:id,epoch:2,version:2,connection:'READY',ready:true,role:'STANDALONE',audioAvailable:true,audioFinished:true,testStatus:{relay:{eventOwner:'THIS DEVICE',segmentSeconds:0}},...initial},
+    start(){clientOptions.onChange(this.state);},pause(){},dispose(){},storedLensLink:()=>null,async acknowledge(){},async relaySettings(){}};
+  const navigator={permissions:permission===null?undefined:{query:()=>permissionGate?.promise||Promise.resolve({state:permission})}};
+  vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../../main/resources/static/assets/display/app.js'),'utf8'),{
+    document,navigator,location:{search:''},URLSearchParams,Date:{now:()=>time},crypto:{randomUUID:()=>id},sessionStorage:storage,localStorage:{getItem:()=>null},
+    window:{location:{search:''},DisplayCore:require('../../../main/resources/static/assets/display/display-core.js'),
+      DisplayConversate:{createClient(options){clientOptions=options;return client;}},
+      DisplayVoice:{createCapture(options){f=capture(undefined,{onChange:options.onChange});Object.assign(f.client.state,client.state);return f.voice;}},addEventListener:(name,fn)=>handlers.set(name,fn)},
+    requestAnimationFrame(){},setTimeout:()=>1,clearTimeout(){}});
+  return{f,store,nodes,handlers,client,update(patch){Object.assign(client.state,patch);clientOptions.onChange(client.state);}};
+}
+test('reload resume intent auto starts a continuation only after same-session ownership and granted permission',async()=>{
+  const first=reloadApp();await first.f.voice.start();first.handlers.get('pagehide')();await flush();
+  const second=reloadApp({store:first.store,initial:{ready:false}});await flush();assert.equal(second.f.acquisitions,0);
+  second.update({ready:true});await flush();await flush();
+  try{assert.equal(second.f.acquisitions,1);assert.equal(second.f.voice.isActive(),true);assert.equal(second.store.size,0);}
+  finally{await second.f.voice.stop();}
+});
+test('explicit stop leaves no resume intent and reload cannot record automatically',async()=>{
+  const first=reloadApp();await first.f.voice.start();await first.f.voice.stop();first.handlers.get('pagehide')();await flush();
+  const second=reloadApp({store:first.store});await flush();assert.equal(second.store.size,0);assert.equal(second.f.acquisitions,0);
+});
+test('persisted pageshow does not consume resume intent or automatically start the microphone',async()=>{
+  const app=reloadApp();await app.f.voice.start();app.handlers.get('pagehide')();await flush();
+  const saved=[...app.store];assert.equal(saved.length,1);
+  app.handlers.get('pageshow')({persisted:true});await flush();assert.deepEqual([...app.store],saved);assert.equal(app.f.acquisitions,1);assert.equal(app.f.voice.isActive(),false);
+});
+test('prompt denied and unsupported permission consume intent and leave a one-tap resume button',async()=>{
+  for(const permission of ['prompt','denied',null]){
+    const first=reloadApp();await first.f.voice.start();first.handlers.get('pagehide')();await flush();
+    const second=reloadApp({store:first.store,permission});await flush();await flush();
+    assert.equal(second.f.acquisitions,0);assert.equal(second.store.size,0);assert.equal(second.nodes.get('microphone').textContent,'폴드6 수음 재개');
+    second.nodes.get('microphone').onclick();await flush();await flush();assert.equal(second.f.acquisitions,1);await second.f.voice.stop();
+  }
+});
+test('expired different-session and auto-voice resume intentions never auto-start capture',async()=>{
+  for(const initial of [{assistId:'87654321-4321-4321-8321-abcdef123456'},{autoVoiceSettings:{modeEnabled:true}},{}]){
+    const first=reloadApp();await first.f.voice.start();first.handlers.get('pagehide')();await flush();
+    const second=reloadApp({store:first.store,initial,time:Object.keys(initial).length?2000:61001});await flush();
+    assert.equal(second.f.acquisitions,0);assert.equal(second.store.size,0);
+  }
+});
+test('pagehide while permission is being checked fences a late automatic resume',async()=>{
+  const first=reloadApp();await first.f.voice.start();first.handlers.get('pagehide')();await flush();
+  const gate=deferred(),second=reloadApp({store:first.store,permissionGate:gate});await flush();second.handlers.get('pagehide')();
+  gate.resolve({state:'granted'});await flush();assert.equal(second.f.acquisitions,0);
+});
+test('explicit stop or finish while reload permission is pending prevents late capture',async()=>{
+  for(const button of ['stop','finish']){
+    const first=reloadApp();await first.f.voice.start();first.handlers.get('pagehide')();await flush();
+    const gate=deferred(),second=reloadApp({store:first.store,permissionGate:gate});await flush();
+    await second.nodes.get(button).onclick();gate.resolve({state:'granted'});await flush();await flush();
+    try{assert.equal(second.f.acquisitions,0,button+' must cancel a pending reload resume');}
+    finally{await second.f.voice.stop();}
+  }
+});
+test('server begin and chunk failure diagnostics identify the stage without recording audio or response text',async()=>{
+  const f=capture(()=>{throw Object.assign(Error('display-timeout'),{status:0});}),reported=[];
+  f.client.state.epoch=7;f.client.captureDiagnostic=async event=>reported.push(event);f.client.reconnect=async()=>{};
+  try{
+    await f.voice.start();assert.equal(reported[0]?.stage,'server_begin');assert.equal(reported[0]?.httpStatus,0);assert.equal(reported[0]?.epoch,7);
+    f.client.beginVoice=async()=>{};await f.voice.reconnect();
+    f.client.voiceChunk=async()=>{throw Object.assign(Error('event_owner_required'),{status:403});};f.pcm();await flush();await flush();
+    const event=reported.find(e=>e.stage==='transport');assert.equal(event?.httpStatus,403);assert.equal(event?.producerMismatch,true);
+    for(const row of reported)for(const forbidden of ['pcm','text','body','transcript','grant','cookie','authorization'])assert.equal(Object.hasOwn(row,forbidden),false);
+  }finally{await f.voice.stop();}
+});
+test('capture diagnostics use the existing endpoint with an allowlisted payload and an abort deadline',async()=>{
+  const f=transport(()=>view());
+  try{
+    assert.equal(typeof f.client.captureDiagnostic,'function');
+    await f.client.captureDiagnostic({stage:'transport',httpStatus:503,epoch:2,producerMismatch:false,lastFrameAgeMs:42,errorCode:'audio_transport_failed',pcm:'private',body:'private',grant:'private'});
+    const call=f.calls.find(c=>c.route==='relay/diagnostics');assert.equal(call.body.event,'capture_error');assert.equal(call.body.code,'http_503');
+    assert.equal(call.body.stage,'transport');assert.equal(call.body.lastFrameAgeMs,42);
+    for(const forbidden of ['pcm','body','grant'])assert.equal(Object.hasOwn(call.body,forbidden),false);
+    assert.equal(f.timers.size,0);
+  }finally{f.client.dispose();}
+});
 
 test('session preparation has its own deadline instead of the ordinary four-second request limit',async()=>{
   const gate=deferred(),f=transport(route=>route==='bootstrap'?gate.promise:view());
@@ -141,6 +227,57 @@ test('device recovery preserves the selected input constraint',async()=>{
  try{await f.voice.start();f.tracks[0].readyState='ended';f.tracks[0].onended();await flush();await flush();
    assert.equal(f.acquisitions,2);for(const args of f.constraints)assert.deepEqual(args.audio.deviceId,{exact:'selected-input'});
  }finally{await f.voice.stop();}
+});
+
+test('concurrent ended-track recovery rebinds one selected input without duplicating the graph or PCM',async()=>{
+ const f=capture(undefined,{deviceId:()=> 'selected-input'});
+ try{
+   await f.voice.start();f.pcm(1000);await flush();
+   const ended=f.tracks[0].onended;f.tracks[0].readyState='ended';ended();ended();
+   await f.voice.deviceChanged();await flush();
+   assert.equal(f.acquisitions,2,'concurrent notifications must share one reacquisition');
+   assert.equal(f.sources.length,2);assert.equal(f.sources[0].disconnects,1);
+   assert.equal(f.sources[1].media.getAudioTracks()[0],f.tracks[1]);
+   assert.equal(f.tracks.filter(track=>track.readyState==='live').length,1);
+   assert.equal(f.tracks[0].onended,null);
+   assert.equal(f.nodes.length,1,'input recovery preserves the existing worklet');
+   assert.equal(f.starts,1,'input recovery preserves the healthy server segment');
+   for(const args of f.constraints)assert.deepEqual(args.audio.deviceId,{exact:'selected-input'});
+   f.pcm(2000);await flush();
+   assert.deepEqual(f.sent,[{sequence:0,marker:1000},{sequence:1,marker:2000}]);
+ }finally{await f.voice.stop();}
+});
+
+test('Stop during input reacquisition fences late worklet PCM and every recovery timer',async()=>{
+ const f=capture(),gate=deferred();let disposed=0;
+ try{
+   await f.voice.start();const oldNode=f.nodes[0];
+   f.env.navigator.mediaDevices.getUserMedia=()=>gate.promise;
+   f.tracks[0].readyState='ended';f.tracks[0].onended();await flush();
+   await f.voice.stop();
+   const emit=()=>{const samples=new Int16Array(320);samples.fill(3000);oldNode.port.onmessage({data:{pcm:samples.buffer}});};
+   emit();gate.resolve({getTracks:()=>[{stop(){disposed++;}}]});await flush();await flush();
+   await f.advance(120000);emit();await flush();
+   assert.equal(disposed,1);assert.equal(f.voice.isActive(),false);
+   assert.equal(f.starts,1);assert.equal(f.acquisitions,1);assert.equal(f.timers.size,0);
+   assert.deepEqual(f.sent,[],'stopped graph callbacks must not transmit PCM');
+ }finally{gate.resolve({getTracks:()=>[]});await f.voice.stop();}
+});
+
+test('an explicit new Start survives the old reacquisition and rejects the old worklet callback',async()=>{
+ const f=capture(),gate=deferred();let disposed=0;
+ try{
+   await f.voice.start();const oldNode=f.nodes[0],getUserMedia=f.env.navigator.mediaDevices.getUserMedia;
+   f.env.navigator.mediaDevices.getUserMedia=()=>gate.promise;
+   f.tracks[0].readyState='ended';f.tracks[0].onended();await flush();await f.voice.stop();
+   f.env.navigator.mediaDevices.getUserMedia=getUserMedia;await f.voice.start();
+   gate.resolve({getTracks:()=>[{stop(){disposed++;}}]});await flush();await flush();
+   const samples=new Int16Array(320);samples.fill(3000);oldNode.port.onmessage({data:{pcm:samples.buffer}});
+   f.pcm(4000);await flush();
+   assert.equal(disposed,1);assert.equal(f.starts,2);assert.equal(f.acquisitions,2);
+   assert.equal(f.voice.isActive(),true);assert.equal(f.tracks[1].readyState,'live');
+   assert.deepEqual(f.sent,[{sequence:0,marker:4000}]);
+ }finally{gate.resolve({getTracks:()=>[]});await f.voice.stop();}
 });
 test('failed readiness after epoch renewal cleans only the returned audio epoch',async()=>{
  const f=transport(route=>route==='audio/start'?view({epoch:2,audioState:'WAITING'}):view());

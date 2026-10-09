@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" begin "%~nx0" %*
 title AbandonWare Meta Display Debug (wear)
 rem Headless/agent mode: AWX_RAG_JSON=1, AWX_AGENT or CI appends -JsonStdout so
 rem the PowerShell stage emits exactly one JSON document on stdout, and pause is
@@ -24,4 +25,5 @@ if defined RAG_JSON_ARG (
   if not "%DISPLAY_DBG_EXIT%"=="0" echo [RESULT] Meta Display debug exit code: %DISPLAY_DBG_EXIT% ^(0=ready/verified, 2=blocked, 3=not-running, 4=degraded, 5=verbose-not-applied, 6=verify-checks-failed, 1=failed^). See [DBG ...] output above and var\debug\ logs.
 )
 if defined RAG_PAUSE pause
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %DISPLAY_DBG_EXIT%
 exit /b %DISPLAY_DBG_EXIT%

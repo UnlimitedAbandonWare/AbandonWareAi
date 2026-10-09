@@ -88,6 +88,13 @@
     function jevReasonLabel(code){const key=String(code||'');const text=jevReasonText[key];return text?text+' ('+key+')':(key?'대기('+key+')':'대기');}
     function notice(error){const text=messages[error?.message]||'연결과 입력 범위를 확인해 주세요.';$('nf-status').textContent=text;const alert=$('error');if(alert)alert.textContent=text;}
     function modelStatus(){
+      const selectedReasoningModel=$('nf-answer-model')?.value||'';
+      const reasoningRow=catalogRows.find(row=>row.id===selectedReasoningModel);
+      const reasoningSupported=reasoningRow?.metadata?.focusReasoningSupported===true;
+      if($('nf-reasoning'))$('nf-reasoning').disabled=!reasoningSupported;
+      if($('nf-reasoning-status'))$('nf-reasoning-status').textContent=reasoningSupported?
+        'Fast → low · Standard → medium · Deep → high. 다음 질문부터 적용됩니다.':
+        '이 모델의 추론 깊이 지원을 확인하지 못했습니다. 저장한 선호는 유지하며 미지원 옵션은 전송하지 않습니다.';
       const output=$('nf-model-status');if(!output)return;
       const selected=$('nf-answer-model')?.value,row=catalogRows.find(value=>value.id===selected);
       const exclusive=$('nf-answer-target')?.value==='GEMINI_WEBSEARCH_ONLY';
@@ -150,7 +157,8 @@
       finally{host.clearTimeout?.(timer);if(generation===catalogGeneration){catalogBusy=false;catalogAbort=null;}}
     }
     function paintSettings(value){
-      value={...value,settings:{...value.settings,answerLengthChars:value.settings?.answerLengthChars??400,quickAnswerEnabled:value.settings?.quickAnswerEnabled??false}};
+      value={...value,settings:{...value.settings,answerLengthChars:value.settings?.answerLengthChars??400,quickAnswerEnabled:value.settings?.quickAnswerEnabled??false,reasoningPreset:value.settings?.reasoningPreset??'STANDARD'}};
+      if($('nf-reasoning'))$('nf-reasoning').value=value.settings.reasoningPreset;
       stored=value;
       for(const [key,id] of Object.entries(fields)){const e=$(id);if(flags.has(key))e.checked=!!value.settings[key];else e.value=value.settings[key];}
       syncLengthPreset();
@@ -308,6 +316,7 @@
         if(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(Number(rawLength))||Number(rawLength)<80||Number(rawLength)>800)throw Error('invalid_nova_settings');
         for(const [key,id] of Object.entries(fields)){const e=$(id);settings[key]=flags.has(key)?!!e.checked:key==='wakeWord'?e.value:Number(e.value);}
         if($('nf-web-search')&&$('nf-web-search').value!=='')settings.webSearchEnabled=$('nf-web-search').value==='true';
+        if($('nf-reasoning'))settings.reasoningPreset=$('nf-reasoning').value;
         for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value);}
         if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR'};
         if($('nf-answer-model')){

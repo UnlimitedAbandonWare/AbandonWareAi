@@ -58,7 +58,7 @@ REQUIRED_AUDIT_FIELDS = [
     "decision",
     "failReason",
 ]
-ALLOWED_ENV_REFS = ["NAVER_KEYS", "NAVER_CLIENT_ID", "NAVER_CLIENT_SECRET"]
+ALLOWED_ENV_REFS = ["NAVER_APIHUB_CLIENT_ID", "NAVER_APIHUB_CLIENT_SECRET"]
 CHAT_DEBUG_EVENTS_SAFE_NEXT_ACTIONS = {
     "prefer_native_ollama_route",
     "inspect_ollama_runtime_capacity",

@@ -167,11 +167,15 @@ public class KeyResolver {
 
     /**
      * Resolve Naver credentials through the standard fail-soft ladder:
+     * API HUB pair (naver.apihub.client-id/secret, NAVER_APIHUB_CLIENT_ID/
+     * NAVER_APIHUB_CLIENT_SECRET) via ProviderCredentialResolver first, then
      * naver.keys, NAVER_KEYS, then naver.client-id/naver.client-secret.
      */
     public String resolveNaverKeysCsvSafe() {
         String clientId = firstTrimmed("naver.client-id", "NAVER_CLIENT_ID");
         String clientSecret = firstTrimmed("naver.client-secret", "NAVER_CLIENT_SECRET");
+        String hubClientId = firstTrimmed("naver.apihub.client-id", "NAVER_APIHUB_CLIENT_ID");
+        String hubClientSecret = firstTrimmed("naver.apihub.client-secret", "NAVER_APIHUB_CLIENT_SECRET");
         ProviderCredentialResolver.Resolution resolution = providerCredentialResolver
                 .resolve(ProviderCredentialResolver.Provider.NAVER);
         String resolved = resolution.valueOrNull();
@@ -180,7 +184,9 @@ public class KeyResolver {
         traceNaverCredentialResolution(
                 naverSourceName(resolution),
                 keysPresent,
-                !ConfigValueGuards.isMissing(clientId) && !ConfigValueGuards.isMissing(clientSecret),
+                (!ConfigValueGuards.isMissing(clientId) && !ConfigValueGuards.isMissing(clientSecret))
+                        || (!ConfigValueGuards.isMissing(hubClientId)
+                                && !ConfigValueGuards.isMissing(hubClientSecret)),
                 NaverCredentialBridge.countCredentialPairs(resolved),
                 keysPresent ? "" : naverDisabledReason(resolution));
         return resolved == null ? "" : resolved;

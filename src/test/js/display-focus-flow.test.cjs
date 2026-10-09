@@ -56,6 +56,13 @@ test('nonsequential completed answer begins displaying within two frames',()=>{
  f.step(20);f.step(20);assert.ok(f.flow.state().index>0);f.step(20);
  assert.equal(f.events.filter(e=>e.name==='first_visible').length,1);
 });
+test('nonsequential ready lines appear without an artificial provider-sized wait',()=>{
+ const f=fixture();f.flow.accept(snapshot('가'.repeat(48),{presentation:{sequentialTextEnabled:false,autoFadeEnabled:false}}));f.run(200);
+ assert.equal(f.flow.state().index,48);
+ assert.equal(f.events.filter(e=>e.name==='first_useful_visible').length,1);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+ assert.ok(f.events.find(e=>e.name==='presentation_done').at<=200);
+});
 test('no auto fade still completes and idles without animation work',()=>{
  const f=fixture();f.flow.accept(snapshot('마지막은 5mg가 아닙니다.',{presentation:{autoFadeEnabled:false}}));f.run(6000);assert.equal(f.flow.state().done,true);assert.equal(f.paints.at(-1).opacity,1);assert.equal(f.pending.size,0);
 });

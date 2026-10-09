@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
 <title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
-<script src="display-core.js" defer></script><script src="display-conversate.js?v=audio-policy-0926" defer></script><script src="display-voice.js?v=fold6-mic-1" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-model-preset-20261006" defer></script><script src="app.js?v=fold6-mic-1" defer></script>
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=auto-voice-20261008" defer></script><script src="display-voice.js?v=auto-voice-20261008" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-snapshot-1" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-model-preset-20261006" defer></script><script src="app.js?v=auto-voice-20261008" defer></script>
 <style>
 #app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
 #app > * { margin-bottom:16px; }
@@ -68,6 +68,27 @@
 </section>
 <section id="nova-history" hidden aria-label="노바 처리 기록"><h2>노바 처리 기록</h2><p>질문·답변 원문은 저장하지 않습니다.</p><div id="nova-history-list"></div><button id="nova-history-older" class="focusable" type="button">이전 처리</button><button id="nova-history-close" class="focusable" type="button">기록 닫기</button></section>
 <details id="advanced-settings"><summary class="focusable" tabindex="0">연결·입력 설정</summary>
+<section id="auto-voice-settings" aria-label="자동 음성 시작 설정">
+<h2>자동 음성 시작</h2>
+<p>준비 후 등록 문구가 확정 전사에 포함되면 대화 힌트를 시작합니다. 준비 중에는 힌트를 생성하지 않습니다. 짧은 문구는 우연히 일치할 수 있습니다.</p>
+<div class="lens-grid">
+<label for="av-mode">자동 시작 모드</label><input id="av-mode" type="checkbox">
+<label for="av-hints">활성화 후 힌트 표시</label><input id="av-hints" type="checkbox" checked>
+<label for="av-language">수음·힌트 언어</label><select id="av-language"><option value="ko">한국어</option><option value="en">English · Soniox 전용</option></select>
+<label for="av-preset">대화 목적</label><select id="av-preset"><option value="general">일반 대화</option><option value="interview">면접</option></select>
+<label for="av-lines">힌트 최대 줄 수 (3~9)</label><input id="av-lines" type="number" min="3" max="9" step="1" value="3">
+<label for="av-chars">힌트 최대 글자 수 (200~500)</label><input id="av-chars" type="number" min="200" max="500" step="1" value="200">
+</div>
+<div id="av-phrases"></div><button id="av-add" type="button">문구 추가</button>
+<button id="av-aliases" type="button">예시 호출어 추가 · 노바 / Nova</button>
+<button id="av-save" type="button">자동 시작 설정 저장</button><button id="av-reset" type="button">이 설정만 기본값으로 복원</button>
+<p>최대 64개, 문구당 128자입니다. 저장과 새로고침만으로 마이크를 켜지 않습니다. 영어는 전사 엔진을 Soniox로 선택하세요. 줄·글자 수는 상한이며 실제 화면에 맞춰 200자보다 짧은 완성 문장으로 표시할 수 있습니다. 준비 중에도 전사가 작동하므로 클라우드 비용 또는 로컬 처리 지연이 발생할 수 있습니다.</p>
+<label for="av-test-input">문구 일치 확인 · 이 기기에서만 검사</label><input id="av-test-input" autocomplete="off"><button id="av-test" type="button">일치 확인</button><p id="av-test-result" role="status"></p>
+<label><input id="av-informed" type="checkbox">함께 대화하는 사람에게 수음을 알렸습니다.</label>
+<label><input id="av-consent" type="checkbox">이번 세션에서 마이크 수음과 선택한 전사 서비스 사용에 동의합니다.</label>
+<div class="actions"><button id="av-prepare" type="button">자동 시작 준비 · 마이크 켜기</button><button id="av-stop" type="button">즉시 중지</button></div>
+<p id="av-status" role="status">DISARMED · 직접 준비하기 전에는 수음하지 않습니다.</p>
+</section>
 <details id="nova-settings"><summary class="focusable" tabindex="0">노바 대화 설정</summary>
 <form id="nova-settings-form"><div class="lens-grid">
 <label for="nf-enabled">노바 음성 호출</label><input id="nf-enabled" class="focusable" type="checkbox">
@@ -83,6 +104,8 @@
 <label for="nf-answer-target">답변 실행 경로</label><select id="nf-answer-target" class="focusable"><option value="AUTO">자동</option><option value="API_ONLY">API만</option><option value="LOCAL_ONLY">로컬만</option><option value="GEMINI_WEBSEARCH_ONLY">Gemini 검색 고정</option></select>
 <span>전용 모드는 선택 Gemini로 웹검색을 요청하며 검색·출처·Google 검색 제안이 확인된 답변만 제공합니다. 다른 모델로 자동 전환하지 않습니다.</span><button id="nf-general-mode" class="focusable" type="button">일반 자동 모드로 전환</button><span>전환 후 설정을 저장하면 다음 질문부터 적용합니다. 질문을 자동 재전송하지 않습니다.</span>
 <label for="nf-answer-model">답변 모델</label><select id="nf-answer-model" class="focusable"><option value="">자동 선택</option></select>
+<label for="nf-reasoning">추론 깊이</label><select id="nf-reasoning" class="focusable"><option value="FAST">Fast</option><option value="STANDARD" selected>Standard</option><option value="DEEP">Deep</option></select>
+<p id="nf-reasoning-status" class="hint" role="status">모델별 지원 여부를 확인합니다. 추론 깊이는 글자 출력 속도와 별도 설정입니다.</p>
 <span>메인 모델 프리셋</span><div class="actions"><button id="nf-preset-luna" class="focusable" type="button">루나 (Luna · 초고속/경제)</button><button id="nf-preset-gemini" class="focusable" type="button">제미나이 (Gemini · 웹검색)</button><button id="nf-preset-auto" class="focusable" type="button">자동 (기본)</button></div><span id="nf-preset-status" class="hint" role="status" style="grid-column:1/-1">프리셋은 모델과 실행 경로를 한 번에 맞춥니다. 저장하면 다음 질문부터 적용됩니다.</span>
 <label for="nf-answer-fallback">모델 자동 전환 ON/OFF</label><input id="nf-answer-fallback" class="focusable" type="checkbox">
 <label for="nf-answer-backup-1">첫 번째 대체 모델</label><select id="nf-answer-backup-1" class="focusable"><option value="">대체 모델 없음</option></select>

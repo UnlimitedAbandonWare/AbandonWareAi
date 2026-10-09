@@ -23,9 +23,15 @@ final class SonioxNodeTransport implements ConversateAsrBridge.Transport,WebSock
     private volatile boolean finishing;
     private volatile String failureReason="ASR_SIDECAR_FAILED";
     SonioxNodeTransport(SonioxSidecarManager.Endpoint endpoint,ObjectMapper json,Consumer<JsonNode> events,Consumer<String> failure,Duration timeout)throws IOException{
+        this(endpoint,json,events,failure,timeout,null);
+    }
+    SonioxNodeTransport(SonioxSidecarManager.Endpoint endpoint,ObjectMapper json,Consumer<JsonNode> events,Consumer<String> failure,Duration timeout,String language)throws IOException{
         this.json=json;this.events=events;this.failure=failure;
-        var connecting=HttpClient.newBuilder().connectTimeout(timeout).build().newWebSocketBuilder().connectTimeout(timeout)
-                .header("Authorization","Bearer "+endpoint.bearer()).buildAsync(endpoint.streamUri(),this);
+        if(language!=null&&!java.util.Set.of("ko","en").contains(language))throw new IOException("stt_language_unsupported");
+        var builder=HttpClient.newBuilder().connectTimeout(timeout).build().newWebSocketBuilder().connectTimeout(timeout)
+                .header("Authorization","Bearer "+endpoint.bearer());
+        if(language!=null)builder.header("X-Soniox-Language",language);
+        var connecting=builder.buildAsync(endpoint.streamUri(),this);
         try{
             long end=System.nanoTime()+timeout.toNanos();
             socket=connecting.get(timeout.toMillis(),TimeUnit.MILLISECONDS);

@@ -93,6 +93,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             &&com.example.lms.llm.ChatGptOAuthRegistration.isRoute(selection.modelId())
             &&(scope==null||!scope.recallEnabled())&&memory.transcript().isEmpty()
             &&(selection.routing()==null||!selection.routing().effectiveFallbackAllowed());
+        requestBuilder.focusReasoningEffort((memory.reasoningPreset()==null?NovaFocusSettings.ReasoningPreset.STANDARD:memory.reasoningPreset()).effort());
         if(foldCandidate)requestBuilder.mode("FACT").polish(false);
         var request=requestBuilder.build();
         var admissionContext=new ChatConversationContext(memory.recent().stream().map(NovaFocusAnswerService::pair).toList(),
@@ -193,11 +194,7 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             }
             if(grounded&&(!java.util.Objects.equals(answer,grounding.originalText())||!grounding.publicationReady()))
                 throw new IllegalStateException("focus_grounding_publication_held");
-            if(!grounded&&memory.answerLengthChars()!=null){
-                // Preserve full text in the existing ephemeral state. The lens projection caps it;
-                // the owner-bound Fold projection remains available without another model call.
-                if(web){answer=cleanLensText(answer);String suffix=lensSourceSuffix?sourceSuffix(result):null;if(suffix!=null)answer+=suffix;}
-            }else if(!grounded&&web)answer=lensCompact(answer,result);
+            // Preserve the generated Fold body. Lens-only cleanup belongs to View.forTarget.
             TraceStore.put("focus.length.generatedGraphemes",graphemes(completed.text()));
             TraceStore.put("focus.length.visibleGraphemes",graphemes(memory.answerLengthChars()==null?answer:boundDisplay(answer,memory.answerLengthChars())));
             TraceStore.put("focus.length.targetChars",memory.answerLengthChars()==null?"legacy":memory.answerLengthChars());
@@ -341,6 +338,63 @@ public class NovaFocusAnswerService implements NovaFocusAnswer {
             .replaceAll("[ \\t\\x0B\\f\\r]+"," ")
             .replaceAll("\\n{2,}","\\n")
             .strip();
+    }
+    /** Display-only projection. Fold retains the answer and structured grounding unchanged. */
+    static String lensText(String text,boolean complete){
+        if(text==null||text.isBlank())return text;
+        String candidate=text.replace("\r\n","\n");
+        if(!complete){
+            // The provider's safe sentence prefix may still contain an unfinished link.
+            // Publish complete sentences, without waiting for the full answer.
+            var ends=java.util.regex.Pattern.compile("[.!?。！？][*_`]*(?=\\s|$)").matcher(candidate);
+            int end=0;while(ends.find())end=ends.end();
+            candidate=candidate.substring(0,end);
+        }
+        var lines=new ArrayList<String>();boolean sources=false;
+        for(String line:candidate.split("\n",-1)){
+            String node=line.strip();
+            if(node.startsWith("```"))continue;
+            if(node.matches("(?i)^(?:#{1,6}\\s*)?(?:출처|참고\\s*(?:자료|문헌|링크)|sources?|references?)\\s*[:：]?\\s*$")){sources=true;continue;}
+            if(sources){
+                if(node.isBlank()||node.matches("(?i)^(?:[-*+]\\s+|[0-9]+[.)]\\s+|https?://|www\\.|\\[[^]]+](?:\\(|:)).*"))continue;
+                sources=false; // A following answer paragraph is not part of the reference list.
+            }
+            if(node.matches("(?i)^\\[[^]]+\\]:\\s*(?:https?://|www\\.).*"))continue;
+            if(node.matches("(?i)^(?:검색\\s*(?:중|진행\\s*중|완료)|searching|search\\s+in\\s+progress|tool[_ ](?:call|result)|TRACE_JSON|TRACE_HTML)(?:[ .…:：].*)?$"))continue;
+            // Link nodes keep their label; addresses and image nodes are never display text.
+            StringBuilder visible=new StringBuilder();
+            for(int i=0;i<line.length();){
+                boolean image=line.charAt(i)=='!'&&i+1<line.length()&&line.charAt(i+1)=='[';
+                int start=image?i+1:i;
+                if(line.charAt(start)=='['){
+                    int labelEnd=line.indexOf(']',start+1);
+                    if(labelEnd<0&&!complete)break;
+                    if(labelEnd>=0&&labelEnd+1<line.length()&&line.charAt(labelEnd+1)=='['){
+                        int refEnd=line.indexOf(']',labelEnd+2);
+                        if(refEnd<0&&!complete)break;
+                        if(refEnd>=0){if(!image)visible.append(line,start+1,labelEnd);i=refEnd+1;continue;}
+                    }
+                    if(labelEnd>=0&&labelEnd+1<line.length()&&line.charAt(labelEnd+1)=='('){
+                        int depth=1,j=labelEnd+2;
+                        for(;j<line.length()&&depth>0;j++){char c=line.charAt(j);if(c=='(')depth++;else if(c==')')depth--;}
+                        if(depth>0)break;
+                        if(!image)visible.append(line,start+1,labelEnd);
+                        i=j;continue;
+                    }
+                }
+                visible.append(line.charAt(i++));
+            }
+            String cleaned=cleanLensText(visible.toString())
+                .replace("**","").replace("__","")
+                .replaceAll("(?i)</?[a-z][a-z0-9]*(?:\\s+[^<>]*)?\\s*/?>|<https?://[^>]+>","")
+                .replaceAll("(?i)(?:https?://|www\\.)[^\\s<>]+","")
+                .replaceAll("\\[출처:[^]]*]","")
+                .replaceAll("\\[(?:[0-9]+[,; ]*)+]","")
+                .replaceAll("[ \\t]{2,}"," ").strip();
+            if(!cleaned.isBlank()&&!cleaned.matches("(?i)(?:주소|URL|링크)\\s*[:：]?"))lines.add(cleaned);
+        }
+        String projected=String.join("\n",lines);
+        return projected.isBlank()&&complete?"링크와 출처는 휴대폰에서 확인하세요.":projected;
     }
     private static String cutAtBoundary(String text,int budget){
         return boundDisplay(text,budget);

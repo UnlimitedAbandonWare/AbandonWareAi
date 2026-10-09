@@ -18,8 +18,8 @@ class ChatPlanBudgetFocusedTest {
                 .useWebSearch(true).useRag(false).webTopK(8).searchQueries(0)
                 .searchMode(SearchMode.FORCE_LIGHT).build();
         assertDoesNotThrow(() -> guard.validateChatProjected(request, plans.load("safe.v1"), true, false));
-        assertEquals(3L, TraceStore.get("public.request.budget.branchCount"),
-                "one base query plus the authored two optional ExtremeZ queries");
+        assertEquals(1L, TraceStore.get("public.request.budget.branchCount"),
+                "workflow and ExtremeZ share the one-query LIGHT web budget");
     }
     @Test void koreanConceptWithRagAndWebIsAdmittedAtUnchangedLimits() {
         var guard = new PublicRequestBudgetGuard();
@@ -30,18 +30,18 @@ class ChatPlanBudgetFocusedTest {
         assertTrue(((Number)TraceStore.get("public.request.budget.retrievalWork")).longValue() <= 384);
         assertTrue(((Number)TraceStore.get("public.request.budget.providerWork")).longValue() <= 4096);
     }
-    @Test void braveKeepsIndependentPlannerAndExtremeZExpansionAndEnforcesBoundary() {
+    @Test void braveWebSharesWorkflowBudgetAndEnforcesBoundary() {
         var guard = new PublicRequestBudgetGuard();
-        guard.setMaxRetrievalWork(396); guard.setMaxProviderWork(10_000);
+        guard.setMaxRetrievalWork(54); guard.setMaxProviderWork(10_000);
         var request = ChatRequestDto.builder().message("recall this topic with bounded evidence")
                 .useWebSearch(true).useRag(false).webTopK(8).searchQueries(0)
                 .searchMode(SearchMode.AUTO).build();
         assertDoesNotThrow(() -> guard.validateChatProjected(request, plans.load("brave.v1"), true, false));
-        assertEquals(396L, TraceStore.get("public.request.budget.retrievalWork"));
-        assertEquals(10L, TraceStore.get("public.request.budget.plannedQueries"));
+        assertEquals(54L, TraceStore.get("public.request.budget.retrievalWork"));
+        assertEquals(3L, TraceStore.get("public.request.budget.plannedQueries"));
         assertEquals(12, TraceStore.get("public.request.budget.extremeZQueries"));
-        assertEquals(22L, TraceStore.get("public.request.budget.branchCount"));
-        guard.setMaxRetrievalWork(395);
+        assertEquals(3L, TraceStore.get("public.request.budget.branchCount"));
+        guard.setMaxRetrievalWork(53);
         assertThrows(PublicRequestBudgetGuard.Rejection.class,
                 () -> guard.validateChatProjected(request, plans.load("brave.v1"), true, false));
     }

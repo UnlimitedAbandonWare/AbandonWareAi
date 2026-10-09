@@ -32,7 +32,7 @@ only when the user explicitly names them.
 
 - Service install, `sc`/scheduled-task registration, firewall or share-ACL changes.
 - `docker pull`/build/run for grading; SMB share re-enable; new daemons or background watchers.
-- New SaaS signups/keys — prefer local Ollama, then existing `configs/api-routing.yaml` env APIs.
+- New SaaS signups/keys. Existing provider order follows task scope: agent-work = Codex credits → external paid API → free → local Ollama (last); main `/chat` = API/OAuth-first, Ollama last; RAG/embed = 3090-local with classified incident fallback. See `docs/agents-rules/DEMO1-RTX3090-WATCH.md` and existing `configs/api-routing.yaml`.
 - Any destructive Git (`reset --hard`, `clean`, `add -A`, push, remote mutation) — unchanged by light mode.
 
 ## Why it got heavy (2026-09-24)

@@ -37,9 +37,11 @@ export async function startServer({ bearerSeed, credential, model = 'stt-rt-v5',
     if (stopping || !authorized(request) || request.url !== '/stream' || !configured || streams.size >= 1) {
       socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n'); return;
     }
-    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws));
+    const language=request.headers['x-soniox-language'];
+    if(language!=null&&!['ko','en'].includes(language)){socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');return;}
+    wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
   });
-  wss.on('connection', ws => {
+  wss.on('connection', (ws,request) => {
     let session;
     const send = event => {
       if (ws.readyState !== WebSocket.OPEN) return;
@@ -49,7 +51,7 @@ export async function startServer({ bearerSeed, credential, model = 'stt-rt-v5',
     };
     try {
       const sdk = sdkClient.realtime.stt({ model, audio_format: 'pcm_s16le', sample_rate: 16000,
-        num_channels: 1, language_hints: ['ko', 'en'], enable_endpoint_detection: true });
+        num_channels: 1, language_hints: request.headers['x-soniox-language']?[request.headers['x-soniox-language']]:['ko', 'en'], enable_endpoint_detection: true });
       session = createSession({ sdk, emit: send, fail: reason => { send({ type: 'error', reason }); ws.close(1011, 'speech_unavailable'); } });
       streams.add(session);
       ws.on('message', (data, binary) => { if (binary) { session.close(); ws.close(1003); } else session.audio(data.toString('utf8')); });

@@ -121,6 +121,31 @@ public class ProviderCredentialResolver {
 
     private Resolution resolveNaver() {
         List<Candidate> configured = new ArrayList<>();
+        // Keep the canonical property's precedence; standalone lookups use its existing ENV alias.
+        String providerMode = environment.getProperty("naver.search.provider");
+        if (providerMode == null) providerMode = environment.getProperty("NAVER_SEARCH_PROVIDER", "auto");
+        providerMode = providerMode.trim().toLowerCase(java.util.Locale.ROOT);
+        if (!java.util.Set.of("auto", "openapi", "apihub").contains(providerMode)) {
+            return Resolution.disabled(Provider.NAVER, false, "none", 0, "invalid_naver_search_provider");
+        }
+        // Complete API HUB pair wins in auto; forced modes never cross namespaces.
+        if (!"openapi".equalsIgnoreCase(providerMode)) {
+            String hubPropertyId = externalValue("naver.apihub.client-id");
+            String hubPropertySecret = externalValue("naver.apihub.client-secret");
+            String hubEnvironmentId = externalValue("NAVER_APIHUB_CLIENT_ID");
+            String hubEnvironmentSecret = externalValue("NAVER_APIHUB_CLIENT_SECRET");
+            if (hubPropertyId != null && hubPropertySecret != null) {
+                configured.add(new Candidate("naver.apihub.client-pair",
+                        hubPropertyId + ":" + hubPropertySecret));
+            }
+            if (hubEnvironmentId != null && hubEnvironmentSecret != null) {
+                configured.add(new Candidate("NAVER_APIHUB_CLIENT_PAIR",
+                        hubEnvironmentId + ":" + hubEnvironmentSecret));
+            }
+            if (!configured.isEmpty() || "apihub".equalsIgnoreCase(providerMode)) {
+                return finish(Provider.NAVER, configured);
+            }
+        }
         addExternalCandidate(configured, "naver.keys", environment.getProperty("naver.keys"));
         addExternalCandidate(configured, "NAVER_KEYS", environment.getProperty("NAVER_KEYS"));
 

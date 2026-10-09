@@ -78,12 +78,12 @@
         if(fade>0)paint(Math.max(0,1-fade));schedule();return;
       }
       if(index<units.length){
-        const wait=mode==='sentence'?1200:cfg.sequentialTextEnabled?cfg.charIntervalMs:index===0?0:Math.max(1200,cfg.charIntervalMs*24);
+        const wait=mode==='sentence'?1200:cfg.sequentialTextEnabled?cfg.charIntervalMs:0;
         if(credit>=wait){
           credit=0;
           if(mode==='sentence'||cfg.sequentialTextEnabled){append(units[index++]);}
           else{
-            // Non-typing mode releases one measured line, then lets it be read.
+            // Ready text releases one measured line per frame; scrolling still preserves readability.
             do{const unit=units[index];if(lines[lines.length-1]&&!fits(lines[lines.length-1]+unit))break;append(unit);index++;}while(index<units.length&&!shift&&units[index-1]!=='\n');
             if(index<units.length&&!shift){lines.push('');if(lines.length>lineLimit())shift={start:elapsed,height:lineHeight()};paint();}
           }
@@ -99,10 +99,13 @@
       if(!focus||focus.active!==true){retire();reset();key='';identity=null;paint();return false;}
       if(typeof focus.serverInstanceId!=='string'||typeof focus.activationId!=='string'||!Number.isSafeInteger(focus.stateVersion))return false;
       if(server===focus.serverInstanceId&&focus.stateVersion<highestVersion)return false;
-      if(server!==focus.serverInstanceId||activation!==focus.activationId){retire();reset();key='';highestVersion=-1;}
+      if(server!==focus.serverInstanceId||activation!==focus.activationId){retire();reset();key='';highestVersion=-1;if(options.retainAfterPresentation)paint();}
       const previousVersion=highestVersion;
       server=focus.serverInstanceId;activation=focus.activationId;highestVersion=focus.stateVersion;
       cfg=settings(focus.presentation||cfg);
+      // Lens retention ends at the session boundary, not at animation completion.
+      if(options.retainAfterPresentation)cfg.autoFadeEnabled=false;
+      if(!focus.answerText&&options.retainAfterPresentation&&doneAt!==null)return true;
       if(!focus.answerText){if(key){retire();reset();key='';paint();}return true;}
       if(typeof focus.answerText!=='string'||Array.from(focus.answerText).length>8000||!Number.isSafeInteger(focus.answerVersion)||typeof focus.turnId!=='string')return false;
       if(focus.answerComplete!==undefined&&typeof focus.answerComplete!=='boolean')return false;

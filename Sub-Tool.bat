@@ -1,6 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" begin "%~nx0" %*
 title AbandonWare Agent Quick Sub-Tool
 
 rem Headless / agent mode detection
@@ -29,4 +30,5 @@ if defined ST_PAUSE (
   pause
 )
 
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %ST_EXIT%
 exit /b %ST_EXIT%

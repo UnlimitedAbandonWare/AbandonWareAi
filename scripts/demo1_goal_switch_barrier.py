@@ -559,6 +559,19 @@ def cmd_reject_complete(args) -> int:
         "evidence": evidence,
         "evidenceAccepted": bool(matched) and bool(evidence) and not rejected,
     }
+    if getattr(args, "task", None) and not _safe_id(args.task):
+        rejected = True
+        out.update(rejected=True, reason="invalid-task-id", evidenceAccepted=False)
+    elif getattr(args, "task", None):
+        from checkpoint_doctor import check_continuity
+        state_path = Path(args.root) / BASE / args.task / "state.md"
+        continuity = check_continuity(state_path, expected_task=args.task,
+            latest_ref=args.latest_instruction_ref, expected_revision=args.expected_revision,
+            complete=True, environment=args.environment)
+        out["continuity"] = continuity
+        if not continuity["allowed"]:
+            rejected = True
+            out.update(rejected=True, reason="continuity-incomplete", evidenceAccepted=False)
     print(json.dumps(out, ensure_ascii=True))
     return 5 if rejected else 0
 
@@ -678,6 +691,10 @@ def build_parser() -> argparse.ArgumentParser:
                        help="증거 없는 지시문/도구 서문이면 exit!=0 (instructional-not-acceptance)")
     p.add_argument("--root", default=str(DEFAULT_ROOT))
     p.add_argument("--text", required=True, help="완료로 주장하려는 문장")
+    p.add_argument("--task", help="Exact task ID; checks its existing state.md delivery contract")
+    p.add_argument("--latest-instruction-ref")
+    p.add_argument("--expected-revision", type=int)
+    p.add_argument("--environment")
     p.set_defaults(func=lambda r, a: cmd_reject_complete(a))
     return parser
 

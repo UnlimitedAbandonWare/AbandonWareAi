@@ -144,6 +144,9 @@ public class NaverSearchService implements WebSearchProvider {
     @Autowired(required = false)
     private DebugEventStore debugEventStore;
 
+    @Autowired(required = false)
+    private com.example.lms.debug.ApiFailureRecorder apiFailureRecorder;
+
     private static final Logger log = LoggerFactory.getLogger(NaverSearchService.class);
 
     // ---------------------------------------------------------------------
@@ -216,6 +219,17 @@ public class NaverSearchService implements WebSearchProvider {
     private List<NaverCredentialBridge.Credential> naverKeys = List.of(); // 초기값은 빈 리스트
     private final AtomicLong keyCursor = new AtomicLong(); // 라운드-로빈 인덱스
 
+    @Value("${naver.search.provider:auto}")
+    private String searchProvider = "auto";
+    @Value("${naver.search.api-base-url:${NAVER_SEARCH_API_BASE_URL:https://openapi.naver.com}}")
+    private String openApiBaseUrl = "https://openapi.naver.com";
+    @Value("${naver.apihub.base-url:${NAVER_APIHUB_BASE_URL:https://naverapihub.apigw.ntruss.com}}")
+    private String apiHubBaseUrl = "https://naverapihub.apigw.ntruss.com";
+    @Value("${naver.apihub.client-id:${NAVER_APIHUB_CLIENT_ID:}}")
+    private String apiHubClientId = "";
+    @Value("${naver.apihub.client-secret:${NAVER_APIHUB_CLIENT_SECRET:}}")
+    private String apiHubClientSecret = "";
+
     /**
      * 검색 단계(시도) 로그
      */
@@ -286,9 +300,13 @@ public class NaverSearchService implements WebSearchProvider {
     private static final class NaverObservation extends java.util.concurrent.ConcurrentHashMap<String, Object> {
         private final Map<String, Object> context;
         private final java.util.concurrent.atomic.AtomicBoolean published = new java.util.concurrent.atomic.AtomicBoolean();
+        private final com.example.lms.debug.ApiFailureRecorder recorder;
+        private String errorBody;
 
-        private NaverObservation(String query, Map<String, Object> context, boolean clientAttempt) {
+        private NaverObservation(String query, Map<String, Object> context, boolean clientAttempt,
+                                 com.example.lms.debug.ApiFailureRecorder recorder) {
             this.context = context;
+            this.recorder = recorder;
             putAll(TraceStore.searchCorrelation(context));
             put("provider", "naver");
             put("queryHash", SafeRedactor.hashValue(query));
@@ -307,6 +325,22 @@ public class NaverSearchService implements WebSearchProvider {
         private void finish() {
             if (!published.compareAndSet(false, true)) return;
             put("finishedAtEpochMs", System.currentTimeMillis());
+            try {
+                if (recorder != null) {
+                    var terminal = recorder.recordSearchTerminal("naver", "unconfirmed",
+                            Objects.toString(get("providerAttemptId"), null),
+                            get("httpStatus") instanceof Number number ? number.intValue() : 0,
+                            Objects.toString(get("failureClass"), null), errorBody,
+                            Boolean.TRUE.equals(get("clientAttemptObserved")),
+                            Boolean.TRUE.equals(get("providerReceiptObserved")));
+                    if (terminal.recoveredAt() != null) put("recoveredAt", terminal.recoveredAt());
+                }
+            } catch (RuntimeException unavailableIncidentSink) {
+                log.warn("[Naver API] terminal incident recording unavailable errorType={}",
+                        unavailableIncidentSink.getClass().getSimpleName());
+            } finally {
+                errorBody = null;
+            }
             Map<String, Object> immutable = Map.copyOf(this);
             try {
                 withTraceContext(context, () -> {
@@ -1276,10 +1310,72 @@ public class NaverSearchService implements WebSearchProvider {
 
     /* ---------- 4. 키 순환 유틸 ---------- */
     private @Nullable NaverCredentialBridge.Credential nextKey() {
+        if (!validSearchProvider())
+            return null;
+        if (useApiHub())
+            return hasApiHubPair()
+                    ? new NaverCredentialBridge.Credential(apiHubClientId.trim(), apiHubClientSecret.trim())
+                    : null;
         if (naverKeys.isEmpty())
             return null;
         long idx = keyCursor.getAndUpdate(i -> (i + 1) % naverKeys.size());
         return naverKeys.get((int) idx);
+    }
+
+    private boolean validSearchProvider() {
+        return Set.of("auto", "openapi", "apihub").contains(
+                searchProvider == null ? "" : searchProvider.trim().toLowerCase(Locale.ROOT));
+    }
+
+    private boolean hasApiHubPair() {
+        return !ConfigValueGuards.isMissing(apiHubClientId)
+                && !ConfigValueGuards.isMissing(apiHubClientSecret);
+    }
+
+    private boolean validSearchEndpoint() {
+        String base = useApiHub() ? apiHubBaseUrl : openApiBaseUrl;
+        if (ConfigValueGuards.isMissing(base)) return false;
+        try {
+            URI uri = URI.create(base);
+            return ("https".equalsIgnoreCase(uri.getScheme()) || "http".equalsIgnoreCase(uri.getScheme()))
+                    && uri.getHost() != null && uri.getUserInfo() == null
+                    && uri.getRawQuery() == null && uri.getRawFragment() == null;
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+    }
+
+    private boolean useApiHub() {
+        return "apihub".equalsIgnoreCase(searchProvider == null ? "" : searchProvider.trim())
+                || ("auto".equalsIgnoreCase(searchProvider == null ? "" : searchProvider.trim())
+                    && hasApiHubPair());
+    }
+
+    private URI buildWebkrUri(String query, int count) {
+        boolean hub = useApiHub();
+        String base = hub ? apiHubBaseUrl : openApiBaseUrl;
+        UriComponentsBuilder builder = UriComponentsBuilder.fromHttpUrl(base)
+                .path(hub ? "/search/v1/webkr" : "/v1/search/webkr.json")
+                .queryParam("query", query)
+                .queryParam("display", count)
+                .queryParam("start", 1);
+        if (hub) builder.queryParam("format", "json");
+        return builder.build().encode(StandardCharsets.UTF_8).toUri();
+    }
+
+    private void applySearchHeaders(org.springframework.http.HttpHeaders headers,
+                                    NaverCredentialBridge.Credential credential) {
+        if (useApiHub()) {
+            headers.remove("X-Naver-Client-Id");
+            headers.remove("X-Naver-Client-Secret");
+            headers.set("X-NCP-APIGW-API-KEY-ID", credential.id());
+            headers.set("X-NCP-APIGW-API-KEY", credential.secret());
+        } else {
+            headers.remove("X-NCP-APIGW-API-KEY-ID");
+            headers.remove("X-NCP-APIGW-API-KEY");
+            headers.set("X-Naver-Client-Id", credential.id());
+            headers.set("X-Naver-Client-Secret", credential.secret());
+        }
     }
 
     /* === Public API === */
@@ -2473,15 +2569,7 @@ public class NaverSearchService implements WebSearchProvider {
             }
         }
 
-        // NOTE: Use absolute URL to remain resilient even if WebClient baseUrl
-        // is misconfigured.
-        URI uri = UriComponentsBuilder.fromHttpUrl("https://openapi.naver.com/v1/search/webkr.json")
-                .queryParam("query", apiQuery)
-                .queryParam("display", fetch)
-                .queryParam("start", 1)
-                .build()
-                .encode(StandardCharsets.UTF_8)
-                .toUri();
+        URI uri = buildWebkrUri(apiQuery, fetch);
         NaverCredentialBridge.Credential first = nextKey();
         if (first == null) {
             traceNaverCounts(query, fetch, 0, 0, true, naverDisabledReason());
@@ -2528,6 +2616,8 @@ public class NaverSearchService implements WebSearchProvider {
 
         Mono<ResponseEntity<String>> wire = web.get()
                 .uri(uri)
+                .attribute(com.example.lms.debug.ApiFailureWebClientConfiguration.SEARCH_TERMINAL_OWNER,
+                        apiFailureRecorder != null)
                 .headers(h -> {
                     if (capturedRid != null && !capturedRid.isBlank()) {
                         h.set("x-request-id", capturedRid);
@@ -2536,8 +2626,7 @@ public class NaverSearchService implements WebSearchProvider {
                         h.set("x-session-id", capturedSid);
                     }
                 })
-                .header("X-Naver-Client-Id", first.id())
-                .header("X-Naver-Client-Secret", first.secret())
+                .headers(h -> applySearchHeaders(h, first))
                 .header("User-Agent", randomAgent)
                 .retrieve()
                 .toEntity(String.class);
@@ -2566,7 +2655,7 @@ public class NaverSearchService implements WebSearchProvider {
                         return expiredNaverSubscription(query, fetch, permit, capturedTraceContext);
                     }
                     var attemptContext = TraceStore.searchContext(capturedTraceContext, "providerAttemptId");
-                    var observation = new NaverObservation(query, attemptContext, true);
+                    var observation = new NaverObservation(query, attemptContext, true, apiFailureRecorder);
                     latestObservation.set(observation);
                     // Once started this transport may serve several detached cache waiters.
                     // Their deadlines remain on awaitCacheFuture; one loader cannot expire B's socket.
@@ -2581,6 +2670,7 @@ public class NaverSearchService implements WebSearchProvider {
                                 }
                                 observation.put("failureClass", classifyNaverFailureClass(status,
                                         isNaverRateLimited(error), isNaverTimeoutFailure(error), naverFailureReason(error)));
+                                observation.errorBody = naverErrorBody(error);
                                 observation.finish();
                             });
                 }).doFinally(signal -> wirePermit.close()).cache(),
@@ -3141,7 +3231,7 @@ public class NaverSearchService implements WebSearchProvider {
 
     // ─── 신규: 정책 파라미터 버전 ───
     private List<String> parseNaverResponse(String query, String json, SearchPolicy policy) {
-        return parseNaverResponse(query, json, policy, new NaverObservation(query, TraceStore.context(), false));
+        return parseNaverResponse(query, json, policy, new NaverObservation(query, TraceStore.context(), false, apiFailureRecorder));
     }
 
     private List<String> parseNaverResponse(String query, String json, SearchPolicy policy,
@@ -3304,18 +3394,11 @@ public class NaverSearchService implements WebSearchProvider {
                 ? Math.max(1, trace.steps.get(0).afterFilter) // trace 모드면 직전 topK
                 : webTopK;
 
-        // NOTE: Use absolute URL to remain resilient even if WebClient baseUrl
-        // is misconfigured.
-        URI uri = UriComponentsBuilder.fromHttpUrl("https://openapi.naver.com/v1/search/webkr.json")
-                .queryParam("query", apiQuery)
-                .queryParam("display", clampNaverDisplay(Math.max(topK, display)))
-                .queryParam("start", 1)
-                .build()
-                .encode(StandardCharsets.UTF_8)
-                .toUri();
+        URI uri = buildWebkrUri(apiQuery, clampNaverDisplay(Math.max(topK, display)));
 
         boolean acquired = false;
         NightmareBreaker.CallPermit permit = null;
+        NaverObservation observation = null;
         try {
             REQUEST_SEMAPHORE.acquire(); // 동시에 2개까지만 호출
             acquired = true;
@@ -3323,7 +3406,7 @@ public class NaverSearchService implements WebSearchProvider {
             NaverCredentialBridge.Credential key = nextKey();
             if (key == null) {
                 throw new IllegalStateException(
-                        "NAVER API keys are not configured. Set env vars NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (or NAVER_KEYS).");
+                        "NAVER API keys are not configured. Set NAVER_APIHUB_CLIENT_ID / NAVER_APIHUB_CLIENT_SECRET for apihub, or NAVER_CLIENT_ID / NAVER_CLIENT_SECRET (or NAVER_KEYS) for openapi.");
             }
             if (nightmareBreaker != null) {
                 try {
@@ -3336,20 +3419,30 @@ public class NaverSearchService implements WebSearchProvider {
                     return Collections.emptyList();
                 }
             }
-            String id = key.id();
-            String secret = key.secret();
-
             try {
+                observation = new NaverObservation(query,
+                        TraceStore.searchContext(TraceStore.context(), "providerAttemptId"), true, apiFailureRecorder);
                 String randomAgent = USER_AGENTS[new java.util.Random().nextInt(USER_AGENTS.length)];
-                json = web.get()
+                ResponseEntity<String> entity = web.get()
                         .uri(uri)
-                        .header("X-Naver-Client-Id", id)
-                        .header("X-Naver-Client-Secret", secret)
+                        .attribute(com.example.lms.debug.ApiFailureWebClientConfiguration.SEARCH_TERMINAL_OWNER,
+                                apiFailureRecorder != null)
+                        .headers(h -> applySearchHeaders(h, key))
                         .header("User-Agent", randomAgent)
                         .retrieve()
-                        .bodyToMono(String.class)
+                        .toEntity(String.class)
                         .block(Duration.ofMillis(Math.max(1000L, apiTimeoutMs)));
+                if (entity != null) {
+                    observation.put("httpStatus", entity.getStatusCode().value());
+                    observation.put("providerReceiptObserved", true);
+                    json = entity.getBody();
+                }
             } catch (WebClientResponseException e) {
+                observation.put("httpStatus", e.getStatusCode().value());
+                observation.put("providerReceiptObserved", true);
+                observation.put("failureClass", classifyNaverFailureClass(e.getStatusCode().value(),
+                        isNaverRateLimited(e), isNaverTimeoutFailure(e), naverFailureReason(e)));
+                observation.errorBody = e.getResponseBodyAsString();
                 NaverTraceSuppressions.traceSuppressed("api.webClientResponse", e);
                 if (e.getStatusCode().value() == 429) {
                     try {
@@ -3376,6 +3469,7 @@ public class NaverSearchService implements WebSearchProvider {
             }
 
             if (json == null || isBlank(json)) {
+                observation.put("failureClass", "EMPTY_BODY");
                 if (permit != null) {
                     permit.completeBlank("body");
                     permit = null;
@@ -3385,7 +3479,7 @@ public class NaverSearchService implements WebSearchProvider {
 
             // 공통 파서(parseNaverResponse)를 사용해 도메인 필터 및 Fail-Soft를
             // 비동기 경로와 동일하게 적용한다.
-            List<String> lines = parseNaverResponse(query, json);
+            List<String> lines = parseNaverResponse(query, json, defaultPolicy(), observation);
 
             long tookMs = Duration.between(start, Instant.now()).toMillis();
             if (permit != null) {
@@ -3422,6 +3516,16 @@ public class NaverSearchService implements WebSearchProvider {
                     query == null ? 0 : query.length());
             return java.util.Collections.emptyList();
         } catch (Exception ex) {
+            if (observation != null && !observation.published.get()) {
+                int status = naverHttpStatus(ex);
+                if (status > 0) {
+                    observation.put("httpStatus", status);
+                    observation.put("providerReceiptObserved", true);
+                }
+                observation.put("failureClass", classifyNaverFailureClass(status,
+                        isNaverRateLimited(ex), isNaverTimeoutFailure(ex), naverFailureReason(ex)));
+                observation.errorBody = naverErrorBody(ex);
+            }
             NaverTraceSuppressions.traceSuppressed("api.failure", ex);
             if (permit != null) {
                 if (ex instanceof NaverClassifiedFailure classified
@@ -3447,6 +3551,7 @@ public class NaverSearchService implements WebSearchProvider {
                     query == null ? 0 : query.length());
             return java.util.Collections.emptyList();
         } finally {
+            if (observation != null) observation.finish();
             if (permit != null) {
                 permit.completeAbandoned("wire-sync", "non-terminal");
             }
@@ -3771,6 +3876,9 @@ public class NaverSearchService implements WebSearchProvider {
         String safeReason = failureReason == null
                 ? ""
                 : failureReason.toLowerCase(java.util.Locale.ROOT);
+        if ("cancelled".equals(safeReason)) {
+            return "CANCELLED_NEUTRAL";
+        }
         if (safeReason.contains("breaker") || safeReason.contains("cooldown")) {
             return "BREAKER_OR_COOLDOWN";
         }
@@ -3838,16 +3946,23 @@ public class NaverSearchService implements WebSearchProvider {
     }
 
     private boolean hasCreds() {
-        boolean ok = naverKeys != null && !naverKeys.isEmpty()
+        try {
+            TraceStore.put("web.naver.provider", useApiHub() ? "apihub" : "openapi");
+        } catch (RuntimeException unavailableTraceSink) {
+            // Provider admission must not depend on a mutable diagnostic context.
+        }
+        boolean ok = validSearchProvider() && validSearchEndpoint() && (useApiHub() ? hasApiHubPair()
+                : naverKeys != null && !naverKeys.isEmpty()
                 && naverKeys.stream().anyMatch(k -> !ConfigValueGuards.isMissing(k.id())
-                && !ConfigValueGuards.isMissing(k.secret()));
+                && !ConfigValueGuards.isMissing(k.secret())));
         if (!ok) {
             String reason = naverDisabledReason();
             TraceStore.put("web.naver.providerDisabled", true);
             TraceStore.put("web.naver.disabledReason", SafeRedactor.traceLabelOrFallback(reason, "unknown"));
             traceNaverCounts(null, 0, 0, 0, true, reason);
             log.warn("[AWX2AF2][search][naver] provider disabled enabled=false sourceName={} keysPresent={} clientPairPresent={} parsedCount={} disabledReason={}",
-                    naverKeysPresent ? "naver.keys/NAVER_KEYS" : "naver.client-id/NAVER_CLIENT_ID",
+                    useApiHub() ? "naver.apihub.client-id/NAVER_APIHUB_CLIENT_ID"
+                            : naverKeysPresent ? "naver.keys/NAVER_KEYS" : "naver.client-id/NAVER_CLIENT_ID",
                     naverKeysPresent,
                     naverClientPairPresent,
                     parsedNaverKeyCount,
@@ -3857,6 +3972,9 @@ public class NaverSearchService implements WebSearchProvider {
     }
 
     private String naverDisabledReason() {
+        if (!validSearchProvider()) return "invalid_naver_search_provider";
+        if (!validSearchEndpoint()) return "invalid_naver_search_endpoint";
+        if (useApiHub()) return "missing_naver_apihub_credentials";
         return naverKeysPresent ? "invalid_naver_keys" : "missing_naver_client_credentials";
     }
 

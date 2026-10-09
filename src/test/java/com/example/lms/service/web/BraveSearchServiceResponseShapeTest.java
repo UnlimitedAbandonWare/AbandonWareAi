@@ -5,9 +5,13 @@ import com.example.lms.search.TraceStore;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import com.example.lms.debug.ApiFailureRecorder;
+import com.example.lms.debug.DebugEventStore;
 import org.slf4j.MDC;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestTemplate;
@@ -15,8 +19,11 @@ import org.springframework.web.client.RestTemplate;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
+import static org.mockito.Mockito.mock;
 
 class BraveSearchServiceResponseShapeTest {
+    @TempDir java.nio.file.Path temporary;
 
     private static final String BASE_URL = "https://api.search.brave.com/res/v1/web/search";
     private static final String TEST_TOKEN = "brave-outbound-header-test-token";
@@ -288,6 +295,43 @@ class BraveSearchServiceResponseShapeTest {
         assertEquals("request_budget_exhausted", result.message());
         assertEquals(Boolean.TRUE, TraceStore.get("web.brave.requestBudgetExhausted"));
         assertEquals(0, TraceStore.get("executionMode.httpAttempts"));
+    }
+
+    @Test void newParsedReceiptRecoversTheSameProviderFailure() {
+        var recorder = new ApiFailureRecorder(mock(DebugEventStore.class), temporary.resolve("incidents.json").toString());
+        try {
+            var failed = enabledService();
+            ReflectionTestUtils.setField(failed, "apiFailureRecorder", recorder);
+            var denied = MockRestServiceServer.bindTo((RestTemplate) ReflectionTestUtils.getField(failed, "restTemplate")).build();
+            denied.expect(request -> {}).andRespond(withStatus(HttpStatus.UNAUTHORIZED).body("{}"));
+            failed.searchWithMeta("failed search", 1);
+            denied.verify();
+            assertEquals(1, recorder.snapshot().get(0).count());
+            var recovered = enabledService();
+            ReflectionTestUtils.setField(recovered, "apiFailureRecorder", recorder);
+            var success = MockRestServiceServer.bindTo((RestTemplate) ReflectionTestUtils.getField(recovered, "restTemplate")).build();
+            success.expect(request -> {}).andRespond(withSuccess("{\"type\":\"search\",\"web\":{\"results\":[]}}", MediaType.APPLICATION_JSON));
+            assertEquals(BraveSearchResult.Status.OK, recovered.searchWithMeta("new valid search", 1).status());
+            success.verify();
+            assertEquals(0, recorder.snapshot().get(0).consecutive());
+            org.junit.jupiter.api.Assertions.assertNotNull(recorder.snapshot().get(0).recoveredAt());
+        } finally { recorder.close(); }
+    }
+
+    @Test void invalidTwoHundredBodyIsAnIncidentAndCannotRecover() {
+        var recorder = new ApiFailureRecorder(mock(DebugEventStore.class), temporary.resolve("incidents.json").toString());
+        try {
+            var invalid = enabledService();
+            ReflectionTestUtils.setField(invalid, "apiFailureRecorder", recorder);
+            var server = MockRestServiceServer.bindTo((RestTemplate) ReflectionTestUtils.getField(invalid, "restTemplate")).build();
+            server.expect(request -> {}).andRespond(withSuccess("{\"private-body\":", MediaType.APPLICATION_JSON));
+            assertEquals(BraveSearchResult.Status.EXCEPTION, invalid.searchWithMeta("invalid response", 1).status());
+            server.verify();
+            assertEquals(1, recorder.snapshot().size());
+            assertEquals("search", recorder.snapshot().get(0).scope());
+            org.junit.jupiter.api.Assertions.assertNull(recorder.snapshot().get(0).recoveredAt());
+            assertFalse(String.valueOf(recorder.snapshot()).contains("private-body"));
+        } finally { recorder.close(); }
     }
 
     private static BraveSearchService enabledService() {

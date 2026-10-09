@@ -253,5 +253,118 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(before, after)
 
 
+PIN_OK = {"devin.acp.preferredAgent": "devin-cli",
+          "devin.acp.enabledAgents": {"devin-cli": True, "devin-cloud": False}}
+PIN_CLOUD = {"devin.acp.preferredAgent": "devin-cloud",
+             "devin.acp.enabledAgents": {"devin-cli": True, "devin-cloud": True}}
+
+
+def run_pin(env: Path, *args: str):
+    return run_doctor(env, "-AgentPin", "-PinDir", str(env / "var" / "devin-local-pin"), *args)
+
+
+class AgentPinTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="agentpin-test-"))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    @staticmethod
+    def settings(env: Path) -> Path:
+        return env / "appdata" / "devin" / "User" / "settings.json"
+
+    @staticmethod
+    def flag(env: Path) -> Path:
+        return env / "var" / "devin-local-pin" / "allow-cloud.flag"
+
+    def test_check_ok_when_pinned(self):
+        env = make_ok_env(self.tmp / "env")
+        write_json(self.settings(env), {**PIN_OK, "workbench.colorTheme": "X"})
+        code, obj, out = run_pin(env, "-Check")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(obj["outcome"], "ok")
+
+    def test_check_drift_exit2_and_logged(self):
+        env = make_ok_env(self.tmp / "env")
+        write_json(self.settings(env), PIN_CLOUD)
+        code, obj, out = run_pin(env, "-Check")
+        self.assertEqual(code, 2, out)
+        self.assertEqual(obj["outcome"], "drift")
+        log = env / "var" / "devin-local-pin" / "pin.jsonl"
+        self.assertTrue(log.exists())
+        self.assertIn('"drift"', log.read_text(encoding="utf-8"))
+
+    def test_heal_flips_cloud_to_cli_preserves_keys(self):
+        env = make_ok_env(self.tmp / "env")
+        write_json(self.settings(env), {
+            **PIN_CLOUD,
+            "devin.acp.agentPreferences": {"devin-cloud": {"org_id": "org-test"}},
+            "java.import.exclusions": ["a", "b"],
+            "terminal.integrated.cwd": SRC,
+        })
+        code, obj, out = run_pin(env, "-Heal")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(obj["outcome"], "healed")
+        data = json.loads(self.settings(env).read_text(encoding="utf-8"))
+        self.assertEqual(data["devin.acp.preferredAgent"], "devin-cli")
+        self.assertEqual(data["devin.acp.enabledAgents"], {"devin-cli": True, "devin-cloud": False})
+        self.assertEqual(data["devin.acp.agentPreferences"]["devin-cloud"]["org_id"], "org-test")
+        self.assertEqual(data["java.import.exclusions"], ["a", "b"])
+        self.assertEqual(data["terminal.integrated.cwd"], SRC)
+        baks = list((env / "var" / "devin-local-pin").glob("settings.json.bak-*"))
+        self.assertEqual(len(baks), 1)
+        code2, obj2, out2 = run_pin(env, "-Check")
+        self.assertEqual((code2, obj2["outcome"]), (0, "ok"), out2)
+
+    def test_heal_parse_failure_writes_nothing(self):
+        env = make_ok_env(self.tmp / "env")
+        sp = self.settings(env)
+        sp.write_text("{not json", encoding="utf-8")
+        code, obj, out = run_pin(env, "-Heal")
+        self.assertEqual(code, 2, out)
+        self.assertIn("no-write", obj["outcome"])
+        self.assertEqual(sp.read_text(encoding="utf-8"), "{not json")
+
+    def test_allow_cloud_flag_blocks_heal_until_expiry(self):
+        env = make_ok_env(self.tmp / "env")
+        write_json(self.settings(env), PIN_CLOUD)
+        pin = env / "var" / "devin-local-pin"
+        pin.mkdir(parents=True, exist_ok=True)
+        self.flag(env).write_text(json.dumps({"expiresAtUtc": "2099-01-01T00:00:00+00:00"}),
+                                  encoding="utf-8")
+        code, obj, out = run_pin(env, "-Heal")
+        self.assertEqual((code, obj["outcome"]), (0, "skipped-allow-cloud"), out)
+        self.assertEqual(json.loads(self.settings(env).read_text(encoding="utf-8"))
+                         ["devin.acp.preferredAgent"], "devin-cloud")
+        self.flag(env).write_text(json.dumps({"expiresAtUtc": "2000-01-01T00:00:00+00:00"}),
+                                  encoding="utf-8")
+        code, obj, out = run_pin(env, "-Heal")
+        self.assertEqual((code, obj["outcome"]), (0, "healed"), out)
+        self.assertEqual(json.loads(self.settings(env).read_text(encoding="utf-8"))
+                         ["devin.acp.preferredAgent"], "devin-cli")
+
+    def test_heal_already_pinned_no_write(self):
+        env = make_ok_env(self.tmp / "env")
+        sp = self.settings(env)
+        write_json(sp, PIN_OK)
+        mtime = sp.stat().st_mtime_ns
+        code, obj, out = run_pin(env, "-Heal")
+        self.assertEqual((code, obj["outcome"]), (0, "already-pinned"), out)
+        self.assertEqual(sp.stat().st_mtime_ns, mtime)
+
+    def test_allow_cloud_enables_and_check_reports(self):
+        env = make_ok_env(self.tmp / "env")
+        write_json(self.settings(env), PIN_OK)
+        code, obj, out = run_pin(env, "-AllowCloud")
+        self.assertEqual(code, 0, out)
+        self.assertIn("cloud-allowed", obj["outcome"])
+        data = json.loads(self.settings(env).read_text(encoding="utf-8"))
+        self.assertTrue(data["devin.acp.enabledAgents"]["devin-cloud"])
+        self.assertEqual(data["devin.acp.preferredAgent"], "devin-cli")
+        code2, obj2, out2 = run_pin(env, "-Check")
+        self.assertEqual((code2, obj2["outcome"]), (0, "allow-cloud-active"), out2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

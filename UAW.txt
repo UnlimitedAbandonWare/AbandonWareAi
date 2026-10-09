@@ -1,3 +1,2402 @@
+
+updated_resume_jwlee_v2.docx
+프로젝트 명:
+Dynamic RAG Orchestration Platform
+
+
+
+Links
+HR용 이력서: 이력서(HR용)
+
+> Demo: abandonwareai.kro.kr (질문·도메인·요청 설정에 따라 검색 체인과 실행 계획을 조합하고, 선택한 근거로 답변을 구성하는 AI 에이전트 오케스트레이션 플랫폼입니다.) 사진 뷰어 영상 뷰어
+
+> git: AbnadonWareAI
+
+포트폴리오: RAG‑AI project
+
+  개발일지: 나만의 AI 오케스트레이션 아키텍처
+
+블로그: RAG 파이프라인 적용기
+
+
+[ 학력사항 ]
+
+
+2016.03 ~ 2018.02
+
+대전 폴리텍 대학 (정보통신 시스템)
+
+전문학사 / 정보통신 시스템
+
+
+
+전문계
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Anchor-Based Context Compression-점군 압축 (Cluster Compressor)
+
+
+
+💡 요약 (Elevator Pitch)
+'Anchor-Based Context Compression'은 정보가 부족한 상황에서 수집된 후보를 앵커 중심으로 좁히는 검색 보조 기능입니다. ContextOrchestrator에 AnchorNarrower와 DynamicContextCompressor를 연결하여, 활성 조건을 만족하면 후보를 좁히고 프롬프트 맥락을 압축하도록 구현했습니다.
+
+
+1단계: 상황 감지 (특수 작전 개시 결정)
+ContextOrchestrator가 모은 후보에 OverdriveGuard가 희소성·권위·모순·검색 복구 신호를 적용합니다. 설정과 전략 문맥의 조건을 만족하면 앵커 좁히기를 시도합니다.
+
+
+
+2단계: 정보 응축 (창끝 벼리기)
+
+활성 조건을 만족하면 ContextOrchestrator가 AnchorNarrower로 수집 후보를 좁히고 DynamicContextCompressor.composeForPrompt()로 맥락을 구성합니다. 질문의 앵커를 중심으로 후보를 정리하는 흐름입니다.
+
+저는 흩어진 정보를 나열하는 대신 질문의 앵커를 중심으로 후보를 모으고, 문서·토큰 예산 안에서 맥락을 구성하도록 설계했습니다. 넓게 던진 그물의 범위를 목표 지점으로 좁히는 것에 비유할 수 있습니다.
+
+
+점수와 설정으로 개입 여부를 판단하는 조건부 트리거를 구현했습니다. 좁히기 실패나 빈 결과 때 원래 후보를 유지하도록 설계했습니다.
+
+
+
+
+
+
+Anchor-Based Context Compression과 기존 RAG 기능의 조합 시너지
+이 기능은 제가 구성한 RAG의 프롬프트 맥락 조립 단계에 연결되어 있습니다. ContextOrchestrator의 선택된 호출 경로와 활성 설정에 따라 동작합니다.
+
+1단계: 상황 감지 (특수 작전 개시 결정)
+기존 기능: ContextOrchestrator가 전달받은 웹·벡터 후보를 모아 중복을 줄이고 후보 수를 제한합니다.
+오버드라이브와의 조합: 후보를 모은 뒤 OverdriveGuard의 조건을 확인하고, AnchorNarrower가 있을 때 좁히기를 시도합니다.
+정보가 너무 적은가? (희소성)
+수집된 정보의 출처 신뢰도가 낮은가? (저권위)
+정보들끼리 서로 말이 맞지 않는가? (모순성) 희소성·권위 점수와 함께 검색 오류·고갈·모순·전략 충돌 조건을 판단에 사용합니다.
+점수와 설정으로 개입 여부를 판단하는 조건부 트리거를 구현했습니다. 좁히기 실패나 빈 결과 때 원래 후보를 유지하도록 설계했습니다.
+
+2단계: 정보 응축 (창끝벼리기)
+기존 기능: HybridRetriever로 정보를 수집하고 재랭킹 인터페이스로 후보를 정렬합니다. 현재 crossEncoderReranker라는 빈은 BiEncoderReranker를 생성합니다.
+오버드라이브와의 조합: 조건을 만족한 수집 후보에 앵커 좁히기를 적용하고, DynamicContextCompressor가 맥락을 구성합니다.
+앵커 지정: AnchorNarrower가 질문의 보호 대상과 토큰을 이용해 결정적으로 앵커 후보를 고릅니다.
+다단계 압축: 앵커와 관련된 후보를 좁힌 다음 압축기 설정에 따라 문서·토큰 예산을 적용합니다. 넓게 모은 후보에서 프롬프트에 필요한 맥락으로 범위를 줄이는 과정입니다.
+
+핵심 선별: ContextOrchestrator의 압축 경로는 이미 수집한 후보에서 앵커에 맞는 정보를 필터링합니다.
+저는 흩어진 정보를 나열하는 대신 질문의 앵커를 중심으로 후보를 모으고, 문서·토큰 예산 안에서 맥락을 구성하도록 설계했습니다. 넓게 던진 그물의 범위를 목표 지점으로 좁히는 것에 비유할 수 있습니다.
+
+3단계: 유연한 통합 (안전장치)
+기존 기능: 좁히기·압축 모듈을 분리하고 ContextOrchestrator가 전달된 자료를 프롬프트 맥락으로 조립합니다.
+오버드라이브와의 조합: 좁히기·압축 경로는 예외나 빈 결과 때 기존 후보를 유지합니다. @Autowired(required=false)로 관련 모듈을 선택적으로 받도록 구성했습니다.
+강력한 기능을 추가하면서 기존 흐름을 보호하는 것을 중요하게 생각했습니다. 실패 시 원래 후보를 유지하는 Fail-Soft 설계로 기존 아키텍처를 존중하며 기능을 확장했습니다.
+
+
+
+
+
+Failure Pattern Analys
+
+
+'Failure Pattern Analys'는 실행 상태와 오류를 JB/CB 지표·간결한 실패 서명으로 기록하고, 버퍼 가중치와 조건부 검색 순서 판단에 활용하는 피드백 구조입니다. 가중치·온도의 JPA 스냅샷과 복원을 연결하고, 별도로 원시 내용 없이 요약 정보를 담는 CfvmRawTileBuilder의 manifest 생성 로직을 구현했습니다.
+
+## 응축 융합 가상 매트릭스-원시성 (Failure Pattern Analys)의 핵심 기전 (동작 원리) ⚙️
+오류 패턴의 지표·서명 기록 (Failure Metrics & Signature):
+오류 패턴 감지 및 기록: CfvmFailureRecorder가 전달된 추적 요약에서 실패 서명과 JB/CB를 만들고 RawMatrixBuffer에 patternId·traceSize·signatureLength를 기록합니다.
+
+
+실패 지표의 구간 표현과 가중치 갱신:
+가상 매트릭스 형성: JB/CB의 낮음·중간·높음 조합으로 9개 구간을 표현합니다. 별도의 RawMatrixBuffer는 최대 9개 항목의 점수를 볼츠만 형태의 softmax 가중치로 정규화합니다.
+
+
+요약 정보 조립과 검색 순서 조정:
+응축·융합: CFVM 신호를 검색 순서·K 조정 판단에 연결했습니다. 기본 fixed 모드는 원래 순서를 유지하고, 동적 판단에서는 기록된 신호를 활용합니다. CfvmRawTileBuilder는 항목과 가중치를 compact manifest로 묶습니다.
+
+
+
+'Failure Pattern Analys'는 오류 경험을 다음 처리에 반영하려는 설계입니다. 현재 범위는 간결한 지표 기록·가중치 갱신·조건부 검색 순서 조정입니다.
+
+
+요약 (Elevator Pitch)
+'응축 융합 가상 매트릭스-원시성(Failure Pattern Analys)'은 실행·실패 비율을 JB·CB의 9개 구간으로 표현하고, 버퍼 점수를 볼츠만 형태로 정규화하는 오류 피드백 구조입니다. 실패 서명·가중치를 간결하게 저장하여 검색 순서 판단에 활용하도록 했습니다.
+
+
+ 응축 융합 가상 매트릭스-원시성 (Failure Pattern Analys)의 핵심 기전 (동작 원리)
+오류 패턴을 관찰하고 다음 처리에 반영하는 접근입니다. 현재 구현은 실패 지표·서명 기록과 제한된 피드백을 제공합니다.
+
+1. 실행 상태·실패 서명 기록 (Failure Metrics & Signature)
+문제 인식: AI 시스템은 복잡하여 예측 불가능한 실행 오류가 발생할 수 있으며, 이러한 오류 패턴을 실시간으로 감지하고 학습하는 메커니즘이 필요합니다.
+기전:
+오류 트리거·실행 패턴 기록: CfvmFailureRecorder가 전달된 추적 요약에서 실패 서명을 만들고 실행·실패 비율을 기록합니다.
+RawMatrixBuffer: 프로세스 안에서 식별자·추적 크기·서명 길이를 최대 9개 항목으로 보관합니다. 별도의 CfvmSnapshotService가 가중치와 온도를 JPA에 저장·복원합니다.
+오류를 기록할 때 추적 요약에서 간결한 실행 지표와 실패 서명을 남기도록 했습니다. 오류를 다음 판단의 피드백 자료로 활용하는 접근입니다.
+2. JB·CB 구간 표현과 버퍼 가중치 갱신
+문제 인식: 실패 요약을 저장하는 데 그치지 않고, 다음 판단에 사용할 지표로 구조화하려 했습니다. 실행 상태를 간결하게 비교할 수 있는 표현이 필요했습니다.
+기전:
+JB(Job Behavior)·CB(Chain Breakdown) 지표 수집: 계획 단계 수를 기준으로 실행 단계와 실패 단계의 비율을 각각 계산합니다.
+모양 표현: JB와 CB를 각각 낮음·중간·높음으로 나누어 9개 조합의 failure-pattern label을 만듭니다.
+9-슬롯 버퍼·볼츠만 가중치: RawMatrixBuffer가 최대 9개 간결한 항목을 보관하고 갱신 점수를 softmax로 정규화합니다. JB/CB의 9개 구간 표식과 버퍼의 9개 슬롯은 별개입니다.
+동적인 오류 상태를 JB·CB 지표로 요약하고 구간 라벨·실패 서명으로 관찰하도록 만들었습니다. 이를 바탕으로 오류 유형을 비교하고 피드백을 축적하려 했습니다.
+3. 요약 정보 조립과 조건부 검색 순서 조정
+문제 인식: 기록한 실패 신호를 다음 검색 판단에 활용하고, 어떤 조건에서 보수적으로 처리할지 조정할 필요가 있었습니다.
+기전:
+RetrievalOrderService: CFVM 가중치를 검색 순서 판단에 전달합니다. fixed 모드는 기존 순서를 유지하고, 동적 판단 경로는 계획·복구·cooldown·CFVM 신호 등을 사용합니다.
+응축·융합: CfvmRawTileBuilder가 버퍼 항목과 가중치를 compact manifest로 묶는 로직을 제공합니다.
+CFVM manifest(CfvmRawTileBuilder.build): patternId·슬롯·가중치와 rawPayloadStored=false를 담는 manifest입니다. 원시 실행 내용 대신 간결한 패턴 정보를 표현합니다.
+오류 지표를 조건부 검색 순서 판단에 반영하고, 별도의 CfvmRawTileBuilder로 패턴 정보를 조립하도록 했습니다. 기록·가중치·순서 판단의 역할을 나눈 구조입니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+MoE (Mixture-of-Experts) Strategy Selector
+
+'MoE (Mixture-of-Experts) Strategy Selector'는 질문 신호에 따라 검색·모델·예산 힌트를 고르는 전략 선택 계층입니다. 9가지 핵심 플레이트에서 출발해 현재 AP10_TRAIN_RAG까지 등록하고, 기본 플레이트와 파라미터 후보를 선택하도록 구현했습니다.
+
+
+## 이 기능의 핵심 기전 (동작 원리)
+팀원들이 각자의 관점에서 해결 방법을 제안하는 것처럼, 검색·모델·예산 설정을 플레이트별로 나누었습니다. 질문에 맞는 설정을 선택해 기존 RAG 기능에 전달하는 방식입니다.
+
+이때 MoE라는 이름은 질문 신호와 전략 문맥으로 여러 플레이트 가운데 적용할 설정을 선택하는 구조를 뜻합니다.
+
+전략별로 검색 대상·모델·예산의 역할을 나누고, 선택된 플레이트의 힌트를 ChatWorkflow에 전달하도록 구현했습니다.
+
+1. 쿼리 분석 및 플레이트 선택 (The Gate ⚙️)
+9가지 핵심 전략을 출발점으로 삼고 ArtPlateRegistry에 플레이트별 설정을 등록했습니다. 현재는 학습 자료 검색을 위한 AP10_TRAIN_RAG도 포함되어 있습니다.
+
+AP1_AUTH_WEB: 권위 도메인의 웹 정보를 우선하며, webK=8·vectorK=4 설정으로 웹과 벡터 검색을 함께 구성하는 전략
+AP3_VEC_DENSE: 내부 DB(벡터) 정보 검색에 집중
+AP9_COST_SAVER: 비용을 고려한 모델·검색 예산을 적용하는 전략
+질문을 받으면 NineArtPlateGate가 질문 신호와 전략 문맥으로 기본 플레이트를 고르고 ArtPlateEvolver의 후보·채택 비율을 반영합니다. 플레이트 ID와 세션 반복·근거 수·신호 버킷을 묶은 routeKey의 해시로 후보를 선택하고, 검색 K·예산 힌트를 ChatWorkflow에 전달합니다.
+
+한마디로, 문제를 풀기 전에 어떤 검색·모델·예산 전략을 사용할지 결정하는 계층을 구현한 것입니다.
+
+2. 후보 평가와 채택 기준 (The Evaluation Gate)
+ArtPlateEvolver에 후보 플레이트의 평가·채택 정보를 저장하도록 구현했습니다. 선택된 플레이트의 설정과 평가 상태를 후보 채택 판단에 사용합니다.
+
+채택 게이트는 점수와 표본 수에 따라 후보의 분기 비율을 제안합니다. NineArtPlateGate는 routeKey의 해시를 이용해 후보를 선택합니다.
+
+전략 후보의 평가와 실제 선택을 나누어 구현했습니다. 평가·채택 상태에 따라 후보를 적용하는 범위를 조정하는 구조입니다.
+
+3. 플레이트 파라미터 후보 생성 (The Evolver 🧬)
+'MoE (Mixture-of-Experts) Strategy Selector'에 ArtPlateEvolver를 두어 기존 플레이트의 파라미터 후보를 제안하고 평가·채택 정보를 저장하도록 구현했습니다.
+
+예를 들어 ArtPlateEvolver는 버킷 신호에 따라 검색·예산 파라미터가 다른 후보를 만들고, 채택 게이트의 점수·표본 수에 따라 0%·5%·15%·50%의 분기 비율을 제안합니다. NineArtPlateGate는 routeKey의 해시로 후보를 선택합니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+마트료시카 슬라이싱(Matryoshka Slicing)
+
+💡 요약 (Elevator Pitch)
+
+
+결론부터 말씀드리면, 마트료시카 슬라이싱은 반환 임베딩을 목표 차원에 맞추는 기능입니다. 현재 qwen3-embedding:4b 설정에는 원래 차원 2560과 목표 차원 1536을 두고, Java 계층에서 차원 요청·슬라이싱·검증을 처리하도록 구현했습니다.
+
+OllamaEmbeddingModel.java에 Matryoshka-aware 차원 계약과 슬라이싱·검증 경로를 구현했습니다.
+
+1. 목표 차원에 맞춘 벡터 처리 (Matryoshka-aware 경로)
+프로젝트의 Qwen3-Embedding 설정을 Matryoshka-aware 경로와 연결했습니다. 반환 벡터의 길이를 설정된 목표 차원과 비교해 처리합니다.
+
+처리 원리: Java 코드는 모델의 가중치를 학습시키는 대신 반환된 벡터에 목표 차원 계약을 적용합니다.
+결과: WARN_ONLY에서는 목표보다 긴 벡터의 앞부분을 슬라이싱하고, STRICT에서는 목표와 다른 차원의 벡터를 거부합니다.
+ 저는 이 점을 명확히 하고 싶습니다.
+
+저는 Qwen3-Embedding의 반환 벡터를 설정된 목표 차원에 맞추는 어댑터를 구현했습니다. 현재 공개 기본 목표는 1536차원입니다.
+
+2. 저장소 차원 계약과 검증
+처리 기준:
+벡터 크기: 반환된 벡터가 목표보다 길면 WARN_ONLY 모드에서 앞쪽 목표 차원만 사용합니다.
+호환성: 목표 차원을 저장소 계약에 맞춥니다. 차원이 같더라도 서로 다른 임베딩 모델의 벡터를 같은 의미 공간으로 간주하지 않습니다.
+
+'Qwen3-Embedding'과 '자바 슬라이싱 로직'의 조합 시너지
+임베딩 제공자가 벡터를 생성하고, Java 계층이 목표 차원에 맞춰 검증·가공하는 분업 구조를 구현했습니다.
+
+
+
+1. 'Qwen3-Embedding 4B 설정'과 'Java 어댑터'의 결합 → 반환 벡터의 차원 관리
+'Dynamic RAG Routing System'의 조합: 저는 Qwen3-Embedding 계열을 사용하도록 구성했습니다. 현재 공개 설정의 모델은 qwen3-embedding:4b입니다.
+
+'Dynamic RAG Routing System'의 조합: 저는 OllamaEmbeddingModel.java에 앞쪽 목표 차원을 선택하는 마트료시카 슬라이싱 로직을 구현했습니다.
+Ollama 호출: 목표 dimensions=1536을 요청하고, 제공자가 차원 옵션을 거부하면 호환 경로로 다시 호출합니다.
+Java(애플리케이션): WARN_ONLY에서 초과 벡터를 목표 차원으로 슬라이싱하고 길이가 같으면 그대로 사용합니다. STRICT에서는 차원 불일치를 거부하며, 부족한 벡터도 명시적인 zero-pad 허용이 없으면 거부합니다.
+임베딩 제공자가 만든 벡터를 Java 계층에서 목표 차원 계약에 맞추도록 했습니다. OllamaEmbeddingModel.java에 API 호출·차원 요청·슬라이싱·부족 차원 검증을 모아 어댑터 역할을 부여했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Autonomous Resilience Engine(Massive Parallel Query Expansion)
+
+
+
+
+💡 요약 (Elevator Pitch)
+'Massive Parallel Query Expansion'은 조건에 따라 제한된 하위 질의로 추가 탐색하는 RAG 확장 기능입니다. ExtremeZSystemHandler의 직접 탐색 경로와 ExtremeZBurstAspect의 추가 웹 탐색 경로를 구현했습니다. 질의 수·시간 예산·설정에 따라 탐색 범위를 제한합니다.
+
+
+'Massive Parallel Query Expansion'과 기존 RAG 기능의 조합 시너지
+이 기능은 기존 질문 확장기와 검색기를 재활용하는 추가 탐색 모듈입니다. 직접 핸들러와 HybridRetriever에 적용되는 AOP 경로로 역할을 나누었습니다.
+
+1단계: 위기 감지 (필살기 발동 조건)
+기존 기능: 제 RAG 시스템은 ContradictionScorer(정보 모순 점수 측정기), AnalyzeWebSearchRetriever(웹 검색기) 등을 통해 초기 정보의 양과 질을 파악할 수 있습니다.
+'Massive Parallel Query Expansion'와의 조합: ExtremeZTrigger가 문서 수·권위·모순·고위험 꼬리 신호와 전략 충돌 조건으로 활성 여부를 평가합니다.
+초기 검색 결과가 너무 적을 때 (정보 결핍)
+찾은 정보끼리 서로 모순될 때 (정보 혼란)
+고위험 꼬리 신호나 전략 계획의 추가 탐색 요청도 판단에 참여합니다.
+점수·계획·전략 충돌 조건으로 플랜 B를 선택할 수 있는 트리거를 구현했습니다. 질의 수와 시간 예산을 제한하면서 탐색을 확장하려는 구조입니다.
+
+
+2단계: 질문 확장과 조건부 병렬 탐색
+기존 기능: 질문을 여러 하위 질문으로 나누는 SelfAskPlanner와 SmartQueryPlanner, 그리고 웹과 벡터 DB를 검색하는 각각의 Retriever가 이미 존재합니다.
+'Massive Parallel Query Expansion'와의 조합: ExtremeZSystemHandler는 하위 질의 확장·웹/벡터/학습 자료 탐색·정제를 묶습니다. 별도의 ExtremeZBurstAspect는 HybridRetriever 호출에 제한된 추가 웹 탐색을 적용합니다.
+질문 확장: ExtremeZSystemHandler가 QueryBurstExpander와 최대 하위 질의 수 설정을 사용합니다. 실제 개수는 입력·예산·설정·선택 경로에 따라 달라집니다.
+병렬 탐색: 직접 핸들러는 executor가 있으면 웹·벡터·학습 자료 작업을 fan-out하고, 없으면 순차 처리합니다. AOP 추가 웹 탐색은 예산 내 질의 루프입니다.
+하나의 낚싯대 대신 여러 변형 질의를 쓰는 방식입니다. 기존 확장기와 검색기를 재활용하면서 질의 수·시간 예산·executor 조건을 제한했습니다.
+
+3단계: 정제 및 안전한 통합 (기존 규칙 존중)
+기존 기능: WeightedReciprocalRankFuser와 AuthorityScorer로 순위·권위 신호를 다루고, 메인 최종 프롬프트는 PromptBuilder 조립 경계를 따릅니다.
+'Massive Parallel Query Expansion'의 응용:
+정보 선별: 직접 탐색 결과는 기존 융합·권위 평가 경로로 정제하도록 구성했습니다. ExtremeZBurstAspect는 자체 추가 검색에서 rrfApplied=false를 기록하므로 모든 극-Z 경로의 정제 방식이 같지는 않습니다.
+데이터 전달: 직접 핸들러는 최종 프롬프트 대신 List<Content>를 반환합니다. 이후 선택된 RAG 경로가 PromptContext를 구성해 PromptBuilder로 전달합니다.
+Massive Parallel Query Expansion은 추가 검색 자료를 준비하고 최종 프롬프트는 기존 조립 경계를 따르도록 했습니다. RagChainConfig에 직접 핸들러 빈을 두고, 별도로 HybridRetriever AOP 경로를 연결하여 기능의 역할을 분리했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+HYPERNOVA-Dynamic RAG Routing System
+
+
+
+'HYPERNOVA-Dynamic RAG Routing System'은 희소한 상위 신호에 가중치를 주는 RAG 점수 조정 모드입니다. 기존 부품을 교체하기보다 NovaNextFusionService에 TWPM·CVaR·수치 가드·다양성 재정렬을 조건부로 연결했습니다. '고위험-고수익 모드'는 상위 신호에 집중하는 탐색 전략의 비유입니다.
+
+하이퍼노바는 기존 부품의 점수·할당 파라미터를 수학적 로직으로 조정하도록 설계했습니다. 설정에 따라 융합과 재정렬을 적용하고, 점수 변화량을 제한하는 구조입니다.
+
+
+1. '수학적 튜닝'과 '정보 융합/분배'의 결합 → 과감한 베팅과 집중
+기존 정보 융합에 상위 꼬리 신호를 강조하는 로직을 추가했습니다. 소수의 중요한 정보를 놓치지 않도록 점수의 분포와 후보 메타데이터를 반영하는 설계입니다.
+
+꼬리 가중 멱평균(TWPM): NovaNextFusionService가 tailExcess에 따라 지수 p를 제한된 범위에서 계산하고 TailWeightedPowerMeanFuser.fuseUpperTail()에 전달합니다. 입력 점수의 상위 꼬리를 강조하는 가중 평균이며, 정답의 성공 확률을 판정하는 계산은 아닙니다.
+CVaR@α 융합: CvarAggregator.cvarAtQuantile()이 α 분위수 이상 꼬리 점수의 평균을 계산합니다. NovaNextFusionService가 설정된 lambdaCvar로 이를 TWPM과 혼합하며, 고정된 '황금 비율'을 적용하는 방식은 아닙니다.
+위험 조정 K-할당: NovaNextFusionService가 정렬된 후보에 RiskKAllocator를 적용하도록 연결했습니다.
+
+2. '데이터 정규화'와 '재랭킹'의 결합 → 숨겨진 보석 발굴
+임베딩 통계를 보정하는 저랭크 화이트닝과 후보 중복을 고려하는 DPP 선택을 두었습니다. 화이트닝은 벡터 변환을, DPP는 텍스트 shingle 유사도를 이용한 후보 선택을 담당합니다.
+
+저랭크 화이트닝: 현재 구현은 LowRankWhiteningTransform.apply()입니다. 제공자와 통계가 맞으면 벡터를 변환하고, 통계가 없거나 제공자가 다르면 원래 벡터를 통과시킵니다.
+DPP 다양성 재랭커: DppDiversityReranker는 점수와 문서 텍스트의 shingle 유사도를 바탕으로 후보를 탐욕적으로 선택합니다. 관련성과 중복을 함께 고려하는 구조입니다.
+
+3. '안전 게이트'와 '고위험 전략'의 결합 → 통제된 혁신
+점수 조정에 수치 가드와 실패 시 원래 결과를 유지하는 경로를 두었습니다. 탐색을 확장하면서 기존 처리 흐름을 보호하려는 설계입니다.
+
+과민 반응 제어: Delta 투영에 Math.tanh()를 사용하고 변화량에 BodeClamp와 원점수 대비 maxAdjustment 가드를 적용합니다. 이 장치들은 점수의 조정 폭을 제한합니다.
+기존 안전 게이트 연동: CitationGate·PIISanitizer·DomainWhitelist·FinalSigmoidGate 등의 처리 경계를 함께 구성했습니다. 게이트별 적용 경로와 설정에 따라 엄격 차단, soft, degrade, log-only 처리가 달라집니다.
+
+
+
+
+
+ "Dynamic RAG Routing System - 집중 탐침 - 아바라
+
+💡 요약 (Elevator Pitch)
+사용자가 올린 자료를 답변에 활용하기 위해, 로컬 첨부 저장과 검색 문서 변환을 연결한 RAG 경로를 구현했습니다.
+
+AttachmentService가 소유자·세션별로 첨부 자료를 저장하고, AttachmentContextHandler가 해당 자료를 검색 문서로 변환합니다. 이렇게 구성한 문서를 답변 컨텍스트에 포함해 외부 지식을 참조하도록 했습니다.
+
+검색 결과의 순위 융합에는 소스별 가중치를 적용하는 Weighted-RRF와 선택적인 NovaNext 후처리를 두었습니다.
+
+이 RAG 파이프라인은 첨부 문서 변환, 1회 IQR, 선택적인 재랭킹과 다양성 선택을 순서대로 연결한 구조입니다.
+
+작동 방식은 다음과 같습니다.
+
+먼저 소유자·세션에 맞는 첨부 자료를 문서로 변환하고, 현재 반복 수가 1로 설정된 IQR 경로를 실행합니다.
+이렇게 수집된 원석(raw data) 같은 문서는 주입된 첫 번째 재랭커, ONNX 재랭커, DPP에 순서대로 전달됩니다. 선택 모듈이 없거나 처리에 실패하면 기존 문서를 유지하는 Fail-Soft 분기를 두었습니다.
+'MLA 브레드크럼(MLA Breadcrumb)'에는 허용된 이벤트 메타데이터를 마스킹해 기록합니다.
+최종 답변의 재료는 RAG 경로에서 선택한 문서와 이를 조립한 컨텍스트입니다.
+
+
+'CIH-RAG'와 'LLM 오케스트레이션'의 조합 시너지
+이 시스템은 RAG의 '검색(Retrieval)'과 '생성(Generation)'을 분리하고, 선택적인 재랭킹·모델 라우팅·MLA/SSE 관측을 각각의 처리 경계에 두었습니다.
+1. '첨부 RAG'와 '모델 라우터'의 역할 분리 → 문서 처리와 모델 선택
+기존 기능 (CIH-RAG): AttachmentContextHandler가 소유자·세션별 첨부를 문서로 변환한 뒤 1회 IQR과 선택적인 재랭킹을 적용합니다.
+기존 기능 (LLM 오케스트레이션): LlmRouterBandit와 LlmRouterAspect가 조건부 모델 선택을 담당합니다. 설정된 llmrouter 모델 후보를 UCB1 형태의 선택 횟수·성공 보상과 실패 시 cooldown을 바탕으로 선택합니다.
+시너지 (어떻게 결합되는가): LlmRouterAspect는 DynamicChatModelFactory.lcWithTimeout에 전달된 llmrouter 모델 ID를 해석해, 설정된 후보를 선택하는 라우팅 경계를 제공합니다.
+라우터는 후보별 선택 횟수와 성공 보상을 기록하고, 실패한 후보에는 cooldown을 적용해 이후 선택에 반영합니다.
+"즉, 첨부 자료 처리와 모델 선택을 각각의 역할에 맞게 나눴습니다. 첨부 경로는 문서 변환과 선택적 재랭킹을 맡고, llmrouter 경로는 설정된 후보와 선택 상태를 바탕으로 모델을 배정합니다."
+2. '1회 IQR'과 '선택적 재랭킹'의 결합 → 답변 근거 정리
+기존 기능 (CIH-RAG): AttachmentContextHandler가 첨부 문서의 IQR 경로를 담당하며, 현재 반복 수는 1입니다. LoggingSseEventPublisher는 마스킹된 이벤트를 MLA와 SSE에 기록·중계하는 관측 모듈입니다.
+기존 기능 (LLM 오케스트레이션): Weighted-RRF에서 NovaNext로 이어지는 선택적 융합 후처리와, 첨부 경로의 첫 번째 재랭커·ONNX·DPP를 두었습니다. 첨부의 'bi_encoder' 단계에는 CrossEncoderReranker 빈을 주입합니다.
+시너지 (어떻게 결합되는가): 첨부에서 변환한 문서는 선택적인 재랭킹과 DPP를 거쳐 localDocs에 전달됩니다. 해당 모듈이 없거나 실패하면 원래 문서를 유지합니다.
+웹·벡터 등의 순위 목록을 합치는 경로에서는 Weighted-RRF로 융합한 뒤, 설정에 따라 NovaNext/GRANDAS 후처리를 적용합니다.
+첨부 경로에서는 첫 번째 CrossEncoderReranker와 선택적인 ONNX 재랭커가 문서의 순위를 조정합니다.
+마지막으로 DPP가 주입된 경우, 텍스트 shingle 유사도를 바탕으로 중복과 다양성을 고려해 후보를 선택합니다.
+
+3. 'MLA 브레드크럼'과 SSE의 활용 → 이벤트 기록과 실시간 관측
+기존 기능 (CIH-RAG & LLM 오케스트레이션): MLA 브레드크럼과 SSE를 통해 마스킹된 이벤트 메타데이터를 기록하고 중계합니다.
+시너지 (어떻게 결합되는가): 같은 이벤트 처리 경로에서 MLA 기록과 세션별 SSE 중계를 함께 수행합니다.
+역할 1 (이벤트 기록): LoggingSseEventPublisher가 허용된 이벤트 메타데이터를 마스킹한 뒤 MLA 브레드크럼에 기록합니다.
+역할 2 (실시간 관측): LoggingSseEventPublisher가 마스킹된 이벤트를 세션별 SSE 스트림으로 중계합니다.
+"이 시스템에서는 'MLA 브레드크럼'과 SSE를 관측 경로로 활용했습니다. 허용된 이벤트 메타데이터를 마스킹해 기록하고, 같은 이벤트를 세션별 스트림으로 중계하여 처리 과정을 살펴볼 수 있도록 했습니다."
+4. '견고한 아키텍처'의 결합 → 안정적인 운영
+기존 기능 (CIH-RAG): AttachmentService가 로컬 첨부 저장과 소유자·세션 관리를 담당하고, @Scheduled 작업으로 보존 기간이 지난 자료를 정리합니다.
+기존 기능 (LLM 오케스트레이션): PromptBuilder의 프롬프트 조립 경계와 설정 가능한 CitationGate·FinalSigmoidGate를 두고 ProviderGuardConfig로 제공자 설정을 검증했습니다. 게이트 적용과 판단은 선택 경로·모드·설정에 따릅니다.
+시너지 (어떻게 결합되는가): RAG 파이프라인의 '시작'에는 소유자·세션별 첨부 처리를, '끝'에는 프롬프트 조립과 설정 가능한 게이트를 배치했습니다.
+시작(입력) 제어: AttachmentService가 소유자·세션별로 자료를 저장하고, AttachmentContextHandler가 해당 범위의 로컬 첨부를 검색 문서로 변환합니다.
+끝(출력) 제어: 선택된 경로에서 PromptContext를 PromptBuilder로 조립하고, CitationGate와 FinalSigmoidGate는 설정·모드에 따라 판단합니다. soft·degrade·log-only 모드의 결과도 각 공개 정책에 따라 처리합니다.
+AttachmentContextHandler는 세션 첨부를 문서로 변환하고, 현재 1회 IQR과 선택적인 재랭킹을 적용합니다.
+
+기존 기능 (LLM 오케스트레이션): Weighted-RRF에서 NovaNext로 이어지는 선택적 융합 후처리와, 첨부 경로의 첫 번째 재랭커·ONNX·DPP를 두었습니다. 첨부의 'bi_encoder' 단계에는 CrossEncoderReranker 빈을 주입합니다.
+시너지 (어떻게 결합되는가): 첨부에서 변환한 문서는 선택적인 재랭킹과 DPP를 거쳐 localDocs에 전달됩니다. 해당 모듈이 없거나 실패하면 원래 문서를 유지합니다.
+웹·벡터 등의 순위 목록을 합치는 경로에서는 Weighted-RRF로 융합한 뒤, 설정에 따라 NovaNext/GRANDAS 후처리를 적용합니다.
+첨부 경로에서는 첫 번째 CrossEncoderReranker와 선택적인 ONNX 재랭커가 문서의 순위를 조정합니다.
+마지막으로 DPP가 주입된 경우, 텍스트 shingle 유사도를 바탕으로 중복과 다양성을 고려해 후보를 선택합니다.
+ 이 RAG 파이프라인은 첨부 문서 변환, 1회 IQR, 선택적인 재랭킹과 다양성 선택을 순서대로 연결한 구조입니다.
+작동 방식은 다음과 같습니다.
+
+
+3. 'MLA 브레드크럼'과 SSE의 활용 → 이벤트 기록과 실시간 관측
+기존 기능 (CIH-RAG & LLM 오케스트레이션): MLA 브레드크럼과 SSE를 통해 마스킹된 이벤트 메타데이터를 기록하고 중계합니다.
+ "이 시스템에서는 'MLA 브레드크럼'과 SSE를 관측 경로로 활용했습니다. LoggingSseEventPublisher가 허용된 이벤트 메타데이터를 마스킹해 기록하고, 세션별 스트림으로 중계하여 처리 과정을 살펴볼 수 있도록 했습니다."
+
+4. '견고한 아키텍처'의 결합 → 안정적인 운영
+기존 기능 (CIH-RAG): AttachmentService가 로컬 첨부 저장과 소유자·세션 관리를 담당하고, @Scheduled 작업으로 보존 기간이 지난 자료를 정리합니다.
+기존 기능 (LLM 오케스트레이션): PromptBuilder의 프롬프트 조립 경계와 설정 가능한 CitationGate·FinalSigmoidGate를 두고 ProviderGuardConfig로 제공자 설정을 검증했습니다. 게이트 적용과 판단은 선택 경로·모드·설정에 따릅니다.
+시너지 (어떻게 결합되는가): RAG 파이프라인의 '시작'에는 소유자·세션별 첨부 처리를, '끝'에는 프롬프트 조립과 설정 가능한 게이트를 배치했습니다.
+시작(입력) 제어: AttachmentService가 소유자·세션별로 자료를 저장하고, AttachmentContextHandler가 해당 범위의 로컬 첨부를 검색 문서로 변환합니다.
+끝(출력) 제어: 선택된 경로에서 PromptContext를 PromptBuilder로 조립하고, CitationGate와 FinalSigmoidGate는 설정·모드에 따라 판단합니다. soft·degrade·log-only 모드의 결과도 각 공개 정책에 따라 처리합니다.
+
+"즉, 해당 RAG 파이프라인의 '입력'에는 소유자·세션별 첨부 처리를, '출력'에는 프롬프트 조립과 설정 가능한 게이트를 두었습니다. 각 처리 경계를 분리하고 선택 경로와 모드에 맞게 적용하는 구조를 구현했습니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+버전 순수성 사수: OpenAI 어댑터로 통합한 하이브리드 RAG 아키텍처 
+
+
+
+💡 요약 (Elevator Pitch)
+"저는 RAG 시스템의 '버전 순수성(Version Purity)'을 지키기 위해, 4일간의 디버깅 끝에 '프로토콜 어댑터 패턴'을 적용했습니다. Gradle에서 LangChain4j 1.0.1 의존성을 선언·강제하고, OpenAiChatModel의 기본 주소를 정규화해 호환 서버에 연결하는 경로를 구현했습니다."
+
+
+기술적 챌린지와 해결 전략 (The Conflict & Resolution)
+1. 문제 상황: '버전 순수성'과 '기능 지원'의 충돌
+상황: 제 시스템은 LangChain4j 1.0.1 정식 버전을 기반으로 구축되었습니다. 당시에는 Ollama 베타 모듈과의 호환성 문제를 다루면서 정식 의존성을 유지할 연결 방법이 필요했습니다.
+갈등: 베타 모듈 혼합에 따른 의존성 충돌을 피하면서 로컬 모델을 연결해야 했습니다. 그래서 클라이언트 모듈을 추가하는 방식 대신 프로토콜 호환 경로를 선택했습니다.
+ "시스템의 안정성을 위해 라이브러리 버전을 하나로 통일하는 '버전 순수성' 원칙을 고수했습니다. 하지만 이는 로컬 LLM 연동 라이브러리의 호환성 문제라는 큰 벽에 부딪혔습니다. 타협하고 베타 버전을 섞어 쓸 수도 있었지만, 저는 장기적인 운영 안정성을 위해 아키텍처적인 해결책을 찾기로 결심했습니다."
+2. 해결 전략: 'OpenAI 호환 엔드포인트 트릭' (Protocol Adaptation)
+접근: 저는 특정 라이브러리(Ollama Client)에 종속되는 대신, 표준 프로토콜(OpenAI API Spec)을 활용하는 우회로를 택했습니다.
+구현:
+OpenAiChatModel 활용: LangChain4j 1.0.1 정식 의존성 안에서 OpenAiChatModel을 활용한 호환 경로를 두었습니다. LlmConfig는 주소·모델·자격 조건에 따라 호환 모델 또는 Ollama native 경로를 선택합니다.
+엔드포인트 리디렉션: OpenAiChatModel의 baseUrl을 정규화된 호환 서버의 기본 주소로 설정합니다. 클라이언트가 이 주소를 바탕으로 채팅 API 요청을 구성하도록 했습니다.
+설정 구성: LlmConfig.java의 ChatModel 빈과 LLM 설정에 호환 서버의 주소·모델을 적용하도록 구성했습니다.
+ "4일간의 시행착오 끝에 찾아낸 해답은 '인터페이스의 표준화'였습니다. 로컬 LLM(Ollama)이 제공하는 OpenAI 호환 인터페이스를 활용하여, 클라이언트 라이브러리의 버전 충돌 문제를 네트워크 프로토콜 레벨에서 우회했습니다. 정식 의존성을 유지하면서 로컬 모델을 연결하기 위해 선택한 아키텍처적인 해결책이었습니다."
+
+기존 RAG 시스템과의 조합 시너지
+이 '트릭'은 로컬·원격 모델을 공통 ChatModel 경계에서 다루기 위해 활용한 연결 전략입니다.
+
+1. 'Load Balancing Strategy'의 기반 (공통 모델 경계)
+기존 기능: 조건부 모델 선택을 담당하는 LlmRouterBandit·LlmRouterAspect와 공통 모델 팩토리 경계입니다.
+시너지: OpenAI 호환 서버에는 OpenAiChatModel을 사용하고, OpenAI Responses·Gemini·Ollama native 경로에는 각각의 프로토콜 어댑터를 적용합니다.
+코드 복잡도 감소: 공통 ChatModel 경계에서 모델을 다루되, 제공자별 모델·API·인증·기능 차이는 각 어댑터와 설정에 반영하도록 구성했습니다.
+RTX 3090/3060 활용: 호환 주소 설정으로 로컬 추론 서버에 연결하고, 로컬 프로세스의 상태 점검과 시작은 별도의 LocalLlmProcessManager 설정 경로에서 관리합니다.
+2. 'Plan DSL' 및 '자동 학습'의 조건부 실행
+기존 기능: Plan DSL과 UawIdleTrainScheduler·UawAutolearnOrchestrator의 조건부 자동 학습 경로입니다.
+시너지: 정식 의존성과 호환 ChatModel을 유지하면서 유휴 데이터 수집 경로를 구성했습니다. 유휴 학습은 기본 비활성 상태이며, 활성화하면 게이트와 실행 예산에 따라 동작합니다.
+3. '보안 게이트(ProviderGuardConfig)'의 통합 관리
+기존 기능: ProviderGuardConfig (설정 검증).
+시너지: ProviderGuardConfig가 설정에 따라 로컬 실행 요구, 주소 정책, 호환 게이트웨이와 인증 조건을 검증합니다. require-local의 기본값은 false이며, 로컬 실행 강제 여부를 명시적으로 설정하도록 했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+비대칭 멀티 GPU 기반 수직 통합 RAG 오케스트레이터(Asymmetric Multi-GPU Vertical RAG Orchestrator)
+
+
+
+
+💡 요약 (Elevator Pitch)
+"이번에 설계한 시스템은 '하드웨어 인프라부터 소프트웨어 오케스트레이션까지 수직 통합된 RAG 플랫폼'입니다. RTX 3090과 3060의 역할을 나눈 인프라 설정, 로컬 LLM의 상태와 시작을 관리하는 프로세스 계층, 등록 경로와 작업 역할에 따라 엔드포인트를 고르는 라우팅 계층까지 3중 구조로 구성했습니다."
+
+
+'인프라 통합'과 'RAG 시스템'의 시너지
+이 시스템은 하드웨어의 한계에 맞춰 소프트웨어의 실행 경로를 나누는 'Full-Stack Optimization' 구조입니다.
+
+1. '듀얼 GPU 토폴로지(Twin-Ollama)'와 '역할 분담'의 결합 → 하드웨어 최적화
+기존 기능: Ollama (로컬 LLM 실행기).
+신규 아키텍처: RTX 3090(24GB)과 RTX 3060(12GB)이라는 서로 다른 체급의 GPU를 위한 전용 토폴로지를 설계했습니다.
+RTX 3090 (Port 11434): 대형 로컬 추론을 맡기는 '전략가' 역할로 설계한 경로입니다. 현재 주 채팅은 API/OAuth 우선·Ollama 최후 정책을 따르며, GPU_LOST 대응 시에는 11434/3090을 우회하도록 운영 정책을 두었습니다.
+RTX 3060 (Port 11435): 보조 추론·임베딩을 맡기는 '실무자' 역할로 설계한 경로입니다. 공개 임베딩 설정은 11435와 qwen3-embedding:4b를 사용하며, 실제 역할별 경로는 프로필과 장애 우회 정책에 따라 선택합니다.
+"각 GPU의 메모리 용량과 특성에 맞춰 '두뇌'와 '임베딩/보조' 역할을 나누는 설계를 했습니다. API 우선 정책, 실행 프로필, 장애 우회 조건을 설정에 반영해 상황별로 경로를 선택하도록 구성했습니다."
+2. '로컬 LLM 프로세스 매니저'와 '시스템 부팅'의 결합 → 운영 안정성
+기존 기능: Spring Boot 애플리케이션.
+신규 아키텍처: LocalLlmProcessManager라는 '부트스트랩 매니저'를 개발했습니다. @Order(HIGHEST_PRECEDENCE), BeanFactoryPostProcessor, SmartLifecycle을 통해 빈 초기화와 로컬 프로세스 시작에 참여합니다.
+헬스 체크: 설정된 로컬 엔드포인트에 접근해 상태를 점검합니다.
+자동 복구: enabled·autostart가 켜져 있고 시작 커맨드와 실행 예산이 허용하는 경우, 설정된 커맨드(start-command)로 로컬 프로세스의 시작을 시도합니다.
+부팅 허가: 설정에 따라 동기 처리 또는 비동기 시작 경로를 사용하고, fail-fast 여부와 DEGRADED 상태를 구분해 초기화를 처리합니다.
+"애플리케이션이 하부 인프라(LLM 프로세스)의 상태를 점검하고, 설정된 조건에 따라 시작과 복구를 시도하는 'Self-Healing' 구조를 두었습니다. 동기·비동기 시작과 fail-fast 설정으로 초기화 시의 동작을 구분했습니다."
+
+3. '임베딩 스택 고정'과 'RAG 파이프라인'의 결합 → 데이터 일관성
+기존 기능: FederatedEmbeddingStore(벡터 DB), RAG Retriever.
+신규 아키텍처: 임베딩 설정에 qwen3-embedding:4b와 목표 1536차원 계약을 두고, 기본 엔드포인트를 Port 11435로 구성했습니다. 실행 경로에는 역할별 정책과 프로필·장애 우회 조건을 적용합니다.
+(Before): 여러 임베딩 모델이 섞여 차원 수(dimension) 충돌이 발생할 위험이 있었습니다.
+(After): OllamaEmbeddingModel이 목표 차원과의 일치 여부를 검사하고, 슬라이싱과 부족 차원 처리 정책을 적용합니다.
+"'임베딩 차원 불일치'에 대응하기 위해 모델·차원 계약과 검증 경로를 두었습니다. 목표 차원을 설정하고, 반환된 벡터의 차원을 확인해 정책에 맞게 처리하도록 구현했습니다."
+
+4. '모델 기반 라우터'와 '애플리케이션 로직'의 결합 → 개발 편의성
+기존 기능: DynamicChatModelFactory와 조건부 LlmRouterBandit·LlmRouterAspect입니다.
+신규 아키텍처: DynamicChatModelFactory.selectLocalBaseUrl()이 등록된 route의 주소·deviceRole과 모델 패턴·역할별 설정을 바탕으로 엔드포인트를 선택합니다.
+개발자가 모델을 요청하면 → 명시적으로 등록된 route의 주소와 역할 설정을 우선 적용하고, 해당 경로가 없으면 모델 패턴에 맞는 주소를 선택합니다.
+개발자가 qwen3:8b 등 설정된 경량 모델 패턴을 요청하면 → 등록 route와 coder·judge·vision 등의 역할 설정을 우선 적용한 뒤, 조건에 따라 fast/base 주소를 선택합니다.
+"비즈니스 로직에서는 공통 모델 경계를 사용하고, 포트와 역할별 엔드포인트 선택은 라우팅 계층에 모았습니다. 등록된 route와 모델·역할 설정을 바탕으로 주소를 고르도록 하여 연결 설정을 한곳에서 관리하는 구조를 구현했습니다."
+
+
+
+
+
+
+
+Dynamic RAG Routing System: 자동 학습-강화 오케스트레이터
+
+
+
+
+
+💡 요약 (Elevator Pitch)
+
+이번에 구축한 'RAG 학습 데이터 파이프라인'은 검증과 마스킹 조건을 만족한 Q&A·메타데이터를 JSONL로 축적하는 시스템입니다. UawAutolearnService·UawDatasetWriter와 조건부 인덱스 반영을 연결했습니다. 기본 비활성 설정을 두고, 활성화하면 품질·자원·예산 게이트에 따라 실행하도록 구현했습니다.
+
+
+'데이터셋 파이프라인'과 기존 RAG 기능의 조합 시너지
+
+1단계: 유휴 조건에서의 학습 데이터 축적
+
+사용자 부재와 자원·예산 조건을 확인한 뒤 학습 후보를 실행하는 단계입니다.
+
+핵심 기능: UawIdleTrainScheduler 및 UawAutolearnOrchestrator
+동작: Asia/Seoul 기준 00:30·04:30 예약을 두었습니다. enabled·cron-enabled는 기본 false이며, 활성화되면 사용자 부재·CPU·breaker·GPU admission·예산 조건을 검사해 UawAutolearnService 실행을 요청합니다.
+기존 기능과의 조합성:
+UawAutolearnService가 지식 공백·curiosity·설정된 질문·이력·정적 seed에서 학습 후보를 구성합니다.
+후보 질의를 실행한 뒤 근거·다양성·품질·validation 조건을 적용하고, validationAccepted 결과를 UawDatasetWriter로 data/train_rag.jsonl에 기록하도록 연결했습니다.
+결과: 사용자 입력 시 취소 신호를 전달하고 CPU·GPU·예산 게이트로 실행 범위와 비용을 제한하는 구조를 구현했습니다.
+
+2단계: RAG 인덱스 반영 (Closed-Loop Re-indexing)
+
+
+1단계의 승인 데이터와 미처리 backlog를 RAG 인덱스에 조건부로 반영하는 단계입니다. Spring Boot 앱 내부에서 승인 수·일일 실행 한도·배치 한도를 확인합니다.
+
+핵심 기능: AutolearnRagRetrainOrchestrator (신규) 및 TrainRagIngestService (업그레이드)
+동작: 새 승인 데이터와 backlog를 검사합니다. 기본 minAccepted=10, 일일 cap=2이며, 신규 승인 데이터가 0건이어도 backlog를 확인하는 분기가 있습니다.
+기존 기능과의 조합성:
+정책을 통과하면 TrainRagIngestService가 JSONL을 읽고 projection 모드에 맞춰 내용을 구성합니다. 기본값은 raw-content-to-vector=false와 METADATA_ONLY입니다.
+구성된 내용은 VectorStoreService·LangChainRAGService 경계를 통해 반영합니다. projection NONE에서는 벡터 반영을 하지 않습니다.
+결과: '유휴 조건 → 후보 실행·검증 → JSONL 기록 → 조건부 인덱스 반영'을 앱 내부에 연결했습니다. 활성화 설정과 승인 정책·projection 모드가 각 단계의 적용 범위를 결정합니다.
+
+3단계: 검증 결과와 정책 피드백
+검증된 후보 결과를 CFVM·튜너 피드백에 전달하고, 별도의 정책 조정 경로에서 제한된 검색 순서 변경에 활용하는 단계입니다.
+
+핵심 기능: UawAutolearnService의 검증 후 피드백 및 PolicyAdjuster
+동작: 조건부 유휴 루프에서 후보 실행 결과를 검증한 뒤 관련 피드백을 전달합니다.
+기존 기능과의 조합성:
+피드백 전달: UawAutolearnService가 검증 이후 CFVM·튜너에 피드백을 전달합니다. 모델 라우터의 보상 상태는 별도의 LlmRouterBandit에서 관리합니다.
+RAG 전략 조정: PolicyAdjuster가 feedback·cooldown 조건을 확인해 검색 순서를 제한적으로 조정하도록 구현했습니다.
+실패 피드백과 계획 선택: PlanSelectionService는 brave 요청 문맥에 따라 safe/brave를 선택합니다. 실패 피드백의 조건부 순서 조정은 PolicyAdjuster가 담당하도록 역할을 나누었습니다.
+요약
+제가 설계한 이 3단계 자동화 루프의 핵심은 '조합성'과 '점진적 개선'입니다.
+
+기존 RAG 기능과 연결하여 후보 생성·검증·데이터 기록·조건부 인덱스 반영·피드백을 구성했습니다.
+
+활성화 조건과 자원·예산을 확인한 뒤 후보를 실행하고, 승인된 결과를 기록·반영하는 흐름입니다. 각 단계의 책임과 적용 범위를 분리했습니다.
+
+이 기능은 UAW 후보 실행의 검증·데이터 저장과 선택적인 내부 데이터 API에 연결되어 있습니다.
+
+1. '품질·안전 게이트'와 '학습 데이터 승인'의 결합 → 기록 대상 선별
+기존 기능:
+CitationGate: 답변의 인용(근거) 개수를 검증합니다.
+com.example.lms.guard.FinalSigmoidGate: 근거·위험 조건과 설정된 sigmoid 점수 기준으로 결과를 판정합니다.
+DomainWhitelist: 출처가 허용된 도메인인지 검사합니다.
+UawAutolearnService가 승인한 결과를 UawDatasetWriter에 전달합니다. 기록기는 training-data filter·redaction·validation metadata·finalGate·quarantine 조건을 검사합니다.
+인용 기준: UAW 후보의 기본 minEvidenceCount는 3이며, allowZeroEvidence 등의 설정과 분기에 따라 승인 여부를 판단합니다.
+품질 기준: UawAutolearnService가 품질·validation·finalGate 상태를 검사하고, UawDatasetWriter가 finalGate·accepted 상태를 확인합니다.
+다양성 기준: uaw.autolearn.min-context-diversity의 기본값은 0.30입니다. 정규화한 근거 문자열의 3-gram 고유 비율을 계산해 적용합니다.
+사용자에게 답변을 공개하는 판단과 학습 데이터로 받아들이는 판단을 구분했습니다. 검증·마스킹·품질·다양성 조건을 통과한 데이터를 기록하도록 게이트를 구성했습니다.
+
+2. '데이터 스키마'와 'RAG 전체 파이프라인'의 결합 → 풍부한 메타데이터 확보
+기존 기능: 후보 실행 결과와 모델·근거·검증 상태를 각 처리 경로에서 다룹니다.
+현재 UawDatasetWriter는 질문·답변에 source·model/provider·gate·근거 수·다양성·validation·redaction 메타데이터를 함께 기록합니다.
+기록 예시: question, answer, model/provider, evidenceCount, finalGate, contextDiversity, validation, redactionApplied/redactionCount.
+왜 이 결과를 학습 자료로 받아들였는지 살펴볼 수 있도록 승인·근거·다양성·모델·마스킹 메타데이터를 남겼습니다.
+
+3. '수집 파이프라인'과 '운영/테스트 인프라'의 결합 → 지속적인 데이터 축적
+기존 기능:
+Soak/Probe API: 시스템을 자동으로 테스트하고 회귀 검증을 수행하는 인프라.
+probe.officialSourcesOnly: 공식 소스만 검색하도록 제한하는 운영 토글.
+'데이터셋 파이프라인'과의 조합:
+공식 소스 우선: UawAutolearnService의 officialSourcesOnly 기본값을 true로 두어 후보 실행의 출처 범위를 제한하도록 했습니다.
+자동 데이터 기록: 조건부 UAW 실행 결과가 승인 조건을 통과하면 설정된 JSONL에 축적되도록 연결했습니다.
+수동 추가 API: /internal/dataset/rag POST를 UawDatasetWriter에 연결했습니다. uaw.dataset-api.enabled=true와 관련 자동 설정의 등록 조건을 충족하면 사용할 수 있습니다.
+후보 실행·품질 검증·마스킹·기록·조건부 인덱스 반영을 연결했습니다. 공식 소스 제한과 승인 게이트를 적용하고, 활성 설정·자원·예산으로 실행 범위를 제어하도록 구현했습니다.
+
+
+
+Dynamic RAG Routing System - 브레이브 모드
+
+
+
+💡 요약 (Elevator Pitch)
+'브레이브 모드'는 탐색 폭과 검증 설정을 함께 조정하는 RAG 작전 계획입니다. brave.v1.yaml에 질문 확장·Massive Parallel Query Expansion·앵커 좁히기·재랭킹과 게이트 파라미터를 선언했습니다. 요청 문맥으로 계획을 선택하고, hint와 제한된 when·pipeline 실행 정보를 읽는 경로를 구현했습니다.
+
+
+'브레이브 모드'와 기존 RAG 기능의 조합 시너지
+'브레이브 모드'는 제가 구축한 기능들을 탐색 확대와 검증 강화라는 목적에 맞춰 조합한 작전 계획(Plan DSL)입니다. 각 기능은 연결된 소비자와 활성 조건에 따라 적용됩니다.
+
+1. '작전 계획서(Plan DSL)'와 '상황 판단'의 결합 → 지능적인 모드 전환
+기존 기능: 제 시스템은 YAML 계획을 선택하고, PlanHintApplier가 hint·조건·제한된 pipeline 실행 정보를 읽어 요청별 처리에 반영하는 구조입니다.
+'브레이브 모드'와의 조합:
+명시적·조건부 선택: brave.v1.yaml에 X-Brave-Mode:on 또는 initial_recall<0.35 조건을 선언했습니다. PlanSelectionService는 NovaRequestContext의 brave 여부로 brave/safe를 고르고, PlanHintApplier가 선택된 계획의 제한된 실행 정보를 읽습니다.
+전용 작전 계획: brave.v1.yaml 계획서에는 더 과감한 탐색과 더 엄격한 안전 규칙이 미리 정의되어 있습니다.
+요청 문맥과 계획에 따라 설정을 달리하는 모드 선택 구조를 구현했습니다. Plan DSL의 부분 소비를 기반으로 기존 모듈을 조합하는 유연성을 지향했습니다.
+
+2. 'Anchor-Based Context Compression/Massive Parallel Query Expansion'와 '탐색/응축'의 결합 → 탐색 범위 조정
+기존 기능: 질문을 여러 개로 확장하는 Self-Ask/Massive Parallel Query Expansion, 그리고 핵심 정보로 응축하는 Anchor-Based Context Compression 모듈이 이미 존재합니다.
+'브레이브 모드'와의 조합: 확장·Massive Parallel Query Expansion·오버드라이브 설정과 파이프라인 단계를 선언했습니다. 적용 여부는 소비자 연결, 빈, 예산, 기능별 활성 조건을 따릅니다.
+질문 확장: 계획에는 Self-Ask count=3, QueryBurst count=12, extremeZ.enabled=true가 선언되어 있습니다. 실제 질의 수와 실행 단계는 설정 소비·예산·중복 제거 조건에 따라 달라집니다.
+자원 설정: brave 계획에 naver.search.web-top-k=18과 검색·ONNX 동시성 등의 override를 선언했습니다.
+핵심 응축: 계획에 narrow.overdrive.anchor를 선언하고, ContextOrchestrator에 조건부 앵커 좁히기·압축 경로를 두었습니다.
+기존 질문 확장과 정보 응축 모듈을 '브레이브 모드'라는 작전 계획에 조합했습니다. 넓게 탐색한 뒤 앵커를 중심으로 핵심을 좁히는 역할 분담입니다.
+
+3. '강화된 안전 게이트'와 '최종 결과물'의 결합 → 신뢰성 강화 목표
+기존 기능: AutorunPreflightGate(사전 안전 점검), PIISanitizer(개인정보 보호), 도메인 화이트리스트 등 강력한 거버넌스 도구들이 있었습니다.
+'브레이브 모드'와의 조합: 탐색 확대와 함께 인용·품질 기준을 강화하는 설정을 계획에 담았습니다.
+더 엄격한 기준: brave.v1.yaml에 gate.citation.min=3과 sigmoid 파라미터가 선언되어 있습니다. 실제 판단은 적용 경로·모드·설정에 따릅니다.
+안전 우선 원칙: 확대 탐색에도 개인정보·출처·품질 경계를 적용하도록 설계했습니다. 게이트의 soft·degrade·log-only 처리와 엄격 차단을 구분합니다.
+탐색의 자유도를 높일 때 검증 기준도 함께 살펴야 한다는 원칙을 계획과 게이트 설정에 반영했습니다. 탐색 폭과 검증 강도를 함께 조정하는 것이 이 설계의 핵심입니다.
+
+
+
+
+
+
+
+
+
+
+
+Dynamic RAG Routing System- 룰 브레이크 모드
+
+💡 요약 (Elevator Pitch)
+'룰 브레이크'는 설정 토큰을 검증해 요청별 정책과 만료시각을 부여하는 선택적 탐색 제어 기능입니다. RuleBreakInterceptor를 MVC에 등록하고, 유효한 정책을 검색 순서 판단에 전달하는 경로를 구현했습니다. 적용은 해당 정책을 읽는 소비자에 한정됩니다.
+
+
+'룰 브레이크'와 기존 RAG 기능의 조합 시너지
+'룰 브레이크'는 기존 부품이 요청별 정책·만료 문맥을 읽도록 하는 구조입니다. 유효한 문맥을 실제로 소비하는 경로에서만 정책이 적용됩니다.
+
+1. '요청 문맥(RuleBreakContextHolder)'과 '정책 검증'의 결합 → 요청 단위 제어
+기존 기능: TraceContext·TraceStore 등의 요청 추적 경계가 있습니다. RuleBreak 정책 전달에는 별도의 RuleBreakContextHolder를 사용합니다.
+'룰 브레이크'와의 조합: RuleBreakEvaluator가 X-RuleBreak-Token을 설정 토큰·정책과 검증하고 TTL 만료시각을 생성합니다. RuleBreakInterceptor가 문맥을 RuleBreakContextHolder에 두고, 완료·비동기 전환 시 정리합니다.
+요청 단위의 정책 전달 경계를 두고 활성·거부 판단을 제한된 메타데이터로 기록했습니다. 소비자는 유효한 정책 문맥을 읽어 동작을 조정합니다.
+
+2. '동적 체인/검색'과 '정책 기반 파라미터 튜닝'의 결합 → 유연한 탐색 전략
+기존 기능: DynamicRetrievalHandlerChain과 RetrievalOrderService가 검색 경로·순서를 조정하고, 검색기는 K 설정을 받습니다. 기본 fixed 모드는 원래 순서를 유지합니다.
+'룰 브레이크'와의 조합: 유효한 문맥을 실제로 읽는 소비자가 정책에 맞춰 동작을 조정합니다.
+검색 순서 변경: 동적 판단 경로에서는 유효한 SPEED_FIRST 정책에 따라 VECTOR_KG_WEB를 선택합니다. fixed 모드는 이 판단 전에 기본 순서를 반환합니다.
+룰 브레이크는 '어떤 요청에 어떤 정책을 적용할지'를 문맥으로 전달합니다. 연결된 검색 순서 소비자가 유효 정책을 읽도록 구현하여 요청 단위로 동작을 제어했습니다.
+
+3. '요청 정책'과 '검증·정리'의 결합 → 요청 단위의 통제
+기존 기능: RuleBreakEvaluator가 토큰 일치·정책·만료시각을 확인하고, 인터셉터가 요청 문맥을 관리합니다.
+'룰 브레이크'와의 조합:
+판단 기록: 정책의 활성·거부 판단을 제한된 메타데이터로 기록하고, 유효기간이 지난 문맥은 검색 정책에 적용하지 않도록 했습니다.
+요청 정책을 부여할 때 검증과 정리가 함께 이뤄지도록 했습니다. 활성·거부 판단을 기록하고 완료·비동기 전환 때 문맥을 비워 요청 사이의 정책 혼입을 방지하도록 설계했습니다.
+
+
+
+
+그랜다스 모듈 퓨전 투영(GRAfted N-archive Delta-projection ASsembly)
+
+             
+'그랜다스 모듈(GRA-NΔ-AS)'은 여러 소스의 순위 융합 결과에 권위·근거·중복·모순·꼬리 신호를 반영하는 점수 조정 레이어입니다. WeightedReciprocalRankFuser → NovaNextFusionService의 조건부 후처리로 연결하여 현재 후보의 메타데이터에 따라 기여도를 보정했습니다.
+
+
+## 그랜다스 모듈 퓨전 투영 (GRA-NΔ-AS)의 핵심 기전 ⚙️
+
+
+그랜다스 모듈은 다음 단계로 후보 순위와 점수를 조정합니다.
+
+1. GRAfted N-archive: N개의 아카이브에서 신호 접목
+기전: WeightedReciprocalRankFuser가 전달받은 순위 목록의 소스별 점수·순위와 메타데이터를 모아 NovaNextFusionService.ScoredResult로 전달합니다. 실제 포함되는 소스는 호출자가 제공한 목록을 따릅니다.
+한 출처의 순위에만 의존하지 않고 전달된 여러 소스의 신호를 종합합니다. 여러 전문가의 의견을 모으는 것과 같은 역할입니다.
+2. Delta-projection: 후보의 품질·꼬리 신호를 점수 변화(Δ)에 투영
+기전: tailSignal·grandasReadiness·authorityAvg·strongCitationRate·crossLaneSupportRate를 더하고 duplicateRate·contradictionRate를 빼는 메타데이터 기반 Δ를 계산합니다. tanh·BodeClamp·원점수 대비 가드 안에서 점수에 반영합니다.
+예를 들어 권위·근거 지지가 높고 중복·모순이 적은 후보의 융합 점수를 제한적으로 보정합니다. 여러 품질 신호를 하나의 변화량으로 모아 반영하는 필터입니다.
+
+3. ASsembly: 점수/순위 융합 및 최종 컨텍스트 조립
+
+기전:
+Score Fusion(WMP/TWPM): 여러 소스의 기여도를 정규화하고 가중 거듭제곱 평균 계열로 결합합니다. 현재 GRANDAS 후처리에는 TWPM 계산이 사용됩니다.
+Rank Fusion(RRF): 소스별 문서 순위를 가중 합산해 통합 순위를 만듭니다. 조건에 따라 이 결과에 GRANDAS 후처리를 적용합니다.
+Bode-like Sensitivity Clamp: GRANDAS 보정 전후 점수 차이에 BodeClamp를 적용해 조정 폭을 제한합니다.
+Delta-Project 적용: 꼬리 신호, 준비도, 권위, 강한 인용, 교차 소스 지지, 중복·모순 메타데이터로 구성한 Δ를 융합 점수에 반영합니다.
+다양한 소스의 점수와 순위를 결합하고 후보의 품질 신호를 반영하도록 설계했습니다. WeightedReciprocalRankFuser와 NovaNextFusionService를 연결하여 순위 융합 뒤 점수 보정이 이어지는 구조를 구현했습니다.
+
+
+Dynamic RAG Routing System - FullScaleSearchStrategy(구성명·동명 타입 미확인)
+💡 요약 (Elevator Pitch)
+
+'Dynamic RAG Routing System - FullScaleSearchStrategy(구성명·동명 타입 미확인)'는 요청별 실행 계획으로 탐색 범위를 조합한 구성입니다. WorkflowOrchestrator가 요청·도메인에 따라 brave.v1·rulebreak.v1·hyper_nova.v1 등의 계획을 선택하고, ExecutionPlanApplier가 기능 제한과 override를 적용하도록 구현했습니다.
+
+
+'FullScaleSearchStrategy(구성명·동명 타입 미확인)'와 기존 RAG 기능의 조합 시너지
+기존 탐색·응축·융합 기능을 요청별 실행 계획으로 조합했습니다. 각 단계는 소비 경로와 활성 조건·예산에 따라 적용됩니다.
+
+1. 'Plan DSL'과 '기존 오케스트레이션'의 결합 → 요청별 실행 계획
+기존 기능: YAML 계획을 선택하고 hint·조건·실행 계획 override를 읽어 요청별 처리에 반영하는 구조입니다.
+계획 선택: WorkflowOrchestrator가 요청·도메인에 따라 기존 계획을 선택하고 PlanHintApplier로 정규화합니다. 선택된 계획에서 지원하는 설정을 각 소비 경로에 전달합니다.
+기존 Plan DSL을 활용하여 탐색 전략을 설정과 실행 계획으로 조합했습니다. 기능별 활성 조건과 예산을 함께 적용하도록 구현했습니다.
+
+2. '탐색/응축 모듈'의 조합 → 질문 확장과 정보 정제
+기존 기능: Self-Ask·QueryBurst·Massive Parallel Query Expansion, Anchor-Based Context Compression, GRANDAS, Bi-Encoder와 선택적 ONNX 경로가 있습니다. ONNX는 별도의 backend·runtime 조건을 가지며 현재 점수 서비스는 어휘 기반 fail-soft를 사용합니다.
+모듈 적용: 실행 계획과 기능별 조건에 따라 필요한 탐색·응축 단계를 선택하도록 구성했습니다.
+탐색 확대: Self-Ask와 QueryBurst·Massive Parallel Query Expansion에서 하위 질문과 변형 질의를 구성합니다. 분기 수는 lane 제한·예산·설정·중복 제거를 따릅니다.
+정보 정제: 활성 조건에 따라 후보를 앵커 중심으로 좁히고 GRANDAS·재랭킹 경로에서 순위와 점수를 조정합니다.
+기존 질문 확장기·검색기·응축기·융합기를 실행 계획으로 조합했습니다. 정찰 → 확대 탐색 → 핵심 응축 → 최종 정렬처럼 각 모듈의 역할을 나누었습니다.
+
+3. '요청 정책'과 '안전 게이트'의 결합 → 탐색·검증 기준 조정
+기존 기능: DomainWhitelist·PIISanitizer·CitationGate·FinalSigmoidGate 등 출처·개인정보·인용·위험 조건을 다루는 구성요소가 있습니다.
+검증 구성: RuleBreak가 토큰·정책을 검증하고 게이트가 각 경로·설정에 따라 결과를 처리하도록 역할을 나누었습니다.
+정책 적용: 검증된 RuleBreak 요청 문맥과 허용된 override를 해당 소비자가 읽어 동작에 반영합니다.
+검증 기준: 기본·프로파일·계획에 따라 인용 수와 sigmoid threshold를 설정하고, HARD/SOFT/DEGRADE/LOG_ONLY 모드로 처리합니다.
+탐색 범위를 조정할 때 검증 기준도 함께 살펴야 한다는 원칙을 반영했습니다. 요청 정책과 게이트의 역할을 나누어 기존 모듈의 적용 범위를 제어하도록 설계했습니다.
+
+
+Cognitive Circuit Router (CCR)
+
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 설계한 듀얼 기어 인지 라우팅(Dual-Gear Cognitive Routing)은 기본 프로필과 위험 신호에 따른 탐색 확장을 구분하는 구조입니다. DualGearPolicy와 ExecutionPlanApplier가 실행 계획을 조정하고, 별도의 후보 생성·앙상블 경로는 각 활성 조건에 따라 사용하도록 구현했습니다."
+
+🏗 핵심 아키텍처 구성 및 시너지 설명
+1. [기본 모드] 기본 파라미터 프로필 (Deterministic Baseline)
+기존 RAG의 한계: 온도(Temperature)와 탐색 폭(Top-P)을 고정하면 답변 다양성이 제한될 수 있어, 상황에 따라 탐색 폭을 조정할 필요가 있었습니다.
+적용 및 시너지: GoldenRatioProfile에 Temp 0.3 / Top-P 0.2의 기본 프로필을 정의했습니다. ExecutionPlanApplier가 이를 plan override에 기록하여, 요청의 기본 처리 파라미터를 명시적으로 전달합니다.
+2. [비상 모드] 확률적 파라미터 섭동 가차 (Stochastic Circuit Breaker)
+기존 RAG의 한계: 근거 회수율이 낮거나 모순 신호가 있는 요청에는 기본 탐색 범위를 조정할 필요가 있었습니다.
+적용 및 시너지: 위험·저회수·모순 신호에 따라 DualGearPolicy가 제한된 수의 질의 변형을 만드는 '가차(Gacha)' 탐색을 구현했습니다. 별도의 DiverseSamplingOrchestrator는 ensemble.sampling.enabled가 활성화된 경우 서로 다른 Temperature/Top-P 후보를 생성하며, 해당 설정의 기본값은 false입니다. 정형화된 틀을 넓혀 보려는 비상 탈출구이며, 질의 변형과 후보 생성은 각각의 조건에 따라 사용하도록 나누었습니다.
+3. [검증 모드] 근거 기반 후보 선별 (Critic-Judged Ensembling)
+기존 RAG의 한계: 후보의 다양성을 넓힐수록 사실·논리 오류도 점검해야 하므로, 후보별 근거 검증이 필요했습니다.
+적용 및 시너지: EnsembleFinalAnswerService와 judgeService를 이용하는 후보 선별 경로를 구현했습니다. ensemble 활성화와 citation context 등의 조건을 충족할 때 후보를 평가합니다.
+근거 점검: refinementEvidenceReady와 후보 검증 조건을 확인하여, 답변 후보를 사용 가능한 근거와 연결해 평가합니다.
+가드레일 스크리닝: "이 선을 넘으면 안 된다"는 정책 위반 여부를 검사합니다.
+후보 비교: DiverseSamplingOrchestrator의 sampleDualHypotheses/sampleThreeRoleHypotheses 경로에서 서로 다른 가설·역할의 후보를 생성하도록 구현했습니다.
+"이 아키텍처의 핵심은 요청의 위험 신호를 실행 계획 조정에 반영하는 데 있습니다.
+
+회수율·권위·모순 위험 등의 지표를 평가하여, 요청에 적용할 탐색 전략을 조정하도록 구성했습니다.
+
+평소에는 기본 프로필을 사용하고, 저회수·모순 신호가 있으면 제한된 질의 변형으로 탐색 폭을 넓힙니다. 후보 생성과 앙상블·근거 검증은 각각의 활성 조건을 가진 별도 경로로 관리합니다.
+
+즉, 위험 신호에 따라 탐색 전략을 조정하고 후보 검증을 결합하는 적응형 AI 에이전트의 기반을 구현한 것입니다."
+
+
+UAM - '(Unlimited Archive)’ - Mimic 오케스트레이터
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 구성한 UAM Mimic 오케스트레이터의 핵심은 RAG의 모델·가드·자동학습 정책을 명시적으로 관리하는 것입니다. 현재는 application.yml이 application-llm.yaml·stage-policy 등 여러 설정을 가져오고, 제공자 검증·재랭커·UAW 자동학습이 각자의 활성 조건을 읽는 구조로 구현되어 있습니다."
+
+
+'UAM 오케스트레이터'와 기존 RAG 기능의 조합 시너지
+'UAM 오케스트레이터'는 자동학습과 플랜·라우터·가드의 설정을 조합하는 구조입니다. 각 구성요소의 책임과 적용 조건을 분리하여 관리합니다.
+
+1. '핵심 안전 가드'와 '시스템 부팅/실행'의 결합 → 운영 안정성 확보
+기존 기능: 조건부 ONNX 경로, 인용·sigmoid 게이트, LlmRouterAspect·LlmRouterBandit이 관련 기반입니다.
+'UAW'와의 조합: 공개 설정과 개별 가드의 활성화 조건을 통해 부팅·실행 시 정책을 읽도록 구성했습니다.
+Provider Guard: require-local=true일 때 llm.provider가 local인지 검증합니다. 기본값은 false이며, fail-fast 설정에 따라 부팅 실패 또는 provider-disabled로 처리합니다.
+GPU 설정: 공개 application-llm.yaml의 ONNX gpu-id는 0입니다. ONNX는 기본 비활성이므로 장치 역할 설정과 실제 추론 실행을 구분해 관리합니다.
+병목 제어: ONNX 동시성 제한과 세마포어 경로를 두었으며, 기본 zsys.onnx.max-concurrency는 1입니다.
+"저는 안전 규칙을 명시적인 설정으로 관리했습니다. 제공자 검증·GPU 역할 설정·동시성 제어를 각각의 활성 조건과 연결하고, 실패 시 어떤 상태로 전환할지 구분해 두었습니다."
+
+2. '자동학습 스케줄러'와 '검증·데이터 기록'의 결합 → 조건부 데이터 축적
+기존 기능:
+UAW 후보 실행: 설정된 질문·이력·정적 seed 등에서 후보를 구성해 검증하는 자동학습 경로입니다.
+검증 게이트: 근거·위험 신호와 validation 상태를 평가하며, 경로별 threshold와 mode를 사용합니다.
+'UAW'와의 조합: UawIdleTrainScheduler가 train_idle.enabled와 train_idle.cron.enabled를 읽고 UawAutolearnOrchestrator.tick()을 호출합니다. 두 플래그의 기본값은 false입니다.
+예약 조건: 기본 크론은 Asia/Seoul 기준 00:30과 04:30입니다. 두 플래그를 활성화한 뒤에도 사용자 부재·예산·자원 가드를 통과해야 후보 실행이 진행됩니다.
+검증: evidenceCount·품질·validation 메타데이터, provider-disabled와 학습 쓰기 조건 등을 점검합니다.
+데이터 저장: accepted로 판정되고 쓰기가 허용된 샘플을 설정된 JSONL 데이터셋에 append합니다.
+"저는 후보 실행·검증·데이터 기록·조건부 인덱스 반영을 연결했습니다. 허용된 retrain 단계는 신규 샘플을 ingest/reindex하며, 현재 기본은 raw-content-to-vector=false와 METADATA_ONLY입니다. 이는 LLM 가중치 학습이 아니라 검색용 자료를 갱신하는 흐름입니다."
+
+
+3. '최종 프롬프트'와 '기존 프롬프트 빌더'의 결합 → 조립 경계 유지
+기존 기능: PromptBuilder.build(ctx)는 메인 ChatWorkflow의 최종 프롬프트 조립 경계입니다.
+현재 연결: 메인 ChatWorkflow가 최종 모델 호출에 사용할 프롬프트를 PromptBuilder로 조립합니다. 질문 확장·보조 작업은 별도의 호출 경계에서 관리합니다.
+"저는 메인 최종 프롬프트의 조립 경계를 유지하고, 인용·PII 같은 검증 가드는 별도의 역할로 관리했습니다. 프롬프트 구성과 출력 검증의 책임을 나누어 정책을 추적할 수 있도록 했습니다."
+
+
+
+
+
+
+
+
+Dynamic RAG Routing System - Load Balancing Strategy (Hybrid Engine Arbiter)
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 구현한 Load Balancing Strategy (Hybrid Engine Arbiter)는 요청 조건에 따라 모델과 RAG 처리 전략을 조정하는 오케스트레이션 구조입니다. LlmRouterAspect·LlmRouterBandit, Plan DSL과 조건부 재랭커를 연결하고, 모델 호출 결과와 실패 신호를 정책에 반영하도록 구성했습니다."
+
+
+'Dynamic RAG Routing System'의 5대 핵심 조합 및 시너지
+이 구조는 모델·자원 설정, 라우팅·가드, 검색·정제, 실행 계획, 실패 피드백의 다섯 계층으로 구성했습니다.
+
+1. [핵심 기반] '비대칭 GPU' 자원 분배 아키텍처 (3090/3060)
+저는 RTX 3090(24GB VRAM)과 RTX 3060(12GB VRAM)의 역할을 작업 성격에 맞게 나누는 하드웨어 구성을 설계했습니다.
+
+기존 기능: LlmRouterAspect·LlmRouterBandit, RerankerSelector·OnnxCrossEncoderReranker와 GPU·모델 설정이 관련 기반입니다.
+조합 방식 (로직 변경):
+로컬 모델 경로: Ollama/OpenAI 호환 endpoint와 모델별 admission 설정으로 호출 가능한 모델을 관리합니다. 장치 역할 설정과 실제 모델 서버의 GPU 배치는 분리해 다룹니다.
+재랭커 경로: 공개 ONNX 설정의 device-id/gpu-id는 0입니다. 현재 ONNX는 기본 비활성이며, OnnxRuntimeService에는 어휘 유사도 기반 fail-soft 점수 계산을 두었습니다.
+"저는 무거운 로컬 작업과 보조 작업의 자원 설정을 분리했습니다. 모델 서버의 endpoint와 재랭커의 활성 조건을 각각 관리하여, 역할별 자원 배치를 조정할 수 있도록 구성했습니다."
+
+
+2. '지능형 LLM 라우터'와 '보안 게이트'의 결합 (AI 관제탑)
+모델 서버의 endpoint와 자격·가용성 조건을 확인하고, 요청에 사용할 제공자를 선택하는 라우팅 경로를 구성했습니다.
+
+기존 기능: LlmRouterAspect, LlmRouterBandit, HybridLlmGatewayProbeService, ProviderGuardConfig, PromptBuilder와 인용·sigmoid 게이트가 있습니다.
+조합 방식:
+지능형 라우팅: LlmRouterBandit에 UCB1 선택과 실패 cooldown을 구현하고, 호출 성공·실패·지연을 recordOutcome으로 반영합니다. API-first·수동 모델 고정·등록 경로 eligibility에 따라 선택 방식이 달라집니다.
+제공자 검증: ProviderGuardConfig는 require-local=true일 때 provider를 제한하고 로컬 endpoint 허용 여부를 검사합니다. 기본값은 false이며 fail-fast 설정에 따라 부팅 실패 또는 provider-disabled로 처리합니다.
+출력 제어: 메인 최종 프롬프트는 PromptBuilder 경계를 사용하고, 인용·sigmoid 등의 검증 가드는 각각의 조건과 판정 모드에 따라 적용합니다.
+"저는 모델 호출 결과를 피드백하는 라우터와 제공자·품질 가드를 함께 구성했습니다. 등록 모델과 요청 정책에 따라 경로를 선택하고, 설정 검증과 출력 점검의 책임을 분리했습니다."
+
+
+3. 'RAG 검색·정제' 파이프라인 (답변 재료 준비)
+RAG 파이프라인은 활성화된 검색 경로와 예산에 따라 LLM에게 전달할 근거 후보를 준비합니다.
+
+
+
+기존 기능: DynamicRetrievalHandlerChain, SelfAskPlanner, Weighted-RRF, GRANDAS, Bi-Encoder, 조건부 ONNX 경로, DppDiversityReranker, RerankCanonicalizer.
+조합 방식: 정보 정제는 정교한 '다단계 필터링'을 거칩니다.
+확장: SelfAskPlanner는 BQ/ER/RC의 3-Way lane을 생성합니다. 실제 lane 수와 실행 여부는 예산·lane 제한·활성화 조건을 따릅니다. (Query Expansion (or Decomposition) with Self-Ask)
+수집: DynamicRetrievalHandlerChain이 등록·활성화된 웹·벡터·KG 등의 retrieval handler를 조합합니다.
+융합: Weighted-RRF가 정규화된 후보 키로 소스 결과를 합치고, 조건에 따라 GRANDAS 후처리를 적용합니다.
+정제(재랭커 선택과 조건부 다양성 조정):
+Bi-Encoder: 현재 기본 embedding backend에서 후보를 재정렬하는 경로입니다.
+DPP: 융합 결과에 조건부로 적용하여 관련성과 다양성을 함께 조정합니다. (Context Refinement)
+ONNX: 설정·모델 조건에 따라 선택되는 경로입니다. 현재 runtime 서비스는 실모델 GPU 추론 대신 Jaccard 기반 fail-soft 상태입니다.
+"저는 검색·융합과 재랭커 선택·다양성 조정의 역할을 분리했습니다. Bi-Encoder와 조건부 DPP를 사용하고, ONNX의 비활성·폴백 상태도 명시적으로 처리하도록 구성했습니다."
+
+
+
+
+4. '전략적 오케스트레이션' (상황별 모드 전환)
+요청 상황에 맞춰 플랜과 실행 계획의 파라미터를 조정하는 것이 전략적 오케스트레이션의 역할입니다.
+
+기존 기능: Plan DSL, BladeSpec, Anchor-Based Context Compression, Massive Parallel Query Expansion, Hypernova 계열 설정과 실패 피드백·IrregularityProfiler가 관련 구성요소입니다.
+조합 방식: Plan DSL과 GuardContext override의 소비 경로를 통해 검색·응축·융합 단계의 파라미터와 사용 범위를 조정합니다.
+'Brave 모드': brave.v1 플랜과 관련 override가 탐색 폭·응축·게이트 조건을 조정합니다. 실행 여부와 검색량은 각 가드·예산·등록 상태를 따릅니다.
+'Hypernova 모드': hyper_nova.v1 플랜과 실행 계획에서 TWPM·CVaR·Risk-K 관련 설정을 사용합니다. GRANDAS는 Weighted-RRF 뒤의 조건부 후처리 경로로 이어집니다.
+'Side Train / Error Break': 비정규성·실패·cooldown 신호를 OrchestrationSignals·BypassStrategy·retrieval 가드에서 소비하여 처리를 보수적으로 조정합니다.
+'UAW': BladeSpec이 NORMAL/STRIKE/BYPASS에서 사용할 기능과 분기 수를 정의합니다. 질문 조건에 따른 Plan 선택은 WorkflowOrchestrator가 담당합니다.
+"저는 Plan DSL과 요청별 실행 계획으로 RAG의 탐색·응축·융합 동작을 조정했습니다. 플랜 선택과 override를 실제 소비하는 Java 경로에 연결하여, 각 모듈의 역할과 활성 조건을 명시적으로 관리하도록 했습니다."
+
+
+
+
+5. '자가 학습 및 진화 루프' (지속적인 개선)
+마지막으로, 자동학습과 실패 피드백 경로를 각각의 활성 조건에 따라 연결했습니다.
+
+기존 기능: UawIdleTrainScheduler·UawAutolearnOrchestrator, 실패 피드백·데이터셋 기록·RAG 인덱스 반영 경로가 있습니다.
+조합 방식:
+자동학습: UawIdleTrainScheduler는 Asia/Seoul 기준 00:30·04:30 예약을 두며, train_idle.enabled와 train_idle.cron.enabled의 기본값은 false입니다. 활성화 후에도 사용자 부재·예산·자원 조건을 통과해야 tick이 진행됩니다.
+데이터 선별: UAW 검증 메타데이터와 품질 추적기·UawDatasetWriter가 validation.accepted와 쓰기 가드를 만족한 샘플을 JSONL 데이터셋에 기록합니다.
+인덱스 반영: 허용된 샘플을 TrainRagIngestService로 ingest/reindex합니다. 현재 기본은 raw-content-to-vector=false·METADATA_ONLY이며, LLM 가중치 학습과 구분되는 검색용 자료 갱신입니다.
+실패 피드백: FailurePatternOrchestrator가 실패 패턴을 metrics·JSONL·cooldown으로 연결하고, PolicyAdjuster가 조건부 정책 조정을 제공합니다.
+"저는 유휴 조건에서 후보를 검증하고 데이터를 축적하는 흐름과, 실패 감지 결과를 cooldown·정책에 반영하는 흐름을 나누어 구현했습니다. 실행·검증·기록·조건부 인덱스 반영을 연결하고, 각 단계의 예산과 활성 조건을 관리했습니다."
+
+
+
+
+
+
+
+Silent Failure Pattern- Anti-Fragile Circuit Breaker
+
+
+💡 요약 (Elevator Pitch) "제가 구현한 Silent Failure Pattern(Nightmare Break)은 응답이 비어 있거나 실패가 숨겨지는 상황을 드러내고 호출을 제어하는 구조입니다. FriendShieldPatternDetector의 빈·회피 응답 감지, FaultMaskingLayerMonitor의 실패 기록, NightmareBreaker의 key별 cooldown·회로 상태를 조합했습니다."
+
+
+1. 개발 배경: '결함 은폐 계층(Fault Masking Layer)'의 역설
+과거 프로젝트 협업 과정에서, "겉으로는 에러가 없지만 실제로는 작동하지 않는(Silent Failure)" 모듈로 인해 전체 시스템이 마비되는 경험을 했습니다. 이는 마치 동료 뒤에 숨어 책임을 회피하는 '결함 은폐 계층(Fault Masking Layer)'처럼, try-catch로 에러를 삼키거나 default 값으로 문제를 덮어버리는 잘못된 방어 코드들이 원인이었습니다. 저는 "진정한 안정성은 문제를 숨기는 것이 아니라, 문제를 가장 먼저 드러내고(Fail-fast) 해결하는 것"이라는 철학을 바탕으로, 이 불투명한 방어막을 뚫고 시스템의 진짜 상태를 직시하여 위기를 통제하는 'Silent Failure Pattern'를 설계했습니다.
+
+2. 핵심 기전 (동작 원리)
+1단계: 환영 감지 (Piercing the Shield)
+
+문제: HTTP 응답 코드만으로는 빈 결과나 회피성 응답을 구분하기 어려워, 응답 내용과 지연·실패 신호를 함께 관측할 필요가 있었습니다.
+해결: IrregularityProfiler가 관측된 문제를 요청의 비정규성 점수·이벤트로 기록합니다. FriendShieldPatternDetector는 빈 구조 payload와 짧은 회피성 문장을 휴리스틱으로 식별하고, NightmareBreaker는 slow-call/silent-failure 정책으로 호출 key별 상태를 조정합니다.
+2단계: 악몽 격파 (Breaking the Nightmare)
+
+기전: 설정된 silent-failure·slow-call 신호가 누적되면 NightmareBreaker가 해당 호출 key를 OPEN/cooldown 상태로 전환합니다.
+동작:
+호출 차단 및 취소: 해당 key의 신규 호출을 제한하고, 요청 소유 Future를 타임아웃·취소 처리하는 경로를 두었습니다.
+쉴드 해제(Unmasking): FaultMaskingLayerMonitor가 원인 유형·실패 이벤트·비정규성 신호를 기록합니다. 민감정보를 제거한 진단 정보로 문제를 추적하도록 구성했습니다.
+3단계: 여명 회복 (Dawn Recovery & Bypass)
+
+기전: 문제를 터뜨리는 것에서 멈추지 않고, 사용자에게는 안정적인 서비스를 제공해야 합니다.
+동작: BypassStrategy·BypassRoutingService가 보조 엔진 장애·STRIKE/COMPRESSION·BYPASS 신호에 따라 기능을 제한하고, 사용 가능한 근거로 대체 응답을 조립합니다. 근거가 없으면 정보 부족 응답을 반환합니다.
+3. '결함 은폐(Fault Masking)MOE 모델 사건'에서의 기술적 승화 (Self-Reflection)
+이 기능은 외부 의존성이 실패할 때 아키텍처 수준에서 어떻게 대응할 것인지에 대한 저의 해답입니다. 무조건적인 신뢰 대신 관측·검증·호출 제한을 구현하고, 요청별 회복 경로와 실패 상태를 명시적으로 다루었습니다.
+
+
+SelfHealingEcoRAG (자가 치유(복구/서킷 브레이커)
+
+
+💡 요약 (Elevator Pitch)
+"제가 설계한 SelfHealingEcoRAG는 검색 실패에 대비한 버퍼와 재순환 구조입니다. 과거 검색 결과를 제한된 버퍼에 보관하고, 결과가 부족할 때 출처 필터와 중복 제거를 거쳐 재주입하도록 연결했습니다. 재순환 자료에는 UNVERIFIED 상태를 표시합니다."
+
+'에코시스템 환수 시스템'과 기존 RAG 기능의 조합 시너지
+이 시스템은 RAG 검색 체인에 완충(Buffer)과 순환(Recirculation) 계층을 더하여 일시적인 검색 실패에 대응합니다. 버퍼·출처 필터·호출 key별 회로 상태를 나누어 관리합니다.
+
+1. 'EcosystemBufferPool' (미생물 군단 완충층) → 데이터 재순환
+어항 생태계 비유: 물고기(재첩)가 죽더라도 미리 풍부하게 배양해 둔 '미생물 군단'이 있으면 수질 악화(백탁 현상)를 막을 수 있습니다.
+기존 기능: 웹 검색 결과가 비거나 부족하면 폴백 경로를 선택하며, 전체 검색 체인은 웹·벡터·KG 등 등록된 축을 조합합니다.
+조합 및 시너지: EcosystemBufferPool에 검색 결과를 TTL·용량 범위 안에서 보관합니다. WebFailSoftSearchAspect의 결과가 비고 버퍼가 등록된 경우, 과거 후보를 low-trust 출처 필터로 검사한 뒤 중복을 제거해 제한적으로 재주입합니다.
+2. 'SurgeGuard'(기능명·동명 타입 미확인) ( 스파이크 차단) → 데이터 오염 격리
+어항 생태계 비유: 큰 개체가 흙 속에서 썩으면 암모니아가 늘어 어항 전체에 영향을 줄 수 있습니다.
+기존 기능: 검색 결과가 부족해 폴백(Fallback) 모드가 작동하면, 필터링되지 않은 신뢰도 낮은 정보(Low-Trust URL)가 그대로 AI의 프롬프트로 유입될 위험이 있었습니다.
+조합 및 시너지: EcosystemBufferPool.recirculateSafe에 low-trust 출처 필터를 적용합니다. 재순환 후보의 low-trust 비율이 임계치(기본 0.5) 이상이면 safe 목록을 비우고 격리 지표를 기록합니다. 통과한 재순환 자료도 UNVERIFIED로 표시합니다.
+3. 'NightmareBreaker' 개선 (검역소 분리) → 회복 탄력성(Resilience)
+기존 과제: 429 같은 요청 제한 응답과 일반적인 실패를 구분하고, 호출 대상별 회로 상태를 관리할 필요가 있었습니다.
+조합 및 시너지: NightmareBreaker는 429를 RATE_LIMIT으로 분류하여 기본적으로 generic hard-failure 카운트에 더하지 않습니다. 대신 rate-limit 전용 임계치·OPEN/backoff를 적용하고 key별 상태를 분리합니다.
+RAG 시스템을 구축할 때 가장 다루기 까다로운 부분은 외부 API의 응답 지연이나 예기치 않은 데이터 오염입니다. 저는 이를 해결하기 위해 생태계의 '자정 작용' 모델을 코드에 이식했습니다.
+
+문제가 생기기 전에 미리 데이터를 비축(Buffer)하고,
+장애 시 출처·용량 조건을 만족한 결과를 재활용(Recirculate)하며,
+그 과정에서 low-trust 출처를 필터링하고 재순환 자료의 미검증 상태를 표시하는 구조입니다.
+TraceStore에는 ecosystem.recirculate.used, ecosystem.ammonia.score, ecosystem.ammonia.quarantined 등의 상태를 기록하도록 연결했습니다.
+
+
+
+Dynamic RAG Routing System - 에러 브레이크
+
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 구현한 Dynamic RAG Routing System - 에러 브레이크는 실패 신호를 후속 요청의 보수적 처리에 활용하는 구조입니다. 실패 패턴과 cooldown, CFVM 기록·K 배분 조정, 요청별 Bypass를 연결하고 위험 등급별 정책 옵션은 별도 클래스로 표현했습니다."
+
+
+'에러 브레이크'와 기존 RAG 기능의 조합 시너지
+'에러 브레이크'는 기존 RAG를 대체하지 않고 실패 신호에 따라 실행을 조정하는 방식입니다. 실패 기록·cooldown·K 조정 경로와, 위험 등급별 옵션을 반환하는 정책 클래스를 나누어 구현했습니다.
+
+
+1. '실패 기록(CFVM Raw)'과 '검색 조정'의 결합 → 후속 요청의 보수적 처리
+기존 기능: RAG 파이프라인 실행 중 웹 검색 실패(NaverSearchService), 결과 융합 오류(Weighted-RRF), 재랭킹 실패(ONNX) 등 다양한 지점에서 문제가 발생할 수 있었습니다. 빌드 시에도 cannot find symbol 같은 반복적인 오류가 있었습니다.
+'에러 브레이크'와의 조합:
+실패 패턴 축적: CfvmFailureRecorder와 FailurePatternOrchestrator가 실패 이벤트·패턴을 기록하고 일부 정책 경로에 전달합니다.
+위험 신호 활용: CFVM과 CfvmKAllocationTuner가 경험·실패·위험 신호를 K 배분에 활용합니다. RawMatrixBuffer가 간결한 실패 정보를 보관하고, 조정 경로가 해당 신호를 소비합니다.
+실패 기록을 오답 노트처럼 활용하는 기반을 구현했습니다. 기록·cooldown·K 배분 피드백을 통해 다음 요청을 보수적으로 처리하는 구조를 지향합니다.
+
+2. '동적 RAG 체인'과 '위험 등급별 정책'의 역할 분리
+기존 기능: DynamicRetrievalHandlerChain이 RetrievalOrderService와 요청 메타데이터로 검색 경로를 구성합니다. 기본 fixed 모드는 WEB → VECTOR → KG이며, 다른 모드·유효한 override·실패 신호 조건에서 조정할 수 있습니다.
+'에러 브레이크'의 정책 클래스: NovaErrorBreakGuard가 OK/WARN/BREAK별 옵션을 반환합니다. 기존 주 체인의 OrchestrationGate·실패 패턴·CFVM 조정과 구분되는 정책 구현입니다.
+위험 등급 입력: NovaErrorBreakGuard는 외부에서 받은 Risk enum을 정책 옵션으로 변환합니다.
+경로 지시:
+OK(안전): 기본 정책 옵션을 반환합니다.
+WARN(주의): 정책 클래스는 ONNX 비활성·webTopK=8·officialOnly 등 보수적인 옵션을 반환합니다.
+BREAK(위험): ONNX 비활성·webTopK=4·officialOnly·preferCache 옵션을 반환합니다.
+기존 체인의 cooldown·K 배분·Bypass로 실패에 대응하고, 위험 등급별 옵션은 별도의 정책 클래스로 표현했습니다. 실행 신호와 설정을 읽는 경계를 분리했습니다.
+
+3. '기존 인프라 재활용'과 '비침투적 설계' → 안정적인 통합
+기존 기능: 도메인 정책·Weighted-RRF·조건부 재랭커·Soak/Probe·선택적 Upstash 캐시 등 관련 구성요소가 있습니다.
+'에러 브레이크'와의 조합: 정책 클래스는 ONNX 사용 여부·webTopK·officialOnly·preferCache 등의 옵션을 반환합니다. 기존 체인에는 cooldown·K 조정·Bypass 신호를 소비하는 경로를 두었습니다.
+가장 중요하게 생각한 것은 기존 시스템을 보호하면서 안전 기능을 추가하는 것이었습니다. 정책 신호와 설정 소비 경계를 나누어 기능을 조합하는 비침투적인 방식을 적용했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ Query Expansion (or Decomposition) with Self-Ask의 핵심 기전 (동작 원리)
+
+
+
+
+도입배경:
+배경지식이 부족하면 같은 문서를 반복해서 읽어도 핵심을 파악하기 어려운 문제를 경험했습니다. 이를 해결하려고 롱테일 질의를 BQ/ER/RC 관점으로 나누는 SelfAskPlanner를 구현했습니다. 실제 lane 수와 실행은 요청 예산·활성 조건을 따릅니다.
+
+핵심은 배경지식 공백을 세 가지 질문 축으로 나누고 lane 가중치·온도·시간 예산을 조정하는 것입니다. 생성된 질의를 검색·융합·재랭킹과 연결하고 구조화된 프롬프트로 답변 생성을 돕도록 설계했습니다.
+
+이러한 기능 개발의 근간에는 저의 멘토이신 박현수 선생님께 배운 가설-검증 루프와 예외 처리 중심의 문제 해결 접근법이 있었습니다. 초기 모놀리식 구조에서 DTO 기반의 모듈형 아키텍처로 리팩토링하는 과정에서 Transformer 모델의 수리적 패턴에 대한 이해를 심화할 수 있었습니다.
+
+해당 문제 해결 과정과 기술적 시도들은 아래 Git 리포지토리에서 확인하실 수 있습니다.
+
+▶ 1. 전체 구조와 시작점: ChatService / ChatWorkflow
+
+메인 채팅 요청은 API 진입점에서 ChatService로 들어와 ChatWorkflow 등의 처리 흐름으로 이어집니다.
+
+질문·도메인·요청 설정에 따라 WorkflowOrchestrator와 검색 체인을 조합하고, 조건을 만족하면 SelfAskPlanner 같은 확장 모듈을 사용합니다.
+
+"초기에는 모든 기능이 얽힌 모놀리식 구조였지만, 지금은 각 기능이 모듈화되어 어떻게 조합하는지 이 파일을 통해 전체적인 아키텍처를 파악할 수 있습니다."
+
+
+▶   2.  핵심 아이디어 (롱테일 분기): SelfAskPlanner
+
+배경지식 공백을 줄이기 위해 generateThreeLanes에서 LLM과 결정론적 폴백으로 BQ/ER/RC 하위 질문을 생성하는 로직을 구현했습니다. 생성 수는 lane 제한과 예산을 따릅니다.
+
+질문 생성은 SelfAskPlanner가, 하위 질의 검색은 SelfAskWebSearchRetriever와 기존 체인이 담당합니다. 저는 질문 분해·검색·재랭킹의 역할을 나누어 문제 해결 방식에 맞게 조합했습니다.
+
+
+▶ 3. 기술적 깊이 (재랭킹 구성): CrossEncoderReranker
+
+여러 하위 질문의 검색 결과를 합친 뒤 중요도를 다시 정렬하는 단계입니다. 현재 기본 crossEncoderReranker 빈은 BiEncoderReranker를 제공합니다.
+
+ONNX 재랭킹 연동을 위한 인터페이스와 선택 경로를 두었습니다. 현재 기본 경로는 Bi-Encoder이고 ONNX는 기본 비활성 조건을 가집니다. OnnxRuntimeService.scorePair는 Jaccard 기반 fail-soft 계산입니다.
+
+이 부분을 통해 재랭커 선택, Java 추론 연동 인터페이스, 실패 시 대체 처리의 경계를 다루는 엔지니어링 과정을 보여주고 싶습니다.
+
+
+▶  4.최종 결과물 조합: PromptBuilder
+
+마지막으로, 수집·선별 후 컨텍스트로 채택된 웹 검색 결과와 문서를 PromptBuilder 경계에서 조합합니다.
+
+build(PromptContext)와 ChatWorkflow의 사용 지점에서 근거 컨텍스트와 최종 지시를 구조화해 조립하도록 했습니다.
+
+"이것이 자기소개서에서 언급한 '스스로 생각하게 하는 띵킹 셋업(사고 유도 프롬프트)'의 최종 결과물로, AI가 맥락을 더 잘 이해하고 정확한 답변을 생성하도록 유도합니다."
+
+
+
+
+Query Expansion (or Decomposition) with Self-Ask 설계 설명
+가령 배경지식이 부족한 상태에서 들어오는 복잡한 질문에 대해, 단순히 키워드 검색만으로는 정확한 답변을 찾기 어려운 문제를 해결하기 위해 이 기능을 만들었습니다. 예를 들어, "최근 도입된 시스템의 성과 지표(KPI)는?"이라는 모호한 질문이 들어왔을 때, 이 질문 하나로만 검색하는 대신 여러 관점으로 쪼개어 가장 정확한 정보를 찾아내는 것이 목표입니다.
+
+모호한 질문을 BQ/ER/RC 관점으로 분기합니다. Planner의 lane 생성은 순차 루프이며 이후 검색은 예산 안에서 비동기 제출합니다. 여러 전문가가 다른 관점으로 접근한다는 비유로 설계를 설명할 수 있습니다.
+
+가령
+
+도메인/정의 축: 질문의 핵심 용어(예: '성과 지표')에 대한 정의나 관련된 업무 도메인을 탐색합니다.
+별칭·동의어/오타 축: 질문 속 용어의 다양한 별칭이나 동의어를 찾아 오타까지 보정하며 탐색합니다.
+관계·가설 축: 질문에 내포된 관계나 가설(예: 시스템 도입과 성과의 관계)을 탐색합니다.
+얻어진 검색 결과는 기존 체인의 융합·재랭킹 경로로 전달합니다. 재랭킹 방식은 선택된 Bi-Encoder 또는 조건부 ONNX 경로를 따릅니다.
+
+그다음에는 가중치와 온도로 질문 확장·후보 선별의 균형을 조정합니다.
+
+SelfAskPlanner의 lane 가중치와 온도를 조정하여 질문 확장의 집중도와 다양성을 다룹니다.
+
+소프트맥스: 원시 점수를 합이 1인 상대적 분포로 변환하는 방법입니다. 이 값을 정답 확률로 바로 해석하지 않습니다.
+온도(T): 이 확률 분포의 집중도를 조절하는 역할을 합니다.
+T를 낮추면 일반적으로 분포가 집중되어 상대적으로 예측 가능한 선택을 유도합니다. 정확성과 안전성을 자동 보장하지는 않습니다.
+T를 높이면 일반적으로 분포가 퍼져 다양한 선택을 유도할 수 있습니다. 새로운 근거의 회수를 보장하는 값은 아닙니다.
+다양한 질의 생성: LLM 샘플링과 결정론적 폴백을 함께 사용해 하위 질문을 만듭니다.
+이 조정의 목표는 안정적인 선택과 탐색 다양성 사이의 균형을 찾는 것입니다.
+
+결과적으로 하위 질의 생성과 검색을 연결하여, 원래 질문 하나로만 검색하지 않고 여러 관점의 근거를 모으는 구조를 구현했습니다.
+
+요약하면, Query Expansion (or Decomposition) with Self-Ask는 질문 분해·가중치·정보 검색 기법을 결합해 복잡한 질문의 배경지식 공백을 줄이는 구조입니다.
+
+
+Dynamic RAG Routing System  - 트리 다이어그램
+
+💡 요약 (Elevator Pitch)
+"제가 구현한 트리 다이어그램은 질문을 여러 관점의 노드로 표현하는 트리 생성 뼈대입니다. PredictTreeController → ScenarioExpander → TreeSerializer를 연결하여, 질문과 고정된 세 관점 노드를 Mermaid/DOT 문자열로 변환하도록 했습니다."
+
+
+'미래 예측 트리'와 기존 RAG 기능의 조합 시너지
+질문 입력, 관점별 노드 생성, 문자열 직렬화의 역할을 분리했습니다. Controller가 요청을 받고 Expander와 Serializer를 순서대로 호출하는 구조입니다.
+
+1. '관점 확장'과 '트리 구조'의 결합 → 질문의 세 가지 관점 표현
+핵심 기능: ScenarioExpander가 질문을 루트로 받아 고정된 세 관점을 하위 노드로 만듭니다.
+'미래 예측 트리'와의 조합: PredictTreeController가 ScenarioExpander.expand(q)를 호출합니다. Expander는 '정의/범위 확인', '동의어·오타 보정', '관계·인과 가설'을 child로 추가합니다.
+하나의 질문을 세 관점으로 펼쳐볼 수 있는 트리 뼈대를 구현했습니다. 각 노드의 관계를 직렬화 가능한 구조로 표현했습니다.
+
+
+2. '트리 직렬화'와 '텍스트 형식'의 결합 → Mermaid·DOT 출력
+핵심 기능: TreeSerializer가 노드 구조를 Mermaid와 Graphviz DOT 텍스트로 변환합니다.
+'미래 예측 트리'와의 조합:
+시각화 형식: 트리의 부모·자식 관계를 Mermaid와 Graphviz DOT 문자열로 표현합니다.
+질문을 고정된 세 관점의 노드로 만들고, 이를 Mermaid/DOT 텍스트로 제공하는 직렬화 뼈대를 구현했습니다. 입력·확장·출력의 역할을 나누어 구성했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+'하이브리드 LLM 게이트웨이'(Hybrid LLM Gateway)
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 구축한 '하이브리드 LLM 게이트웨이'는 RAG 파이프라인의 '엔진 룸'을 관리하는 관제탑입니다. DynamicChatModelFactory와 LlmRouterAspect가 등록된 로컬·API·OAuth 경로를 설정·요청 역할·가용성에 따라 선택합니다. 로컬 모델은 HTTP로 호출하고, 실패 시에는 조건에 맞는 폴백 후보를 사용하는 구조입니다."
+
+
+'로컬 LLM 게이트웨이'와 기존 RAG 기능의 조합 시너지
+이 기능은 RAG 파이프라인의 '두뇌'를 제공자·모델·endpoint 설정에 따라 선택하고 관리하는 핵심 허브입니다.
+
+1. '지능형 LLM 라우터'와 '다중 엔진'의 결합 → 유연성 및 효율성
+기존 기능: 외부 API(OpenAI) 호출 로직.
+'게이트웨이'와의 조합: LlmRouterAspect·LlmRouterBandit·DynamicChatModelFactory가 관제 역할을 나누어 맡습니다. 등록된 여러 경로의 적격성·순서와 사용자의 수동 모델 선택을 처리합니다.
+OpenAI 호환 로컬 서버: 설정된 HTTP endpoint를 통해 지원 모델 서버를 호출하는 경로입니다.
+Ollama native: Ollama 모델 서버를 HTTP로 호출하는 로컬 경로입니다.
+DJL/JLama: 위 엔진들의 '예비 엔진'입니다.
+"저는 하나의 LLM에 종속되지 않도록 여러 모델 경로를 선택하는 라우터를 설계했습니다. 제공자·모델·endpoint와 폴백 순서를 조정하고, 각 경로의 지원 프로토콜·자격·가용성을 함께 확인하도록 구성했습니다."
+
+2. '작전 계획서(Plan DSL)'와 '로컬 LLM'의 결합 → 설정에 따른 모델 선택
+기존 기능: Plan DSL은 RAG 전략과 단계별 설정을 전달하는 '작전 계획서'입니다. 실제 호출 순서는 Java 오케스트레이션과 각 단계의 활성화·예산 조건이 함께 결정합니다.
+'게이트웨이'와의 조합: 일부 플랜에는 llm.provider: local 설정이 있으며, 주 채팅은 로컬·API·OAuth 경로를 지원합니다. Self-Ask·질문 확장·최종 답변은 작업별 라우팅 조건에 따라 모델을 선택합니다.
+"로컬 LLM을 플랜 설정과 모델 라우팅에 연결했습니다. 질문 분석부터 최종 답변까지 각 작업의 역할과 제공자를 구분해 관리하는 것이 핵심입니다."
+
+3. 'RAG/재랭킹 모듈'과 '로컬 LLM'의 결합 → 역할을 나눈 파이프라인
+기존 기능: DynamicRetrievalHandlerChain의 웹·벡터 검색, Weighted-RRF와 선택적 재랭킹·다양성 조정을 연결했습니다. KG·ONNX·DPP는 각 경로의 설정·빈·예산 조건을 따릅니다.
+'게이트웨이'와의 조합: 선택된 로컬 또는 외부 모델이 정제 파이프라인에서 구성한 최종 프롬프트를 전달받습니다.
+RAG가 웹/벡터/KG에서 모든 근거를 수집합니다.
+선택된 재랭커와 조건부 DPP가 후보의 관련성·다양성을 조정합니다. 현재 ONNX 경로는 비활성 시 후보 순서를 유지하며, 실모델 GPU 추론이 완료된 상태는 아닙니다.
+PromptBuilder가 선별된 컨텍스트와 정책을 바탕으로 최종 프롬프트를 조립합니다.
+이 프롬프트는 선택된 모델 경로로 전달되며, 로컬 경로에서는 모델 서버에 HTTP 요청을 보냅니다.
+"RAG 및 재랭킹 모듈은 답변 재료를 모으고 정렬하고, 게이트웨이는 그 재료를 사용할 모델을 선택하는 역할을 합니다. 검색·정제와 모델 호출을 분리하여, 한쪽을 조정할 때 다른 쪽의 책임 경계를 유지하도록 했습니다."
+
+4. '헬스 체크'와 '자동 폴백(Fallback)'의 결합 → 조건부 장애 우회
+기존 기능: LlmHealthIndicator 등 시스템 상태를 점검하는 헬스 체크 기능이 있었습니다.
+'게이트웨이'와의 조합: 모델 실패에 대비해 적격성 검사·endpoint 상태·폴백 후보를 사용합니다. 로컬 실패 시 외부 API/OAuth 경로로 우회할 수 있으며, 등록·자격·설정·남은 예산·사용자 모델 선택 조건을 함께 확인합니다.
+"저는 로컬 엔진 문제에 대비해 라우터와 폴백 모델을 연결했습니다. 대체 후보를 사용할 수 없거나 예산·취소 조건에 걸리면 실패를 반환하여, 우회 범위와 실패 상태를 명시적으로 다루도록 했습니다."
+[RAG 아키텍처] 운영 안정성 및 정책 중앙화 3대 핵심 조합
+제 RAG 시스템은 복잡한 기능을 '운영하고 통제할 수 있는 아키텍처'로 구성하는 데 초점을 두었습니다.
+
+빌드 경계, 제공자 자격 정책, 모델 라우팅을 세 가지 운영 기반으로 나누어 관리했습니다.
+
+1. '빌드 경계'와 'RAG 모듈'의 결합 → 실행 대상의 명시
+가장 먼저, RAG 파이프라인의 활성 소스와 리소스 경계를 명시했습니다.
+
+기존 RAG 기능: Weighted-RRF 융합기, Self-Ask 플래너, 조건부 ONNX 경로 등 핵심 구성요소가 있습니다.
+문제점: 중복 코드·placeholder와 라이브러리 버전 혼재를 줄이기 위해 활성 sourceSet과 의존성 버전 규칙을 분리해 관리할 필요가 있었습니다.
+조합 및 시너지:
+LangChain4j 1.0.1 버전 규칙: build.gradle.kts의 resolutionStrategy.eachDependency에서 dev.langchain4j 그룹에 useVersion("1.0.1")을 적용합니다.
+sourceSets 경계: 활성 Java·리소스·테스트 소스셋을 분리하고, 별도 legacy tree는 기본 실행 대상과 구분합니다.
+"현재 빌드가 읽는 경로와 핵심 라이브러리 버전 규칙을 명시했습니다. 이는 어떤 코드가 실제 실행 대상인지 추적하고, 의존성 변경의 범위를 관리하기 위한 기초 작업입니다."
+2. '중앙 정책/보안'과 'API 키 관리'의 결합 → 비용 통제 및 안정성
+두 번째로, API 자격 정보의 충돌과 제공자 사용 조건을 다루는 정책을 구성했습니다.
+
+기존 RAG 기능: 검색·생성 경로는 외부 API 제공자를 지원하며, 선택된 경로와 유효한 자격·예산에 따라 호출합니다.
+문제점: 키가 중복 설정되거나, 의도치 않게 비싼 유료 API가 호출될 위험이 있었습니다.
+조합 및 시너지:
+KeyResolver(키 주입 정책): 현재 KeyResolver가 중앙 resolver의 호환 경계 역할을 합니다. OpenAI 등 중앙 경로는 같은 값의 중복 alias를 허용하고, 서로 다른 값이 충돌하면 해당 제공자를 비활성 처리합니다. 일부 legacy strict 경로는 호출 시 충돌 예외를 던집니다.
+제공자 정책: application.yml은 application-llm.yaml·stage-policy 등 여러 설정을 가져옵니다. 실제 호출 가능 여부는 등록된 제공자·자격·라우팅 적격성과 개별 가드 조건에서 결정합니다.
+"외부 API 운영을 통제하기 위해 자격 정보 충돌 처리와 제공자 라우팅 조건을 갖췄습니다. 충돌 제공자를 닫고 호출 가능한 경로를 구분하여, 문제가 전체 시스템의 불명확한 상태로 번지지 않도록 했습니다."
+3. '라우팅 정책'과 '사용자 경험(UX)'의 결합 → 일관성 및 회복탄력성
+마지막으로, 모델 실패 시의 대체 경로와 사용자가 명시한 모델 선택을 함께 처리하도록 라우팅 정책을 구성했습니다.
+
+기존 RAG 기능: LlmRouterAspect·LlmRouterBandit이 등록된 모델·제공자 경로를 조건에 따라 선택합니다.
+문제점: 자동 모델 선택에서 실패에 대비한 대체 경로를 마련하면서도, 사용자가 고른 모델 경로는 존중할 필요가 있었습니다.
+조합 및 시너지:
+Fail-soft 라우팅: 등록 순서·적격성·설정에 따른 폴백 경로를 둡니다. API-first가 활성화되면 공개 설정의 route-order를 사용하며, 실제 활성화 여부는 실행 환경 설정을 따릅니다.
+사용자 모델 선택: 사용자가 명시한 모델은 exact route로 존중하는 로직을 적용합니다. WebInfraConfig의 30분 TTL 캐시는 웹 문자열 캐시로 별도 운영 경계를 가집니다.
+
+
+
+엠페러 프로 타임 Zero-100(Emperor Pro Time Engine)
+
+
+
+💡 요약 (Elevator)
+"제가 구현한 엠페러 프로 타임 Zero-100은 검색·생성 요청에 절대 deadline과 시간 slice를 연결하는 구조입니다. Zero100SessionAspect가 Zero100SessionRegistry·Zero100BranchScheduler를 호출하고, STRICT·RELAXED·EXPLORE lane과 진행률에 따른 검증·합의 신호를 관리하도록 구성했습니다."
+
+
+1. 배경 및 문제 해결 (Context & Resolution)
+기존 과제: 레이트리밋·쿨다운·외부 응답 지연을 처리하면서, 요청에 남은 시간과 단계별 예산을 일관되게 관리할 필요가 있었습니다.
+해결책: 요청의 절대 deadline을 유지하고, 경과 시간의 진행률(0~100)과 시간 slice에 따라 lane을 회전시키도록 구현했습니다. 요청 예산과 실패 페널티를 함께 적용합니다.
+
+2. 엠페러 프로 타임의 5단계 핵심 기전
+이 기능은 기존 RAG 구성요소에 시간 배정과 lane별 라우팅 신호를 전달하는 구조입니다.
+
+① 목표 범위 제한 (Goal Calibration)
+기존 기능: SelfAskPlanner, QueryTransformer.
+조합 방식: Zero100SessionRegistry가 maxMinutes를 1~100, sliceMs를 50~60,000 범위로 제한하고 절대 deadline을 유지합니다. 탐색률·정밀도·재현율 목표도 설정된 범위 안에서 관리합니다.
+② 3-Way 관점 분기 (3-Branch Split)
+기존 기능: HybridRetriever, DomainWhitelist.
+조합 방식: scheduler가 STRICT·RELAXED·EXPLORE를 각각 BQ·ER·RC lane에 연결하고, 시간 slice에 따라 활성 lane과 라우팅 파라미터를 정합니다.
+STRICT(권위형): 권위 중심 관점에 대응하는 BQ lane입니다. 실제 출처 제한은 검색 정책·프로필 조건을 따릅니다.
+RELAXED(확장형): 탐색을 넓히는 ER lane이며, scheduler가 해당 lane의 라우팅 파라미터를 정합니다.
+EXPLORE(비판형): 롱테일·반례 탐색을 위한 RC lane으로, 관점과 검색 신호를 전달합니다.
+③ Zero-100 타임박스 로테이션 (Scheduling)
+조합 방식: elapsed/total 진행률과 sliceIndex % 3으로 lane을 회전시킵니다. 요청 예산·RATE_LIMIT·실패 피드백에 따라 call/timebox 비율과 페널티를 조정하고, 일부 검색에는 다음 lane 재조회 경로를 연결했습니다.
+④ 검증·합의 신호 관리 (Verification Signals)
+조합 방식: 진행률에 따라 cross-verify·consensus·risk-consensus 플래그를 켜고 trace에 기록합니다. scheduler의 검증 신호와 검색 체인의 공개 결과 경계를 분리해 관리합니다.
+⑤ 검색 결과 융합 (Weighted RRF)
+조합 방식: 검색 체인의 공개 출력 경로에서 Weighted RRF로 결과를 융합합니다. zero100 플랜의 call budget은 .34/.33/.33, timebox는 .38/.32/.30으로 정의되어 있으며, lane별 예산 설정과 결과 융합의 역할을 구분합니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+(Dynamic RAG Routing System - Conditional Bypass: 'Side Train' Orchestrator)
+
+
+
+"제가 구현한 Bypass Routing(Side Train)은 장애·강등 신호에 맞춰 RAG 기능을 제한하고, 필요한 경우 근거 기반 대체 응답을 만드는 위기 대응 구조입니다. BypassStrategy가 실행할 blade를 선택하고, BladeSpec이 기능 범위를 제한하며, BypassRoutingService가 남아 있는 근거를 조합합니다."
+
+
+'Bypass Routing'과 기존 RAG 기능의 조합 시너지
+'Bypass Routing'은 기존 RAG 모듈을 장애·압축·강등 조건에 맞게 조정하는 조건부 오케스트레이션 전략입니다.
+
+1. '실패 신호 수집'과 '조건부 라우팅'의 결합
+기존 기능: DynamicRetrievalHandlerChain, PromptBuilder와 검증 게이트로 이어지는 정규 경로가 있습니다.
+'Bypass Routing'과의 조합: IrregularityProfiler는 호출자가 전달한 delta·reason을 GuardContext에 누적하거나 high-risk 상태를 표시합니다. BypassStrategy는 bypass·auxHardDown 또는 strike·compression·auxDegraded 신호를 기준으로 blade를 선택합니다.
+"저는 파이프라인의 실패·강등 신호를 모아, 기능을 줄이거나 대체 응답 경로를 선택하도록 구현했습니다. 각 구성요소가 장애를 관측하는 역할과 대응 정책을 정하는 역할을 나누어 맡습니다."
+
+2. '근거 기반 대체 응답'과 '기존 검색/응축 모듈'의 결합
+기존 기능: 웹 검색·컨텍스트 응축·질문 확장 모듈이 있습니다.
+'Bypass Routing'과의 조합: 현재 요청 상태에 따라 blade가 사용할 기능을 제한하고, BypassRoutingService가 확보된 근거로 대체 응답을 구성합니다.
+근거 선별: BypassRoutingService는 strike/compression 상태에서 최대 3개, 그 외에는 최대 6개의 근거를 사용합니다.
+응답 구성: 사용할 근거가 없으면 정보 부족 응답을 반환합니다. 확보한 근거의 유무를 대체 응답 구성의 조건으로 사용합니다.
+"Bypass Routing은 사용 가능한 기능과 근거를 제한하여 짧은 대체 응답을 구성합니다. 탐색을 계속 늘리는 대신, 현재 확보한 정보로 어디까지 답할 수 있는지 명확히 다루는 방식입니다."
+
+3. '최종 안전 게이트' 및 '핵심 상태'와의 결합
+기존 기능: 검증 게이트와 compression·strike·auxDegraded 등 요청 상태 신호가 있습니다.
+'Bypass Routing'과의 조합: guard·압축·장애 신호를 blade 선택과 대체 응답 경로에 연결했습니다.
+'안전 게이트'의 대체 경로: 특정 실패·강등 경로에서는 BypassRoutingService가 근거를 조합한 응답을 제공합니다. 근거와 남은 조건에 따라 정보 부족·실패 상태도 반환합니다.
+'압축 상태'의 조정: BypassStrategy는 compression·strike·auxDegraded 신호에 strike blade를 선택하고 일부 보조 기능을 줄입니다.
+"저는 장애·강등 조건에서 기능 제한과 근거 기반 대체 응답을 조합했습니다. 실행할 수 있는 범위를 줄이고, 남아 있는 근거를 사용해 응답하도록 만든 회복 구조입니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Autonomous Resilience Engine: 지능형 RAG 오케스트레이션 엔진의 핵심 기전 (동작 원리)⚙️
+
+제가 설계한 'Autonomous Resilience Engine'은 시간 예산·실패 신호·선택적 재랭킹·캐시·게이트를 조합한 RAG 오케스트레이션 구조입니다. 요청 예산과 단계별 조건에 따라 작업을 줄이고, 검색 후보와 위험 신호를 평가하는 장치를 연결했습니다.
+
+Autonomous Resilience Engine은 다음 네 가지 운영 장치와 품질 게이팅을 조합합니다.
+1. 제한된 리소스 및 취소 시그널 (Global Time Budget & Cancellation Signal) ⏳
+문제 인식: 특정 요청이 과도한 자원을 사용하거나 지연될 수 있어, 요청 예산과 단계별 제한이 필요했습니다.
+기전: public chat/RAG 진입 필터가 TimeBudget을 설치하고, 비동기 chat과 검색·벡터·재랭킹 경로가 이를 전파·참조합니다. 예산이 부족한 단계에서는 스킵·축소·타임아웃 등의 강등을 적용합니다.
+"AI 서비스에 스태미나 개념을 도입하듯, 주요 경로에 시간 예산을 전달하고 남은 예산에 맞춰 작업을 줄이도록 했습니다. 요청의 처리 한계를 코드에서 명시적으로 관리하는 구조입니다."
+2. 재랭크 가드 및 동시성 제어 (Reranker Guard & Concurrency Control) 🚦
+문제 인식: 고비용 재랭킹 경로를 사용할 때는 동시 실행을 제한하고, 해당 경로를 사용할 수 없을 때의 반환 동작을 마련해야 합니다.
+기전: SemaphoreGateAspect는 reranker.ce.maxConcurrency 설정이 있을 때 ONNX rerank 호출에 permit을 적용합니다. permit 취득에 실패하면 입력 후보를 topN으로 제한해 반환하며, 재랭커 선택·폴백도 별도 조건으로 관리합니다.
+"재랭킹 호출에 동시성 제한을 적용하고, 실행할 수 없을 때는 후보를 유지하는 경로를 두었습니다. 비활성·실패 상황의 반환 동작까지 함께 관리하는 호출 제어 구조입니다."
+3. 중복 검색 실행 공유 (Single-Flight Search Execution) 🚀
+문제 인식: 동일한 검색의 중복 실행과 캐시 미스로 백엔드 호출이 늘어날 수 있어, 캐시와 선택적 실행 공유가 필요했습니다.
+기전: cache.singleflight.enabled=true일 때 SingleFlightAspect가 WebSearchRetriever.retrieve(Query)를 감쌉니다. 요청 scope token·method·query digest로 같은 실행을 SingleFlightManager의 in-flight map에 모읍니다. UpstashBackedWebCache는 로컬 Caffeine과 선택적 원격 캐시를 담당합니다.
+"같은 요청 범위에서 겹치는 검색은 실행을 공유하고, 웹 캐시는 별도로 활용하도록 구성했습니다. 실행 중 작업 공유와 결과 캐시의 역할을 나누어 중복 작업을 관리했습니다."
+4. 선제적 필터링 및 정규화 (Pre-emptive Filtering & Deduplication) 🛡️
+문제 인식: 신뢰도가 낮은 정보와 중복 후보가 컨텍스트에 유입될 수 있어, 검색 정책과 정규화·병합이 필요했습니다.
+기전: AnalyzeWebSearchRetriever는 전처리·SearchPolicyEngine을 사용하고, 공식 도메인 hard filter는 AdaptiveWebSearchHandler의 officialOnly/domainProfile 조건에 연결됩니다. WeightedReciprocalRankFuser는 RerankCanonicalizer.canonicalKey로 후보의 병합 키를 구성합니다.
+"검색 정책·조건부 도메인 필터와 정규화된 병합 키로 입력 후보를 정리했습니다. 검색 단계의 출처 제어와 융합 단계의 중복 처리를 각자의 경계에서 수행하도록 했습니다."
+## Dynamic Threshold Gating (Sigmoid-based) 💯
+Autonomous Resilience Engine의 '최종 품질 게이트'는 위험·근거 신호를 점수화해 통과·경고·강등·차단을 판단하는 장치입니다. 현재 com.example.lms.guard.FinalSigmoidGate는 검색 accumulator를 검사하는 경로에 연결되어 있습니다.
+기전: com.example.lms.guard.FinalSigmoidGate.score는 base에서 hallucination·policy·citation 입력의 가중 항을 뺀 뒤 sigmoid를 계산합니다. 현재 검색 체인은 accumulator의 빈 상태에 따른 0/1 compositeScore·policyRisk=0·누적 후보 수 조건으로 check를 호출합니다.
+판정 분기: 기본 threshold는 0.70, mode는 soft이며, strong evidence·policyRisk 조건의 우선 PASS와 HARD/SOFT/DEGRADE/LOG_ONLY 분기가 있습니다. 검색 체인의 BLOCK 처리는 후보 trim으로 연결됩니다.
+파라미터 관리: gate는 생성자에 주입된 base·가중치·threshold와 모드를 사용합니다. 위험 신호별 가중치와 판정 방식을 설정으로 구분하도록 구성했습니다.
+"저는 위험·근거 신호를 sigmoid 점수와 판정 모드로 연결했습니다. 이 점수는 정답 확률이 아니라 운영 정책을 적용하기 위한 지표이며, 검색 후보 제한과 경고·강등을 명시적으로 처리하는 데 사용합니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+UAT -'(Unlimited Archive)’ ‘썸네일링’
+
+
+
+
+💡 요약 (Elevator Pitch)
+"제가 구현한 UA Thumbnail은 최근 질문에서 앵커와 웹 근거를 모아 한 줄 캡션 JSON을 만들고 KnowledgeBaseService에 저장하는 파이프라인입니다. UawThumbnailOrchestrator가 사용자 부재·CPU 여유·예산을 확인한 뒤 UawThumbnailService를 호출하며, uaw.thumbnail.enabled의 기본값은 false입니다."
+
+
+'UAW 썸네일링'과 기존 RAG 기능의 조합 시너지
+이 기능은 기존 웹 검색·키워드 프롬프트·ChatModel·지식 적재 서비스를 콘텐츠 생성에 재조합한 응용 경로입니다.
+
+1. 'Plan DSL'을 통한 '썸네일링' 파이프라인 정의
+기존 기능: Plan DSL은 RAG 전략을 선언하는 '작전 계획서'이며, 전용 서비스가 실제로 소비하는 옵션을 정의합니다.
+'UAW'와의 조합: UAW_thumbnail.v1.yaml에 anchors/evidence/render/persist 옵션을 정의했습니다. 전용 서비스가 아래 순서로 처리합니다.
+앵커 생성: anchors.count 기본 12개를 목표로 키워드 프롬프트를 만들며, 실패하면 주제·토큰 기반 앵커를 사용합니다.
+근거 수집: 앵커를 바탕으로 WebSearchProvider.search를 호출합니다.
+근거 선별: URL 중복을 줄이고 도메인 다양성을 우선하여 final_k 기본 6개까지 선별합니다. 부족할 때는 같은 도메인의 근거도 보충합니다.
+프롬프트 조립: QueryKeywordPromptBuilder.buildUawThumbnailRenderPrompt로 근거와 앵커를 조립합니다.
+최종적으로 LLM이 '썸네일' JSON 객체를 생성합니다.
+"저는 썸네일 생성 과정을 전용 YAML 옵션과 서비스 순서로 표준화했습니다. 앵커 수·앵커별 근거 수·최종 근거 수를 조정할 수 있도록 했으며, 로더는 classpath 계획서를 캐시해 사용합니다."
+
+2. '로컬 LLM 라우터'와의 결합 → 효율적인 컨텐츠 생성
+기존 기능: 공통 ChatModel 경계에서 모델을 주입받습니다. 실제 제공자는 모델 등록·라우팅 설정을 따릅니다.
+'UAW'와의 조합: 앵커와 캡션 JSON 생성은 주입된 ChatModel을 사용합니다. 오케스트레이터는 후보 탐색·쿨다운·일 예산·백오프를 적용해 반복 작업을 제어합니다.
+"반복 생성 작업의 실패 처리를 단계별로 나누었습니다. 앵커 생성은 규칙 기반으로 폴백하고, 근거나 생성 결과가 부족하면 저장을 생략하며, 반복 실패에는 스케줄러 백오프를 적용합니다."
+
+3. '검색·선별 모듈'과의 결합 → 근거를 갖춘 썸네일 생성
+기존 기능:
+웹 검색: WebSearchProvider를 통해 앵커별 근거를 수집합니다.
+근거 정리: URL 중복 제거와 도메인 다양성 우선 선택을 수행합니다.
+저장 기준: 최소 2개 근거와 저장 신뢰도 기준을 확인합니다.
+'UAW'와의 조합: 전용 근거 수집 경로에서 기존 WebSearchProvider를 재사용하고, 썸네일 서비스가 선별·생성·저장 판단을 담당합니다.
+서로 다른 도메인의 근거를 우선 선택하고, 근거가 부족하면 같은 도메인에서 보충합니다.
+수집한 후보는 URL 중복 제거와 도메인별 선별을 거쳐 최종 근거 목록으로 구성됩니다.
+최대 final_k 기본 6개의 근거를 캡션 JSON 생성에 사용합니다.
+"썸네일의 품질은 근거 자료에서 시작한다고 생각했습니다. 저는 웹 검색과 키워드 프롬프트를 재사용하고, URL·도메인 선별과 저장 신뢰도 기준을 적용하여 생성물과 실제 수집 근거를 함께 관리하도록 했습니다."
+Autonomous Memory Orchestrator (자율형 메모리 오케스트레이터)
+
+
+
+"제가 구현한 Autonomous Memory Orchestrator(자율형 메모리 오케스트레이터)는 벡터 청킹·지식 그래프·상태 관리·UAW 썸네일을 조합하여 개체와 관계를 기록하는 구조입니다. GraphRagChunkingService·BrainStateService·GraphRagThumbnailBridge가 수집·목록화·이벤트 연결을 나누어 맡습니다."
+
+1. 시스템의 핵심 조합 및 시너지 (The Architecture)
+이 기능은 네 가지 인프라를 연결하며, 입력 경로와 저장 백엔드의 활성 조건을 나누어 관리합니다.
+
+① 정보의 수집과 정제 (Vector + Chunking)
+기존 기능: VectorStoreService와 DocumentChunkingService를 통한 텍스트 분할 및 벡터 DB 적재.
+조합 방식: GraphRagChunkingService가 텍스트 분할·개체/관계 추출·벡터/Neo4j/BrainStateService 적재를 나누어 수행합니다. 검증 지식 통합은 별도의 서비스 경계로 구분합니다.
+② 관계망 형성 (Knowledge Graph - Neo4j)
+기존 기능: Neo4jKnowledgeGraphClient (Neo4j 연동), KnowledgeGraphHandler (KG 검색).
+조합 방식: 추출한 개체·관계를 저장하고, 질의의 KG·벡터 축과 제한된 관계 경로 탐색에 활용합니다. SparseNodeInferenceService는 기본 깊이 2, 허용 범위 1~3과 frontier 상한을 두어 탐색 범위를 제한합니다.
+③ '뇌 상태' 관리 (LangGraph State)
+기존 기능: RagGraphExecutor, RagGraphState (LangGraph 기반 상태 추적), ChatHistoryService.
+조합 방식: RagGraphExecutor는 LangGraph 상태 실행을, BrainStateService는 청크·개체·관계 목록화를 담당합니다. Brain Snapshot에서 인메모리 수집 상태·도메인·관계·희소 노드 등을 조회할 수 있도록 구성했습니다.
+④ 사전 요약 및 예열 (UAW Thumbnail)
+기존 기능: UawThumbnailService가 근거 기반 한 줄 캡션 JSON을 KnowledgeBaseService에 통합하고 저장 이벤트를 발행합니다.
+조합 방식: 썸네일 생성이 활성화되고 사용자 부재·예산 조건을 만족하면 최근 질문의 요약을 지식망에 투영합니다. 저장 이벤트를 GraphRagThumbnailBridge가 받아 ingestPreparedChunks/ingestText로 전달합니다.
+2. 소스 코드 경계 존중 (Minimal-Modification Policy)
+"저는 새로운 기능을 추가할 때 기존 시스템의 경계를 존중하려고 했습니다. Spring 이벤트 발행(ApplicationEventPublisher)과 서비스·컨트롤러의 역할 분담을 활용하여, 수집·목록화·조회 기능을 나누어 확장했습니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Multi-Factor Reliability Scoring
+
+
+도입 배경
+빌드 시점에 모든 라이브러리 버전이 맞는지 검사하는 정적 정합성 평가만으로는, 실제 서비스 운영 중에 발생하는 외부 API 실패나 네트워크 오류 같은 돌발 상황에 대응할 수 없는 문제를 발견했습니다. 비행기가 이륙하기 전 점검(빌드)도 중요하지만, 비행 중 엔진(외부 API) 고장이나 공항(메시지 전송) 폐쇄 같은 예외 상황을 실시간으로 관리하는 '운행 중 위험 관리 시스템'이 필요하다고 판단했습니다.
+
+이를 해결하기 위해, 각 단계의 건강 상태를 0과 1 사이의 점수로 표현하고 종합 Health Score를 계산하는 모듈을 개발했습니다. com.abandonware.ai.addons.flow.FlowJoiner는 외부에서 mark한 단계 점수의 가중합에 sigmoid를 적용하고, withFallback에서 임계값 또는 예외에 따른 대체 실행을 지원합니다.
+
+이 아이디어는 시스템 안정성을 '예방'의 관점에서 '대응'의 관점으로 전환하는 저의 문제 해결 철학이 담겨 있으며, 관련 구현 내용은 아래 코드에서 확인하실 수 있습니다.
+
+▶ 1. 전체 구조와 시작점: FlowJoiner와 FlowJoinerFacade
+
+"단계별 상태 점수와 대체 경로를 표현하는 모듈입니다."
+
+FlowJoinerFacade.sequence(hasRetrieve, hasConsent)는 검색 가능 여부와 전송 동의 여부를 받아, 조건에 맞는 단계 이름 목록을 구성합니다.
+FlowJoiner 빈과 FlowJoinerFacade에 점수·폴백·시퀀스 표현을 나누어 두었습니다. 요청 전체를 실행하는 채팅 서비스와 분리된 모듈 경계로 구성했습니다.
+▶ 2. 핵심 아이디어 (동적 경로 결정): router.joiner.FlowJoiner.sequence
+
+"주어진 조건에 맞춰 실행 순서를 표현하는 구조입니다."
+
+sequence 메서드는 hasRetrieve와 hasConsent의 두 조건을 조합해 네 가지 단계 이름 목록을 반환합니다.
+예를 들어, 전송 동의가 없으면 send_message 대신 send_outbox라는 단계 이름을 반환합니다. 이는 실행 계획의 표현이며, 실제 도구 호출이나 배송 실행과는 별도의 경계입니다.
+
+
+동적 정합성 평가 설계 설명
+제가 설계한 시스템의 핵심은 "상황을 정량화하고, 점수에 기반해 행동한다"는 것입니다.
+
+마치 비행기의 계기판처럼, 주요 기능을 여러 축으로 나누어 상태를 평가하도록 했습니다. 각 단계 점수는 외부에서 mark로 입력받습니다.
+
+'5원소' 기능 축 정의: 시스템의 핵심 기능을 5가지로 정의합니다.
+P (계획): 작업을 시작할 수 있는가?
+R (정보 검색): 외부 데이터베이스 조회가 가능한가?
+C (평가): 검색된 정보가 유효한가?
+Y (답변 합성): AI가 답변을 생성할 수 있는가?
+K (전송): 최종 결과를 사용자에게 전달할 수 있는가?
+'5가지 상태'의 점수 모델링: 각 기능의 입력을 0과 1 사이로 제한하고, 종합 가중합에 sigmoid 함수를 적용합니다. 예를 들어 R=0.7은 호출자가 제공하는 상태 점수이며, 모듈이 자동 측정한 성공 확률은 아닙니다.
+종합 '안전 점수(S)' 계산: sigmoid(1.4P + 1.6R + 1.2C + 1.2Y + 1.0K − 3.0)으로 정책적 건강 지표를 계산합니다.
+계산 예시: P·R·C·Y·K를 모두 1로 넣으면 S는 약 0.968입니다.
+계산 예시: R=0, K=0, 나머지를 1로 넣으면 S는 약 0.690입니다.
+결과적으로, 이 모듈은 단계 점수와 임계값을 사용해 대안을 선택하는 위험 관리 구조를 표현합니다. 저는 가능 여부만 판단하는 분기와 상태 점수 기반 판단을 분리해, 조건에 따른 실행 흐름을 명시적으로 다루도록 했습니다.
+
+
+
+
+
+DBVM-X-RAG 테서렉트
+도입 배경: OCR 텍스트를 기존 검색 구조에 연결하는 어댑터 설계
+
+
+텍스트 중심 RAG에서는 이미지나 스캔 PDF 안의 내용을 바로 검색하기 어렵습니다. 저는 이런 자료의 텍스트를 추출해 기존 검색 경로에 연결하는 확장 구조를 설계했습니다.
+
+OCR 결과를 기존 검색 파이프라인에서 다루려면 반환 형식과 점수 기준을 맞추는 경계가 필요합니다. 저는 문자열 결과를 표준 컨텍스트로 변환하고 검색 결과로 전달하는 어댑터를 구성했습니다.
+
+이 작업에서는 비정형 자료를 처리하는 전체 과정보다, OCR 결과를 기존 RAG 구조에서 수용하는 정규화·검색 경계를 구현했습니다.
+
+
+
+
+자율 탐색 반경 확장 엔진 (Dynamic RAG Scaler) 
+
+💡 핵심 요약 (Elevator Pitch)
+"제가 설계한 'Stochastic Transformer Evolver(SSE 블록)'는 MoE 전략 선택의 플레이트 후보에 수치형 변이를 제안하는 RAG 보정 모듈입니다. NineArtPlateGate에서 ArtPlateEvolver.proposeWithSse를 거쳐 StochasticTransformerEvolver를 호출하며, artplate.sse.enabled의 기본값은 false입니다.
+기존 결정론적 변이에 선택적인 확률적 보폭 확장(Stochastic Step Expansion)을 더하고, 점수 카드의 직전 대비 차분(Δ)으로 보상과 패널티를 부여했습니다. 탐색 회차·점수 변화·허용 범위를 기준으로 수치 파라미터의 보폭과 방향을 조절하는 구조입니다."
+🏗 1. 기존 RAG 아키텍처와의 유기적 조합 (Synergy)
+이 기능은 기존 ArtPlateEvolver에 조건부로 결합한 파라미터 탐색 부스터입니다. S03 MoE 계층의 플레이트 선택 이후 수치형 후보를 보정하는 역할로 구성했습니다.
+기존 기능과의 연동 구조: NineArtPlateGate가 초기 플레이트 사양(ArtPlateSpec)을 선택하면, 조건이 맞을 때 ArtPlateEvolver.proposeWithSse로 전달합니다. SSE 블록은 이 지점에 조건부 오버레이(Overlay) 방식으로 결합됩니다.
+이중 안전망(Fail-Soft) 메커니즘: 예외, 금지된 필드 변경, 채택 가드 거부, 리셋 한계 등의 조건에서는 PlateFailureBucket 기반 결정론적 변이나 기본 사양으로 폴백하도록 구현했습니다.
+프롬프트 및 도메인 경계: topK·예산·하한·가중치 등 수치형 필드를 변이하고, modelCandidates·domainAllow·history 등의 필드는 보존하며 채택 가드를 검사합니다. SSE의 파라미터 보정과 최종 프롬프트를 만드는 PromptBuilder.build(ctx)의 역할을 분리했습니다.
+📉 2. 3단계 상태 전이 및 가중치 업데이트 기전 (Math & Logic)
+SSE 블록은 탐색 강도를 세 페이즈로 나누고, 점수 차분에 따라 수치 파라미터의 조정 비율과 방향을 바꾸는 피드백 규칙을 사용합니다.
+2.1 확률적 보폭 확장 (Stochastic Step Expansion)
+동일한 기본 플레이트의 누적 iteration으로 탐색 보폭을 루트 스케일로 조정합니다. 실제 변화량에는 페이즈와 learningRate, 노이즈, clamp가 함께 반영됩니다.
+EXPLORE: step(n) = clamp(lr × (1 + √n × noise_scale), 0, 2). EXPLOIT에서는 루트 항에 0.2를 곱하고, RESET의 step은 0으로 둡니다.
+노이즈는 ThreadLocalRandom에서 얻은 6개 균등값의 합에서 3을 뺀 뒤 scale을 곱해 계산합니다. 이 값의 절댓값과 계산된 보폭 중 큰 값을 변이에 사용합니다.
+2.2 3단계 탐색 페이즈 (SsePhase)
+EXPLOIT(수렴 탐색): iteration이 stagnationThreshold 미만이고 RESET 조건이 아니면 선택합니다. 보폭 식의 루트 항에 0.2 계수를 적용합니다.
+EXPLORE(확장 탐색): iteration이 stagnationThreshold 이상이면 선택하여 루트 항과 노이즈 규모를 더 크게 사용합니다. 누적 회차에 따라 탐색 보폭을 조절하는 정책입니다.
+RESET(리셋): 연속 패널티 2회와 maxResetCount 조건에 따라 리셋 ID를 부여하고 기존 파라미터를 허용 범위로 clamp합니다. 리셋 한계를 초과하면 기본 사양이나 결정론적 변이로 폴백합니다.
+2.3 차분 스코어링 및 방향 조정(Δ)
+NineArtPlateGate가 계산한 현재 후보의 ScoreCard.composite()와 저장된 직전 점수의 차분(Δ = score(n) - score(n-1))을 사용합니다.
+Δ > +0.05(HIGH 보상, 기본값): 개선 신호로 취급하여 learningRate에 기본 1.5배 boost를 적용하고 기존 방향을 유지합니다.
+0 < Δ ≤ +0.05(NORMAL, 기본값): 기본 learningRate와 기존 방향을 유지합니다. Δ가 0이거나 작은 음수일 때는 방향을 무작위로 선택할 수 있습니다.
+Δ < -0.04(LOW 패널티, 기본값): 기본 0.5배 decay를 적용하고 기존 방향을 반전합니다. 연속 패널티를 다음 상태에 반영하며, 2회 조건에 도달한 상태의 다음 제안에서 RESET을 선택합니다. 임계값과 배율은 설정할 수 있습니다.
+⚙️ 3. 파라미터 탐색 공간의 한계선 (Bounds)
+SSE 블록이 조정하는 수치형 필드에는 아래 clamp 범위를 적용합니다. 표의 변위 단위와 signedStep, 반올림, 최소 정수 이동 규칙을 함께 사용해 실제 변화량을 계산합니다.
+제어 파라미터
+필드별 변위 단위
+운영 최소 한계치
+운영 최대 한계치
+webTopK (웹 검색 문서 수)
+1
+1
+16
+vecTopK (벡터 DB 검색 문서 수)
+2
+1
+32
+webBudgetMs (웹 제한 시간)
+200
+300ms
+5000ms
+vecBudgetMs (벡터 제한 시간)
+200
+300ms
+5000ms
+noveltyFloor (신규성 하한선)
+0.05
+0.10
+0.80
+authorityFloor (권위도 하한선)
+0.05
+0.20
+0.90
+wAuthority (출처 신뢰도 가중치)
+0.03
+0.10
+0.60
+wNovelty (정보 신선도 가중치)
+0.03
+0.10
+0.50
+wFd (거리 보정 가중치)
+0.03
+0.10
+0.50
+wMatch (인텐트 매칭 가중치)
+0.03
+0.10
+0.60
+📂 4. 컴포넌트 구조 및 관측 가능성 (Observability)
+4.1 수직 통합 컴포넌트 맵 (FQCN)
+수치 변이 계산, 점수 카드, 상태 기록, 설정 바인딩의 책임을 나눈 전용 Java 컴포넌트 구성입니다.
+com.example.lms.artplate.sse.StochasticTransformerEvolver
+핵심 진화 엔진입니다. 현재 탐색 상태와 점수 카드를 분석하여 파라미터 변이(perturb)를 수행하는 주체입니다.
+com.example.lms.artplate.sse.SseScoreCard
+직전 점수와 현재 점수를 보관하고 상벌 임계치를 판정하는 자바 불변 레코드(record)입니다.
+com.example.lms.artplate.sse.SseSessionState
+iteration·연속 패널티·페이즈·방향을 담는 불변 레코드입니다. NineArtPlateGate는 기본 plate ID별 AtomicReference 상태쌍에 이를 보관합니다.
+com.example.lms.artplate.sse.StochasticEvolverConfig
+artplate.sse 설정을 바인딩하여 전략의 활성화와 파라미터를 제어합니다. enabled의 기본값은 false입니다.
+4.2 추적성: TraceStore 관제 앵커
+조건을 만족해 탐색이 수행되면 TraceStore에 다음 지표를 기록하여 선택한 페이즈와 보정값을 추적합니다.
+sse.enabled / sse.phase: 기능 활성화 여부 및 현재 탐색 단계(EXPLOIT / EXPLORE / RESET)
+sse.iteration / sse.step / sse.lr: 누적 탐색 회차, 계산된 보폭, 파라미터 조정에 사용한 learningRate
+sse.delta / sse.highReward / sse.lowPenalty: 직전 대비 점수 변화량 및 실시간 보상/패널티 트리거 발생 플래그
+sse.basePlateId / sse.mutatedPlateId: 변이의 모체가 된 원래 플레이트 고유 식별자와 SSE 블록에 의해 동적 진화된 사양 식별자
+sse.source / sse.bypassReason: SSE 후보를 사용했는지 또는 기존 결정론적 경로로 폴백했는지와 그 사유를 기록합니다.
+.
+1. 플레이트별 탐색 상태와 점수 관리
+"탐색 상태와 직전 점수는 ConcurrentMap<String, AtomicReference<SseRuntimeState>>에 기본 plate ID별로 보관합니다. 두 값을 하나의 상태 객체로 묶어 set하며 플레이트 간 상태를 분리했습니다. 같은 플레이트의 동시 read-compute-set에 CAS 재시도 루프를 두는 구조는 아닙니다."
+2. 후보와 다음 상태의 통합 반환
+"proposeWithSse는 perturb를 한 번 호출하고 SseProposal(candidate, nextState)를 반환합니다. NineArtPlateGate는 제안된 후보와 함께 반환된 다음 상태를 저장하도록 연결했습니다."
+
+
+
+
+
+테서렉트 검색 어댑터
+DBVM-X-RAG의 검색·융합 구조와 OCR 검색 어댑터의 역할을 구분했습니다. 현재 OCR 연결부는 문자열 결과를 표준 컨텍스트로 바꾸고 조건부 검색 축에 전달하는 경계입니다.
+
+DBVM-X-RAG 검색·융합 구조
+
+질의를 여러 검색 축으로 나누고 융합·재랭킹해 답변으로 연결하는 구조를 설계했습니다. 현재 웹·벡터·KG와 선택 OCR 어댑터, RRF·DPP·재랭킹 경로가 있으며 각각 활성 조건을 가집니다. DBVM-X(Domain, Behavior, Vector, Memory, X-Encoder)는 설계상의 분류 축입니다.
+
+
+
+OCR 검색 어댑터와 결과 정규화
+
+OcrRetriever는 검색 포트에서 받은 결과를 LangChain4j Content로 변환하는 어댑터입니다. OcrIndexingJob에는 인덱스 연결용 포트를 두어 검색 결과 변환과 저장 연결의 경계를 나누었습니다.
+
+
+
+
+
+
+
+
+
+
+OCR 결과 정규화와 RAG 검색 어댑터 구현
+OCR 결과를 기존 텍스트 RAG 구조에서 다루기 위한 어댑터와 조건부 검색 경로를 구현했습니다. 데이터 정규화와 공통 융합 경계를 나누어 각 소스의 반환 형식을 맞추도록 구성했습니다.
+
+주요 구현 내용:
+
+OCR 데이터 정규화 파이프라인 설계
+OCR 문자열을 표준 컨텍스트로 바꾸는 OcrResultNormalizer와 LangChain4j Content 변환 어댑터를 구현했습니다. 정규화기는 문자열 span에 기본 점수와 순위를 부여합니다.
+공통 컨텍스트와 검색 결과 융합
+OCR 검색 결과가 제공되면 DynamicRetrievalHandlerChain의 보조 검색 축으로 수집할 수 있도록 연결했습니다. 출처가 다른 결과를 공통 정제·융합 경계에서 다루는 구조입니다.
+검색 포트와 변환 어댑터 분리
+검색 포트와 결과 변환 어댑터를 분리하여, 소스별 연결부와 공통 RAG 처리부가 서로 다른 책임을 갖도록 구성했습니다.
+기능 플래그(Feature Flag)를 통한 경로 제어
+ocr.enabled와 rag.ocr.enabled, 의존성 조건으로 추출·검색 경로의 활성화를 나누었습니다. 설정과 빈 등록 조건을 통해 선택적인 연결 범위를 제어합니다.
+기술 스택: Java, Spring Boot, LangChain4j Content, OCR 검색 어댑터, 데이터 정규화, Feature Flag
+
+
+
+
+
+
+
+
+매트릭스 트랜스포머
+
+
+▶ 1. 전체 구조와 시작점: MatrixTransformer 
+"이 모듈은 웹·벡터DB·메모리에서 전달된 정보를 컨텍스트 섹션으로 합성합니다. 슬라이스 평가와 분량 배분 로직을 matrixTransformer 빈으로 구성했습니다."
+
+입력을 Slice로 분해한 뒤 정규화, 신규성 점수 계산, 제한된 보정, 분량 배분, 컨텍스트 조립을 수행하도록 구현했습니다. 여러 출처를 같은 합성 경계에서 다루는 것이 이 모듈의 역할입니다.
+
+▶ 2. 핵심 아이디어(규칙 기반 스코어링): 신규성·출처 가중치·보정 함수
+
+각 정보 조각의 출처 우선순위와 중복 정도를 수치로 정리해 컨텍스트 구성에 활용하는 규칙 기반 평가 구조입니다.
+
+제가 설계한 시스템의 핵심은 "정보를 정량화하고, 점수에 기반해 행동한다"는 것입니다.
+
+슬라이스 평가: 출처별 기본 점수와 신규성·보정 계수를 사용합니다.
+권위도(Authority): Web > RAG > Memory의 고정 출처 가중치와 우선순위를 정책값으로 사용합니다.
+신규성(Novelty): 토큰 집합 기반 코사인 근사로 앞선 정보와의 유사도를 계산하고, 중복이 적은 정보에 높은 계수를 부여합니다.
+증강 가능성(Augmentation): correctionMultiplier가 신규성에 선형 보정을 적용하고 상하한을 제한합니다. 결정론적 규칙으로 점수 변화 폭을 관리합니다.
+종합 기여도 점수: 출처 기본 점수에 신규성 계수와 보정 계수를 곱해 슬라이스의 점수를 계산합니다.
+▶ 3. 기술적 깊이(분량 제어): Dynamic Allocation & Source Gate
+
+컨텍스트 길이를 제한하면서 데이터가 있는 소스에 분량을 배분하기 위한 예산 관리 장치입니다.
+
+동적 분량 배분(Dynamic Allocation): allocateLineBudget는 선택된 소스별 Slice 개수 비율로 총 36줄의 예산을 나눕니다.
+최소 분량 배분(Fallback): 데이터가 있는 활성 소스에는 예산이 허용할 때 최소 4줄을 우선 배분하며, 비활성 소스는 0줄로 처리합니다. 실제 입력보다 많은 내용을 만들어 채우지는 않습니다.
+소스 게이트(Source Gate): deterministic_source_gate를 기록하고 출처별 슬라이스 수와 고정 규칙에 따라 분량을 배분합니다. 계산 방식과 배분 결과를 같은 모듈에서 다루도록 구성했습니다.
+"출처와 중복 정도를 수치화하고 제한된 컨텍스트 분량을 배분하는 합성 모듈을 구현했습니다. 입력 평가와 분량 조립을 나누어 정보 합성의 기준을 코드로 표현한 것이 핵심입니다."
+
+
+
+
+
+
+
+
+Anchor-Based Context Compression
+
+
+도입 배경
+
+요청마다 필요한 처리 깊이와 위험 수준이 다르다는 점에서 적응형 파이프라인을 설계했습니다. Anchor-Based Context Compression은 ContextOrchestrator가 AnchorNarrower로 후보를 좁히고 DynamicContextCompressor로 맥락을 구성하는 조건부 경로입니다. 아래에서는 이와 함께 사용하는 복잡도 분류와 위험도 기반 K 제어를 설명합니다.
+
+제가 기여한 점 및 핵심 설계
+
+처리 자원을 구분하고 위험 신호에 대응하기 위해 복잡도 분류와 검색량 제어를 나누어 설계했습니다.
+
+1. 복잡도 분류를 이용한 처리 경로 선택
+
+문제점: 질문의 난이도와 목적을 구분하지 않고 같은 처리 깊이를 적용하면 불필요한 연산이 발생할 수 있습니다.
+
+해결책: QueryComplexityGate는 선택 주입된 QueryComplexityClassifier를 우선 사용합니다. 분류기가 없거나 실패하면 길이·검색 연산자·비교 표현·질문사·문장 분절 규칙으로 SIMPLE/AMBIGUOUS/COMPLEX를 분류합니다.
+
+기대 효과: 단순 질문과 복잡한 질문에 필요한 처리 깊이를 구분하여, 조건에 맞는 분석 경로를 선택하는 것입니다.
+
+2. 위험 신호를 이용한 검색량 제어
+
+문제점: 정보 수집 단계에서 부정확하거나 잠재적으로 유해한 정보가 유입될 경우, 최종 결과의 품질이 저하될 위험이 있었습니다.
+해결책: 검색 TopK 보조 경로의 com.example.lms.risk.RiskScorer는 위험 단어와 출처 tier 규칙으로 RDI(0~1)를 계산합니다. 별도의 risk.rdi.RiskScorer는 모델 제공자 기반 listing RDI(0~100)를 다루며, 두 구현의 입력과 척도를 분리해 설명했습니다.
+동작 범위: retrieval.topK.shrinkOnRisk=true이면 TopKShrinkerAspect가 지정 웹 리트리버의 정수 K 인자를 조절합니다. 현재 Trace 위험도·질의 규칙·폴백 값과 선택 RiskKAllocator를 사용하며, 활성화 및 대상 메서드 호출 조건이 필요합니다.
+설계 원칙 및 구현 범위
+
+질의 특성과 위험 신호에 따라 처리 강도를 조절하는 것이 핵심 설계 원칙입니다. 복잡도·위험도 지표를 활용하되, 실제 구현에는 임계값 분기와 규칙, boolean 게이트도 함께 사용했습니다.
+
+복잡도 분류, 조건부 K 제어와 추적 경로를 마련했습니다. 제어 조건과 로그를 통해 어떤 기준으로 검색량이 조정되는지 분석할 수 있게 구성했습니다.
+
+
+단순히 검색된 결과를 나열하는 RAG 파이프라인은 정보의 중복, 특정 소스로의 편향, 그리고 유의미한 정보의 누락이라는 근본적인 문제를 해결할 수 없다는 한계를 발견했습니다. LLM에 컨텍스트를 제공하기 전, 각 정보의 가치를 정적으로 판단하는 것만으로는 최적의 답변 품질을 보장할 수 없다고 판단했습니다.
+
+정보 조각을 출처 우선순위·신규성·보정 계수로 평가하고 컨텍스트 예산을 나누는 MatrixTransformer를 개발했습니다. 현재 모듈은 결정론적 계산으로 슬라이스를 평가하고 출처별 분량을 배분합니다.
+
+이 아이디어는 정보 통합을 '단순 조립'의 관점에서 '가치 기반의 동적 포트폴리오 구성'으로 전환하는 저의 문제 해결 철학이 담겨 있으며, 관련 구현 내용은 아래 구조에서 확인하실 수 있습니다.
+
+
+
+
+
+
+
+
+미러 - 트랜스폼 퍼펙트 큐브
+
+💡 요약 (Elevator Pitch)
+
+
+"미러-트랜스폼 퍼펙트 큐브(MPC)는 입력 점 집합의 좌표 범위를 정리하는 정규화 유틸리티입니다. 점들의 중심을 이동하고 최대 축 크기에 맞춰 균일하게 스케일링하는 계산을 구현했습니다."
+
+
+MPC의 좌표 정규화 구조
+MPC에서 다루는 대상은 3D 점 좌표입니다. 검색 경로 선택이나 텍스트 재랭킹과 역할을 구분하고 좌표 정규화 계산을 별도 모듈에 두었습니다.
+
+1단계: 점 집합의 좌표 기준 정리
+구현 대상: 점 좌표 집합을 입력으로 받아 중심과 축별 범위를 기준으로 정규화합니다.
+좌표 처리: 점 집합의 중심을 기준으로 좌표를 이동하여 입력의 위치 차이를 정리합니다.
+"점 집합을 같은 좌표 기준에서 다룰 수 있도록 중심 이동 계산을 분리했습니다."
+
+2단계: 최대 축 크기를 이용한 균일 스케일링
+기존 기능:
+MirrorPerfectCube.normalize는 입력 점 집합의 중심과 최대 축 크기를 계산 기준으로 사용합니다.
+좌표 범위: 가장 큰 축의 크기를 기준으로 동일한 스케일을 적용합니다. 점 집합의 모든 축을 서로 다르게 늘려 정육면체로 재구성하는 방식은 아닙니다.
+처리 경계: MPC의 좌표 정규화와 Weighted-RRF·재랭커의 문서 점수 계산은 서로 다른 기능입니다.
+현재 좌표 정규화는 점 집합을 받는 유틸리티의 계산으로 구성했습니다.
+
+입력 데이터의 위치와 크기 차이를 정리하는 것이 이 계산의 역할입니다.
+입력 점들의 중심을 이동하고 모든 축에 같은 스케일을 적용합니다.
+"좌표 정규화의 책임을 작은 유틸리티로 분리했습니다. 제가 구현한 범위는 입력 점의 좌표 기준과 크기를 맞추는 계산입니다."
+
+3. 구현 경계와 호출 범위
+입력 점 좌표를 받아 변환 좌표를 만드는 계산의 책임을 이 모듈에 두었습니다.
+
+동적 게이팅과 스코어 보정을 활용한 RAG 파이프라인 고도화
+
+
+
+
+질문마다 필요한 검색량과 처리 깊이가 다르다는 점에 주목했습니다. 질의 특성에 맞춰 리소스 투입량과 처리 경로를 선택할 수 있도록 게이팅과 실행 계획을 설계했습니다.
+
+이 아이디어는 RAG 파이프라인을 '고정된 공장 라인'에서 '상황에 맞춰 최적의 팀을 구성하는 지휘 본부'로 전환하는 저의 문제 해결 철학이 담겨 있습니다. 시스템의 핵심은 "상황(질의)을 정량화하고, 점수에 기반해 행동한다"는 것입니다.
+
+▶ 1. 전체 구조와 시작점: 지능형 RAG 오케스트레이터
+
+"사용자 요청의 특성을 분석하고 검색·생성 단계에서 사용할 옵션과 경로를 정하는 오케스트레이션 구조입니다."
+
+질의 복잡도, 요청 힌트, Plan 소비 필드, MoE·플레이트 신호에 따라 경로와 자원을 선택하는 구조를 마련했습니다. 각 게이트의 활성 조건과 호출 경계를 나누어 구성했습니다.
+
+▶ 2. 핵심 아이디어 (동적 경로 결정): 쿼리 복잡도 게이트 & MoE K-할당
+
+질의와 실행 조건에 맞춰 기존 처리 경로를 선택하고 자원을 배분하는 구조입니다.
+
+쿼리 복잡도 기반 선택적 정밀 처리: QueryComplexityGate는 SIMPLE/AMBIGUOUS/COMPLEX를 분류해 Self-Ask·Analyze 필요 여부를 제공합니다. 2-Pass·ONNX 선택에는 요청·Plan·백엔드·모델 조건도 함께 작용합니다.
+MoE·계획 기반 K-할당: 플레이트 사양과 PlanHintApplier가 웹·벡터 K와 예산을 전달합니다. 위험 K 제어와 CFVM 튜닝 경로를 함께 두어 조건에 따라 검색량을 조절합니다.
+▶ 3. 기술적 깊이(점수와 질의 처리): 스코어 보정 & 쿼리 확장
+
+서로 다른 정보원의 점수와 불명확한 질의를 다루기 위해 점수 보정과 선택적 질의 확장을 활용했습니다.
+
+이종 검색엔진 스코어 보정: 등온 회귀 테이블 기반 IsotonicCalibrator와 기본 clip 경로를 마련했습니다. 테이블이 있으면 해당 보정을 적용하고, 없을 때는 raw 점수의 범위를 [0,1]로 제한합니다.
+질의 확장 및 결과 융합: Self-Ask와 하위 질의 확장, RRF 융합을 선택적으로 활용합니다. 질문을 여러 관점으로 나누어 근거를 모으는 구조이며 실행 범위는 활성화 조건과 예산에 따릅니다.
+기반 강화(의미 기반 청킹): 문장·문단과 길이 예산을 고려해 컨텍스트를 구성하는 방향을 적용했습니다. 문서 분할 기준과 이후 검색·생성 단계의 입력 길이를 함께 다루는 접근입니다.
+질의·설정·관측 신호에 따라 기존 처리 경로와 검색 자원을 선택적으로 조절하는 구조를 구현했습니다. 각 옵션의 소비 경계를 분리하여 선택과 실행의 관계를 확인할 수 있도록 구성했습니다.
+
+
+
+
+
+
+
+
+
+시공 응축 빌드매트릭스
+
+
+
+도입배경: AI 모델 라우팅과 의사결정의 내부 상태를 분석하기 위해 런타임 지표를 수집하는 계측 구조를 설계했습니다. 수집한 신호로 판단 기준을 점검할 수 있도록 AOP 계측과 품질 추적 기능을 구성했습니다.
+
+
+의사결정 지점의 지표 수집, 진단 로그 기록, 오류율 기반 임계값 조정을 각각 구현했습니다. 이 절에서는 실제 코드에 있는 계측과 품질 추적 경계를 중심으로 설명합니다.
+
+1. 실시간 AI 의사결정 모니터링 시스템 구축 (Spring AOP)
+문제점: AI 오케스트레이션의 내부 동작(모델 선택, 증거 허용 등)은 복잡하여 문제 발생 시 원인 파악이 어려운 '블랙박스' 구간이었습니다.
+해결책: OrchestrationHotspotAspect가 ModelRouter·RouterPolicy·MoeCandidateRouter 등의 의사결정 지점을 Spring AOP로 계측합니다. 수요·의심 점수와 후보 엔트로피·지니계수를 기록하며, 휴리스틱과 pseudoWeights를 사용하는 진단값임을 구분했습니다.
+구현: TraceLogger.emit으로 민감값을 정리한 NDJSON 로그를 만들고, 수신 URL이 설정되면 CloudPointerClient.trySend로 외부 수집을 시도합니다. 로그 생성과 선택적인 전송의 소스 연결을 마련했습니다.
+2. 오류율 추적과 임계값 조정
+문제점: 품질 변화를 파악하려면 개별 오류뿐 아니라 일정 구간의 오류율과 지표 변화도 함께 살펴야 합니다.
+해결책: UawAutolearnQualityTracker는 EWMA와 오류율 창을 사용해 품질을 추적하고 임계값을 조정합니다. 최근 오류와 지표의 변화를 수치로 다루는 품질 추적 로직입니다.
+구현 의의: 오류율과 관측 지표를 기준으로 임계값을 점검할 수 있게 구성했습니다. 관측값과 조정 기준을 나누어 문제 분석에 활용하도록 했습니다.
+3. 계측 실패 처리와 외부 의존성 관리
+로그 기록과 외부 수집 호출을 구분하고, 수신 URL이 있는 경우에만 전송을 시도하도록 구성했습니다.
+계측 실패를 상위로 전파하지 않는 fail-soft 처리를 두었습니다. CloudPointerClient는 호출 스레드에서 HttpURLConnection을 순차 실행하며, 타임아웃으로 각 통신의 대기 시간을 제한합니다.
+계측에는 Spring AOP, Jackson, SLF4J와 JDK 통신 API를 사용했습니다. 외부 의존성의 역할을 나누고 실패 처리와 타임아웃을 명시하는 방식으로 구현했습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+9개의 코어 옵저버빌리티 매트릭스 (Core Observability Matrices)
+
+
+
+💡 요약 (Elevator Pitch)
+"9개의 가상 매트릭스는 RAG 실행을 진단하기 위한 비행 기록 장치입니다. MatrixTelemetryExtractor가 전달받은 실행 요약을 소스·권위·위험·지연 등의 지표로 정리하고, VirtualPoint 구현은 NDJSON 기록과 최대 256개 인메모리 LRU 저장을 제공합니다. RagFailureBlackboxService는 조건이 맞을 때 과거 진단 벡터를 위험 판단의 참고값으로 활용합니다."
+
+
+'가상 매트릭스'와 기존 RAG 기능의 조합 시너지
+RAG의 실행 결과를 진단 지표로 정리하고, 비슷한 과거 사례를 현재 위험 판단에 참고하는 피드백 구조입니다.
+
+1단계: 실행 요약의 지표화(비행 기록 장치)
+기존 기능: 검색·융합·재랭킹·위험도 관련 모듈에는 로그와 텔레메트리를 남기는 경계가 있습니다. 각 모듈의 실행은 설정과 호출 조건에 따릅니다.
+'가상 매트릭스'와의 조합: MatrixTelemetryExtractor가 전달받은 실행 요약 Map을 9개 개념 축의 지표로 정규화합니다. 누락된 값에는 기본값을 적용하여 일정한 형태로 다룰 수 있게 구성했습니다.
+M1 (소스 조합): 웹, 벡터DB, KG 중 어떤 소스를 얼마나 썼나?
+M2 (신뢰도): 정부/학술 등 신뢰도 높은 소스를 얼마나 활용했나?
+M5(재랭킹): reranker.cost 지표를 로그 스케일로 정규화합니다.
+M8(지연): latency.ms를 tanh로 정규화합니다. 비용·예산은 별도 M9 지표로 다룹니다.
+"실행 요약을 고정 슬롯의 지표로 정리하는 구조를 구현했습니다. 기본 벡터는 M1의 세 소스 비율과 M2/M3/M4/M5/M7/M8/M9를 합친 10슬롯이며, M6 기여분은 별도 sidecar로 다룹니다. 개념상의 9개 축을 실제 저장 표현에 맞춰 구체화한 것입니다."
+
+2단계: 진단 지표의 벡터화와 저장
+기존 기능: FederatedEmbeddingStore는 여러 EmbeddingStore를 하나로 묶는 연합 저장소 래퍼입니다. 실제 저장·검색 방식은 주입한 하위 저장소에 따르며, VirtualPoint는 별도의 기록 경로를 사용합니다.
+'가상 매트릭스'와의 조합: telemetry.VirtualPointService는 정해진 슬롯 값을 벡터로 바꾸어 NDJSON에 기록합니다. learning.virtualpoint.VirtualPointService는 별도로 진단 벡터와 위험·복구 정보를 최대 256개 인메모리 LRU에 보관합니다.
+"실행 경험을 진단용 지표 벡터로 정리해 기록·재사용할 수 있게 했습니다. NDJSON 기록과 인메모리 진단 저장을 나누고, 조건이 맞는 과거 사례를 위험 판단의 참고값으로 사용합니다."
+
+
+
+
+
+
+
+
+
+
+
+
+3-Stage Application Strategy for Virtual Matrices
+
+기존 기능: Probe·Soak는 활성 조건에서 파라미터 조합을 실험하는 경로입니다. 검색 체인은 RetrievalOrderService의 순서를 따르며 기본 fixed 모드에서는 웹→벡터→KG를 사용하고, 요청 메타데이터의 순서 override는 별도로 적용합니다.
+'가상 매트릭스'와의 조합: RagFailureBlackboxService가 관측 trace를 매트릭스로 바꾸고, 기능 활성화·현재 신호·유사도 조건에 따라 인메모리의 과거 진단 벡터를 조회합니다.
+조회한 과거 진단 정보는 현재의 위험도·우선순위·주요 실패·복구 제안을 보정하는 참고값으로 사용합니다.
+"비슷한 진단 사례를 현재 판단에 참고할 수 있도록 위험 prior 경로를 연결했습니다. 실행 중 관측된 신호와 과거 진단 정보를 함께 정리하는 보조 구조입니다."
+
+가상 매트릭스의 진단 활용 3단계
+현재 구현된 실행 요약·진단 벡터를 기준으로 기록, 유사 사례 조회, 위험 판단 보조의 세 단계를 설명하겠습니다.
+
+1단계: 실행 지표와 진단 정보 기록
+먼저 실행 요약과 진단 정보를 일정한 형태로 정리합니다.
+
+응용 방안:
+지표 벡터화: telemetry.VirtualPointService가 정해진 슬롯을 벡터로 변환해 NDJSON에 기록합니다. 같은 지표 표현으로 실행 요약을 남길 수 있도록 구성했습니다.
+진단 정보 보관: learning.virtualpoint.VirtualPointService가 진단 벡터와 위험·복구 정보를 최대 256개 인메모리 LRU에 보관합니다.
+기존 기능과의 조합:
+기존 Art Plate 선택과 진단 벡터 기록은 별도 기능으로 두었습니다. WorkflowOrchestrator는 금융 상황에서 ap11을 선택하는 분기를 가지며, VirtualPoint는 진단 정보를 기록합니다.
+"실행 지표와 위험·복구 정보를 일정한 형태로 기록하여, 이후 진단에서 참고할 수 있는 기반을 마련했습니다."
+
+2단계: 유사한 과거 진단 사례 조회
+기능과 신호 조건이 맞으면 현재 진단과 가까운 과거 사례를 조회합니다.
+
+응용 방안:
+유사 사례 조회: 인메모리 VirtualPointService.nearest와 RagFailureBlackboxService의 연결을 통해 과거 진단 벡터를 검색합니다.
+조회 조건: 기능 활성 여부와 현재 신호, 유사도 조건을 함께 확인하여 위험 prior에 사용할 과거 사례를 선택합니다.
+기존 기능과의 조합:
+현재 상태를 진단 벡터로 정리한 뒤 기능 활성 여부와 유사도 조건에 따라 과거 사례를 활용합니다.
+과거 사례의 위험·복구 정보를 가져와 현재 진단의 참고값으로 사용합니다.
+"현재 상태와 유사한 진단 사례를 찾아 위험 판단에 참고하도록 구현했습니다. 현재 신호를 기록하는 단계와 과거 사례를 조회하는 단계를 연결한 것이 핵심입니다."
+
+3단계: 위험도와 복구 제안 보정
+조회한 과거 사례는 현재의 위험 판단과 복구 제안을 보정하는 데 사용합니다.
+
+응용 방안:
+위험 prior: 조건에 맞는 과거 진단 벡터를 현재 위험도와 우선순위 판단의 참고값으로 활용합니다.
+복구 제안: 과거 위험·복구 정보를 현재 주요 실패와 대응 제안의 보정에 사용합니다.
+기존 기능과의 조합:
+기존 Massive Parallel Query Expansion과 Anchor-Based Context Compression에는 요청·후보·위험·예산 등 서로 다른 실행 조건이 있습니다.
+VirtualPoint는 이와 별도로 진단 사례를 조회해 위험과 복구 제안을 보조합니다. 현재 확인된 연결은 제안과 진단값의 보정까지입니다.
+"과거 사례를 현재 진단에 참고하여 위험과 대응 방향을 정리하는 구조입니다. 현재 요청에서 관측한 신호에 유사 사례의 정보를 더해 문제 분석을 보조하도록 구성했습니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+플래너 넥서스 (WorkflowOrchestrator)
+
+
+
+ 요약 (Elevator Pitch)
+"기존 RAG 위에 Plan을 선택하고 실행 옵션을 전달하는 WorkflowOrchestrator를 구현했습니다. 질의·도메인·첨부·모드 조건에 맞는 Plan을 고르고, PlanHintApplier를 통해 검색 K·예산·재랭킹·게이트 옵션과 일부 when 조건을 연결합니다. 개별 Java 처리 경로와 Plan의 소비 필드를 구분한 오케스트레이션 구조입니다."
+
+
+신규 기능과 기존 RAG 기능의 조합 시너지
+제가 추가한 기능들은 기존 단계의 설정과 호출 경계를 연결하는 구성 요소입니다. 각 모듈의 실제 옵션 소비와 활성 조건을 나누어 관리하도록 구성했습니다.
+
+1. '작전 계획서(Plan DSL)'와 '동적 체인'의 결합 → 전략 옵션 전달
+기존 기능: DynamicRetrievalHandlerChain과 RetrievalOrderService는 질문·전략·RuleBreak 조건에 따른 검색 순서 분기를 가집니다. 기본 retrieval.order.mode=fixed에서는 웹→벡터→KG를 사용하며, 요청 메타데이터의 override는 별도로 적용합니다.
+신규 기능과의 조합: WorkflowOrchestrator가 작전 계획서(YAML)를 선택·정규화하고 GuardContext에 planId를 기록합니다. 검색 체인은 전달된 힌트와 설정을 실제 처리 경계에서 소비합니다.
+예시: 최근성 단서에 recency_first.v1.yaml, 엔티티·KG 관련 조건에 kg_first.v1.yaml 등을 선택하는 경로가 있습니다. 선택한 Plan의 K·예산·재랭킹 옵션을 해당 코드 경계로 전달합니다.
+"검색 전략의 설정을 작전 계획서로 나누고, 선택된 Plan의 옵션을 기존 실행 경로에 연결했습니다. 새 단계를 YAML에 적는 것만으로 자동 실행하는 방식이 아니라, 구현된 소비 필드를 중심으로 전략을 조절하는 구조입니다."
+
+2. '동적 K-할당/점수 보정'과 '검색/융합' 모듈의 결합 → 검색량과 점수 기준 조정
+기존 기능: HybridRetriever가  웹/벡터 DB에서 정보를 가져오고, WeightedRRF가 여러 소스의 검색 결과를 융합했습니다.
+신규 기능과의 조합:
+동적 K-할당: PlanHintApplier가 웹·벡터 K와 예산, kgTopK 등의 필드를 힌트와 메타데이터로 전달합니다. 웹 15개·벡터 5개 같은 값은 계획에서 선택할 수 있는 배분 예시입니다.
+점수 보정: ScoreCalibrator·IsotonicCalibrator와 기본 clip 경로를 통해 서로 다른 점수 범위를 다룹니다. [0,1] 범위의 정규화 값과 데이터로 교정된 성공 확률을 구분하여 사용합니다.
+"검색 소스별 K와 예산을 전달하고, 점수 보정 경계를 분리했습니다. 서로 다른 정보 소스의 수집량과 점수 기준을 코드로 연결한 것이 핵심입니다."
+
+3. '안전 게이트/거버넌스'와 '답변 처리'의 결합 → 승인 검사와 개인정보 정제
+기존 기능: ChatService가 최종적으로 AI의 행동(Tool 사용 등)을 실행하고, AnswerSanitizer가 답변을 정제했습니다.
+신규 기능과의 조합:
+사전 안전 점검: com.nova.protocol.guard.AutorunPreflightGate.check는 도메인 존재 여부, 최소 근거 2개, isAuthorized를 검사합니다. 화이트리스트 연결은 확장 지점이며, 모든 ChatService 툴 실행 전에 반드시 호출되는 연결은 확인되지 않았습니다.
+개인정보 거버넌스: GuardPipeline은 초안과 가드 최종 결과에 PIISanitizer.mask를 적용합니다. 이메일·전화번호·주민번호·카드형 숫자·토큰 등의 패턴을 처리하는 서비스 경계의 정제 계층입니다.
+"행동 승인에 필요한 항목을 검사하는 게이트와 답변의 개인정보 패턴을 정제하는 계층을 나누어 구현했습니다. 검사 로직의 존재와 실제 호출 조건을 구분하여 안전 기능의 적용 범위를 명확히 했습니다."
+요약 (Elevator Pitch)
+"기존 RAG의 점수 결합과 보정 계산을 보강한 작업입니다. WPM의 일반화 평균, 제한된 점수 보정, Plan 옵션 소비 경계를 구현했습니다. 수식의 역할과 실제 호출 범위를 구분하여 기존 구조 안에서 기능을 정리했습니다."
+
+
+신규 기능과 기존 RAG 기능의 조합 시너지
+제가 추가한 기능들은 완전히 새로운 기능이라기보다는, 기존 시스템의 잠재력을 최대한 끌어내기 위한 '정밀 보정 장치'들입니다.
+
+1. '수학적 융합'과 '정보 종합(Fusion)'의 결합 → 평균 계산과 점수 보정
+기존 기능: WeightedRRF 등 여러 검색 결과를 융합하는 모듈이 있습니다. 여기에 평균 계산과 점수 보정 경계를 나누어 구성했습니다.
+신규 기능과의 조합:
+Weighted Power Mean(WPM): WeightedPowerMeanFuser.fuse에 일반화 평균과 p=0일 때의 기하평균 계산을 구현했습니다. TailWeightedPowerMeanFuser는 상위 tail 가중치를 더하며, p에 따라 결합 방식이 달라집니다.
+MP-Law Normalizer: com.abandonwareai.fusion.MpLawNormalizer.normalize에 점수 분포 기반 경계 clamp를 구현했습니다. 점수 범위를 제한하는 계산이며, 엄밀한 고유값 분포 분석과는 역할을 구분했습니다.
+"일반화 평균과 점수 분포 보정을 별도 모듈로 구성했습니다. 결합 방식과 보정 범위를 나누어 계산의 역할을 명확히 표현했습니다."
+
+2. '안전 장치'와 '동적 계획(WorkflowOrchestrator)'의 결합 → 수치 제한과 옵션 적용
+기존 기능: WorkflowOrchestrator의 Plan 선택과 PlanHintApplier의 힌트 소비 경로가 있습니다. 여기에 관련 수치 보정과 안전 검사 로직을 구분해 구성했습니다.
+신규 기능과의 조합:
+Bode-like Sensitivity Clamp: Nova의 BodeClamp는 큰 입력을 완만하게 줄이고 결과를 [0,1]로 제한합니다. NovaNextFusionService에서 delta 크기를 보정하는 계산에 사용됩니다.
+Score Calibrator(Fallback): IsotonicCalibrator는 보정 테이블이 없을 때 raw 점수를 [0,1]로 clip하는 기본 경로를 제공합니다. 값의 범위를 제한하는 폴백이며, 그 결과를 교정된 확률로 해석하지 않습니다.
+WorkflowOrchestrator 연결: WorkflowOrchestrator.selectPlan→PlanHintApplier.applyToGuardContext→GuardContext·OrchestrationHints의 K·예산·재랭킹 옵션 소비로 이어집니다. 일부 plan.when 조건은 확장·Self-Ask를 제어하고 plan.pipeline은 실행 증거를 stage ledger에 대응시킵니다.
+"작전 계획의 실제 소비 필드를 기존 실행 경계에 연결하고 수치 보정을 보강했습니다. 선언과 실행을 구분하여 어떤 옵션이 어느 단계에 적용되는지 정리한 것이 핵심입니다."
+
+3. '모듈화'와 '비파괴적 개선' → 아키텍처 존중
+기존 기능: 검색 체인, 선택 재랭커, 도메인 정책 등을 별도 모듈과 설정 경계로 나눈 구조입니다.
+신규 기능과의 조합: 수식 기반 기능을 기존 처리 경계에 맞추어 보강하는 방식으로 접근했습니다. 현재 소스에서는 계산 모듈과 호출 조건을 나누어 확인할 수 있습니다.
+"기존 아키텍처의 역할 분담을 존중하며 필요한 계산과 연결을 보강하는 것을 중요하게 생각했습니다. 모듈 이름보다 실제 구현과 호출 조건을 기준으로 기능을 설명하는 것이 저의 개발 원칙입니다."
+
+
+
+ '아블레이션 기여분해(Ablation Contribution Decomposition)'
+
+
+💡 요약 ( Elevator Pitch)
+"제 RAG 시스템의 진단 기능 중 하나는 아블레이션 기여분해(Ablation Contribution Decomposition)입니다. 단계별로 기록한 정책 패널티를 볼츠만·softmax 상대 가중치로 정리하여 점수 하락에 기여한 이벤트를 살펴봅니다. 기록된 신호를 기준으로 점검할 후보의 우선순위를 보여주는 진단 보조 기능입니다."
+
+
+1. 핵심 메커니즘: 수학적 진단 (The Science)
+에러 로그에서 발생한 사건을 확인하는 데 더해, 기록한 이벤트가 정책 점수 하락에 얼마나 기여했는지를 정리합니다.
+
+점수 차분(Δ) 기반 패널티 시스템: recordPenalty가 호출된 이벤트에 대해 초기 점수 1.0에서 제한·감쇠한 패널티를 적용합니다.
+온도 어닐링(Temperature Annealing): 기록된 장애 이벤트 수에 따라 로그 스케일로 온도를 낮추어, 패널티의 상대 가중치 분포를 조절합니다.
+볼츠만 가중치(Softmax): 기록된 패널티 scoreDelta를 상대 가중치로 바꾸고, 가장 큰 후보와 샘플을 기록합니다. 이 값은 점검 우선순위를 위한 지표입니다.
+
+2. 실패 신호의 기록 지점: 트레이스 앵커(Trace Anchors)
+모델 요구 신호와 비동기 결과 누락처럼 별도 확인이 필요한 실패 지점을 트레이스 앵커로 관리합니다.
+
+Model Required 신호: qtx.llm.modelRequired 등의 앵커를 진단 패널티에 연결하여 모델 요구·부재 상태를 추적합니다.
+비동기 결과 누락(Missing Future) 탐지: Future 객체가 null로 반환되는 구간을 missing_future 앵커로 관리합니다.
+기능적 연결: 활성화된 bridge·penalty 경로가 이벤트를 AblationContributionTracker에 전달하면 기록된 패널티의 상대 기여 지표를 계산합니다.
+
+3. 기존 RAG 기능과의 조합성 (Synergy)
+이 기능은 기존 RAG 부품의 실패 신호를 모아 정리하는 진단 보조 장치입니다.
+
+오케스트레이션 진단: LLM·Self-Ask 등의 경로에서 기록되는 이벤트와 패널티를 모아 상대적인 실패 기여 후보를 계산합니다.
+안전 게이트와의 연동: CitationGate·FinalSigmoidGate 등의 실패 이벤트가 기록되면 guard·step별 상대 지표를 제공합니다. 답변 공개·보류 정책과 진단 점수는 별도 경계로 다룹니다.
+운영 가시성: TraceStore에 기여 지표를 기록하고 UawAblationFinalizeAspect에서 마감 처리와 blackbox 갱신을 연결합니다. 공개 응답과 대시보드에는 해당 경로가 투영한 허용 필드를 사용합니다.
+
+4. 진단 지표의 활용(The Impact)
+"RAG 시스템에서 흩어져 발생하는 실패 신호를 정리하기 위해 볼츠만 분포 아이디어를 진단 우선순위에 응용했습니다. 기록 패널티의 상대 기여를 통해 디버깅과 튜닝을 돕는 구조를 구현했습니다. 운영 중 어떤 신호가 기록되었는지 추적할 수 있게 만드는 것을 중요하게 생각합니다."
+
+1. 학습 후보 검증 메트릭 스키마와 상태 지표화
+검증 메타데이터 파이프라인: laneCoverage, contaminationScore, requeryConfirmed, CFVM reward 등의 검증 상태와 런타임 Trace를 수집·정량화하는 메트릭 스키마를 구성했습니다.
+샘플·루프 상태 가시화: 검증 메타데이터와 오류율 창, EWMA 지표로 학습 후보의 통과 여부와 루프 상태를 관측합니다. 샘플 검증 결과와 writer 결과를 각각의 지표로 다룹니다.
+2. 동적 임계선(Dynamic Threshold) 기반 이상 패턴 감지
+적응형 임계치 적용: sampleScore, context_contamination_score, requery_penalty 등 검증 지표를 활용하여 샘플별 임계 판단을 구성했습니다.
+이상 징후(Anomaly) 추적: EWMA·윈도우와 설정된 오염도·점수 변화 기준으로 spike·drift 플래그를 계산합니다.
+3. 검증 결과에 따른 보정과 격리 판단
+Vector Quarantine 판단: 검증 거절·오염·이상 신호에 따라 QUARANTINE 또는 SHADOW_REVIEW 결정을 내리는 로직을 구현했습니다.
+CFVM 피드백 루프: 검증 sampleScore와 오염·재질의·이상 패널티로 reward를 만들고, key·arm과 tuner가 있을 때 feedback을 적용합니다. 임계값 조정과 검증 결과의 피드백 경계를 연결했습니다.
+
+
+
+컨텍스트 정제 및 다양성 증강 (Context Refinement & Diversity Augmentation)
+
+
+
+
+💡 요약 (Elevator Pitch)
+"RAG 파이프라인의 정제 단계를 보강하기 위해 DPP 다양성 재랭커를 구현했습니다. 문서의 관련성과 텍스트 중복 정도를 함께 고려하여 후보를 선택하는 모듈입니다. 비슷한 문서만 반복해서 남기기보다 서로 다른 내용을 포함한 후보를 고르는 스마트 큐레이터 역할을 맡겼습니다."
+
+
+신규 기능과 기존 RAG 기능의 조합 시너지
+제가 추가한 기능들은 기존 파이프라인의 중간 단계에서 선택적인 필터와 보정기로 동작합니다. DPP 선택, URL 정규화, 임베딩 캐시를 서로 다른 책임으로 나누었습니다.
+
+1. 'DPP 다양성 재랭커'와 '2-Pass 재랭킹'의 결합 → 관련성과 다양성 반영
+기존 기능: Bi-Encoder와 Cross-Encoder 인터페이스를 사용하는 2-Pass 경로가 있으며, 백엔드·모델·요청 조건에 따라 실제 단계가 달라집니다. 현재 OnnxRuntimeService는 실모델 추론 대신 어휘 유사도 기반 fail-soft 점수를 반환합니다.
+신규 기능과의 조합: UnifiedRagOrchestrator에서는 Bi-Encoder 다음, Cross-Encoder 이전에 DPP 단계를 둡니다. DynamicRetrievalHandlerChain의 별도 DPP는 융합 이후에 적용됩니다.
+해결하려는 문제: 1차 후보에 비슷한 문서가 반복되면 후속 처리에 같은 내용이 여러 번 전달될 수 있습니다. 관련성과 중복 정도를 함께 고려하는 후보 선택이 필요했습니다.
+구현: DPP는 텍스트 shingle 유사도와 relevance를 커널에 반영해 greedy determinantal 선택을 수행합니다. 수치 경계에서는 legacy 계산으로 내려가는 폴백을 두었습니다. 이후 정밀 재랭킹 적용은 선택한 백엔드와 요청 조건에 따릅니다.
+"DPP 재랭커는 관련성과 다양성을 함께 고려하는 스마트 필터입니다. 비유하자면, 서류를 통과한 지원자 중 서로 다른 강점을 가진 팀을 구성하는 과정과 같습니다. 실제 후보 수와 적용 위치는 요청·설정·처리 경로에 맞춰 결정합니다."
+
+2. 'URL 정규화'와 'RRF 융합'의 결합 → 문서 식별 기준 통일
+기존 기능: WeightedRRF는 웹, 벡터 DB 등 여러 소스의 검색 결과를 종합하여 최종 순위를 매기는 '정보 융합' 모듈입니다.
+신규 기능과의 조합: RerankCanonicalizer가 utm_ 같은 추적 파라미터와 URL 표현을 정리합니다. WeightedReciprocalRankFuser는 canonicalKey를 문서 식별에 사용해 주소 표현이 다른 같은 페이지를 함께 다루도록 연결했습니다.
+"URL 정규화는 주소 표현에 따른 중복을 줄이는 작은 청소부 역할입니다. 정규화한 키를 융합 단계의 문서 식별에 사용하여, URL 처리와 순위 결합의 기준을 연결했습니다."
+
+3. '임베딩 캐시'와 '검색/재랭킹'의 결합 → 유효한 계산 결과 재사용
+기존 기능: 임베딩 모델은 여러 검색·재랭킹 모듈에서 사용됩니다. DppDiversityReranker 자체는 텍스트 shingle 유사도를 사용하므로, 임베딩 캐시는 이와 별도의 계산 재사용 기능입니다.
+신규 기능과의 조합: LangChainConfig가 DecoratingEmbeddingModel로 EmbeddingModel을 감쌉니다. 기본 인메모리 캐시는 TTL·LRU·single-flight와 모델·차원 식별 키를 사용하며, 유효한 캐시 hit에서는 저장된 임베딩을 재사용합니다.
+"임베딩 캐시는 반복 계산을 줄이기 위한 메모리입니다. 모델·차원·유효기간을 기준으로 재사용 범위를 나누고, 같은 입력의 동시 요청을 묶는 구조를 구현했습니다. 실제 속도와 API 비용 효과는 제공자·캐시 적중률에 따라 달라집니다."
+
+
+
+
+9개의 두뇌 - 타일 : 매트릭스 교정기
+
+
+
+
+  요약 (Elevator Pitch)
+"9-타일 매트릭스 별칭 교정기는 문맥 힌트를 활용하는 입력 보정 모듈입니다. NineTileAliasCorrector에 9개 tile ID를 두고, 일부 게임 별칭과 도메인·텍스트 힌트, 선택적인 mini LLM 보정을 연결했습니다. 확신이 낮은 경우 입력을 유지하는 보수적인 방식으로 구성했습니다."
+
+
+신규 기능과 기존 RAG 기능의 조합 시너지
+이 기능은 DynamicRetrievalHandlerChain의 질의 분석 입구와 연결됩니다. 입력 문맥과 도메인 힌트를 활용하여 검색에 전달할 질의를 보정합니다.
+
+1. '타일 사전'과 '문맥 분석'의 결합 → 문맥에 따른 별칭 보정
+기존 기능의 한계: 문맥 없이 별칭을 고정 치환하면 다른 분야의 단어로 바뀔 수 있습니다. 저는 질의에 담긴 도메인과 텍스트 단서를 함께 사용하는 방향으로 보정 로직을 구성했습니다.
+신규 기능과의 조합:
+전문 분야별 타일: 9개 tile ID를 정의하고 games에 '스컹크→스커크', '마키바→마비카' 등의 기본 별칭을 두었습니다. 현재 별칭 내용이 있는 분야를 중심으로 보정합니다.
+문맥 기반 가중치: context의 vp.topTile·intent.domain 또는 가벼운 텍스트 힌트로 tile 가중치를 조절합니다. 예를 들어 게임 힌트가 주어졌을 때 기본 사전의 '스컹크→스커크' 보정을 적용할 수 있습니다.
+"질문의 문맥과 도메인 힌트를 사용해 별칭을 보수적으로 보정하는 시스템을 구현했습니다. 사전에 있는 별칭과 현재 힌트를 함께 사용하여, 고정 치환만으로 처리할 때의 오교정 가능성을 줄이려는 접근입니다."
+
+2. 문맥 힌트와 타일 가중치의 결합
+기존 기능: 실행 요약을 NDJSON에 기록하고 진단 벡터를 인메모리에 보관하는 VirtualPoint 구현이 있습니다. 이 기록 기능과 교정기의 문맥 힌트 처리는 별도 경계입니다.
+신규 기능과의 조합: 별칭 교정기는 context에 전달된 vp.topTile 또는 intent.domain을 읽어 가중치를 조절합니다. 전달된 힌트와 사전 규칙을 결합하는 방식입니다.
+"다른 처리 단계에서 전달한 문맥 힌트를 교정기에서도 사용할 수 있도록 구성했습니다. 타일 가중치와 사전 규칙, 선택적인 mini LLM 보정의 역할을 나누어 입력을 다룹니다."
+
+3. '오버레이 아키텍처'와 '기존 교정기'의 결합 → 원문 유지 폴백
+기존 기능: ConceptResolver와 별칭 보정 경계가 있으며, 새로운 교정기를 기존 질의 처리 앞단에 추가하는 방식으로 접근했습니다.
+신규 기능과의 조합: 새로운 교정기는 기존 시스템을 대체하는 것이 아니라, 그 앞단에서 작동하는 '오버레이(Overlay)' 방식으로 구현했습니다.
+교정 시: 문맥 힌트와 규칙 점수가 조건을 만족하면 교정 결과를 다음 단계로 전달합니다. 기본 게임 사전의 실제 교정 예시는 '스컹크→스커크'입니다.
+저신뢰·실패 시: 규칙 점수가 낮으면 입력을 유지합니다. mini LLM이 없거나 제한·실패 조건에 해당하면 기존 입력 또는 규칙 결과를 반환합니다.
+"기존 질의 처리 앞단에 오버레이를 두고, 확신이 낮을 때 원문을 유지하는 폴백을 구현했습니다. 새 보정 경로가 판단을 내릴 수 없는 경우에도 입력을 보존하도록 구성한 것이 핵심입니다."
+
+
+
+선언형 '작전 계획(DSL)' 기반의 유연한 RAG 오케스트레이션 엔진
+
+
+
+요약 (Elevator Pitch)
+"제가 구축한 RAG 시스템의 핵심은 실행 조건을 분리하고 전략 옵션을 조절하는 것입니다. 현재 Gradle 루트의 활성 소스를 중심으로 기능 토글, Plan 옵션 소비, 요청 MDC 추적을 구성했습니다. 모듈·설정·요청별 조건을 나누어 실제 동작을 제어하도록 설계했습니다."
+
+
+'데모 모듈'과 기존 RAG 기능의 조합 시너지
+이 시스템은 현재 Gradle 루트 실행 엔진에 모듈·빈·설정이 연결되는 구조입니다. 내부 디렉터리의 이름보다 활성 sourceSets와 실제 등록·소비 경로를 기준으로 실행 범위를 정리했습니다.
+
+1. '운영 토글(application.yml)'과 'RAG 모듈'의 결합 → 유연한 제어
+기존 기능: Weighted-RRF, 인용·도메인 정책, 캐시, Naver 검색과 조건부 재랭킹 경로가 있습니다. ONNX 이름의 현재 런타임 경로는 어휘 유사도 기반 fail-soft 점수를 반환하므로 실모델 추론과 구분합니다.
+조합 방식: 여러 핵심 기능을 application.yml과 프로필, 요청·Plan 옵션으로 제어합니다. 빈 생성 조건과 요청 시 소비하는 옵션을 나누어 적용합니다.
+예시 1(재랭킹 선택): onnx.enabled와 요청별 옵션으로 재랭킹 경로를 조절합니다. 실제 적용은 모델·백엔드 조건과 설정의 소비 시점에 따릅니다.
+예시 2(근거 정책): gate.citation.min 같은 인용 기준과 도메인 정책을 Plan·설정으로 표현합니다. 각 게이트와 답변 공개 정책이 해당 값을 소비하는 경계에서 적용됩니다.
+"핵심 기능을 설정·요청·Plan으로 조절할 수 있도록 나누었습니다. 클래스패스 설정과 빈 생성 시점에 반영되는 값, 요청마다 소비하는 옵션을 구분하여 운영 조건을 드러내는 구조입니다."
+
+2. '작전 계획서(Plan DSL)'와 '오케스트레이션'의 결합 → 전략적 파이프라인
+기존 기능: Self-Ask, Web·Vector 검색, 융합, Bi-Encoder, 조건부 재랭킹, 안전 게이트 등의 개별 처리 경로가 있습니다.
+조합 방식: brave.v1.yaml은 SelfAsk→QueryBurst→dynamicChain→Weighted RRF→Overdrive→Bi-Encoder→ONNX→prompt.build→answer.generate를 선언합니다. Plan 선택과 소비 옵션, 일부 when 조건, pipeline stage ledger를 연결했으며 실제 실행은 구현된 Java 처리 경로와 조건에 따릅니다.
+"작전 전략을 YAML로 표현하고 실제 소비 필드를 코드 경계에 연결했습니다. pipeline 선언은 실행 증거를 stage ledger에 대응시키며, 새 단계를 추가하려면 해당 단계의 실행 코드와 설정·조건 연결이 필요합니다."
+
+3. 'MDC 추적'과 'RAG 흐름'의 결합 → 관측 가능성(Observability)
+기존 기능: Soak/Probe API(테스트 엔드포인트), SSE(실시간 이벤트) 등 운영 인프라.
+조합 방식: TraceFilter가 요청 입구에서 X-Request-Id와 세션 헤더·쿠키를 처리하고 MDC·TraceStore의 상관 ID를 설정합니다. ID가 없으면 생성하며, 공개 진단값에는 해시와 redaction을 적용합니다.
+"요청을 공통 ID로 묶어 진단할 수 있게 추적 필터와 로그 경계를 구성했습니다. Soak·Probe 실행 중 문제를 좁힐 수 있도록 요청 식별자를 제공하고 공개 진단값을 정리했습니다."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+[ 이직 및 지원 사유 ]
+“AI 에이전트가 실제로 검색·검증·행동하도록 만드는 플랫폼을 더 큰 스케일에서 구현하고자 합니다.” 하이브리드 검색·검증 파이프라인과 에이전트 가드레일을 설계·구현한 경험을 바탕으로, 귀사에서 MCP 기반 에이전트·RAG 플랫폼을 엔드투엔드로 고도화하고 싶습니다.
+
+[ 입사가능시기 ]
+협의 가능(즉시~2주 내 조정 가능)
+
+
+자기소개서
+저는 문제 정의 → 설계 → 구현 → 운영·개선의 전 과정을 책임지고 성능과 안정성을 함께 고려하는 개발자입니다. Java, C++, Python을 기반으로 Spring·Netty 중심의 실시간 스트리밍 서버와 LangChain4j 기반 하이브리드 RAG 파이프라인을 설계·개발해 왔습니다.
+
+첫째, 실시간 스트리밍 서버에서는 고동시성 환경에서의 처리량/지연시간 최적화, 연결 안정성, 장애 대응과 관측성(로그/지표 기반 분석)을 중심으로 개선을 진행했습니다. 병목 구간을 계측해 원인을 좁히고, 서버 구조와 처리 흐름을 단순화하여 안정적으로 확장 가능한 형태로 다듬는 데 강점이 있습니다.
+
+둘째, RAG 파이프라인에서는 Retrieval–Re-rank–Scoring 흐름을 정리하고, 점수 분포를 다루기 위한 보정 코드를 구현했습니다. Marchenko–Pastur 법칙에서 얻은 아이디어와 점수 분포 기반 경계 clamp를 검토하며 수치 보정 방식을 다루었습니다. 또한 Self-Ask 형태의 질문 확장·분해, 앵커 중심 후보 선택과 컨텍스트 구성, 실패 기록·cooldown·조건부 정책 피드백을 연결했습니다.
+
+저는 기능 구현 자체보다, “왜 성능이 떨어지는지”를 재현 가능한 방식으로 규명하고(로그/샘플/지표), 가설–실험–검증을 통해 개선안을 고도화하는 방식을 중요하게 생각합니다. 또한 문서화와 기준 정의(평가 데이터셋/지표), 코드 리뷰와 합의 과정을 통해 팀이 동일한 방향으로 개선을 이어갈 수 있도록 정리하는 편입니다.
+
+귀사에서는 백엔드/AI 시스템 개발 경험을 바탕으로, RAG 기반 기능의 정확도·속도·운영 안정성을 함께 개선하는 역할을 맡고 싶습니다. 빠르게 프로토타입을 만들되, 운영 가능한 품질까지 끌어올리는 개발자로 기여하겠습니다.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+추가 핵심 기능: 대화 실행·근거·운영 경계
+1. 검색 근거와 최종 답변의 출처 결속
+저는 웹·벡터·로컬 문서의 검색 결과를 최종 답변의 출처 목록과 연결하는 파이프라인을 구현했습니다. 근거·인용 게이트와 출처 위치 확인을 통과한 자료를 공개 가능한 출처 메타데이터로 승격하도록 구성했습니다.
+
+핵심 기전: 승격된 자료에 표식을 부여하고, 최종 답변에서 사용한 표식과 출처 목록을 연결합니다. 공개 출처 메타데이터에는 원문 스니펫을 넣지 않으며, 검색 결과 없음과 게이트 실패·서비스 미가용을 구분합니다.
+
+기존 RAG와의 조합: 검색·재랭킹 이후에 출처 처리 경계를 두어 답변에 연결된 자료를 추적하도록 했습니다. 출처 결속을 위한 구현이며 모든 문장의 사실성을 보장하는 장치는 아닙니다.
+
+관련 구현: RagEvidenceAttributionService.promoteForPromptDetailed · RagEvidenceAttributionService.appendFinalEvidenceAppendix
+
+관련 클래스: RagEvidenceAttributionService
+
+
+2. 최종 응답 공개와 장기 지식 저장의 분리
+저는 최종 검증의 판정 상태와 장기 지식 저장 허용 여부를 분리하는 응답 공개 정책을 구현했습니다. 검증이 수행되는 일반 대화 경로에서 판정이 불가능하거나 검증기가 fail-soft로 끝난 경우에는 답변을 미검증 상태로 유지하면서 장기 지식 저장을 차단하도록 구성했습니다.
+
+핵심 기전: 명시적 근거 요청이나 문서 범위가 지정된 요청에는 별도의 공개 조건을 적용합니다. 저장이 허용된 답변도 취소·중단 확인을 거쳐 후속 저장 단계로 전달합니다.
+
+기존 RAG와의 조합: 검색 근거·최종 검증·저장 판단의 역할을 나누어 답변 공개와 지식 채택을 구분했습니다. 모든 요청의 검증이나 여러 저장소의 원자적 저장을 전제로 하지 않습니다.
+
+관련 구현: ChatWorkflow.applyFinalVerificationReleaseGate · ChatWorkflow.applyEvidenceReleasePolicy
+
+관련 클래스: ChatWorkflow
+
+
+3. 정확한 실행 단위의 스트리밍 복구·취소
+저는 채팅 스트리밍을 세션 ID와 실행 토큰에 결속해, 연결이 끊긴 뒤에도 보관 중인 동일 실행의 이벤트나 저장된 최종 답변을 복원하는 경로를 구현했습니다. 전송 연결 해제와 사용자의 명시적 Stop을 구분하도록 구성했습니다.
+
+핵심 기전: 저장·종료 가드로 교체된 실행의 늦은 저장과 중복 종료를 방지합니다. 모델 호출에서는 취소 수락과 공급자 워커의 실제 종료를 별도로 기록하여 요청 수락과 실제 작업 종료를 구분합니다.
+
+기존 RAG와의 조합: 검색·생성 작업의 실행 식별자를 스트림과 후속 저장에 연결했습니다. 복원 가능한 기록과 실행 상태를 활용하며 무손실 복구나 취소 즉시 워커 종료를 보장하는 방식은 아닙니다.
+
+관련 구현: ChatRunRegistry.attachInteractiveExact · 저장·종료 가드의 처리 경계 · 모델 호출의 워커 종료 경계
+
+관련 클래스: ChatRunRegistry
+
+
+4. 응답별 trace 결속과 제한된 진단 복원
+저는 각 답변의 메시지 ID에 trace 스냅샷 포인터를 결속해, 대화 이력을 다시 열어도 해당 응답의 진단 정보를 찾을 수 있도록 구현했습니다. 원본 trace와 별도로 허용된 필드의 진단 요약을 대화 저장소에 남기도록 구성했습니다.
+
+핵심 기전: 메모리 스냅샷이 사라진 경우에는 저장된 진단 요약을 사용해 제한된 진단 화면을 복원합니다. 원본 스냅샷의 수명과 대화에 남긴 요약의 역할을 나누었습니다.
+
+기존 RAG와의 조합: 이벤트 관측에 응답별 포인터와 요약을 연결했습니다. 메모리 기반 원본 trace 전체를 재시작 이후에도 영구 보존하는 기능은 아닙니다.
+
+관련 구현: ChatTraceSnapshotPointerPersister.persist · 저장된 진단 요약의 복원 경로
+
+관련 클래스: ChatTraceSnapshotPointerPersister
+
+
+5. 사용자 정정값을 보존하는 세션 맥락 복원
+저는 세션별 최근 대화와 길이가 제한된 요약을 함께 복원해 후속 질문의 맥락으로 전달하는 기능을 구현했습니다. 사용자가 정의하거나 정정한 값은 요약 예산 안에서 우선 보존하고, 이전 assistant 추정보다 최신 사용자 정정값을 우선하도록 문맥·프롬프트에 반영했습니다.
+
+핵심 기전: 내부 메타 메시지를 대화에서 제외하고 세션 범위로 기록을 조회합니다. 요약은 줄 병합·길이 제한·키워드와 문장 선택을 사용하며 공개·저장 허용 조건을 통과한 경로에서 갱신합니다.
+
+기존 RAG와의 조합: 현재 질문과 최근 대화·사용자 정정값을 함께 전달해 후속 질문의 맥락을 구성했습니다. LLM의 의미 요약이나 무제한 장기 기억을 전제로 하지 않습니다.
+
+관련 구현: ChatHistoryServiceImpl.getRecentHistoryWindow · ChatHistoryServiceImpl.updateRollingSummary
+
+관련 클래스: ChatHistoryServiceImpl
+
+
+6. 모델·엔드포인트별 API 요청 호환성
+저는 OpenAI 호환 API와 Ollama 네이티브 모델을 공통 ChatModel 경계에서 생성하도록 구성했습니다. 모델·엔드포인트 조건에 맞춰 샘플링 옵션의 전송·생략과 출력 토큰 파라미터를 적용하고, 반환 클라이언트에 설정 모델과 출력 예산을 결속하도록 구현했습니다.
+
+핵심 기전: 모델 파라미터 매트릭스와 팩토리 생성 경계를 사용해 요청 옵션을 조립합니다. 같은 옵션을 모든 모델에 일괄 전송하지 않고 구현된 모델·엔드포인트 조건에 따라 요청을 구성합니다.
+
+기존 RAG와의 조합: 라우터가 선택한 모델과 최종 호출의 설정을 팩토리 경계에서 연결했습니다. 요청 호환성 구현에 관한 설명이며 모든 모델의 기능 지원이나 실제 외부 API 호출 성공을 의미하지 않습니다.
+
+관련 구현: DynamicChatModelFactory.lcWithTimeout · OpenAiModelParamMatrix.resolveTokenParam
+
+관련 클래스: DynamicChatModelFactory · OpenAiModelParamMatrix
+
+
+7. 실제 검색 결과 0건에 한정된 제한 재검색
+저는 검색 엔진 장애와 실제 검색 결과 0건을 구분하고, 실제 0건일 때만 질의를 한 번 확장해 두 번째 검색 사이클로 연결하는 경로를 구현했습니다. 검색 실패를 무조건 질의 확장으로 처리하지 않도록 구성했습니다.
+
+핵심 기전: 확장 질의가 원래 주제·날짜·출처 연산자·제외 조건을 유지하는지 검사하고, 예산 소진이나 취소 시에는 종단 사유를 기록합니다. Conversate의 단일 사이클 경로에서는 확장을 하지 않습니다.
+
+기존 RAG와의 조합: 제한 재검색을 검색 제공자 경계에 연결해 확장 조건과 종료 사유를 추적하도록 했습니다. 검색 사이클 수와 실제 외부 HTTP 호출 수는 구분하며 제공자 키와 런타임 활성 조건에 따라 실행됩니다.
+
+관련 구현: HybridWebSearchProvider.searchBoundedFallback · GeminiGateway.expandSearchQueryOnce
+
+관련 클래스: HybridWebSearchProvider · GeminiGateway
+
+
+8. 검색 키 레인과 쿼터 예약의 일관성
+저는 Brave 무료·기본 키 레인의 상태를 분리하고, 요청 시작 시 선택한 키와 무료 쿼터 예약을 실제 HTTP 헤더에 전달되는 요청 단위로 묶도록 구현했습니다. 한도 소진과 쿨다운 상태에 따라 이후 요청의 레인을 선택하도록 구성했습니다.
+
+핵심 기전: 성공·실패 정산을 중복 처리하지 않으며 타임아웃에서는 제공자가 요청을 처리했는지 불확실하므로 예약을 즉시 환급하지 않는 정책을 적용합니다.
+
+기존 RAG와의 조합: 검색 제공자의 키 선택·요청·정산을 같은 흐름에서 관리했습니다. 로컬 카운터와 공급자 헤더를 사용하는 구현이며 재시작을 넘는 영속 과금 원장이나 비용 절감 성과로 설명하지 않습니다.
+
+관련 구현: BraveSearchService.reserveForRequest · 쿼터 예약·정산의 처리 경계
+
+관련 클래스: BraveSearchService
+
+
+9. 질의·출처 범위에 결속된 사전 검색 재사용
+저는 사전 검색 결과를 원질의 해시와 출처·제공자 범위에 결속해 다른 질의의 결과를 잘못 재사용하지 않도록 구현했습니다. 이 동작은 WebSearchRetriever의 검색 경로에 적용됩니다.
+
+핵심 기전: site: 제약으로 기존 결과를 필터링한 뒤 충분한 결과가 있으면 추가 검색을 생략합니다. 결과가 부족하면 기존 자료를 초기 근거로 유지하면서 새 검색을 수행하도록 구성했습니다.
+
+기존 RAG와의 조합: 메인 흐름이 전달한 사전 검색 결과를 검색기의 identity 검사와 연결했습니다. 별도 검색기를 사용하는 모든 채팅 경로에 같은 재사용 동작이 적용된다고 전제하지 않습니다.
+
+관련 구현: WebSearchRetriever.retrieve · 질의·범위 검사와 site 재사용의 처리 경계
+
+관련 클래스: WebSearchRetriever
+
+
+10. 대화 맥락의 일관된 JSON/ZIP 내보내기
+저는 선택한 여러 대화의 저장된 메시지와 연결 가능한 진단 정보를 하나의 JSON 또는 ZIP으로 내보내는 기능을 구현했습니다. 읽기 전용 직렬화 트랜잭션으로 스냅샷을 캡처하고 같은 캡처 결과를 두 형식에서 재사용하도록 구성했습니다.
+
+핵심 기전: 대상 데이터의 변경 검사를 위한 SHA-256 manifest를 포함하고 선택 수·크기·동시 작업·캐시 보관 제한을 적용합니다. 보존되지 않은 진단 자료는 결과에 명시해 진단 정보의 부분 보존 상태를 드러냅니다.
+
+기존 RAG와의 조합: 저장된 대화와 연결 가능한 진단 정보를 함께 정리하되 임시 내보내기 캐시의 범위에서 제공합니다. 과거 원본 프롬프트·검색·실행 자료 전체를 백업하는 기능으로 설명하지 않습니다.
+
+관련 구현: ChatConversationExportSupport.capture · ChatConversationExportSupport.download
+
+관련 클래스: ChatConversationExportSupport
+
+
+
+
+
+
 ================================================================================
 Abandon_X.txt — UAW.txt에 수록된 보조·교정 문서 (기존 제목 유지)
 ================================================================================

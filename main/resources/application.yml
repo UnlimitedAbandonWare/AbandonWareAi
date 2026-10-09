@@ -150,12 +150,17 @@ naver:
   keys: "${NAVER_KEYS:}"
   client-id: "${NAVER_CLIENT_ID:}"
   client-secret: "${NAVER_CLIENT_SECRET:}"
+  apihub:
+    base-url: "${NAVER_APIHUB_BASE_URL:https://naverapihub.apigw.ntruss.com}"
+    client-id: "${NAVER_APIHUB_CLIENT_ID:}"
+    client-secret: "${NAVER_APIHUB_CLIENT_SECRET:}"
   filters:
     enable-domain-filter: false
     enable-keyword-filter: true
     keyword-min-hits: 2
     domain-policy: boost
   search:
+    provider: "${NAVER_SEARCH_PROVIDER:auto}"
     timeout-ms: 5500
     retry:
       max-attempts: 1

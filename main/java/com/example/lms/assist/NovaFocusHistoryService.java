@@ -24,7 +24,10 @@ public class NovaFocusHistoryService {
     public record Pair(long sequence,String turnId,String state,String question,String answer) {}
     public record Page(List<Pair> turns,Long beforeSequence) {}
     public record Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,
-                          NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,Integer answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled) {
+                          NovaFocusSettings.AnswerSelection answerSelection,long settingsVersion,Integer answerLengthChars,boolean quickAnswerEnabled,Boolean webSearchEnabled,NovaFocusSettings.ReasoningPreset reasoningPreset) {
+        public Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,NovaFocusSettings.AnswerSelection selection,long version,Integer length,boolean quick,Boolean web){
+            this(recent,summary,relevant,transcript,selection,version,length,quick,web,NovaFocusSettings.ReasoningPreset.STANDARD);
+        }
         public Context(List<Pair> recent,String summary,List<Pair> relevant,List<com.example.lms.service.ChatConversationContext.Transcript> transcript,NovaFocusSettings.AnswerSelection selection,long version,Integer length,boolean quick){
             this(recent,summary,relevant,transcript,selection,version,length,quick,null);
         }
@@ -45,8 +48,8 @@ public class NovaFocusHistoryService {
     /** Server-side default for owners without stored settings; explicit toggles still win. */
     @org.springframework.beans.factory.annotation.Value("${conversate.focus.default-enabled:false}")
     private boolean defaultEnabled;
-    @org.springframework.beans.factory.annotation.Value("${conversate.focus.display-default-model:chatgpt-oauth:gpt-5.6-luna}")
-    private String defaultDisplayModel="chatgpt-oauth:gpt-5.6-luna";
+    @org.springframework.beans.factory.annotation.Value("${conversate.focus.display-default-model:llmrouter.gemini-pro}")
+    private String defaultDisplayModel="llmrouter.gemini-pro";
 
     public NovaFocusHistoryService(PlatformTransactionManager manager,ObjectMapper mapper,ChatHistoryService history) {
         this.mapper=mapper;this.tx=new TransactionTemplate(manager);
@@ -98,7 +101,7 @@ public class NovaFocusHistoryService {
             new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of()));
         return new NovaFocusSettings(defaultEnabled,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),
             d.wakeListenTimeoutMs(),d.presentation(),d.recallEnabled(),d.rememberFactsEnabled(),
-            d.snapshot(),selection,d.recentContext(),d.memory(),d.answerLengthChars(),d.quickAnswerEnabled());
+            d.snapshot(),selection,d.recentContext(),d.memory(),d.answerLengthChars(),d.quickAnswerEnabled(),d.webSearchEnabled(),d.effectiveReasoningPreset());
     }
     private NovaFocusSettings decode(String json) {
         if(json==null)return serverDefaults();
@@ -137,7 +140,7 @@ public class NovaFocusHistoryService {
         return transaction(()->{var p=locked(owner,channel);
             if(p.getSettingsVersion()!=expected)throw new IllegalArgumentException("focus_settings_conflict");
             var merged=value;
-            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null){ // Omitted optional blocks preserve server-owned values.
+            if(value.snapshot()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null||value.reasoningPreset()==null){ // Omitted optional blocks preserve server-owned values.
                 var stored=decode(p.getSettingsJson());
                 var selection=value.answerSelection()==null?stored.answerSelection():value.answerSelection();
                 if(p.getSettingsJson()!=null&&value.answerSelection()!=null&&value.answerSelection().routing()==null&&stored.answerSelection()!=null)
@@ -149,7 +152,8 @@ public class NovaFocusHistoryService {
                     value.memory()==null?stored.memory():value.memory(),
                     value.answerLengthChars()==null?stored.answerLengthChars():value.answerLengthChars(),
                     value.quickAnswerEnabled()==null?stored.quickAnswerEnabled():value.quickAnswerEnabled(),
-                    value.webSearchEnabled()==null?stored.webSearchEnabled():value.webSearchEnabled());
+                    value.webSearchEnabled()==null?stored.webSearchEnabled():value.webSearchEnabled(),
+                    value.reasoningPreset()==null?stored.effectiveReasoningPreset():value.reasoningPreset());
             }
             try{p.setSettingsJson(mapper.writeValueAsString(merged));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
             p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),merged);});

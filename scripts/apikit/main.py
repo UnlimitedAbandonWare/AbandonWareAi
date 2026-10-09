@@ -269,11 +269,12 @@ def main(argv=None):
         "argv": [a for a in (argv if argv is not None else sys.argv[1:])],
         "rows": rows, "allOk": all_ok,
     }
+    payload = common.scrub_result(payload, ctx.get("secret_values", ()))
     saved = common.save_result(payload, getattr(args, "out", None))
     if getattr(args, "json", False):
         print(json.dumps(payload, ensure_ascii=False, indent=2))
     else:
-        common.print_table(rows)
+        common.print_table(payload["rows"])
         print("saved=%s allOk=%s" % (saved, all_ok))
     return 0 if all_ok else 3
 

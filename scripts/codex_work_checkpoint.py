@@ -8,7 +8,7 @@ restores only unchanged sealed postimages. No Git index/ref operations are used.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 import difflib
 import hashlib
@@ -383,6 +383,11 @@ def secret_free(data, source_path=""):
         for fixture in diagnostics:
             replacement = fixture.replace(field + ":", "runIdentity:").replace(field + "=", "runIdentity=")
             text = text.replace(fixture, replacement)
+    if source_path == "scripts/test_codex_nightly_review.py":
+        # Exact invalid, synthetic redaction fixture: no encoded key body.
+        # Other bodies, neighbouring headers and production paths remain blocked.
+        text = text.replace("'-----BEGIN " + "PRIVATE KEY-----\\nsynthetic'",
+                            "'<synthetic-invalid-private-key>'")
     if source_path == "scripts/test_git_ship.py":
         # Exact synthetic scan fixtures of git_ship's own tests; every other
         # path and any altered literal stays under the credential scan.
@@ -675,7 +680,8 @@ def secret_free(data, source_path=""):
                                  + r"\s*\?\s*" + noarg + r"\s*:\s*" + noarg + r"\s*;", re.I)
         comparison = re.compile(r"\b(" + names + r")\s*==(?!=)", re.I)
         iteration = re.compile(r"\bfor\s*\(\s*(?:java\.lang\.)?String\s+(token)\s*:\s*"
-                               + r"(?:" + ident + r"(?=\s*[.)])|new\s+String\s*\[\]\s*\{)")
+                               + r"(?:" + ident + r"(?=\s*[.)])|"
+                               + ident + r"\(\s*" + ident + r"\s*\)(?=\s*\))|new\s+String\s*\[\]\s*\{)")
         for expression in (conditional, comparison, iteration):
             for match in expression.finditer(text):
                 if not any(start < match.end() and match.start() < end for start, end in protected):
@@ -1362,6 +1368,9 @@ def completion_cleanup(root, run, manifest, state):
     Cleanup cannot rewrite successful verification or start another patch.
     """
     request_path = run / "task-cleanup-request.json"
+    continuity_lock = ExitStack()
+    continuity_bytes = None
+    task_state = None
     try:
         raw = contents(request_path)
         if raw is None:
@@ -1369,6 +1378,23 @@ def completion_cleanup(root, run, manifest, state):
         request = json.loads(raw)
         require(request.get("schemaVersion") == "awx.completed-task-cleanup.v1" and
                 request.get("taskId") == manifest["decision"]["goalId"], "cleanup-task-mismatch")
+        # Source verification is already complete. Delivery failure blocks only whole-task finalization.
+        from checkpoint_doctor import check_continuity, CONTRACT_PREFIX, state_write_lock
+        task_state = root / "data/agent-handoff/codex-autonomy" / request["taskId"] / "state.md"
+        task_aware = any(key in request for key in ("instructionRef", "taskRevision", "environment"))
+        state_text = task_state.read_text(encoding="utf-8-sig") if task_state.exists() else ""
+        if task_aware or any(line.startswith(CONTRACT_PREFIX) for line in state_text.splitlines()):
+            if task_state.exists():
+                continuity_lock.enter_context(state_write_lock(task_state))
+                continuity_bytes = contents(task_state)
+            delivery = check_continuity(task_state, expected_task=request["taskId"],
+                latest_ref=request.get("instructionRef"), expected_revision=request.get("taskRevision"),
+                complete=True, environment=request.get("environment"))
+            if not delivery["allowed"]:
+                state["completionCleanup"] = {"status": "hold", "reason": "continuity-incomplete",
+                                              "continuity": delivery}
+                state["nextAction"] = "reconcile-required-delivery-proof"
+                return
         posts = request.get("postimages", [])
         require(isinstance(posts, list) and all(isinstance(p, dict) for p in posts), "cleanup-postimage-set")
         hashes = {p.get("path"): p.get("sha256") for p in posts}
@@ -1385,6 +1411,8 @@ def completion_cleanup(root, run, manifest, state):
             "-LogDirectory", str(run / "cleanup"), "-Apply"
         ], capture_output=True, timeout=150, creationflags=subprocess.CREATE_NO_WINDOW)
         require(digest(contents(request_path)) == digest(raw), "cleanup-request-changed")
+        if continuity_bytes is not None:
+            require(contents(task_state) == continuity_bytes, "cleanup-continuity-state-changed")
         require(len(result.stdout) <= MAX_BYTES, "cleanup-result-too-large")
         output = json.loads(result.stdout.decode("utf-8-sig"))
         require(output.get("schemaVersion") == "awx.completed-task-cleanup.result.v1" and
@@ -1405,6 +1433,8 @@ def completion_cleanup(root, run, manifest, state):
         reason = str(error) if isinstance(error, CheckpointError) else "cleanup-io-timeout-or-evidence-error"
         state["completionCleanup"] = {"status": "hold", "reason": reason}
         state["nextAction"] = "reconcile-cleanup-receipt-and-required-proof"
+    finally:
+        continuity_lock.close()
 
 
 def lease_conflict_autoflow(root, targets, run=None):

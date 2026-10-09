@@ -14,6 +14,21 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.response.MockRestResponseCreators.*;
 
 class ChatModelCatalogServiceTest {
+    @Test void geminiCueSelectableUnderMetaDisplayDefaultRoutesWithoutOpeningGlobalSelection() throws Exception {
+        var properties=new org.springframework.boot.env.YamlPropertySourceLoader().load("meta-display",new org.springframework.core.io.ClassPathResource("application-meta-display.yml"));
+        String configured=properties.stream().map(p->p.getProperty("app.ai.remote-model-selection-routes")).filter(java.util.Objects::nonNull).findFirst().orElseThrow().toString();
+        var env=new org.springframework.mock.env.MockEnvironment();String routes=env.resolveRequiredPlaceholders(configured);
+        assertThat(env.withProperty("CHAT_REMOTE_MODEL_SELECTION_ROUTES","api3").resolveRequiredPlaceholders(configured)).isEqualTo("api3");
+        var row=mock(CloudModelRouteClassifier.CloudModelRouteRow.class);when(row.routeKey()).thenReturn("gemini-cue");when(row.provider()).thenReturn("gemini");when(row.modelId()).thenReturn("gemini-3.5-flash-lite");when(row.eligible()).thenReturn(true);
+        var cloud=mock(CloudModelRouteClassifier.class);when(cloud.classifyDefaultCatalog("chat")).thenReturn(List.of(row));
+        var catalog=new ChatModelCatalogService(cloud,null,new RestTemplateBuilder(),"https://remote.invalid",false);
+        org.springframework.test.util.ReflectionTestUtils.setField(catalog,"remoteSelectionRoutes",routes);
+        var cue=catalog.resolve("llmrouter.gemini-cue").orElseThrow();assertThat(cue.selectable()).isTrue();assertThat(cue.reasons()).doesNotContain("remote_selection_disabled");
+        when(row.eligible()).thenReturn(false);when(row.disabledReason()).thenReturn("missing_api_key");
+        var unavailable=new ChatModelCatalogService(cloud,null,new RestTemplateBuilder(),"https://remote.invalid",false);
+        org.springframework.test.util.ReflectionTestUtils.setField(unavailable,"remoteSelectionRoutes",routes);
+        assertThat(unavailable.resolve("llmrouter.gemini-cue").orElseThrow().selectable()).isFalse();
+    }
     @Test void googleSearchCapabilityUsesConfiguredNativeReadinessWithoutGenerationProbe() {
         for (String scenario : List.of("supported", "unknown-model", "disabled-search")) {
             String model = scenario.equals("unknown-model") ? "gemini-unverified" : "gemini-3.8-flash";

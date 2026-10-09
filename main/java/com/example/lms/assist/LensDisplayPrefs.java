@@ -1,6 +1,8 @@
 package com.example.lms.assist;
 
 import java.util.*;
+import java.text.Normalizer;
+import java.nio.charset.StandardCharsets;
 
 /** Developer-tunable Meta Display lens presentation values, resolved per owner.
     Carried to the glasses inside lens/text and relay events; the server echoes the
@@ -9,7 +11,8 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
                                long transcriptTtlMs,long hintTtlMs,long autoPageMs,int hintTargetChars,
                                boolean historyEnabled,long historyWindowMs,int historyMaxChars,int historyMaxTokens,
                                boolean topicResetEnabled,
-                               long triggerQuietMs,long cueCooldownMs,long forceAfterMs){
+                               long triggerQuietMs,long cueCooldownMs,long forceAfterMs,AutoVoiceTrigger autoVoiceTrigger){
+    public LensDisplayPrefs {if(autoVoiceTrigger==null)autoVoiceTrigger=AutoVoiceTrigger.defaults();}
     public static final int MIN_FONT=20,MAX_FONT=36;
     public static final int MIN_TRANSCRIPT_LINES=1,MAX_TRANSCRIPT_LINES=8;
     public static final int MIN_HINT_PAGE_LINES=4,MAX_HINT_PAGE_LINES=13;
@@ -33,7 +36,7 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
         return new LensDisplayPrefs(26,26,4,11,20_000,20_000,5_000,
                 Math.max(MIN_TARGET_CHARS,Math.min(MAX_TARGET_CHARS,hintTargetChars)),
                 true,0,0,0,true,
-                2_500,10_000,180_000);
+                2_500,10_000,180_000,AutoVoiceTrigger.defaults());
     }
 
     /** Null patch fields keep the current value; out-of-range values fail by field name.
@@ -57,7 +60,8 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
                 pick(p.topicResetEnabled(),base.topicResetEnabled),
                 pick(p.triggerQuietMs(),base.triggerQuietMs,MIN_TRIGGER_QUIET_MS,MAX_TRIGGER_QUIET_MS,"triggerQuietMs"),
                 pick(p.cueCooldownMs(),base.cueCooldownMs,MIN_CUE_COOLDOWN_MS,MAX_CUE_COOLDOWN_MS,"cueCooldownMs"),
-                pick(p.forceAfterMs(),base.forceAfterMs,MIN_FORCE_AFTER_MS,MAX_FORCE_AFTER_MS,"forceAfterMs"));
+                pick(p.forceAfterMs(),base.forceAfterMs,MIN_FORCE_AFTER_MS,MAX_FORCE_AFTER_MS,"forceAfterMs"),
+                base.autoVoiceTrigger.patch(p.autoVoiceTrigger()));
     }
     /** Write-only selector: presets compose only existing font/line fields — TTLs, cue cycle and history stay. */
     private LensDisplayPrefs preset(String name){
@@ -73,7 +77,7 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
     private LensDisplayPrefs withDisplay(int transcriptFont,int hintFont,int transcriptLines,int hintLines){
         return new LensDisplayPrefs(transcriptFont,hintFont,transcriptLines,hintLines,
             transcriptTtlMs,hintTtlMs,autoPageMs,hintTargetChars,historyEnabled,historyWindowMs,historyMaxChars,historyMaxTokens,
-            topicResetEnabled,triggerQuietMs,cueCooldownMs,forceAfterMs);
+            topicResetEnabled,triggerQuietMs,cueCooldownMs,forceAfterMs,autoVoiceTrigger);
     }
     public enum Preset { DEFAULT,READ_EASY,DENSE }
     private static int pick(Integer value,int current,int min,int max,String field){
@@ -115,14 +119,71 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
         out.put("historyMaxChars",historyMaxChars);out.put("historyMaxTokens",historyMaxTokens);
         out.put("topicResetEnabled",topicResetEnabled);
         out.put("triggerQuietMs",triggerQuietMs);out.put("cueCooldownMs",cueCooldownMs);out.put("forceAfterMs",forceAfterMs);
+        out.put("autoVoiceTrigger",autoVoiceTrigger.describe());
         return out;
     }
+    /** Render projections deliberately exclude the owner's registered phrases. */
+    public LensDisplayPrefs renderSafe(){return new LensDisplayPrefs(transcriptFontPx,hintFontPx,transcriptMaxLines,hintPageLines,
+        transcriptTtlMs,hintTtlMs,autoPageMs,hintTargetChars,historyEnabled,historyWindowMs,historyMaxChars,historyMaxTokens,
+        topicResetEnabled,triggerQuietMs,cueCooldownMs,forceAfterMs,autoVoiceTrigger.withoutPhrases());}
+    public record Phrase(String id,String language,String text){@Override public String toString(){return "Phrase[redacted]";}}
+    public record AutoVoiceTrigger(boolean modeEnabled,boolean hintsEnabled,List<Phrase> phrases,String language,int hintLines,int hintChars,String preset){
+        public AutoVoiceTrigger {phrases=phrases==null?List.of():List.copyOf(phrases);}
+        public static AutoVoiceTrigger defaults(){return new AutoVoiceTrigger(false,true,List.of(),"ko",3,200,"general");}
+        public static String normalize(String text){return Normalizer.normalize(text,Normalizer.Form.NFC).strip().replaceAll("(?U)\\s+"," ").toLowerCase(Locale.ROOT);}
+        public AutoVoiceTrigger patch(AutoVoicePatch p){
+            if(p==null)return this;
+            if(Boolean.TRUE.equals(p.restoreDefaults()))return defaults();
+            String lang=p.language()==null?language:p.language();
+            String selected=p.preset()==null?preset:p.preset();
+            if(!Set.of("ko","en").contains(lang)||!Set.of("general","interview").contains(selected))throw invalid("language_or_preset");
+            int lines=pick(p.hintLines(),hintLines,3,9,"autoVoiceTrigger.hintLines"),chars=pick(p.hintChars(),hintChars,200,500,"autoVoiceTrigger.hintChars");
+            List<Phrase> list=phrases;
+            if(p.phrases()!=null){
+                if(p.phrases().size()>64)throw invalid("phrases");
+                var unique=new LinkedHashMap<String,Phrase>();var ids=new HashSet<String>();int bytes=0;
+                for(var phrase:p.phrases()){
+                    if(phrase==null||phrase.text()==null||phrase.id()==null||!phrase.id().matches("[A-Za-z0-9_-]{1,64}")||!Set.of("ko","en").contains(phrase.language()))throw invalid("phrases");
+                    if(phrase.text().codePoints().anyMatch(c->Character.isISOControl(c)||c>=0xD800&&c<=0xDFFF))throw invalid("phrases");
+                    String text=Normalizer.normalize(phrase.text(),Normalizer.Form.NFC).strip().replaceAll("(?U)\\s+"," ");
+                    if(text.isBlank()||text.codePointCount(0,text.length())>128)throw invalid("phrases");
+                    bytes+=text.getBytes(StandardCharsets.UTF_8).length;if(bytes>8192)throw invalid("phrases");
+                    String key=phrase.language()+":"+normalize(text);
+                    if(!unique.containsKey(key)){if(!ids.add(phrase.id()))throw invalid("phrase_id");unique.put(key,new Phrase(phrase.id(),phrase.language(),text));}
+                }
+                list=List.copyOf(unique.values());
+            }
+            boolean mode=pick(p.modeEnabled(),modeEnabled);
+            if(mode&&list.stream().noneMatch(f->f.language().equals(lang)))throw invalid("phrases_required");
+            return new AutoVoiceTrigger(mode,pick(p.hintsEnabled(),hintsEnabled),list,lang,lines,chars,selected);
+        }
+        public Phrase match(String text){String value=normalize(text);Phrase best=null;int length=-1;
+            for(var p:phrases){String literal=normalize(p.text());int n=literal.codePointCount(0,literal.length());
+                if(p.language().equals(language)&&value.contains(literal)&&n>length){best=p;length=n;}}
+            return best;
+        }
+        public AutoVoiceTrigger withoutPhrases(){return new AutoVoiceTrigger(modeEnabled,hintsEnabled,List.of(),language,hintLines,hintChars,preset);}
+        public Map<String,Object> describe(){return Map.of("modeEnabled",modeEnabled,"hintsEnabled",hintsEnabled,"phraseCount",phrases.size(),"language",language,"hintLines",hintLines,"hintChars",hintChars,"preset",preset);}
+        @Override public String toString(){return describe().toString();}
+        private static org.springframework.web.server.ResponseStatusException invalid(String field){return ConversateSessionService.error(org.springframework.http.HttpStatus.BAD_REQUEST,"invalid_lens_settings:autoVoiceTrigger."+field);}
+    }
+    public record AutoVoicePatch(Boolean modeEnabled,Boolean hintsEnabled,List<Phrase> phrases,String language,
+        @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer hintLines,
+        @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer hintChars,
+        String preset,Boolean restoreDefaults){}
     public record Patch(@com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer transcriptFontPx,
                         @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=NovaFocusSettings.StrictInteger.class) Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
                         Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,
                         Boolean historyEnabled,Long historyWindowMs,Integer historyMaxChars,Integer historyMaxTokens,
                         Boolean topicResetEnabled,
-                        Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs,String preset){
+                        Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs,String preset,AutoVoicePatch autoVoiceTrigger){
+        public Patch(Integer transcriptFontPx,Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
+                     Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,
+                     Boolean historyEnabled,Long historyWindowMs,Integer historyMaxChars,Integer historyMaxTokens,
+                     Boolean topicResetEnabled,Long triggerQuietMs,Long cueCooldownMs,Long forceAfterMs,String preset){
+            this(transcriptFontPx,hintFontPx,transcriptMaxLines,hintPageLines,transcriptTtlMs,hintTtlMs,autoPageMs,hintTargetChars,
+                historyEnabled,historyWindowMs,historyMaxChars,historyMaxTokens,topicResetEnabled,triggerQuietMs,cueCooldownMs,forceAfterMs,preset,null);
+        }
         /** 16-field form keeps older callers and JSON payloads valid. */
         public Patch(Integer transcriptFontPx,Integer hintFontPx,Integer transcriptMaxLines,Integer hintPageLines,
                      Long transcriptTtlMs,Long hintTtlMs,Long autoPageMs,Integer hintTargetChars,

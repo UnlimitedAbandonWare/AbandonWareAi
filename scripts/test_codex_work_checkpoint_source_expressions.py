@@ -11,6 +11,18 @@ from scripts.test_codex_work_checkpoint import CP, decision
 class SourceExpressionCheckpointTest(unittest.TestCase):
     setting = "api" + "Key"
 
+    def test_nightly_invalid_private_key_fixture_is_exact_and_path_bounded(self):
+        fixture = "'-----BEGIN " + "PRIVATE KEY-----\\nsynthetic'"
+        path = "scripts/test_codex_nightly_review.py"
+        CP.secret_free(fixture.encode(), path)
+        for altered, source_path in (
+            (fixture, "main/resources/private-data.txt"),
+            (fixture.replace("synthetic", "encoded-key-material"), path),
+            (fixture + "\n'-----BEGIN " + "PRIVATE KEY-----\\nencoded-key-material'", path),
+        ):
+            with self.subTest(source_path=source_path), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(altered.encode(), source_path)
+
     def test_js_call_with_optional_runtime_member_is_not_a_literal_secret(self):
         name = "to" + "ken"
         expression = "const " + name + " = normalizeRunToken(runState?.runToken);"

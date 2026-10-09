@@ -390,19 +390,19 @@ class PublicRequestBudgetGuardTest {
         assertDoesNotThrow(() -> guard.validateChatEffective(request));
         assertDoesNotThrow(() -> guard.validateChatProjected(
                 request, applier.load("brave.v1"), true, false));
-        assertEquals(270L, TraceStore.get("public.request.budget.retrievalWork"));
-        assertEquals(15L, TraceStore.get("public.request.budget.branchCount"));
+        assertEquals(54L, TraceStore.get("public.request.budget.retrievalWork"));
+        assertEquals(3L, TraceStore.get("public.request.budget.branchCount"));
         assertEquals(18, TraceStore.get("public.request.budget.effectiveTopK"));
-        assertEquals(1_620L, TraceStore.get("public.request.budget.providerWork"));
+        assertEquals(324L, TraceStore.get("public.request.budget.providerWork"));
 
-        guard.setMaxRetrievalWork(269);
+        guard.setMaxRetrievalWork(53);
         assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
                 () -> guard.validateChatProjected(request, applier.load("brave.v1"), true, false));
     }
 
     @org.junit.jupiter.params.ParameterizedTest(name = "burst offset={0} projectedWork={2}")
-    @org.junit.jupiter.params.provider.CsvSource({"-1,14,252,1512,true", "0,15,270,1620,true",
-            "1,16,288,1728,true"})
+    @org.junit.jupiter.params.provider.CsvSource({"-1,17,166,324,true", "0,18,174,324,true",
+            "1,19,182,324,true"})
     void shippedQueryBurstCountChangesActualProjectedAdmission(int offset, long expectedBranches,
             long expectedWork, long expectedProviderWork, boolean acceptedAtShippedBudget) throws Exception {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper(
@@ -439,23 +439,23 @@ class PublicRequestBudgetGuardTest {
         ReflectionTestUtils.setField(guard, "planHintApplier", applier);
         guard.setMaxProviderWork(10_000);
         ChatRequestDto request = ChatRequestDto.builder()
-                .message("recall this topic with bounded evidence").useRag(false).useWebSearch(true)
+                .message("recall this topic with bounded evidence").useRag(true).useWebSearch(true)
                 .webTopK(8).searchQueries(0).searchMode(SearchMode.AUTO).build();
         guard.setMaxRetrievalWork((int) expectedWork);
-        assertDoesNotThrow(() -> guard.validateChatProjected(request, plan, true, false));
+        assertDoesNotThrow(() -> guard.validateChatProjected(request, plan, true, true));
         assertEquals(expectedBranches, TraceStore.get("public.request.budget.branchCount"));
         assertEquals(expectedWork, TraceStore.get("public.request.budget.retrievalWork"));
         assertEquals(expectedProviderWork, TraceStore.get("public.request.budget.providerWork"));
         assertEquals(18, TraceStore.get("public.request.budget.effectiveTopK"));
         guard.setMaxRetrievalWork((int) expectedWork - 1);
         assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
-                () -> guard.validateChatProjected(request, plan, true, false));
+                () -> guard.validateChatProjected(request, plan, true, true));
         guard.setMaxRetrievalWork(432);
         if (acceptedAtShippedBudget) {
-            assertDoesNotThrow(() -> guard.validateChatProjected(request, plan, true, false));
+            assertDoesNotThrow(() -> guard.validateChatProjected(request, plan, true, true));
         } else {
             assertRejection(HttpStatus.TOO_MANY_REQUESTS, "chat_retrieval_budget_exceeded",
-                    () -> guard.validateChatProjected(request, plan, true, false));
+                    () -> guard.validateChatProjected(request, plan, true, true));
         }
         System.out.printf("TBL07_COUNT count=%d branches=%d retrievalWork=%d providerWork=%d acceptedAtShippedBudget=%s%n",
                 selectedCount, expectedBranches, expectedWork, expectedProviderWork, acceptedAtShippedBudget);
@@ -841,7 +841,7 @@ class PublicRequestBudgetGuardTest {
         PublicRequestBudgetGuard guard = new PublicRequestBudgetGuard();
         PlanHintApplier applier = new PlanHintApplier(new DefaultResourceLoader());
         ReflectionTestUtils.setField(guard, "planHintApplier", applier);
-        guard.setMaxRetrievalWork(395);
+        guard.setMaxRetrievalWork(107);
         guard.setMaxProviderWork(10_000);
         SettingsService settings = mock(SettingsService.class);
         ClientOwnerKeyResolver owner = mock(ClientOwnerKeyResolver.class);
@@ -862,7 +862,7 @@ class PublicRequestBudgetGuardTest {
                 .useWebSearch(true)
                 .useRag(false)
                 .webTopK(8)
-                // Workflow3 + ExtremeZ12 is legal; accumulation preserves a real overflow.
+                // Shared web3 * tuned topK18 * accumulation2 = 108 > 107.
                 .accumulation(true)
                 .searchMode(SearchMode.AUTO)
                 .build();

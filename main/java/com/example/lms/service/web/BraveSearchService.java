@@ -1008,8 +1008,11 @@ public class BraveSearchService implements WebSearchProvider {
         private final java.util.Map<String, Object> parent;
         private final java.util.Map<String, Object> row = new java.util.LinkedHashMap<>();
         private final long startedNs = System.nanoTime();
+        private final com.example.lms.debug.ApiFailureRecorder recorder;
+        private String errorBody;
 
-        private BraveAttemptObservation(String query) {
+        private BraveAttemptObservation(String query, com.example.lms.debug.ApiFailureRecorder recorder) {
+            this.recorder = recorder;
             parent = TraceStore.context();
             java.util.Map<String, Object> attemptContext = TraceStore.searchContext(parent, "providerAttemptId");
             row.putAll(TraceStore.searchCorrelation(attemptContext));
@@ -1025,8 +1028,8 @@ public class BraveSearchService implements WebSearchProvider {
             TraceStore.installContext(attemptContext);
         }
 
-        private static BraveAttemptObservation start(String query) {
-            try { return new BraveAttemptObservation(query); }
+        private static BraveAttemptObservation start(String query, com.example.lms.debug.ApiFailureRecorder recorder) {
+            try { return new BraveAttemptObservation(query, recorder); }
             catch (RuntimeException unavailableContext) { return null; }
         }
 
@@ -1050,6 +1053,29 @@ public class BraveSearchService implements WebSearchProvider {
         }
 
         private void close() {
+            try {
+                if (recorder != null) {
+                    String reason = java.util.Objects.toString(row.get("failureReason"), "unknown");
+                    String terminalReason = "OK".equals(row.get("outcome")) ? "NONE" : switch (reason) {
+                        case "timeout" -> "TIMEOUT_OR_BUDGET";
+                        case "json-parse-error", "blank-response" -> "PARSE_ERROR";
+                        case "cancelled" -> "CANCELLED_NEUTRAL";
+                        case "transport-error" -> "TRANSPORT_ERROR";
+                        case "unknown" -> "UNKNOWN";
+                        default -> "PROVIDER_ERROR";
+                    };
+                    var terminal = recorder.recordSearchTerminal("brave", "web",
+                            java.util.Objects.toString(row.get("providerAttemptId"), null),
+                            row.get("httpStatus") instanceof Number value ? value.intValue() : 0,
+                            terminalReason, errorBody, true, Boolean.TRUE.equals(row.get("providerReceiptObserved")));
+                    if (terminal.recoveredAt() != null) row.put("recoveredAt", terminal.recoveredAt());
+                }
+            } catch (RuntimeException unavailableIncidentSink) {
+                log.warn("[Brave API] terminal incident recording unavailable errorType={}",
+                        unavailableIncidentSink.getClass().getSimpleName());
+            } finally {
+                errorBody = null;
+            }
             try {
                 row.put("finishedAtEpochMs", System.currentTimeMillis());
                 row.put("elapsedMs", Math.max(0L, (System.nanoTime() - startedNs) / 1_000_000L));
@@ -1262,7 +1288,7 @@ public class BraveSearchService implements WebSearchProvider {
                 if (permit != null) { permit.completeAbandoned("wire", "request_search_budget"); permit = null; }
                 return requestBudgetExhaustedResult(safeQuery, topK, t0Ns);
             }
-            attempt = BraveAttemptObservation.start(safeQuery);
+            attempt = BraveAttemptObservation.start(safeQuery, apiFailureRecorder);
             ResponseEntity<String> res = requestTemplate.exchange(uri, HttpMethod.GET, entity, String.class);
             if (attempt != null) attempt.received(res.getStatusCode().value());
             String body = res.getBody();
@@ -1337,7 +1363,7 @@ public class BraveSearchService implements WebSearchProvider {
             return observeBraveResult(attempt, BraveSearchResult.ok(snippets, elapsedMs), snippets.isEmpty() ? "true_zero" : "none");
 
         } catch (HttpClientErrorException.TooManyRequests e) {
-            if (apiFailureRecorder != null) apiFailureRecorder.recordException(baseUrl, "web", e);
+            if (attempt != null) attempt.errorBody = e.getResponseBodyAsString();
             TraceStore.put("web.brave.suppressed.http429", true);
             long retryAfterMs = rateLimitRetryAfterToMs(e.getResponseHeaders());
             long requestedCooldownMs = Math.max(Math.max(0L, props.cooldownMs()), retryAfterMs);
@@ -1356,7 +1382,7 @@ public class BraveSearchService implements WebSearchProvider {
             return observeBraveResult(attempt, new BraveSearchResult(java.util.List.of(), BraveSearchResult.Status.HTTP_429, 429, cooldownMs,
                     msg, elapsedMs), "rate-limit");
         } catch (HttpStatusCodeException e) {
-            if (apiFailureRecorder != null) apiFailureRecorder.recordException(baseUrl, "web", e);
+            if (attempt != null) attempt.errorBody = e.getResponseBodyAsString();
             TraceStore.put("web.brave.suppressed.httpStatus", true);
             int code = (e.getStatusCode() != null) ? e.getStatusCode().value() : -1;
             long retryAfterMs = retryAfterToMs(e.getResponseHeaders());
@@ -1400,7 +1426,6 @@ public class BraveSearchService implements WebSearchProvider {
                     (code > 0 ? code : null), 0L, "http-error", elapsedMs), "http-error");
         } catch (Exception e) {
             boolean resourceAccess = e instanceof ResourceAccessException;
-            if (apiFailureRecorder != null && !isCancellationFailure(e)) apiFailureRecorder.recordException(baseUrl, "web", e);
             TraceStore.put(resourceAccess ? "web.brave.suppressed.resourceAccess"
                     : "web.brave.suppressed.exception", true);
             long elapsedMs = (System.nanoTime() - t0Ns) / 1_000_000L;

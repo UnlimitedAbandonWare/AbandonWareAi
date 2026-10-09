@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
 """deliver_to_downloads.py — copy agent deliverables into the user's Downloads.
 
-Contract DEMO1-DELIVERY-DOWNLOADS: a directive/report/brief an agent writes for
-the human is not finished until it also exists in user.downloads and the reply
-carries the tool's DELIVERED line. Three layers: rule doc, this tool, hook.
+Contract DEMO1-DELIVERY-DOWNLOADS: only an explicitly declared dot final
+directive is delivered here. Reviews, drafts, logs and intermediate artifacts
+stay in the project. Model names and filenames do not grant delivery authority.
 
-  --file <path> [...]   copy the named files
-  --scan [--since-minutes N] [--roots ...]   copy matching recent outputs that
-                        are not already present with the same sha256
+  --file <path> [...] --role dot --artifact-kind final-directive
+                         copy the explicitly selected final directives
+  --scan                 compatibility no-copy entry; automatic scanning disabled
   --quiet               print only when something was copied
-  --hook-stop           Codex Stop-hook entry (contract PASTE_DEVIN_dot-only-
-                        downloads_20261004): read the hook event JSON on stdin,
-                        open transcript_path (or resolve ~/.codex/sessions via
-                        session_id), and deliver only when the transcript's
-                        FIRST user-role message contains the literal tag
-                        [DOT-BRIEF]. stop_hook_active, missing/broken stdin or
-                        transcript -> no writes, exit 0. stdout is always a
-                        single `{}` JSON line (Stop hooks reject plain text);
-                        details go to the log file.
+  --hook-stop            compatibility no-copy entry; never reads a transcript.
+                         stdout remains a single `{}` JSON line.
   --downloads <dir>     destination override (tests); default = registry
                         user.downloads, fallback %USERPROFILE%\\Downloads
   --log <path>          jsonl log override; default <repo>/var/deliver/deliver-log.jsonl
@@ -126,8 +119,10 @@ def variant_path(downloads, name, n):
     return downloads / f"{p.stem}_v{n}{p.suffix}"
 
 
-def deliver_one(src, downloads):
+def deliver_one(src, downloads, *, role=None, artifact_kind=None):
     """Copy src into downloads. Returns (action, dest_path, sha12, size)."""
+    if role != "dot" or artifact_kind != "final-directive":
+        return ("REFUSED:dot-final-directive-required", None, None, 0)
     src = Path(src)
     reason = classify(src)
     if reason:
@@ -363,58 +358,15 @@ def hook_stop_roots(event):
 
 
 def run_hook_stop(args, downloads, record):
-    """Stop-hook gate. Returns (out_lines_append, extra_record_fields)."""
-    lines, extra = [], {}
-    try:
-        raw = sys.stdin.buffer.read(65537) if not sys.stdin.isatty() else b""
-    except OSError:
-        raw = b""
-    if len(raw) > 65536:
-        return lines, {"dot": False, "reason": "stdin-oversize"}
-    try:
-        event = json.loads(raw.decode("utf-8-sig")) if raw.strip() else {}
-    except ValueError:
-        return lines, {"dot": False, "reason": "stdin-unreadable"}
-    sid = str(event.get("session_id") or "")[:8]
-    extra["session8"] = sid or None
-    if event.get("stop_hook_active"):
-        return lines, {"dot": False, "reason": "stop-hook-active", **extra}
-    transcript = event.get("transcript_path") or event.get("transcriptPath")
-    reason = None
-    if not transcript and event.get("session_id"):
-        transcript = find_transcript_by_session(event["session_id"])
-    if not transcript or not Path(transcript).is_file():
-        reason = "transcript-missing"
-    if reason is None:
-        first_user = read_first_user_message(Path(transcript))
-        if first_user is None:
-            reason = "no-user-message"
-        elif DOT_TAG not in first_user:
-            reason = "tag-absent"
-    if reason is not None:
-        return lines, {"dot": False, "reason": reason, **extra}
-    start = session_start_epoch(Path(transcript))
-    if start:
-        since = int((time.time() - start) / 60) + 5
-        since = max(5, min(HOOK_STOP_MAX_MINUTES, since))
-    else:
-        since = args.since_minutes
-    roots = hook_stop_roots(event)
-    deadline = time.monotonic() + args.deadline_sec
-    res = scan(roots, since, downloads, deadline, name_fn=matches_dot_name)
-    for src, _a, dest, sha12, size in res["delivered"]:
-        lines.append(f"DELIVERED {dest} {size}B sha12={sha12} MATCH")
-    extra.update({"dot": True, "roots": roots, "since_minutes": since,
-                  "scanned": res["scanned"], "truncated": res["truncated"],
-                  "delivered": len(res["delivered"]),
-                  "skipped": len(res["skipped"]), "refused": len(res["refused"]),
-                  "warnings": res["warnings"][:20]})
-    return lines, extra
+    """Compatibility no-copy entry; never inspects a transcript or session."""
+    return [], {"dot": False, "reason": "automatic-delivery-disabled", "delivered": 0}
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--file", action="append", default=[])
+    ap.add_argument("--role", help="Explicit sender role; only dot is eligible")
+    ap.add_argument("--artifact-kind", help="Only final-directive is eligible")
     ap.add_argument("--scan", action="store_true")
     ap.add_argument("--hook-stop", action="store_true",
                     help="Codex Stop hook: deliver only for [DOT-BRIEF] first-"
@@ -430,14 +382,26 @@ def main(argv=None):
     try:
         downloads = resolve_downloads(args.downloads)
         log_path = Path(args.log) if args.log else ROOT / "var" / "deliver" / "deliver-log.jsonl"
+        if (not log_path.resolve().is_relative_to(ROOT.resolve())
+                or log_path.resolve().is_relative_to(downloads.resolve())):
+            print("{}" if args.hook_stop else "REFUSED project-log-required")
+            return 0
         record = {"ts": datetime.now(timezone.utc).isoformat(), "downloads": str(downloads)}
         out_lines = []
+
+        if args.hook_stop or args.scan:
+            record.update({"mode": "hook-stop" if args.hook_stop else "scan",
+                           "dot": False, "reason": "automatic-delivery-disabled", "delivered": 0})
+            append_log(log_path, record)
+            print("{}" if args.hook_stop else "REFUSED automatic-delivery-disabled")
+            return 0
 
         if args.file:
             record["mode"] = "file"
             results = []
             for f in args.file:
-                action, dest, sha12, size = deliver_one(f, downloads)
+                action, dest, sha12, size = deliver_one(
+                    f, downloads, role=args.role, artifact_kind=args.artifact_kind)
                 results.append({"src": f, "action": action,
                                 "dst": str(dest) if dest else None, "sha12": sha12, "size": size})
                 if action == "DELIVERED":
@@ -447,32 +411,6 @@ def main(argv=None):
                 else:
                     out_lines.append(f"{action.split(':')[0]} {f} {action.split(':', 1)[-1]}")
             record["results"] = results
-        elif args.hook_stop:
-            record["mode"] = "hook-stop"
-            hs_lines, hs_extra = run_hook_stop(args, downloads, record)
-            record.update(hs_extra)
-            out_lines = hs_lines  # logged below; stdout stays JSON-only
-        elif args.scan:
-            record["mode"] = "scan"
-            roots = args.roots if args.roots else default_roots()
-            deadline = time.monotonic() + args.deadline_sec
-            res = scan(roots, args.since_minutes, downloads, deadline)
-            record.update({"roots": roots, "since_minutes": args.since_minutes,
-                           "scanned": res["scanned"], "truncated": res["truncated"],
-                           "delivered": len(res["delivered"]), "skipped": len(res["skipped"]),
-                           "refused": len(res["refused"]),
-                           "warnings": res["warnings"][:20]})
-            for src, _a, dest, sha12, size in res["delivered"]:
-                out_lines.append(f"DELIVERED {dest} {size}B sha12={sha12} MATCH")
-            if not args.quiet:
-                for src, _a, dest, sha12, size in res["skipped"]:
-                    out_lines.append(f"SKIP_SAME {dest} {size}B sha12={sha12}")
-                for src, action, _d, _s, _z in res["refused"]:
-                    out_lines.append(f"{action.split(':')[0]} {src} {action.split(':', 1)[-1]}")
-                for w in res["warnings"][:10]:
-                    warn(w)
-                if res["truncated"]:
-                    warn("scan truncated at deadline; rerun with a smaller --since-minutes")
         else:
             ap.print_help()
             return 0

@@ -6,7 +6,17 @@ import java.util.*;
 public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQuietMs,int followupIdleMs,
                                 int wakeListenTimeoutMs,Presentation presentation,boolean recallEnabled,boolean rememberFactsEnabled,
                                 Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory,
-                                @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled,Boolean webSearchEnabled) {
+                                @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled,Boolean webSearchEnabled,ReasoningPreset reasoningPreset) {
+    public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory,Integer length,Boolean quick,Boolean web){
+        this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,length,quick,web,null);
+    }
+    public enum ReasoningPreset {
+        FAST("low"),STANDARD("medium"),DEEP("high");
+        private final String effort;
+        ReasoningPreset(String effort){this.effort=effort;}
+        public String effort(){return effort;}
+    }
+    public ReasoningPreset effectiveReasoningPreset(){return reasoningPreset==null?ReasoningPreset.STANDARD:reasoningPreset;}
     public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory,Integer length,Boolean quick){
         this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,length,quick,null);
     }

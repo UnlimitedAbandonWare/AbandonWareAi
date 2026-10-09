@@ -43,6 +43,9 @@ public class ApiFailureRecorder {
         long consecutive;String lastSuccessAt,recoveredAt;
     }
     private final Map<String,ProviderState> states=new HashMap<>();
+    /** Request-local attempt hashes only; bounded and never persisted with incident history. */
+    private final Map<String,SearchTerminal> searchAttempts=new LinkedHashMap<>();
+    public record SearchTerminal(Incident incident,String recoveredAt) {}
     private static final Set<String> SCOPES=Set.of("llm","stt","search","local","other");
     private static final Set<String> EVIDENCE=Set.of("CONFIRMED","SUSPECTED","UNKNOWN");
     private static String scopeOf(String provider) {
@@ -124,11 +127,56 @@ public class ApiFailureRecorder {
             case "AUTH_OR_CONFIG"->new Classification("authentication","unconfirmed","CONFIRMED");
             case "RATE_LIMIT"->new Classification("rate_limit","unconfirmed","CONFIRMED");
             case "TIMEOUT_OR_BUDGET"->new Classification("timeout","unconfirmed","SUSPECTED");
+            case "TRANSPORT_ERROR"->new Classification("connection","unconfirmed","SUSPECTED");
             case "PROVIDER_ERROR"->new Classification("provider_error","unconfirmed","CONFIRMED");
             case "BREAKER_OR_COOLDOWN","PARSE_ERROR"->new Classification("provider_error","unconfirmed","SUSPECTED");
             default->null;
         };
         return classified==null?null:recordClassified(provider,model,0,classified);
+    }
+    /** One subscribed search attempt owns failure accounting and parsed provider recovery. */
+    public synchronized SearchTerminal recordSearchTerminal(String provider,String model,String attemptId,
+            int status,String reason,String errorBody,boolean clientAttempt,boolean providerReceipt) {
+        if(!clientAttempt||attemptId==null||!attemptId.matches("hash:[a-f0-9]{12}")
+                ||!Set.of("naver","brave","serpapi","tavily").contains(Objects.toString(provider,"")))
+            return new SearchTerminal(null,null);
+        String stateKey=provider+"|"+safeModel(model),attemptKey=stateKey+"|"+attemptId;
+        var previous=searchAttempts.get(attemptKey);
+        if(previous!=null)return previous;
+        Incident incident=null;String recoveredAt=null;
+        if(providerReceipt&&status>=200&&status<300&&Set.of("NONE","OK","TRUE_ZERO","FILTER_ZERO").contains(Objects.toString(reason,""))) {
+            var state=states.get(stateKey);boolean recovering=state!=null&&state.consecutive>0;
+            recordSuccess(provider,model);
+            if(recovering)recoveredAt=states.get(stateKey).recoveredAt;
+        } else if(providerReceipt&&status>=400&&status<=599) {
+            incident=record(provider,model,status,errorBody!=null&&errorBody.length()<=16_384?errorBody:null,null);
+        } else {
+            String classified=Set.of("EMPTY_BODY","ITEM_MAPPING_ERROR","TRANSFORM_ERROR").contains(Objects.toString(reason,""))
+                    ?"PARSE_ERROR":!providerReceipt&&"PROVIDER_ERROR".equals(reason)?"TRANSPORT_ERROR":reason;
+            incident=recordSearch(provider,model,classified);
+        }
+        var terminal=new SearchTerminal(incident,recoveredAt);
+        searchAttempts.put(attemptKey,terminal);
+        if(searchAttempts.size()>512)searchAttempts.remove(searchAttempts.keySet().iterator().next());
+        return terminal;
+    }
+    /** A retained, correlated fallback may mask this attempt, never a newer incident or a recovery. */
+    public synchronized boolean markSearchMasked(String provider,String model,String attemptId,String fallbackProvider,String fallbackModel) {
+        if(attemptId==null||!Set.of("naver","brave","serpapi","tavily").contains(Objects.toString(fallbackProvider,"")))return false;
+        var terminal=searchAttempts.get(provider+"|"+safeModel(model)+"|"+attemptId);
+        if(terminal==null||terminal.incident()==null)return false;
+        var observed=terminal.incident();
+        String key=key(observed.provider(),observed.model(),observed.httpStatus(),observed.category(),observed.errorCode());
+        var current=incidents.get(key);var state=states.get(provider+"|"+safeModel(model));
+        if(current==null||state==null||state.consecutive==0||current.count()!=observed.count()
+                ||!current.lastSeen().equals(observed.lastSeen()))return false;
+        String label=fallbackProvider+"/"+safeModel(fallbackModel);
+        if(label.equals(current.maskedBy()))return true;
+        incidents.put(key,new Incident(current.provider(),current.model(),current.httpStatus(),current.category(),current.errorCode(),
+                current.firstSeen(),current.lastSeen(),current.count(),current.scope(),current.evidence(),current.consecutive(),
+                current.lastSuccessAt(),current.recoveredAt(),label,clock.instant().toString()));
+        schedulePersistence();
+        return true;
     }
     /** A later success for provider+model: closes the streak, stamps recovery, keeps prior incidents intact. */
     public synchronized void recordSuccess(String provider,String model) {
@@ -201,16 +249,20 @@ public class ApiFailureRecorder {
             agg.put("consecutive",consecutive);
             if(state!=null&&state.lastSuccessAt!=null)agg.put("lastSuccessAt",state.lastSuccessAt);
             if(state!=null&&state.recoveredAt!=null)agg.put("recoveredAt",state.recoveredAt);
+            Object observedAt=consecutive==0&&state!=null&&state.lastSuccessAt!=null
+                    ?state.lastSuccessAt:agg.get("lastSeen");
             boolean recent=false;
-            try{recent=agg.get("lastSeen")!=null&&nowMs-Instant.parse(String.valueOf(agg.get("lastSeen"))).toEpochMilli()<recentMs;}
+            try{long age=nowMs-Instant.parse(String.valueOf(observedAt)).toEpochMilli();recent=age>=0&&age<recentMs;}
             catch(Exception ignored){}
-            String state2=!recent||consecutive==0?"OK":consecutive>=2?"DEGRADED":"WARNING";
+            String state2=!recent?"STALE":consecutive==0?"OK":consecutive>=2?"DEGRADED":"WARNING";
+            agg.put("freshness",recent?"recent":"stale");
             agg.put("state",state2);
             if("DEGRADED".equals(state2))overall="DEGRADED";else if("WARNING".equals(state2)&&!"DEGRADED".equals(overall))overall="WARNING";
+            else if("STALE".equals(state2)&&"OK".equals(overall))overall="STALE";
             providers.add(agg);
         }
         providers.sort(Comparator.comparingInt((Map<String,Object> m)->switch(String.valueOf(m.get("state"))){
-                    case "DEGRADED"->0;case "WARNING"->1;default->2;})
+                    case "DEGRADED"->0;case "WARNING"->1;case "STALE"->2;default->3;})
                 .thenComparing(m->String.valueOf(m.getOrDefault("lastSeen","")),Comparator.reverseOrder()));
         return Map.of("overall",overall,"providers",providers);
     }
@@ -316,7 +368,7 @@ public class ApiFailureRecorder {
             String host=URI.create(url).getHost();if(host==null)return "unknown";
             return switch(host.toLowerCase(Locale.ROOT)) {
                 case "api.openai.com"->"openai";case "generativelanguage.googleapis.com"->"gemini";
-                case "api.groq.com"->"groq";case "api.search.brave.com"->"brave";case "openapi.naver.com"->"naver";
+                case "api.groq.com"->"groq";case "api.search.brave.com"->"brave";case "openapi.naver.com","naverapihub.apigw.ntruss.com"->"naver";
                 case "serpapi.com"->"serpapi";case "api.tavily.com"->"tavily";case "api.deepgram.com"->"deepgram";
                 case "api.soniox.com","stt-rt.soniox.com"->"soniox";case "dapi.kakao.com"->"kakao";
                 case "api.anthropic.com"->"anthropic";case "api.z.ai"->"zai";case "ai-gateway.vercel.sh"->"vercel";

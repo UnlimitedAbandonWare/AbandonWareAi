@@ -204,7 +204,10 @@ public final class SonioxSidecarManager implements SmartLifecycle {
     public Map<String,Object> diagnostics(){return Map.of("state",state,"reason",reason,"localReady",ready(),"configured",configured(),"starts",restartCount,"providerAttempt","not_observed");}
     /** CloudStt owns admission, routing and one reservation per connection before calling this seam. */
     ConversateAsrBridge.Transport connectAdmittedStream(Consumer<JsonNode> events,Consumer<String> failure)throws IOException{
+        return connectAdmittedStream(events,failure,null);
+    }
+    ConversateAsrBridge.Transport connectAdmittedStream(Consumer<JsonNode> events,Consumer<String> failure,String language)throws IOException{
         if(!configured())throw new IOException("soniox_sidecar_unconfigured");
-        return new SonioxNodeTransport(endpoint(),json,events,failure,Duration.ofSeconds(10));
+        return new SonioxNodeTransport(endpoint(),json,events,failure,Duration.ofSeconds(10),language);
     }
 }

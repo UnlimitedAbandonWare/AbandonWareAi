@@ -2658,14 +2658,12 @@ function providerStatusSearchSummary(rows = []) {
   const attempts = safeRows.reduce((sum, row) => sum + Math.max(0, Number(row.attemptCount) || 0), 0);
   const latencyMs = safeRows.reduce((maximum, row) => Math.max(maximum, Math.max(0, Number(row.latencyMs) || 0)), 0);
   const cacheHits = safeRows.filter((row) => row.cacheHit === true).length;
-  const observedCode = safeRows.map((row) => row.statusCode)
-    .find((value) => value != null && !["not_observed", "unavailable"].includes(String(value))) ?? "na";
-  const quota = safeRows.map((row) => row.quotaDecision)
-    .find((value) => value && value !== "not_observed") || "not_observed";
-  const fallback = safeRows.map((row) => row.fallbackReason)
-    .find((value) => value && !["none", "not_observed"].includes(String(value))) || "none";
-  const error = safeRows.map((row) => row.errorClass)
-    .find((value) => value && !["none", "not_observed"].includes(String(value))) || "none";
+  const perProvider = (field, fallback) => safeRows
+    .map(row => `${providerStatusToken(row.provider)}:${providerStatusToken(row[field], fallback)}`).join("|");
+  const observedCode = perProvider("statusCode", "not_observed");
+  const quota = perProvider("quotaDecision", "not_observed");
+  const fallback = perProvider("fallbackReason", "not_observed");
+  const error = perProvider("errorClass", "not_observed");
   return `p:${providers} r:${routes} m:${models} en:${enabled}/${safeRows.length} cred:${credentials}/${safeRows.length} try:${attempts} code:${providerStatusToken(observedCode)} ms:${latencyMs} cache:${cacheHits} q:${providerStatusToken(quota)} fb:${providerStatusToken(fallback)} err:${providerStatusToken(error)}`;
 }
 
@@ -3590,6 +3588,17 @@ const renderTraceSignalDetail = (signal, pipeline, assistant) => {
     appendTraceSignalLabel(detail, "search reason", search.reasonCode);
     appendTraceSignalLabel(detail, "search results", search.returnedCount);
   }
+  (Array.isArray(search?.providers) ? search.providers : []).slice(0, 32).forEach(row => {
+    if (!["naver", "brave", "serpapi", "tavily"].includes(row?.provider)) return;
+    const provider = row.provider;
+    appendTraceSignalLabel(detail, `${provider} status`, row.outcome);
+    appendTraceSignalLabel(detail, `${provider} HTTP`, row.httpStatus);
+    appendTraceSignalLabel(detail, `${provider} reason`, row.failureReason);
+    appendTraceSignalLabel(detail, `${provider} results`, row.returnedCount);
+    appendTraceSignalLabel(detail, `${provider} freshness`, row.freshness);
+    appendTraceSignalLabel(detail, `${provider} masked by`, row.maskedBy);
+    appendTraceSignalLabel(detail, `${provider} recovered at`, row.recoveredAt);
+  });
   Object.entries(signal.stageCounts || {}).forEach(([stage, count]) => {
     appendTraceSignalLabel(detail, stage, count);
   });

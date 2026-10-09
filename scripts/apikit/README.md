@@ -34,7 +34,7 @@ Exit codes: `0` all OK / `3` any failure / `2` script error.
 |---|---|---|
 | cerebras | CEREBRAS_API_KEY | GET api.cerebras.ai/v1/models |
 | kakao | KAKAO_REST_API_KEY / KAKAO_REST_KEY / KAKAO_API_KEY | GET dapi.kakao.com keyword size=1 |
-| naver | NAVER_CLIENT_ID+SECRET / NAVER_KEYS csv | GET openapi.naver.com webkr display=1 |
+| naver | NAVER_APIHUB_CLIENT_ID+SECRET | GET naverapihub.apigw.ntruss.com /search/v1/webkr display=1 |
 
 Provider error codes (OpenAI `error.code`, Gemini `error.details[].reason`,
 Vercel `error.type`) are recorded verbatim in `code`. Official docs + check

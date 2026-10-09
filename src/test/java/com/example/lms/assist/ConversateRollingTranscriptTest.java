@@ -13,6 +13,16 @@ class ConversateRollingTranscriptTest {
     static ConversateSessionService.Snapshot say(ConversateSessionService s,ConversateSessionService.Snapshot session,int n,boolean fin,String text){return s.submit(OWNER,session.assistId(),session.epoch(),new ConversateQuestionPolicy.Utterance("u"+n,"u"+n,fin?2:1,fin,text),"phone_voice",null);}
     static void waitForCalls(Pipe pipe,int n) throws InterruptedException {for(int i=0;i<200&&pipe.calls.get()<n;i++)Thread.sleep(10);}
     static void waitForCard(ConversateSessionService s,ConversateSessionService.Snapshot x) throws InterruptedException {for(int i=0;i<200&&s.status(OWNER,x.assistId()).card()==null;i++)Thread.sleep(10);}
+    @Test void sameOwnerReclaimRetainsRollingFinalsWhenNewSpeechArrives(){var time=new Time();try(var s=service(time,new Pipe(),40)){
+        var first=s.startPublicDisplay(OWNER);s.control(OWNER,first.assistId(),first.epoch(),"hints_off");
+        say(s,first,1,true,"새로고침 전 확정 전사");
+        var reclaimed=s.control(OWNER,first.assistId(),first.epoch(),"producer_reclaimed");
+        var continued=s.nextSegment(OWNER,first.assistId(),reclaimed.epoch());
+        assertEquals("새로고침 전 확정 전사\n재개한 전사",say(s,continued,1,false,"재개한 전사").caption().text());
+        assertEquals("새로고침 전 확정 전사\n재개한 확정 전사",say(s,continued,1,true,"재개한 확정 전사").caption().text());
+        var takeover=s.control(OWNER,first.assistId(),continued.epoch(),"producer_changed");
+        assertEquals("새 생산자의 전사",say(s,takeover,1,true,"새 생산자의 전사").caption().text());
+    }}
     @Test void twoFinalsAndPartialRemainAfterHintExpiryAndHourBoundary(){var time=new Time();try(var s=service(time,new Pipe(),40)){
         var x=s.startPublicDisplay(OWNER);s.pollOutput(OWNER,x.assistId(),x.epoch(),CLIENT);var closed=new java.util.concurrent.atomic.AtomicInteger();s.registerCapture(OWNER,x.assistId(),x.epoch(),closed::incrementAndGet);
         say(s,x,1,true,"하이젠베르크 불확정성 원리가 뭐야?");var second=say(s,x,2,true,"누구세요?");assertEquals("하이젠베르크 불확정성 원리가 뭐야?\n누구세요?",second.caption().text());

@@ -558,11 +558,27 @@ def print_table(rows):
         print(" | ".join(line[c].ljust(widths[c]) for c in cols))
 
 
-def save_result(payload, out=None):
+def scrub_result(value, secret_values=(), field=""):
+    """Sanitize diagnostics before either persistence or display; preserve machine codes."""
+    if isinstance(value, dict):
+        return {key: scrub_result(item, secret_values, key) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [scrub_result(item, secret_values, field) for item in value]
+    if isinstance(value, str):
+        text = value
+        for secret in secret_values:
+            if secret:
+                text = text.replace(str(secret), "<redacted>")
+        # The existing token mask applies to prose, not status/code/identifier fields.
+        return mask(text) if field in {"detail", "error", "message", "body", "text"} else text
+    return value
+
+
+def save_result(payload, out=None, secret_values=()):
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path = Path(out) if out else OUT_DIR / ("apikit-%s.json" % payload["stamp"])
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+    path.write_text(json.dumps(scrub_result(payload, secret_values), ensure_ascii=False, indent=2),
                     encoding="utf-8")
     return str(path)
 

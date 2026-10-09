@@ -72,9 +72,9 @@ class NovaFocusHistoryTest {
         store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
         assertTrue(mapper.valueToTree(store.settings(owner,"c").settings()).path("webSearchEnabled").booleanValue());
     }
-    @Test void unsetDisplayDefaultIsExactOauthAndExplicitChoicesAndOmittedLengthArePreserved() throws Exception {
+    @Test void unsetDisplayDefaultIsGeminiAndExplicitChoicesAndOmittedLengthArePreserved() throws Exception {
         String owner=UUID.randomUUID().toString();var fresh=store.settings(owner,"c");
-        assertEquals("chatgpt-oauth:gpt-5.6-luna",fresh.settings().answerSelection().modelId());
+        assertEquals("llmrouter.gemini-pro",fresh.settings().answerSelection().modelId());
         assertFalse(fresh.settings().answerSelection().routing().fallbackAllowed());
         var mapper=new ObjectMapper();var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(fresh.settings());
         node.put("answerLengthChars",480);node.put("quickAnswerEnabled",true);
@@ -88,6 +88,24 @@ class NovaFocusHistoryTest {
         node.set("answerSelection",mapper.valueToTree(NovaFocusSettings.AnswerSelection.defaults()));
         store.settings(owner,"c",2,mapper.treeToValue(node,NovaFocusSettings.class));
         assertEquals(NovaFocusSettings.AnswerSelection.Mode.AUTO,store.settings(owner,"c").settings().answerSelection().mode());
+    }
+    @Test void reasoningIsIndependentPersistedAndLegacySavePreservesIt() throws Exception {
+        String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
+        var fresh=store.settings(owner,"c");
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(fresh.settings());
+        node.put("reasoningPreset","DEEP");
+        var selected=mapper.treeToValue(node,NovaFocusSettings.class);
+        store.settings(owner,"c",0,selected);
+        node.remove("reasoningPreset");
+        store.settings(owner,"c",1,mapper.treeToValue(node,NovaFocusSettings.class));
+        var stored=mapper.valueToTree(store.settings(owner,"c").settings());
+        assertEquals("DEEP",stored.path("reasoningPreset").asText());
+        assertEquals(fresh.settings().answerSelection().modelId(),store.settings(owner,"c").settings().answerSelection().modelId());
+        var restarted=new NovaFocusHistoryService(context.getBean(org.springframework.transaction.PlatformTransactionManager.class),mapper,null);
+        var em=SharedEntityManagerCreator.createSharedEntityManager(context.getBean(EntityManagerFactory.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(restarted,"em",em);
+        assertEquals("DEEP",mapper.valueToTree(restarted.settings(owner,"c").settings()).path("reasoningPreset").asText());
+        assertThrows(Exception.class,()->mapper.treeToValue(node.deepCopy().put("reasoningPreset","TURBO"),NovaFocusSettings.class));
     }
     @Test void concurrentOpenCreatesOneRoomAndDifferentOwnersStaySeparate() throws Exception {
         String owner=UUID.randomUUID().toString();var pool=Executors.newFixedThreadPool(4);

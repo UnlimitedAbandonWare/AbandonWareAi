@@ -1,0 +1,16 @@
+﻿{
+    "targets":  [
+                    {
+                        "sha256":  "9098c733ff00555bf73ac4c23fa899cf6b0e3361810a1af5712c5132a9778428",
+                        "path":  "scripts/codex_sandbox_doctor.ps1"
+                    },
+                    {
+                        "sha256":  "cb3091d6143f2fd8e287f4793b7e99d9b50c1d6650ae7f40076342cb94aabbe9",
+                        "path":  "scripts/codex_sandbox_doctor_tests.ps1"
+                    },
+                    {
+                        "sha256":  "415f7c6de52a6d9ce9455aab9d9d7a69eb0db2de909ac22b93c988a96da30b20",
+                        "path":  ".agents/skills/demo1-codex-sandbox-doctor/SKILL.md"
+                    }
+                ]
+}

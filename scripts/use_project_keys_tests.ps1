@@ -17,6 +17,8 @@ try {
     $manual = & $loader -Root $fixture
     if ($env:AWX_TEST_SETTING -ne 'fixture-current' -or $env:AWX_PROJECT_KEYS_SOURCE_ROOT -ne $fixture) { throw 'manual-load-failed' }
     '{"version":1,"values":{"AWX_TEST_SETTING":{"value":"fixture-rotated"}}}' | Set-Content $store -Encoding UTF8
+    '{"schemaVersion":"awx.project-resources.v1","providers":{"fixture":["AWX_TEST_SETTING"]},"runtimeEnvironmentNames":["CONVERSATE_ASR_CLOUD_VERIFICATION_USD","NAVER_SEARCH_PROVIDER","NAVER_APIHUB_BASE_URL","NAVER_SEARCH_API_BASE_URL","NAVER_APIHUB_APP_NAME"]}' |
+        Set-Content (Join-Path $fixture 'config/project-resources.json') -Encoding UTF8
     $runtime = & $loader -Root $fixture -Runtime
     if ($env:AWX_TEST_SETTING -ne 'fixture-rotated' -or $env:AWX_PROJECT_KEYS_SOURCE_ROOT) { throw 'runtime-refresh-failed' }
     $currentBudget = [Environment]::GetEnvironmentVariable('CONVERSATE_ASR_CLOUD_VERIFICATION_USD', 'User')

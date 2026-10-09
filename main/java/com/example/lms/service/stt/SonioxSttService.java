@@ -53,7 +53,11 @@ public class SonioxSttService {
 
     /** Connected means handshake/config send, not authentication or recognized speech. */
     public Flux<Transcript> transcribePcm16Mono(Flux<byte[]> audio,Runnable connected) {
+        return transcribePcm16Mono(audio,connected,null);
+    }
+    public Flux<Transcript> transcribePcm16Mono(Flux<byte[]> audio,Runnable connected,String language) {
         return Flux.defer(()->{
+            if(language!=null&&!List.of("ko","en").contains(language))return Flux.error(failure("invalid_language"));
             if(!isConfigured())return Flux.error(failure(disabledReason));
             if(audio==null||connected==null)return Flux.error(failure("invalid_audio_options"));
             return Flux.<Transcript>create(sink->{
@@ -62,7 +66,7 @@ public class SonioxSttService {
                     Sinks.One<Void> ended=Sinks.one(),finished=Sinks.one();
                     String config;
                     try {config=json.writeValueAsString(Map.of("api_key",credential,"model",model,"audio_format","pcm_s16le",
-                            "sample_rate",16000,"num_channels",1,"language_hints",List.of("ko","en"),"enable_endpoint_detection",true));}
+                            "sample_rate",16000,"num_channels",1,"language_hints",language==null?List.of("ko","en"):List.of(language),"enable_endpoint_detection",true));}
                     catch(Exception invalid){return Mono.error(failure("invalid_configuration"));}
                     Flux<WebSocketMessage> media=audio.map(bytes->{
                         if(bytes==null||bytes.length==0||bytes.length>65536||(bytes.length&1)!=0)throw failure("invalid_audio_chunk");

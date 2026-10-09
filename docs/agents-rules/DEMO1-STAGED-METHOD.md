@@ -2,7 +2,7 @@
 # STAGED_METHOD — 단계형 작업 방식 기본값 (2026-10-05)
 
 사용자 확정 기본 작업 방식: **지시서 하나 → 스킬 resolve → 사실 확인 → 작은 단계 → 검증 → 닫기 → 다음 지시서**.
-스킬 없이·단계 없이·감만으로 휘두르는 작업(야생 휘두르기)은 탐침·검사기가 걸러낸다.
+스킬 resolve 없이·단계 없이·감만으로 휘두르는 작업(야생 휘두르기)은 탐침·검사기가 걸러낸다.
 대상은 모든 에이전트(Codex/dot/Devin/agy/Grok CLI)의 PASTE 실행 — 제품 소스 계약은 아니다.
 
 ## 6게이트
@@ -10,7 +10,7 @@
 | # | 게이트 | 통과 증거 | 실패(야생 휘두르기) |
 |---|--------|-----------|---------------------|
 | G1 | PASTE/목표 1개 | SERIAL_LANE — 세션당 활성 PASTE 1개, journal 1 purpose | 한 세션에 목표 합치기 |
-| G2 | 스킬 resolve | `demo1_vibe_skill_router.py resolve` 결과 또는 지시서의 `@`/`$` skill 1개 primary | 스킬 0개, `@skill` 5개+ 나열 |
+| G2 | 스킬 resolve | `demo1_vibe_skill_router.py resolve` 결과 또는 지시서의 `@`/`$` skill 1개 primary; `intent: null`은 스킬 없이 진행 | resolve 미실행, `@skill` 5개+ 나열로 라우팅 대체 |
 | G3 | 사실 | file:line 근거 또는 `확인 필요` 표기 | 감·추측만으로 패치 |
 | G4 | 작은 단계 | W0→Wn / 단계 N / WP# / G# 마커 ≥2 — 한 번에 한 seam | RED/재현 없이 대량 수정 |
 | G5 | 검증 | 테스트·명령 exit·Acceptance 칸; mock≠live, 안 돌린 것은 NOT_RUN | "읽었다=끝", reject-complete에 걸리는 문구 |

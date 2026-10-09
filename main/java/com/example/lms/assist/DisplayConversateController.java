@@ -55,7 +55,8 @@ public class DisplayConversateController {
     private NovaFocusHistoryService.LensSettings lensSettingsFor(String owner){return lensSettingsCache.computeIfAbsent(owner,key->focusHistory==null?
         new NovaFocusHistoryService.LensSettings(0,LensDisplayPrefs.defaults(defaultHintTargetChars)):focusHistory.lensSettings(key,defaultHintTargetChars));}
     private LensDisplayPrefs prefsFor(String owner){return lensSettingsFor(owner).display();}
-    public record Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation,ConversateCloudStt.StreamPolicy sttPolicy){
+    public record Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation,ConversateCloudStt.StreamPolicy sttPolicy,Boolean autoVoiceConsent){
+        public Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation,ConversateCloudStt.StreamPolicy sttPolicy){this(assistId,epoch,clientId,activate,continuation,sttPolicy,null);}
         public Connection(String assistId,long epoch,String clientId){this(assistId,epoch,clientId,false,false,null);}
         public Connection(String assistId,long epoch,String clientId,boolean activate,boolean continuation){this(assistId,epoch,clientId,activate,continuation,null);}
     }
@@ -63,13 +64,14 @@ public class DisplayConversateController {
     public record RelaySettings(String assistId,long epoch,String clientId,boolean enabled,int segmentSeconds){}
     public record RelayTest(String assistId,long epoch,String clientId,int number,boolean fromFold){}
     public record Input(String assistId,long epoch,String clientId,String requestId,String text,List<String> eventOrder,String verificationMode){@Override public String toString(){return "DisplayInput[redacted]";}}
-    public record AudioChunk(String assistId,long epoch,String clientId,long sequence,String pcm){@Override public String toString(){return "DisplayAudio[redacted]";}}
+    public record AutoVoicePresentation(long presentationRevision,boolean hintsEnabled){public AutoVoicePresentation{if(presentationRevision<0)throw error(HttpStatus.BAD_REQUEST,"invalid_auto_voice_revision");}}
+    public record AudioChunk(String assistId,long epoch,String clientId,long sequence,String pcm,AutoVoicePresentation autoVoiceTrigger){public AudioChunk(String assistId,long epoch,String clientId,long sequence,String pcm){this(assistId,epoch,clientId,sequence,pcm,null);}@Override public String toString(){return "DisplayAudio[redacted]";}}
     public record AudioFrame(Long sequence,String pcm){@Override public String toString(){return "DisplayAudioFrame[redacted]";}}
-    public record AudioBatch(String assistId,long epoch,String clientId,List<AudioFrame> frames){@Override public String toString(){return "DisplayAudioBatch[redacted]";}}
+    public record AudioBatch(String assistId,long epoch,String clientId,List<AudioFrame> frames,AutoVoicePresentation autoVoiceTrigger){public AudioBatch(String assistId,long epoch,String clientId,List<AudioFrame> frames){this(assistId,epoch,clientId,frames,null);}@Override public String toString(){return "DisplayAudioBatch[redacted]";}}
     public record AudioBatchAck(View view,long acceptedThrough,int acceptedCount){}
-    public record AudioStop(String assistId,long epoch,String clientId,boolean finish){}
+    public record AudioStop(String assistId,long epoch,String clientId,boolean finish,boolean autoVoiceStop){public AudioStop(String assistId,long epoch,String clientId,boolean finish){this(assistId,epoch,clientId,finish,false);}}
     public record View(String assistId,long epoch,String state,String reason,long version,DisplayContentView.TextCard card,String requestId,boolean processing,boolean ready,boolean audioAvailable,String audioState,String voiceRequestId,
-                       DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs,boolean hintsEnabled,String role,boolean linked,boolean linkPending,String confirmation,boolean audioFinished,long audioRenewAfterMs,Map<String,Object> testStatus,NovaFocusState.View focus,boolean focusProducer,NovaFocusState.Command focusControl){}
+                       DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs,boolean hintsEnabled,String role,boolean linked,boolean linkPending,String confirmation,boolean audioFinished,long audioRenewAfterMs,Map<String,Object> testStatus,NovaFocusState.View focus,boolean focusProducer,NovaFocusState.Command focusControl,LensDisplayPrefs.AutoVoiceTrigger autoVoiceSettings,Map<String,Object> autoVoiceRuntime){}
     @Autowired(required=false) private NovaFocusService novaFocus;
     public record DiagnosticRequest(String assistId,boolean enabled){}
     public record FocusCommand(String assistId,long epoch,String clientId,String renderTarget,String requestId,String text,String imageBase64,String imageMediaType,String captureId,String error){
@@ -177,7 +179,9 @@ public class DisplayConversateController {
     public record LensView(String assistId,long epoch,long version,boolean ready,DisplayContentView.TextCard card,DisplayContentView.Transcript caption,long captionTtlMs,long cardTtlMs){}
     public record LensRead(String token,Boolean preview){public LensRead(String token){this(token,null);}@Override public String toString(){return "LensRead[redacted]";}}
     public record LensLink(String token,long expiresAt,boolean sticky){@Override public String toString(){return "LensLink[redacted]";}}
-    public record LensText(String conversation,String hint,String hintId,long hintExpiresAt,long conversationExpiresAt,LensDisplayPrefs display,NovaFocusState.View focus){}
+    public record LensText(String conversation,String hint,String hintId,long hintExpiresAt,long conversationExpiresAt,LensDisplayPrefs display,NovaFocusState.View focus,@com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_EMPTY) Map<String,Object> autoVoiceTrigger){
+        public LensText(String conversation,String hint,String hintId,long hintExpiresAt,long conversationExpiresAt,LensDisplayPrefs display,NovaFocusState.View focus){this(conversation,hint,hintId,hintExpiresAt,conversationExpiresAt,display,focus,Map.of());}
+    }
     public record LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults,Long expectedSettingsVersion){
         public LensSettings(String assistId,long epoch,String clientId,LensDisplayPrefs.Patch display,Boolean restoreDefaults){this(assistId,epoch,clientId,display,restoreDefaults,null);}
     }
@@ -207,6 +211,7 @@ public class DisplayConversateController {
         Binding b=bound(caller,id);Snapshot s=sessions.status(b.owner,b.id);
         var result=new LinkedHashMap<String,Object>();
         result.put("enabled",true);result.put("observedAt",clock.millis());result.put("assistId",s.assistId());
+        result.put("capture",sessions.captureDiagnostics(b.owner,b.id));
         result.put("audioState",s.audio().state());result.put("audioChunks",s.audio().chunks());result.put("audioBytes",b.audioBytes);
         result.put("lastAudioReceivedAt",b.lastAudioAt==0?"not_observed":b.lastAudioAt);
         result.put("lastTranscriptReceivedAt",b.lastTranscriptAt==0?"not_observed":b.lastTranscriptAt);
@@ -311,7 +316,7 @@ public class DisplayConversateController {
         if(!Boolean.TRUE.equals(request.preview()))b.lastFocusLensRead=now;
         var caption=DisplayContentView.caption(s.caption(),now);
         var hint=sessions.hintsEnabled(b.owner,b.id)?DisplayContentView.card(s.card(),now):null;
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new LensText(shortLensText(caption==null?null:caption.text(),lensConversationChars),shortLensText(hint==null?null:hint.text(),ConversateSessionService.HINT_TEXT_MAX),hint==null?null:hint.requestId(),hint==null?0:hint.expiresAt(),caption==null?0:caption.expiresAt(),prefsFor(b.owner),lensFocus(b,s)));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(new LensText(shortLensText(caption==null?null:caption.text(),lensConversationChars),shortLensText(hint==null?null:hint.text(),ConversateSessionService.HINT_TEXT_MAX),hint==null?null:hint.requestId(),hint==null?0:hint.expiresAt(),caption==null?0:caption.expiresAt(),prefsFor(b.owner).renderSafe(),lensFocus(b,s),prefsFor(b.owner).autoVoiceTrigger().modeEnabled()?sessions.autoVoiceState(b.owner,b.id):Map.of()));
     }
     private StickyLensGrantStore stickyLensStore(){if(stickyLensStore==null)stickyLensStore=new StickyLensGrantStore(stickyLensPath);return stickyLensStore;}
     private NovaFocusState.View foldFocus(Binding b,Snapshot s){var v=novaFocus==null?null:novaFocus.view(b.owner,b.id,s.epoch());return v==null?null:v.forTarget("fold");}
@@ -352,8 +357,8 @@ public class DisplayConversateController {
         var prior=relay.active(channel);
         var requested=new DisplayRelay.Producer(caller,request.clientId(),b.id);
         if(((request.activate()||request.assistId()==null)&&!requested.equals(prior))||(prior!=null&&prior.owner().equals(caller)&&prior.client().equals(request.clientId())&&!prior.assistId().equals(b.id))){
-            if(prior!=null){Binding old=bindings.get(prior.owner());if(old!=null&&old.id!=null)try{var oldState=sessions.status(old.owner,old.id);sessions.control(old.owner,old.id,oldState.epoch(),"producer_changed");}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;}}
-            b.relayChannel=channel;b.producerClient=request.clientId();b.segmentSeconds=defaultSegmentSeconds==0?0:Math.max(5,Math.min(60,defaultSegmentSeconds));
+            if(prior!=null){Binding old=bindings.get(prior.owner());if(old!=null&&old.id!=null)try{var oldState=sessions.status(old.owner,old.id);sessions.control(old.owner,old.id,oldState.epoch(),prior.owner().equals(caller)&&prior.assistId().equals(b.id)?"producer_reclaimed":"producer_changed");}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;}}
+            b.relayChannel=channel;b.producerClient=request.clientId();b.lastStartAt=0;b.segmentSeconds=defaultSegmentSeconds==0?0:Math.max(5,Math.min(60,defaultSegmentSeconds));
             var producer=relay.activate(channel,caller,request.clientId(),b.id);relay.configure(channel,producer,true,b.segmentSeconds);
             s=sessions.status(caller,b.id);s=sessions.pollOutput(caller,b.id,s.epoch(),request.clientId());
         }else if(requested.equals(prior))relay.presence(channel,requested);
@@ -374,7 +379,7 @@ public class DisplayConversateController {
         String caller=owner(http),channel=relayChannel(http);validateClient(request.clientId());limited(caller,2);
         var p=relay.active(channel);
         if(p!=null)try{var s=sessions.status(p.owner(),p.assistId());relay.publish(channel,p,DisplayContentView.caption(s.caption(),clock.millis()),sessions.hintsEnabled(p.owner(),p.assistId())?DisplayContentView.card(s.card(),clock.millis()):null,lensFocus(bindings.get(p.owner()),s));}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;relay.publish(channel,p,null,null);}
-        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(relay.poll(channel,request.clientId(),p==null?null:prefsFor(p.owner()),Boolean.TRUE.equals(request.preview())));
+        return ResponseEntity.ok().cacheControl(CacheControl.noStore()).body(relay.poll(channel,request.clientId(),p==null?null:prefsFor(p.owner()).renderSafe(),Boolean.TRUE.equals(request.preview()),p==null?Map.of():sessions.autoVoiceState(p.owner(),p.assistId())));
     }
     @PostMapping("/api/assist/display/relay/ack")
     public synchronized ResponseEntity<?> relayAck(@RequestBody RelayPoll request,HttpServletRequest http){
@@ -405,7 +410,9 @@ public class DisplayConversateController {
             if(!"lens_settings_conflict".equals(failure.getMessage()))throw failure;
             lensSettingsCache.remove(b.owner);throw error(HttpStatus.CONFLICT,"lens_settings_conflict");
         }
+        var before=prefsFor(b.owner).autoVoiceTrigger();
         lensSettingsCache.put(b.owner,updated);
+        sessions.autoVoiceSettingsChanged(b.owner,b.id,request.epoch(),before,updated.display().autoVoiceTrigger());
         LOG.info("display.lensSettings applied={}",updated.display().describe());
         return result(b,sessions.status(b.owner,b.id),caller);
     }
@@ -569,7 +576,17 @@ public class DisplayConversateController {
             if(request.continuation())current=sessions.nextSegment(b.owner,b.id,current.epoch());
             else if(current.audio().state().equals("STOPPED")&&current.audio().runtime().containsKey("stopReason"))current=sessions.control(b.owner,b.id,request.epoch(),"text_fallback");
             epoch=current.epoch();if(!b.transcription)sessions.pollOutput(b.owner,b.id,epoch,request.clientId());}
-        asr.start(b.owner,b.id,epoch,request.sttPolicy());
+        var selected=prefsFor(b.owner).autoVoiceTrigger();var policy=request.sttPolicy();
+        if(selected.modeEnabled()){
+            if(request.continuation()&&sessions.autoVoiceState(b.owner,b.id).get("state").equals("DISARMED"))throw error(HttpStatus.CONFLICT,"auto_voice_reprepare_required");
+            if(!request.continuation()&&!Boolean.TRUE.equals(request.autoVoiceConsent()))throw error(HttpStatus.BAD_REQUEST,"auto_voice_consent_required");
+            try{policy=policy==null?new ConversateCloudStt.StreamPolicy("auto",false,List.of(),selected.language()):new ConversateCloudStt.StreamPolicy(policy.engine(),policy.fallbackAllowed(),policy.allowedFallbacks(),selected.language());}
+            catch(IllegalArgumentException invalid){throw error(HttpStatus.BAD_REQUEST,"stt_language_unsupported");}
+        }
+        try{asr.start(b.owner,b.id,epoch,policy);
+            synchronized(this){if(!selected.equals(prefsFor(b.owner).autoVoiceTrigger())){if(sessions.status(b.owner,b.id).epoch()==epoch)sessions.disarmAutoVoice(b.owner,b.id,epoch);throw error(HttpStatus.CONFLICT,"auto_voice_settings_stale");}
+                sessions.armAutoVoice(b.owner,b.id,epoch,request.continuation(),Boolean.TRUE.equals(request.autoVoiceConsent()));}}
+        catch(RuntimeException failure){if(prefsFor(b.owner).autoVoiceTrigger().modeEnabled()&&sessions.status(b.owner,b.id).epoch()==epoch)sessions.disarmAutoVoice(b.owner,b.id,epoch);throw failure;}
         synchronized(this){requireProducer(b,request.clientId());b.audioStarts++;b.lastStartAt=clock.millis();b.lastSegmentSeconds=b.segmentSeconds;return result(b,sessions.status(b.owner,b.id),owner,request.clientId());}
     }
     @PostMapping("/api/assist/display/audio/chunk")
@@ -577,7 +594,7 @@ public class DisplayConversateController {
         String owner=owner(http);Binding b;
         synchronized(this){audioGuard();validateClient(request.clientId());b=audioBinding(owner,request.assistId());requireProducer(b,request.clientId());limited(owner,4);}
         Snapshot s=asr.chunk(b.owner,b.id,request.epoch(),request.sequence(),request.pcm());
-        synchronized(this){requireProducer(b,request.clientId());if(request.sequence()>b.lastAudioSequence||request.epoch()!=b.lastAudioEpoch){b.audioBytes+=Base64.getDecoder().decode(request.pcm()).length;b.lastAudioAt=clock.millis();b.lastAudioSequence=request.sequence();b.lastAudioEpoch=request.epoch();}return result(b,s,owner,request.clientId());}
+        synchronized(this){requireProducer(b,request.clientId());if(request.sequence()>b.lastAudioSequence||request.epoch()!=b.lastAudioEpoch){b.audioBytes+=Base64.getDecoder().decode(request.pcm()).length;b.lastAudioAt=clock.millis();b.lastAudioSequence=request.sequence();b.lastAudioEpoch=request.epoch();autoPresentation(b,request.epoch(),request.autoVoiceTrigger());}return result(b,sessions.status(b.owner,b.id),owner,request.clientId());}
     }
     @PostMapping("/api/assist/display/audio/chunk-batch")
     public ResponseEntity<AudioBatchAck> audioBatch(@RequestBody AudioBatch request,HttpServletRequest http){
@@ -595,10 +612,11 @@ public class DisplayConversateController {
             synchronized(this){requireProducer(b,request.clientId());
                 if(frame.sequence()>b.lastAudioSequence||request.epoch()!=b.lastAudioEpoch){
                     b.audioBytes+=lengths[i];b.lastAudioAt=clock.millis();b.lastAudioSequence=frame.sequence();b.lastAudioEpoch=request.epoch();
+                    autoPresentation(b,request.epoch(),request.autoVoiceTrigger());
                 }
             }
         }
-        synchronized(this){requireProducer(b,request.clientId());var response=result(b,snapshot,owner,request.clientId());
+        synchronized(this){requireProducer(b,request.clientId());var response=result(b,sessions.status(b.owner,b.id),owner,request.clientId());
             return ResponseEntity.status(response.getStatusCode()).headers(response.getHeaders())
                 .body(new AudioBatchAck(response.getBody(),request.frames().get(lengths.length-1).sequence(),lengths.length));}
     }
@@ -617,10 +635,12 @@ public class DisplayConversateController {
         }
         return lengths;
     }
+    private void autoPresentation(Binding b,long epoch,AutoVoicePresentation grant){if(grant!=null)sessions.autoVoiceFrame(b.owner,b.id,epoch,grant.presentationRevision(),grant.hintsEnabled());}
     @PostMapping("/api/assist/display/audio/stop")
     public ResponseEntity<View> audioStop(@RequestBody AudioStop request,HttpServletRequest http){
         String owner=owner(http);Binding b;
         synchronized(this){audioGuard();validateClient(request.clientId());b=bound(owner,request.assistId());requireProducer(b,request.clientId());
+            if(request.autoVoiceStop()&&prefsFor(b.owner).autoVoiceTrigger().modeEnabled()){sessions.disarmAutoVoice(b.owner,b.id,request.epoch());return result(b,sessions.status(b.owner,b.id),owner);}
             // Omitted/false preserves the existing immediate-cancellation contract.
             if(!request.finish())return result(b,sessions.control(b.owner,b.id,request.epoch(),"text_fallback"),owner);}
         var stopped=asr.finish(b.owner,b.id,request.epoch());
@@ -653,11 +673,14 @@ public class DisplayConversateController {
         long now=clock.millis();
         if(s.caption()!=null)b.lastTranscriptAt=Math.max(b.lastTranscriptAt,s.caption().receivedAt());
         var card=DisplayContentView.card(s.card(),now);var caption=DisplayContentView.caption(s.caption(),now);
+        if(prefsFor(b.owner).autoVoiceTrigger().modeEnabled()&&!sessions.hintsEnabled(b.owner,b.id))card=null;
         if(b.relayChannel!=null)relay.publish(b.relayChannel,producer(b),caption,sessions.hintsEnabled(b.owner,b.id)?card:null,lensFocus(b,s));
         boolean focusProducer=novaFocus!=null&&b.relayChannel!=null&&Objects.equals(client,b.producerClient)&&producer(b).equals(relay.active(b.relayChannel));
         var view=new View(s.assistId(),s.epoch(),s.state(),publicReason(s.reason()),s.version(),card,s.diagnostics().requestId(),s.metrics().inFlight()>0||s.metrics().queueLength()>0,s.state().equals("RUNNING"),audioEnabled&&asr!=null&&asr.available(),s.audio().state(),"phone_voice".equals(s.diagnostics().inputPath())?s.diagnostics().requestId():null,
                 caption,caption==null?0:Math.max(0,caption.expiresAt()-now),card==null?0:Math.max(0,card.expiresAt()-now),sessions.hintsEnabled(b.owner,b.id),caller.equals(b.owner)?(b.standalone?"STANDALONE":"DISPLAY"):"PHONE",b.phoneOwner!=null,b.pendingPhone!=null,b.confirmation,"finished".equals(s.audio().runtime().get("stopReason")),asr==null?540000:asr.renewAfterMs(),b.standalone?testStatus(b,s,client):null,foldFocus(b,s),focusProducer,
-                focusProducer?novaFocus.snapshotCommand(b.owner,b.id,s.epoch(),now):null);
+                focusProducer?novaFocus.snapshotCommand(b.owner,b.id,s.epoch(),now):null,
+                caller.equals(b.owner)&&Objects.equals(client,b.producerClient)?prefsFor(b.owner).autoVoiceTrigger():null,
+                sessions.autoVoiceState(b.owner,b.id));
         return ResponseEntity.ok().cacheControl(CacheControl.noStore()).header("Referrer-Policy","no-referrer").body(view);
     }
     private Map<String,Object> testStatus(Binding b,Snapshot s,String client){

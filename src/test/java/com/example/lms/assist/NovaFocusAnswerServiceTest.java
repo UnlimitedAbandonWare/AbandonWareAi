@@ -426,7 +426,7 @@ class NovaFocusAnswerServiceTest {
             assertFalse(request.getValue().isUseWebSearch());assertNull(request.getValue().getModel());
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
-    @Test void webAnswerIsCompactedForTheLensWithASourceSuffix() throws Exception{
+    @Test void webOriginalIsKeptForFoldAndOnlyLensProjectionRemovesLinks() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
         ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
         var adapter=new NovaFocusAnswerService(chat,budgets,runs);
@@ -443,16 +443,17 @@ class NovaFocusAnswerServiceTest {
             var answer=adapter.answer(7L,"공식 자료를 찾아 확인해줘",memory);
             assertFalse(answer.contains("표시 길이를 넘었습니다"));assertFalse(answer.contains("전체 답변은 Fold에서"));
             assertTrue(answer.contains("가나다라마바사아자차카타파하"),"overflow keeps the generated answer instead of a notice");
-            assertTrue(answer.lines().count()<=6,"lens answer stays inside the six-line budget");
-            assertFalse(answer.contains("##"));assertFalse(answer.contains("]("));
-            assertTrue(answer.contains("[출처:"));assertTrue(answer.contains("naver.com"));
+            assertEquals(longAnswer,answer,"the display projection must not rewrite the Fold answer");
+            var lens=NovaFocusAnswerService.lensText(answer,true);
+            assertFalse(lens.contains("]("));assertFalse(lens.contains("https"));
+            assertTrue(lens.contains("공지 기준 중요 내용입니다."));
             clearInvocations(chat);
             // Evidence가 없으면 접미사도 없다; 길이 초과도 안내문이 아닌 원문이 유지된다.
             when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of(longAnswer,"recording",false));
             answer=adapter.answer(8L,"공식 자료를 다시 확인해줘",memory);
             assertTrue(answer.contains("가나다라마바사아자차카타파하"));
             assertFalse(answer.contains("표시 길이를 넘었습니다"));
-            assertTrue(answer.lines().count()<=6);
+            assertEquals(longAnswer,answer);
             assertFalse(answer.contains("[출처:"));
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
@@ -501,26 +502,26 @@ class NovaFocusAnswerServiceTest {
             assertTrue(request.getValue().isStrictModelSelection());
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
-    @Test void autoRoutingFallsBackToLocalDefaultWhenFocusDefaultUnavailable() throws Exception{
+    @Test void autoRoutingFallsBackToApiDefaultWhenFocusDefaultUnavailable() throws Exception{
         var chat=mock(ChatService.class);var budgets=mock(PublicRequestBudgetGuard.class);var runs=new ChatRunRegistry();
         ReflectionTestUtils.setField(runs,"replayCapacity",32);ReflectionTestUtils.setField(runs,"ttlSeconds",60);
         var adapter=new NovaFocusAnswerService(chat,budgets,runs);var request=org.mockito.ArgumentCaptor.forClass(ChatRequestDto.class);
-        ReflectionTestUtils.setField(adapter,"defaultModel","gemma4:26b");
+        ReflectionTestUtils.setField(adapter,"defaultModel","chatgpt-oauth:gpt-5.6-luna");
         var catalog=mock(ChatModelCatalogService.class);
-        when(catalog.resolve("gemma4:26b")).thenReturn(Optional.of(
-            new ChatModelCatalogService.Choice("gemma4:26b","Ollama","local-default","gemma4:26b",
+        when(catalog.resolve("chatgpt-oauth:gpt-5.6-luna")).thenReturn(Optional.of(
+            new ChatModelCatalogService.Choice("chatgpt-oauth:gpt-5.6-luna","chatgpt_oauth","oauth","gpt-5.6-luna",
                 "configured",true,"","release","server_catalog")));
         ReflectionTestUtils.setField(adapter,"modelCatalog",catalog);
-        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("합성 응답","gemma4:26b",false));
+        when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("합성 응답","gpt-5.6-luna",false));
         var routing=new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of());
         var memory=new NovaFocusHistoryService.Context(List.of(),"",List.of(),List.of(),
             new NovaFocusSettings.AnswerSelection(NovaFocusSettings.AnswerSelection.Mode.AUTO,null,routing),0);
         try{
-            // 알 수 없는 라우트 아이디: 카탈로그 미등록이면 로컬 기본값이 이어 받는다.
+            // AUTO excludes local routes; an admitted API default follows an unavailable soft preference.
             ReflectionTestUtils.setField(adapter,"focusDefaultModel","llmrouter.ghost");
             assertEquals("합성 응답",adapter.answer(7L,"아까 정한 이름은?",memory));
             verify(chat).continueChat(request.capture(),isNull(),any());
-            assertEquals("gemma4:26b",request.getValue().getModel());
+            assertEquals("chatgpt-oauth:gpt-5.6-luna",request.getValue().getModel());
             clearInvocations(chat);
             // 선택 불가 라우트(자격·허용목록 미충족)도 우선순위를 얻지 못한다.
             ReflectionTestUtils.setField(adapter,"focusDefaultModel","llmrouter.gemini-pro");
@@ -529,7 +530,7 @@ class NovaFocusAnswerServiceTest {
                     "remote_selection_disabled",false,"remote_selection_disabled","release","server_catalog")));
             assertEquals("합성 응답",adapter.answer(7L,"아까 정한 이름은?",memory));
             verify(chat).continueChat(request.capture(),isNull(),any());
-            assertEquals("gemma4:26b",request.getValue().getModel());
+            assertEquals("chatgpt-oauth:gpt-5.6-luna",request.getValue().getModel());
         }finally{ReflectionTestUtils.invokeMethod(runs,"shutdown");}
     }
     @Test void fixedModeIgnoresFocusDefaultModel() throws Exception{
@@ -539,7 +540,7 @@ class NovaFocusAnswerServiceTest {
         ReflectionTestUtils.setField(adapter,"focusDefaultModel","llmrouter.gemini-pro");
         var catalog=mock(ChatModelCatalogService.class);
         when(catalog.resolve("pinned-model")).thenReturn(Optional.of(
-            new ChatModelCatalogService.Choice("pinned-model","Ollama","local-default","pinned-model",
+            new ChatModelCatalogService.Choice("pinned-model","chatgpt_oauth","oauth","pinned-model",
                 "configured",true,"","release","server_catalog")));
         ReflectionTestUtils.setField(adapter,"modelCatalog",catalog);
         when(chat.continueChat(any(),isNull(),any())).thenReturn(ChatResult.of("합성 응답","pinned-model",false));

@@ -724,8 +724,13 @@
   }
 
   function providerStatusLine(p) {
-    const state = fmt(p.state) || 'OK';
+    const state = fmt(p.state) || 'NOT_OBSERVED';
     const name = `${fmt(p.provider)}${p.scope ? '/' + fmt(p.scope) : ''} · ${fmt(p.model)}`;
+    if (state === 'STALE' || state === 'NOT_OBSERVED') {
+      const history = [p.lastSeen && `마지막 실패 ${fmt(p.lastSeen)}`,
+        p.lastSuccessAt && `마지막 정상 ${fmt(p.lastSuccessAt)}`].filter(Boolean);
+      return [`${name} — 현재 상태 미확인`, state === 'STALE' ? '최근 관측이 오래됨' : '관측 없음', ...history].join(' · ');
+    }
     if (state === 'OK') {
       const recovered = p.recoveredAt ? ` · ${fmt(p.recoveredAt)}에 복구됨` : '';
       return `${name} — 정상${recovered}`;
@@ -758,9 +763,9 @@
       const statusLines = $('apiStatusLines'); statusLines.replaceChildren();
       const status = result.status && typeof result.status === 'object' ? result.status : {};
       const providers = Array.isArray(status.providers) ? status.providers : [];
-      const overall = fmt(status.overall) || 'OK';
+      const overall = fmt(status.overall) || 'NOT_OBSERVED';
       const head = document.createElement('div');
-      head.className = 'font-semibold ' + (overall === 'DEGRADED' ? 'text-red-700' : overall === 'WARNING' ? 'text-amber-700' : 'text-emerald-700');
+      head.className = 'font-semibold ' + (overall === 'DEGRADED' ? 'text-red-700' : overall === 'WARNING' ? 'text-amber-700' : overall === 'OK' ? 'text-emerald-700' : 'text-gray-700');
       head.textContent = `현재 상태: ${overall}`;
       statusLines.appendChild(head);
       for (const p of providers.slice(0, 10)) {

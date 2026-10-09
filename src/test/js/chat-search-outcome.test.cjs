@@ -48,3 +48,32 @@ test('unknown outcome is not displayed as a success', () => {
   render({}, { agentWebSearch: { status: 'unexpected', returnedCount: 0 } }, bubble);
   assert(!bubble.detail.rows.some(([label]) => label === 'web search'));
 });
+
+test('aggregate success preserves NAVER failure and Brave success as separate rows', () => {
+  const { render, bubble } = harness();
+  render({}, { agentWebSearch: { status: 'OK', providers: [
+    { provider: 'naver', outcome: 'FAIL_SOFT', httpStatus: 401, failureReason: 'AUTH_OR_CONFIG', freshness: 'recent' },
+    { provider: 'brave', outcome: 'OK', httpStatus: 200, returnedCount: 2 }
+  ] } }, bubble);
+  assert(bubble.detail.rows.some(([label, value]) => label === 'naver status' && value === 'FAIL_SOFT'));
+  assert(bubble.detail.rows.some(([label, value]) => label === 'naver HTTP' && value === 401));
+  assert(bubble.detail.rows.some(([label, value]) => label === 'brave status' && value === 'OK'));
+  assert(bubble.detail.rows.some(([label, value]) => label === 'brave results' && value === 2));
+  assert(!bubble.detail.rows.some(([label]) => label.includes('recovered')));
+});
+
+test('heartbeat codes and fallback reasons stay associated with each provider', () => {
+  const context = { safeDebugCockpitDetail: value => String(value) };
+  vm.createContext(context);
+  const start = source.indexOf('function providerStatusToken(');
+  const end = source.indexOf('function safeHeartbeatText(', start);
+  assert(start >= 0 && end > start);
+  vm.runInContext(source.slice(start, end) + '\nglobalThis.summary = providerStatusSearchSummary;', context);
+  const value = context.summary([
+    { provider: 'naver', statusCode: 401, fallbackReason: 'AUTH_OR_CONFIG', errorClass: 'authentication' },
+    { provider: 'brave', statusCode: 200, fallbackReason: 'none', errorClass: 'none' }
+  ]);
+  assert(value.includes('code:naver:401_brave:200'));
+  assert(value.includes('fb:naver:AUTH_OR_CONFIG_brave:none'));
+  assert(value.includes('err:naver:authentication_brave:none'));
+});

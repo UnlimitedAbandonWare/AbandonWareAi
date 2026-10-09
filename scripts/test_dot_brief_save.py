@@ -42,6 +42,9 @@ class DotBriefSaveTests(unittest.TestCase):
             "DOT_BRIEF_SAVE_TEMP": str(self.temp_root),
             "DOT_BRIEF_SAVE_AGENT_PROMPTS": str(self.prompts),
             "DOT_BRIEF_SAVE_LOG": str(self.log),
+            # R6 폐기 사본은 옵트인 — 레거시 이중 저장 계약을 검증하는 케이스들을
+            # 위해 기본 픽스처는 켠다. 기본값(꺼짐)은 test_12에서 단독 검증.
+            "DOT_BRIEF_SAVE_PROMPTS_COPY": "1",
         }
 
     def tearDown(self):
@@ -258,6 +261,34 @@ class DotBriefSaveTests(unittest.TestCase):
         self.assertEqual(Path(res["paths"][0]).resolve(), dl.resolve())
         self.assertNotIn("card", {k.lower() for k in res},
                          "카드 필드가 save 결과에 섞여 있다")
+
+    def test_12_prompts_copy_off_by_default(self):
+        # R6(2026-10-06): 기준은 Downloads + sha12 MATCH 하나. env 미설정이면
+        # agent-prompts 사본은 만들어지지 않는다.
+        self.env.pop("DOT_BRIEF_SAVE_PROMPTS_COPY", None)
+        src = self.make_src(data=b"downloads-only default")
+        proc = self.run_cli(*self.save_args(src))
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        res = self.payload(proc)
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(res["paths"]), 1)
+        dl = self.downloads / "PASTE_DEVIN_skill-harmony_20261002.txt"
+        self.assertTrue(dl.is_file())
+        self.assertEqual(res["paths"][0], str(dl))
+        self.assertEqual([p for p in self.prompts.rglob("*") if p.is_file()], [],
+                         "env 없이 agent-prompts 사본이 생겼다")
+
+    def test_13_prompts_copy_opt_in(self):
+        # 옵트인 env를 명시하면 폐기 경로 사본도 계속 쓸 수 있다(롤백 경로).
+        src = self.make_src(data=b"opt-in copy")
+        proc = self.run_cli(*self.save_args(src))
+        self.assertEqual(proc.returncode, 0, proc.stderr.decode())
+        res = self.payload(proc)
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(res["paths"]), 2)
+        pp = self.prompts / "devin-skill-harmony-20261002" / "BRIEF.txt"
+        self.assertTrue(pp.is_file())
+        self.assertEqual(pp.read_bytes(), b"opt-in copy")
 
 
 if __name__ == "__main__":

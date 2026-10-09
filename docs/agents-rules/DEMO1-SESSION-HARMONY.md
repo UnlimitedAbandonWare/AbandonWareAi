@@ -81,8 +81,8 @@ VCS를 만들지 않는다.
 - `python -B scripts/brief_queue_status.py` 가 Downloads의 `PASTE_*` 와
   `data/agent-handoff` 보고를 짝지어 OPEN/DONE/BLOCKED/SUPERSEDED/UNMATCHED를 센다.
 - **에이전트당 OPEN이 3개를 넘으면 새 지시서를 보류**한다(도구가 권고 한 줄을 냄).
-- 산출물 전달 규칙: `docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md` — 지시서·보고서는
-  Downloads에 sha 일치 사본 + `DELIVERED ... MATCH` 줄까지가 완료다.
+- 산출물 전달 규칙: `docs/agents-rules/DEMO1-DELIVERY-DOWNLOADS.md` — dot의 사용자 전달 최종 지시서만 Downloads;
+  리뷰·로그·초안·중간 결과는 기존 프로젝트 보고 경로이며 Downloads 사본을 완료 조건으로 요구하지 않는다.
 
 ## 관련
 

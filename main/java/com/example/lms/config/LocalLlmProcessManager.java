@@ -1509,12 +1509,15 @@ public class LocalLlmProcessManager implements BeanFactoryPostProcessor, SmartLi
 
     private void logSecretPresence() {
         log.info("[AWX][runtime-config][keys] OPENAI_API_KEY.present={} LLM_API_KEY.present={} "
-                        + "NAVER_CLIENT_ID.present={} NAVER_CLIENT_SECRET.present={} NAVER_KEYS.present={}",
+                        + "NAVER_CLIENT_ID.present={} NAVER_CLIENT_SECRET.present={} NAVER_KEYS.present={} "
+                        + "NAVER_APIHUB_CLIENT_ID.present={} NAVER_APIHUB_CLIENT_SECRET.present={}",
                 hasConfiguredValue("OPENAI_API_KEY"),
                 hasConfiguredValue("LLM_API_KEY"),
                 hasConfiguredValue("NAVER_CLIENT_ID"),
                 hasConfiguredValue("NAVER_CLIENT_SECRET"),
-                hasConfiguredValue("NAVER_KEYS"));
+                hasConfiguredValue("NAVER_KEYS"),
+                hasConfiguredValue("NAVER_APIHUB_CLIENT_ID"),
+                hasConfiguredValue("NAVER_APIHUB_CLIENT_SECRET"));
     }
 
     private boolean hasConfiguredValue(String key) {

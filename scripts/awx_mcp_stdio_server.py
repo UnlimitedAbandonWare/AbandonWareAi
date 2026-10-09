@@ -841,7 +841,7 @@ def render_prompt_text(name: str, flow: list[str], optional_flows: list[dict[str
         *optional_flow_lines,
         "Use main/resources/mcp/awx-control-tower-mcp-client.sample.json for the stdio bridge config.",
         "Keep logs redacted: requestId, sessionId, nodeRole, toolName, inputHash, outputCount, elapsedMs, decision, failReason.",
-        "Allowed environment references are NAVER_KEYS, NAVER_CLIENT_ID, and NAVER_CLIENT_SECRET by name only.",
+        "Allowed environment references are NAVER_APIHUB_CLIENT_ID and NAVER_APIHUB_CLIENT_SECRET by name only.",
     ]
     if name == "macmini_patch_producer":
         role = [

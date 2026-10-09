@@ -246,6 +246,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
     @Autowired(required = false)
     private DebugEventStore debugEventStore;
 
+    @Autowired(required = false)
+    private com.example.lms.debug.ApiFailureRecorder apiFailureRecorder;
+
     private boolean isBravePrimary() {
         GuardContext ctx = GuardContextHolder.get();
 
@@ -893,7 +896,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
         TimeBudgetContext.set(selectedBudget);
         boolean executionOwner = activeExecution.get() == null;
         if (executionOwner) {
-            activeExecution.set(new HybridSearchExecution(TimeBudgetContext.get()));
+            activeExecution.set(new HybridSearchExecution(selectedBudget));
         }
         try {
             return action.get();
@@ -2562,6 +2565,7 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             List<String> braveSafe = (brave == null) ? Collections.emptyList() : brave;
             List<String> naverSafe = (naver == null) ? Collections.emptyList() : naver;
             List<String> mergedSafe = (merged == null) ? Collections.emptyList() : merged;
+            markRetainedSearchFallback(braveSafe, mergedSafe, extra);
 
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("mergeKind", mergeKind);
@@ -2754,6 +2758,32 @@ public class HybridWebSearchProvider implements WebSearchProvider {
             soakMetricRegistry.recordWebMerge(mergedTotal, fromNaver);
         } catch (Exception ignore) {
             traceSuppressed("soakWebMetrics.record", ignore);
+        }
+    }
+
+    /** Covering the user requires retained evidence and a live receipt from this search execution. */
+    private void markRetainedSearchFallback(List<String> brave,List<String> merged,Map<String,Object> extra) {
+        if(apiFailureRecorder==null||countFromList(merged,brave)==0
+                ||extra!=null&&Boolean.TRUE.equals(extra.get("braveCacheOnly")))return;
+        Object execution=TraceStore.get("searchExecutionId");
+        if(execution==null||!(TraceStore.get("web.brave.attempt.runs") instanceof List<?> braveRuns)
+                ||!(TraceStore.get("web.naver.filter.runs") instanceof List<?> naverRuns))return;
+        long now=System.currentTimeMillis();
+        boolean liveBrave=braveRuns.stream().anyMatch(item->item instanceof Map<?,?> row
+                &&execution.equals(row.get("searchExecutionId"))
+                &&Boolean.TRUE.equals(row.get("clientAttemptObserved"))
+                &&Boolean.TRUE.equals(row.get("providerReceiptObserved"))
+                &&!Boolean.TRUE.equals(row.get("cacheHit"))&&"OK".equals(row.get("outcome"))
+                &&row.get("httpStatus") instanceof Number status&&status.intValue()>=200&&status.intValue()<300
+                &&row.get("afterFilterCount") instanceof Number count&&count.intValue()>0
+                &&row.get("finishedAtEpochMs") instanceof Number time&&now-time.longValue()>=0&&now-time.longValue()<600_000L);
+        if(!liveBrave)return;
+        for(Object item:naverRuns)if(item instanceof Map<?,?> row
+                &&execution.equals(row.get("searchExecutionId"))&&Boolean.TRUE.equals(row.get("clientAttemptObserved"))
+                &&!Boolean.TRUE.equals(row.get("cacheHit"))&&row.get("providerAttemptId") instanceof String attemptId
+                &&apiFailureRecorder.markSearchMasked("naver","unconfirmed",attemptId,"brave","web")) {
+            TraceStore.append("web.naver.masked.runs",Map.of("providerAttemptId",attemptId,
+                    "searchExecutionId",execution,"maskedBy","brave"));
         }
     }
 
@@ -3181,6 +3211,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 naver.snippets() != null ? naver.snippets() : Collections.emptyList(),
                 topK);
 
+        emitMergeBoundaryEvent("korean.trace.brave_then_naver", query, topK, brave,
+                naver.snippets(), merged, null, null);
+
         NaverSearchService.SearchTrace trace = naver.trace() != null
                 ? naver.trace()
                 : new NaverSearchService.SearchTrace();
@@ -3488,6 +3521,9 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                 brave,
                 topK);
 
+        emitMergeBoundaryEvent("korean.trace.naver_then_brave", query, topK, brave,
+                naver.snippets(), merged, null, null);
+
         NaverSearchService.SearchTrace trace = (naver.trace() != null)
                 ? naver.trace()
                 : new NaverSearchService.SearchTrace();
@@ -3658,6 +3694,8 @@ public class HybridWebSearchProvider implements WebSearchProvider {
                             brave.size(),
                             brave.size(),
                             0));
+                    emitMergeBoundaryEvent("trace.naver_then_brave", query, topK, brave,
+                            Collections.emptyList(), brave, null, null);
                     log.info("[Hybrid] Brave fallback (trace) returned {} snippets", brave.size());
                     return new NaverSearchService.SearchResult(brave, trace);
                 }

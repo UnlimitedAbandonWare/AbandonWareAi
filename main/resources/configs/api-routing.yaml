@@ -82,7 +82,7 @@ routes:
       env: [SERPAPI_API_KEY]
     - id: naver
       tier: free_local
-      env: [NAVER_KEYS, NAVER_CLIENT_ID, NAVER_CLIENT_SECRET]
+      env: [NAVER_APIHUB_CLIENT_ID, NAVER_APIHUB_CLIENT_SECRET]
       seams: ["com.example.lms.service.NaverSearchService"]
 
   asr:

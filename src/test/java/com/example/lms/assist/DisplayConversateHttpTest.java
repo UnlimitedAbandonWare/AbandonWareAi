@@ -97,6 +97,47 @@ class DisplayConversateHttpTest {
         assertEquals(401,client.http.send(socket,HttpResponse.BodyHandlers.discarding()).statusCode());
         assertEquals(before+2,LegacyProbe.calls.get());assertTrue(client.bootstrap().path("ready").asBoolean());
     }
+    @Test void autoVoiceSettingsStayProducerPrivateAndChatGreetingDoesNotPrepareCapture() throws Exception {
+        var controller=context.getBean(DisplayConversateController.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
+        try{
+            var phone=new Client("test-8080aaaabbbbcccc");
+            var hello=phone.connection(null,0);hello.put("activate",true);
+            var initial=JSON.readTree(phone.post("phone-test",hello).body());
+            var connection=phone.connection(initial.path("assistId").asText(),initial.path("epoch").asLong());
+            String registered="설정 목록 전용 합성 문구";
+            var save=new HashMap<>(connection);save.put("expectedSettingsVersion",0);
+            save.put("display",Map.of("autoVoiceTrigger",Map.of("modeEnabled",true,"hintLines",9,"hintChars",500,
+                    "phrases",List.of(Map.of("id","private-setting","language","ko","text",registered)))));
+            var response=phone.post("relay/lens-settings",save);assertEquals(200,response.statusCode());
+            var applied=JSON.readTree(response.body());
+            assertEquals(registered,applied.at("/autoVoiceSettings/phrases/0/text").asText());
+            assertEquals("DISARMED",applied.at("/autoVoiceRuntime/state").asText());
+            assertEquals(initial.at("/testStatus/lensDisplay/hintPageLines"),applied.at("/testStatus/lensDisplay/hintPageLines"));
+            assertEquals(initial.at("/testStatus/lensDisplay/autoPageMs"),applied.at("/testStatus/lensDisplay/autoPageMs"));
+            connection=phone.connection(applied.path("assistId").asText(),applied.path("epoch").asLong());
+            var subscriber=new HashMap<>(connection);subscriber.put("clientId","e".repeat(32));
+            var subscriberView=JSON.readTree(phone.post("poll",subscriber).body());
+            assertTrue(subscriberView.path("autoVoiceSettings").isNull());
+            assertFalse(subscriberView.toString().contains(registered));
+            assertEquals(404,new Client("test-8080aaaabbbbcccc").post("poll",connection).statusCode());
+            var linked=JSON.readTree(phone.post("lens/link",connection).body());
+            var lens=new Client();var lensResponse=lens.post("lens/text",Map.of("token",linked.path("token").asText()));
+            assertEquals(200,lensResponse.statusCode());assertFalse(lensResponse.body().contains(registered));
+            var relay=new Client("test-8080aaaabbbbcccc").post("relay/poll",Map.of("clientId","f".repeat(32),"eventId",0));
+            assertEquals(200,relay.statusCode());assertFalse(relay.body().contains(registered));
+            int generations=calls.get(),legacy=LegacyProbe.calls.get();
+            var chat=HttpRequest.newBuilder(URI.create(base+"/api/chat/sync")).header("Content-Type","application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(JSON.writeValueAsString(Map.of("message",registered)))).build();
+            var chatResponse=phone.http.send(chat,HttpResponse.BodyHandlers.ofString());
+            assertEquals(200,chatResponse.statusCode());assertEquals("synthetic-legacy-response",chatResponse.body());
+            var after=JSON.readTree(phone.post("poll",connection).body());
+            assertEquals("DISARMED",after.at("/autoVoiceRuntime/state").asText());
+            assertTrue(after.at("/autoVoiceSettings/modeEnabled").asBoolean());
+            assertEquals(legacy+1,LegacyProbe.calls.get());assertEquals(generations,calls.get());
+            assertEquals(0,context.getBean(ConversateAsrBridge.class).activeCount());
+        }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
+    }
     @Test void rateWindowBoundsEvenDuplicateInputsAndOtherOwnersRemainIndependent() throws Exception {
         var client=new Client();var s=client.bootstrap();var body=client.connection(s.path("assistId").asText(),s.path("epoch").asLong());body.put("requestId",UUID.randomUUID().toString());body.put("text","요약해 줘");body.put("eventOrder",List.of("change"));
         for(int i=0;i<6;i++)assertEquals(200,client.post("input",body).statusCode());
@@ -172,6 +213,7 @@ class DisplayConversateHttpTest {
         var chunk=c.connection(resumed.path("assistId").asText(),resumed.path("epoch").asLong());
         chunk.put("sequence",0);chunk.put("pcm",Base64.getEncoder().encodeToString(new byte[7680]));
         assertEquals(200,c.post("audio/chunk",chunk).statusCode());
+        assertEquals(200,c.post("audio/stop",c.connection(resumed.path("assistId").asText(),resumed.path("epoch").asLong())).statusCode());
     }
     @Test void phonePairingNeedsReceiverApprovalAndCaptionsAreIndependentOfHints() throws Exception {
         var display=new Client();var phone=new Client();var stranger=new Client();
@@ -341,13 +383,34 @@ class DisplayConversateHttpTest {
             var c=new Client("test-fedcba0987654321");var hello=c.connection(null,0);hello.put("activate",true);var first=JSON.readTree(c.post("phone-test",hello).body());
             var old=c.connection(first.path("assistId").asText(),first.path("epoch").asLong());
             String fresh=UUID.randomUUID().toString().replace("-","");hello.put("clientId",fresh);var second=JSON.readTree(c.post("phone-test",hello).body());
+            assertEquals(first.path("assistId"),second.path("assistId"));
+            assertTrue(second.path("epoch").asLong()>first.path("epoch").asLong());
             assertEquals(403,c.post("audio/stop",old).statusCode());
+            var lateChunk=new HashMap<>(old);lateChunk.put("sequence",0);lateChunk.put("pcm",Base64.getEncoder().encodeToString(new byte[640]));assertEquals(403,c.post("audio/chunk",lateChunk).statusCode());
             assertEquals("OTHER CLIENT",JSON.readTree(c.post("poll",old).body()).at("/testStatus/relay/eventOwner").asText());
             var settings=c.connection(second.path("assistId").asText(),second.path("epoch").asLong());settings.put("clientId",fresh);settings.put("enabled",true);
             for(int seconds:List.of(5,10,15,23,0)){settings.put("segmentSeconds",seconds);var response=c.post("relay/settings",settings);assertEquals(200,response.statusCode());assertEquals(seconds,JSON.readTree(response.body()).at("/testStatus/relay/segmentSeconds").asInt());}
             settings.put("segmentSeconds",4);assertEquals(400,c.post("relay/settings",settings).statusCode());
             var start=c.connection(second.path("assistId").asText(),second.path("epoch").asLong());start.put("clientId",fresh);start.put("continuation",true);
-            assertEquals(409,c.post("audio/start",start).statusCode());
+            var started=c.post("audio/start",start);assertEquals(200,started.statusCode());start.remove("continuation");start.put("epoch",JSON.readTree(started.body()).path("epoch").asLong());
+            assertEquals(403,c.post("audio/stop",old).statusCode());
+            assertEquals("READY",JSON.readTree(c.post("poll",start).body()).path("audioState").asText());assertEquals(200,c.post("audio/stop",start).statusCode());
+        }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
+    }
+    @Test void sameOwnerReloadRetainsCaptionAndImmediatelyContinuesWithNewProducer() throws Exception {
+        var controller=context.getBean(DisplayConversateController.class);org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
+        try{
+            var c=new Client("test-0123456789abcdef");var hello=c.connection(null,0);hello.put("activate",true);var first=JSON.readTree(c.post("phone-test",hello).body());
+            var old=c.connection(first.path("assistId").asText(),first.path("epoch").asLong());assertEquals(200,c.post("audio/start",old).statusCode());
+            var chunk=new HashMap<>(old);chunk.put("sequence",0);chunk.put("pcm",Base64.getEncoder().encodeToString(new byte[640]));assertEquals(200,c.post("audio/chunk",chunk).statusCode());
+            var before=JSON.readTree(c.post("poll",old).body());assertFalse(before.path("caption").isNull());
+            String fresh=UUID.randomUUID().toString().replace("-","");hello.put("clientId",fresh);var second=JSON.readTree(c.post("phone-test",hello).body());
+            assertEquals(first.path("assistId"),second.path("assistId"));assertEquals(before.path("caption"),second.path("caption"));
+            assertEquals(403,c.post("audio/stop",old).statusCode());assertEquals(403,c.post("audio/chunk",chunk).statusCode());
+            var resume=c.connection(second.path("assistId").asText(),second.path("epoch").asLong());resume.put("clientId",fresh);resume.put("continuation",true);
+            var started=c.post("audio/start",resume);assertEquals(200,started.statusCode(),started.body());
+            resume.remove("continuation");resume.put("epoch",JSON.readTree(started.body()).path("epoch").asLong());
+            assertEquals(403,c.post("audio/stop",old).statusCode());assertEquals("READY",JSON.readTree(c.post("poll",resume).body()).path("audioState").asText());assertEquals(200,c.post("audio/stop",resume).statusCode());
         }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
     }
     @Test void lensDisplaySettingsRoundTripEchoesAppliedValuesAndRejectsOutOfRange() throws Exception {

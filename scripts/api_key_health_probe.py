@@ -82,7 +82,7 @@ FIX = {
     "upstash_vector": "https://console.upstash.com",
     "upstash_redis": "https://console.upstash.com",
     "serpapi": "https://serpapi.com/manage-api-key",
-    "naver": "https://developers.naver.com/apps",
+    "naver": "https://console.ncloud.com/",
     "kakao": "https://developers.kakao.com",
     "brave": "https://api-dashboard.search.brave.com/app/keys",
     "tavily": "https://app.tavily.com",
@@ -731,24 +731,46 @@ def check_openrouter(keyctx, http, _p):
 
 
 def check_naver(keyctx, http, _p):
-    cid_name, cid_src, cid = resolve_key(["NAVER_CLIENT_ID", "NAVER_KEYS"])
-    sec_name, sec_src, sec = resolve_key(["NAVER_CLIENT_SECRET"])
-    row = merged_key_row("naver", cid_name + "+" + sec_name,
-                         [(cid_name, cid_src, cid), (sec_name, sec_src, sec)])
-    if cid is None or sec is None:
-        return row
-    # free-tier-only API (no paid meter) — 1-result search is 0 KRW.
-    # https://developers.naver.com/docs/serviceapi/search/blog/blog.md (webkr same shape)
-    r = http("GET", "https://openapi.naver.com/v1/search/webkr.json?query=test&display=1",
-             {"X-Naver-Client-Id": cid, "X-Naver-Client-Secret": sec})
+    # Compatibility entry: share the active APIkit selection; retain this probe's result schema.
+    try:
+        from .apikit.providers import naver
+    except ImportError:
+        from apikit.providers import naver
+    observed = {}
+    def resolve(names):
+        mode_setting = names == ["NAVER_SEARCH_PROVIDER"]
+        sources = {name: {s: str(v).strip() for s, v in key_sources(name).items()
+                         if v is not None and (mode_setting or naver._present(v))} for name in names}
+        observed.update(sources)
+        order = ("process", "user", "machine", "secrets") if mode_setting else ("process", "user", "secrets", "machine")
+        values = [(name, source, v) for source in order
+                  for name in names for s, v in sources[name].items() if s == source]
+        name, source, value = values[0] if values else (names[0], None, None)
+        return {"env": name, "src": source, "value": value, "len": len(value or ""), "sha8": sha8(value) if value else None,
+                "srcs": sorted({s for _, s, _ in values}), "mismatch": len({v for _, _, v in values}) > 1}
+    ki, metadata, url, headers = naver._selection(resolve)
+    reason = metadata.get("disabledReason")
+    prefix = "NAVER_APIHUB_" if metadata["selected_provider"] == "apihub" else "NAVER_"
+    names = ["NAVER_KEYS"] if ki["env"] == "NAVER_KEYS" else [prefix + "CLIENT_ID", prefix + "CLIENT_SECRET"]
+    parts = [(name, observed.get(name, {}), next((observed[name][source]
+              for source in ("process", "user", "secrets", "machine") if source in observed[name]), None))
+             for name in names]
+    row = merged_key_row("naver", "+".join(names), parts)
+    row.update(metadata)
+    row["key_present"] = all(ki["value"])
+    if reason:
+        row["classification"] = CLS_MISMATCH if reason == "conflicting-credential-aliases" else CLS_UNKNOWN if reason.startswith("invalid_") else CLS_MISSING
+        row["detail"] = reason
+        return naver.common.scrub_result(row, ki["value"])
+    r = http("GET", url, headers)
     code, _, msg = _err_fields(r)
     cls, detail = classify_generic(r)
     if r.status == 200:
         detail = "items=%d" % len((r.json() or {}).get("items") or [])
     elif code:
         detail = "%s %s" % (code, msg[:80])
-    return _finalize(row, [("ok" if cls == CLS_OK else "fail", cls, detail, r.latency_ms, {})],
-                     None)
+    result = _finalize(row, [("ok" if cls == CLS_OK else "fail", cls, detail, r.latency_ms, {})], None)
+    return naver.common.scrub_result(result, ki["value"])
 
 
 def check_kakao(keyctx, http, _p):

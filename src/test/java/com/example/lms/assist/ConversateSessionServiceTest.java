@@ -6,6 +6,18 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.springframework.web.server.ResponseStatusException;
 
 class ConversateSessionServiceTest {
+    @Test void sameOwnerReclaimPreservesCaptionAndFinalContextWhileFencingOldEpoch() {
+        var clock=new TestClock();try(var service=new ConversateSessionService(clock)){
+            var s=service.startPublicDisplay("owner");
+            service.submit("owner",s.assistId(),s.epoch(),new ConversateQuestionPolicy.Utterance("info","info",1,true,"합성 배경 정보입니다."));
+            var caption=service.displayTest("owner",s.assistId(),s.epoch(),"합성 전사").caption();
+            var reclaimed=service.control("owner",s.assistId(),s.epoch(),"producer_reclaimed");
+            assertEquals(caption,reclaimed.caption());assertEquals(1,reclaimed.metrics().contextTurns());assertTrue(reclaimed.epoch()>s.epoch());
+            assertThrows(ResponseStatusException.class,()->service.control("owner",s.assistId(),s.epoch(),"text_fallback"));
+            var takeover=service.control("owner",s.assistId(),reclaimed.epoch(),"producer_changed");
+            assertNull(takeover.caption());assertEquals(0,takeover.metrics().contextTurns());
+        }
+    }
     @Test void textFallbackKeepsConfirmedContextAndDeduplicationWithoutReplayingWork() {
         var clock=new TestClock();try(var service=new ConversateSessionService(clock)){
             var s=service.start("owner");var info=new ConversateQuestionPolicy.Utterance("info","info",1,true,"주제 정보를 이야기합니다.");

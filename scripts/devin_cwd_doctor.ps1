@@ -32,6 +32,14 @@ param(
   [string]$WorkspacesRoot,
   [string]$WorkspaceStorageRoot,
   [int]$ActiveWindowSeconds = 120,
+  [switch]$AgentPin,
+  [switch]$Heal,
+  [switch]$AllowCloud,
+  [switch]$InstallSchedule,
+  [switch]$UninstallSchedule,
+  [string]$PinDir,
+  [int]$AllowCloudHours = 4,
+  [string]$PinTaskName = 'AWX-DevinLocalPin',
   [switch]$Json
 )
 
@@ -47,6 +55,7 @@ $GuardMarker = 'DEMO1-CWD-GUARD'
 $srcRootNorm = [System.IO.Path]::GetFullPath($SrcRoot).TrimEnd('\')
 $srcRootFwd  = $srcRootNorm -replace '\\','/'
 $homeNorm    = [System.IO.Path]::GetFullPath($HomeDir).TrimEnd('\')
+if (-not $PinDir) { $PinDir = Join-Path $srcRootNorm 'var\devin-local-pin' }
 
 function Get-Sha12([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path)) { return $null }
@@ -229,6 +238,180 @@ function Invoke-CheckC4() {
   return [PSCustomObject]@{ id = 'C4'; status = 'BAD'; detail = 'folders do not resolve to exactly src'; items = @() }
 }
 
+# --- AgentPin mode (devin-local-session-pin) --------------------------------
+# Watches the two user-settings keys that decide which agent a new session
+# opens: devin.acp.preferredAgent (target 'devin-cli') and
+# devin.acp.enabledAgents (target {devin-cli:true, devin-cloud:false}).
+# Only those two keys are ever written; any parse failure means no write.
+
+function Get-AgentPinFlagPath() { return (Join-Path $PinDir 'allow-cloud.flag') }
+
+function Test-AllowCloudFlag() {
+  # Returns the expiry DateTimeOffset when the flag is present and still valid,
+  # $null when absent, unreadable, or expired.
+  $f = Get-AgentPinFlagPath
+  if (-not (Test-Path -LiteralPath $f)) { return $null }
+  $doc, $err = Read-JsonFile $f
+  if ($err) { return $null }
+  try { $exp = [DateTimeOffset]::Parse([string]$doc.expiresAtUtc) } catch { return $null }
+  if ($exp -gt [DateTimeOffset]::UtcNow) { return $exp }
+  return $null
+}
+
+function Get-AgentPinState() {
+  $st = [PSCustomObject]@{ status = 'MISSING'; preferred = $null; cliEnabled = $null; cloudEnabled = $null; parseError = $null }
+  if (-not (Test-Path -LiteralPath $UserSettingsPath)) { return $st }
+  $doc, $err = Read-JsonFile $UserSettingsPath
+  if ($err) { $st.status = 'CORRUPT'; $st.parseError = [string]$err; return $st }
+  $pp = $doc.PSObject.Properties['devin.acp.preferredAgent']
+  if ($pp) { $st.preferred = [string]$pp.Value }
+  $ea = $doc.PSObject.Properties['devin.acp.enabledAgents']
+  if ($ea -and ($ea.Value -is [PSCustomObject])) {
+    $cp = $ea.Value.PSObject.Properties['devin-cli'];   if ($cp) { $st.cliEnabled = [bool]$cp.Value }
+    $xp = $ea.Value.PSObject.Properties['devin-cloud']; if ($xp) { $st.cloudEnabled = [bool]$xp.Value }
+  }
+  if ($st.preferred -eq 'devin-cli' -and $st.cliEnabled -eq $true -and $st.cloudEnabled -eq $false) {
+    $st.status = 'OK'
+  } else { $st.status = 'DRIFT' }
+  return $st
+}
+
+function Set-AgentPinEnabledAgents($Doc, [bool]$CloudEnabled) {
+  $ea = $Doc.PSObject.Properties['devin.acp.enabledAgents']
+  if (-not $ea -or -not ($ea.Value -is [PSCustomObject])) {
+    $Doc | Add-Member -NotePropertyName 'devin.acp.enabledAgents' -Force -NotePropertyValue (
+      [PSCustomObject]@{ 'devin-cli' = $true; 'devin-cloud' = $CloudEnabled })
+    return
+  }
+  $ea.Value | Add-Member -NotePropertyName 'devin-cli'   -NotePropertyValue $true -Force
+  $ea.Value | Add-Member -NotePropertyName 'devin-cloud' -NotePropertyValue $CloudEnabled -Force
+}
+
+function Backup-SettingsToPinDir() {
+  New-Item -ItemType Directory -Force $PinDir | Out-Null
+  $bak = Join-Path $PinDir ('settings.json.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+  $n = 1
+  while (Test-Path -LiteralPath $bak) { $bak = Join-Path $PinDir ('settings.json.bak-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$n"); $n++ }
+  Copy-Item -LiteralPath $UserSettingsPath -Destination $bak -Force
+  return $bak
+}
+
+function Write-PinLog($Entry) {
+  New-Item -ItemType Directory -Force $PinDir | Out-Null
+  Append-TextNoBom (Join-Path $PinDir 'pin.jsonl') (($Entry | ConvertTo-Json -Compress -Depth 6) + "`r`n")
+}
+
+function Install-PinSchedule() {
+  $existing = $null
+  try { $existing = Get-ScheduledTask -TaskName $PinTaskName -ErrorAction Stop } catch { $existing = $null }
+  if ($existing) { return [PSCustomObject]@{ status = 'exists'; state = [string]$existing.State; task = $PinTaskName } }
+  $scriptPath = $PSCommandPath
+  if (-not $scriptPath) { $scriptPath = Join-Path $PSScriptRoot 'devin_cwd_doctor.ps1' }
+  $arg = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$scriptPath`" -AgentPin -Heal"
+  $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $arg
+  $trig = @(
+    (New-ScheduledTaskTrigger -AtLogOn),
+    (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 10))
+  )
+  try {
+    Register-ScheduledTask -TaskName $PinTaskName -Action $action -Trigger $trig `
+      -User $env:USERNAME -RunLevel Limited `
+      -Description 'Re-pin Devin user settings to Devin Local (preferredAgent=devin-cli, devin-cloud disabled)' `
+      -ErrorAction Stop | Out-Null
+    return [PSCustomObject]@{ status = 'created'; state = 'Ready'; task = $PinTaskName }
+  } catch {
+    return [PSCustomObject]@{ status = 'hold-register-failed'; state = ''; task = $PinTaskName; error = $_.Exception.Message }
+  }
+}
+
+function Uninstall-PinSchedule() {
+  $t = $null
+  try { $t = Get-ScheduledTask -TaskName $PinTaskName -ErrorAction Stop } catch { $t = $null }
+  if (-not $t) { return [PSCustomObject]@{ status = 'absent'; task = $PinTaskName } }
+  Unregister-ScheduledTask -TaskName $PinTaskName -Confirm:$false -ErrorAction Stop
+  return [PSCustomObject]@{ status = 'removed'; task = $PinTaskName }
+}
+
+function Invoke-AgentPin() {
+  $pinAction = 'check'
+  if ($Heal) { $pinAction = 'heal' }
+  elseif ($AllowCloud) { $pinAction = 'allow-cloud' }
+  elseif ($InstallSchedule) { $pinAction = 'install-schedule' }
+  elseif ($UninstallSchedule) { $pinAction = 'uninstall-schedule' }
+  $flagExp = Test-AllowCloudFlag
+  $state = Get-AgentPinState
+  $res = [PSCustomObject]@{
+    schemaVersion = 'devin-cwd-doctor.agentpin.v1'; action = $pinAction
+    pinStatus = $state.status; preferred = $state.preferred
+    cliEnabled = $state.cliEnabled; cloudEnabled = $state.cloudEnabled
+    allowCloudUntil = $(if ($flagExp) { $flagExp.ToString('o') } else { $null })
+    backups = @(); outcome = 'none'; settingsPath = $UserSettingsPath; pinDir = $PinDir
+    task = $null; exitCode = 0
+  }
+  switch ($pinAction) {
+    'check' {
+      if ($state.status -eq 'OK') { $res.outcome = 'ok'; $res.exitCode = 0 }
+      elseif ($flagExp) { $res.outcome = 'allow-cloud-active'; $res.exitCode = 0 }
+      elseif ($state.status -eq 'CORRUPT') { $res.outcome = 'corrupt-no-write'; $res.exitCode = 2 }
+      else { $res.outcome = 'drift'; $res.exitCode = 2 }
+    }
+    'heal' {
+      if ($flagExp) { $res.outcome = 'skipped-allow-cloud'; $res.exitCode = 0 }
+      elseif ($state.status -eq 'OK') { $res.outcome = 'already-pinned'; $res.exitCode = 0 }
+      elseif ($state.status -ne 'DRIFT') { $res.outcome = 'no-write-' + $state.status.ToLower(); $res.exitCode = 2 }
+      else {
+        $bak = Backup-SettingsToPinDir; $res.backups += $bak
+        $doc, $err = Read-JsonFile $UserSettingsPath
+        if ($err) { $res.outcome = 'no-write-parse'; $res.exitCode = 2 }
+        else {
+          $doc | Add-Member -NotePropertyName 'devin.acp.preferredAgent' -NotePropertyValue 'devin-cli' -Force
+          Set-AgentPinEnabledAgents $doc $false
+          Save-JsonPreserving $UserSettingsPath $doc
+          $after = Get-AgentPinState
+          if ($after.status -eq 'OK') { $res.outcome = 'healed'; $res.exitCode = 0 }
+          else { $res.outcome = 'heal-failed'; $res.exitCode = 2 }
+        }
+      }
+    }
+    'allow-cloud' {
+      if ($state.status -in @('CORRUPT','MISSING')) { $res.outcome = 'no-write-' + $state.status.ToLower(); $res.exitCode = 2 }
+      else {
+        $changed = $false
+        if ($state.cloudEnabled -ne $true) {
+          $bak = Backup-SettingsToPinDir; $res.backups += $bak
+          $doc, $err = Read-JsonFile $UserSettingsPath
+          if ($err) { $res.outcome = 'no-write-parse'; $res.exitCode = 2 }
+          else { Set-AgentPinEnabledAgents $doc $true; Save-JsonPreserving $UserSettingsPath $doc; $changed = $true }
+        }
+        if ($res.exitCode -ne 2) {
+          New-Item -ItemType Directory -Force $PinDir | Out-Null
+          $exp = [DateTimeOffset]::UtcNow.AddHours($AllowCloudHours)
+          Write-TextNoBom (Get-AgentPinFlagPath) (([PSCustomObject]@{
+            expiresAtUtc = $exp.ToString('o'); createdBy = 'devin_cwd_doctor -AgentPin -AllowCloud'
+          } | ConvertTo-Json -Compress))
+          if ($changed) { $res.outcome = 'cloud-allowed' } else { $res.outcome = 'cloud-already-enabled-flag-refreshed' }
+          $res.allowCloudUntil = $exp.ToString('o')
+          $res.exitCode = 0
+        }
+      }
+    }
+    'install-schedule'   { $res.task = Install-PinSchedule;   $res.outcome = $res.task.status; $res.exitCode = $(if ($res.task.status -eq 'hold-register-failed') { 2 } else { 0 }) }
+    'uninstall-schedule' { $res.task = Uninstall-PinSchedule; $res.outcome = $res.task.status; $res.exitCode = 0 }
+  }
+  Write-PinLog $res
+  if ($Json) { $res | ConvertTo-Json -Depth 8 }
+  else {
+    "== devin-cwd-doctor agentpin $pinAction =="
+    "pinStatus=$($res.pinStatus) preferred=$($res.preferred) cliEnabled=$($res.cliEnabled) cloudEnabled=$($res.cloudEnabled)"
+    if ($res.allowCloudUntil) { "allowCloudUntil=$($res.allowCloudUntil)" }
+    "outcome=$($res.outcome)"
+    foreach ($b in $res.backups) { "backup: $b" }
+    if ($res.task) { "task: $($res.task.task) $($res.task.status) $($res.task.state)" }
+    "exit=$($res.exitCode)"
+  }
+  exit $res.exitCode
+}
+
 function Invoke-Checks() {
   $c1items = Get-C1Items
   $bad1 = @($c1items | Where-Object { $_.status -in @('BAD','STAGED','CORRUPT') })
@@ -260,6 +443,8 @@ try {
     if ($Json) { $result | ConvertTo-Json -Depth 8 } else { "RESTORED $orig  sha=$shaBefore -> $shaAfter (backup sha=$shaBak)" }
     exit 0
   }
+
+  if ($AgentPin) { Invoke-AgentPin }
 
   $action = if ($Fix) { 'fix' } else { 'check' }
   $checks = Invoke-Checks

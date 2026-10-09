@@ -733,6 +733,12 @@ function Invoke-RagLauncher {
     $mutex = [Threading.Mutex]::new($false, ('Local\AWX-RAG-' + (Get-AwxCanonicalRootHash -Root $script:RagRoot).Substring(0,20)))
     $acquired = $false
     $saved = @{}
+    # awx.bat_run.v1 caller tag (env names only, no values recorded)
+    $caller = 'user'
+    if ($env:AWX_CALLER) { $caller = $env:AWX_CALLER }
+    elseif ($env:DEVIN -or $env:DEVIN_API_KEY) { $caller = 'devin' }
+    elseif ($env:CODEX_CI -or $env:CODEX_SANDBOX -or $env:CODEX_THREAD_ID -or $env:CODEX_HOME) { $caller = 'codex' }
+    elseif ($env:AGENT_SESSION -or $env:AWX_AGENT_WORKER) { $caller = 'agent' }
     # Defaults so the catch block can record ports even when preflight fails early.
     $chosenPort = $Port
     $chosenOllamaPort = $OllamaPort
@@ -807,7 +813,7 @@ function Invoke-RagLauncher {
                 if ((Get-RagHttp $healthUrl).status -eq 200) { $managementUrl = $healthUrl }
             }
         }
-        $summary = [ordered]@{schemaVersion='awx.rag_launcher_result.v1';ok=$true;status='ready';stage='READY';
+        $summary = [ordered]@{schemaVersion='awx.rag_launcher_result.v1';ok=$true;status='ready';stage='READY';caller=$caller;
             runId=(Split-Path -Leaf $runDirectory);role=$(if ($Wear) { 'wear' } elseif ($MetaDisplay) { 'dev' } else { 'rag' });
             springPid=$spring.processId;springReused=$spring.reuse;ragUrl="$base/chat-ui";springUrl=$base;
             ollamaUrl="http://127.0.0.1:$chosenOllamaPort";ollamaApiUrl="http://127.0.0.1:$chosenOllamaPort/v1";managementHealthUrl=$managementUrl;
@@ -878,7 +884,7 @@ function Invoke-RagLauncher {
         $failurePoint = Resolve-RagFailurePoint -Reason $reason -ListenerStatus $listenerStatus -CompileEvidence ([bool]$evidence.compileFound)
         if ([string]::IsNullOrWhiteSpace($nextAction)) { $nextAction = Get-RagFailureNextAction -FailurePoint $failurePoint }
         Write-RagRunResult -RunDirectory $runDirectory -Summary ([ordered]@{
-            ok=$false;status='failed';stage=$failedStage;reason=$reason;failurePoint=$failurePoint;
+            ok=$false;status='failed';stage=$failedStage;caller=$caller;reason=$reason;failurePoint=$failurePoint;
             listenerStatus=$listenerStatus;listenerReason=$listenerReason;nextAction=$nextAction;
             firstErrorExcerpt=$evidence.firstErrorExcerpt;evidencePaths=$evidence.evidencePaths;
             ports=(Get-RagSummaryPorts -Listener $listener -ServerPort ([int]$chosenPort) -MetaDisplay:([bool]$MetaDisplay));

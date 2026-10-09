@@ -582,12 +582,38 @@ public record ChatStreamEvent(
         }
 
         /** Request-local outcome only; provider text and evidence never enter this projection. */
-        public record AgentWebSearchSnapshot(String status, String reasonCode, Integer returnedCount) {
+        public record AgentWebSearchSnapshot(String status, String reasonCode, Integer returnedCount,
+                                             List<SearchProviderSnapshot> providers) {
+                public AgentWebSearchSnapshot(String status, String reasonCode, Integer returnedCount) {
+                        this(status, reasonCode, returnedCount, List.of());
+                }
                 public AgentWebSearchSnapshot {
                         status = "OK".equals(status) || "FAIL_SOFT".equals(status) || "SKIPPED".equals(status)
                                 ? status : null;
                         reasonCode = "OK".equals(status) ? null : cleanReason(reasonCode);
                         returnedCount = nonNegative(returnedCount);
+                        providers = providers == null ? List.of() : providers.stream().limit(32).toList();
+                }
+        }
+
+        /** Allowlisted receipt fields only; no request body, query, credential or raw error. */
+        public record SearchProviderSnapshot(String provider, String outcome, String failureReason,
+                Integer httpStatus, Boolean clientAttemptObserved, Boolean providerReceiptObserved,
+                Integer returnedCount, Integer afterFilterCount, Boolean cacheHit,
+                String maskedBy, String recoveredAt, String freshness) {
+                public SearchProviderSnapshot {
+                        provider = provider != null && List.of("naver", "brave", "serpapi", "tavily").contains(provider) ? provider : "unknown";
+                        outcome = outcome != null && List.of("OK", "TRUE_ZERO", "FILTER_ZERO", "FAIL_SOFT", "SKIPPED", "CACHE_HIT", "UNKNOWN")
+                                .contains(outcome) ? outcome : "UNKNOWN";
+                        failureReason = cleanReason(failureReason);
+                        httpStatus = Boolean.TRUE.equals(providerReceiptObserved) && httpStatus != null
+                                && httpStatus >= 100 && httpStatus <= 599 ? httpStatus : null;
+                        returnedCount = nonNegative(returnedCount);
+                        afterFilterCount = nonNegative(afterFilterCount);
+                        maskedBy = maskedBy != null && List.of("naver", "brave", "serpapi", "tavily").contains(maskedBy) ? maskedBy : null;
+                        try { recoveredAt = recoveredAt == null ? null : java.time.Instant.parse(recoveredAt).toString(); }
+                        catch (RuntimeException invalidTime) { recoveredAt = null; }
+                        freshness = freshness != null && List.of("recent", "stale", "not_observed").contains(freshness) ? freshness : "not_observed";
                 }
         }
 

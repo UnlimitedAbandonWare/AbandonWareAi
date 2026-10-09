@@ -1605,6 +1605,30 @@ intents:
     forbid_families: []
     notes: 마감·범위 판단 정량 가드 — scripts/deadline_scope_guard.py 5대 판정; SSOT docs/agents-rules/DEMO1-DEADLINE-SCOPE-JUDGMENT.md
 
+  - intent: gdrive-docx-inplace-edit
+    explicit: true
+    match:
+      - demo1-gdrive-docx-inplace-edit
+      - gdrive-docx-inplace-edit
+      - docs.google.com
+      - docs.google
+      - 구글 드라이브
+      - google drive
+      - gdrive
+      - 이력서
+      - 경력기술서
+      - 경력 기술서
+      - .docx
+      - docx 편집
+      - 파일이 너무 커서
+      - 저장할 수 없음
+      - 원본에서 편집
+      - 원본 편집
+    primary_skill: demo1-gdrive-docx-inplace-edit
+    optional_skill: null
+    forbid_families: []
+    notes: Google Drive 대용량 .docx(이력서·경력기술서) 원본 '편집하기' 절차 — 사본·다운로드 금지, 재열기 저장 판정
+
 fallback:
   primary_skill: demo1-vibe-max-agency
   development_signals:

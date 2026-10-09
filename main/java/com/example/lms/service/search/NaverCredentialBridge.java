@@ -1,6 +1,7 @@
 package com.example.lms.service.search;
 
 import com.example.lms.config.ConfigValueGuards;
+import com.fasterxml.jackson.annotation.JsonIgnore;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -13,7 +14,11 @@ public final class NaverCredentialBridge {
     private NaverCredentialBridge() {
     }
 
-    public record Credential(String id, String secret) {
+    public record Credential(@JsonIgnore String id, @JsonIgnore String secret) {
+        @Override
+        public String toString() {
+            return "Credential[redacted]";
+        }
     }
 
     public static String resolveKeysCsv(String rawKeys, String clientId, String clientSecret) {

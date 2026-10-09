@@ -189,6 +189,69 @@ class ProviderCredentialResolverTest {
     }
 
     @Test
+    void apiHubPairPreferredOverLegacyAliases() {
+        ProviderCredentialResolver resolver = new ProviderCredentialResolver(
+                new MockEnvironment()
+                        .withProperty("NAVER_APIHUB_CLIENT_ID", "hub-id")
+                        .withProperty("NAVER_APIHUB_CLIENT_SECRET", "hub-secret")
+                        .withProperty("naver.keys", "legacy-id:legacy-secret")
+                        .withProperty("NAVER_CLIENT_ID", "legacy-id")
+                        .withProperty("NAVER_CLIENT_SECRET", "legacy-secret"));
+
+        ProviderCredentialResolver.Resolution result =
+                resolver.resolve(ProviderCredentialResolver.Provider.NAVER);
+
+        assertTrue(result.enabled());
+        assertEquals("hub-id:hub-secret", result.valueOrNull());
+        assertEquals("NAVER_APIHUB_CLIENT_PAIR", result.sourceName());
+    }
+
+    @Test
+    void apiHubPropertyPairAlsoResolves() {
+        ProviderCredentialResolver resolver = new ProviderCredentialResolver(
+                new MockEnvironment()
+                        .withProperty("naver.apihub.client-id", "hub-prop-id")
+                        .withProperty("naver.apihub.client-secret", "hub-prop-secret"));
+
+        ProviderCredentialResolver.Resolution result =
+                resolver.resolve(ProviderCredentialResolver.Provider.NAVER);
+
+        assertTrue(result.enabled());
+        assertEquals("hub-prop-id:hub-prop-secret", result.valueOrNull());
+        assertEquals("naver.apihub.client-pair", result.sourceName());
+    }
+
+    @Test
+    void forcedApiHubWithoutPairDisablesNaver() {
+        ProviderCredentialResolver resolver = new ProviderCredentialResolver(
+                new MockEnvironment()
+                        .withProperty("naver.search.provider", "apihub")
+                        .withProperty("NAVER_CLIENT_ID", "legacy-id")
+                        .withProperty("NAVER_CLIENT_SECRET", "legacy-secret"));
+
+        ProviderCredentialResolver.Resolution result =
+                resolver.resolve(ProviderCredentialResolver.Provider.NAVER);
+
+        assertFalse(result.enabled());
+        assertEquals("missing-credential", result.disabledReason());
+    }
+
+    @Test
+    void forcedOpenApiIgnoresApiHubPair() {
+        ProviderCredentialResolver resolver = new ProviderCredentialResolver(
+                new MockEnvironment()
+                        .withProperty("naver.search.provider", "openapi")
+                        .withProperty("NAVER_APIHUB_CLIENT_ID", "hub-id")
+                        .withProperty("NAVER_APIHUB_CLIENT_SECRET", "hub-secret"));
+
+        ProviderCredentialResolver.Resolution result =
+                resolver.resolve(ProviderCredentialResolver.Provider.NAVER);
+
+        assertFalse(result.enabled());
+        assertEquals("missing-credential", result.disabledReason());
+    }
+
+    @Test
     void optionalSearchProviderAliasesRemainSupported() {
         MockEnvironment environment = new MockEnvironment()
                 .withProperty("TAVILY_API_KEY", "tavily-value")
@@ -284,5 +347,98 @@ class ProviderCredentialResolverTest {
         KeyResolver resolver = new KeyResolver(environment);
 
         assertEquals("", resolver.resolveNaverKeysCsvSafe());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"unknown", "", "${UNRESOLVED_MODE:}"})
+    void invalidNaverModesNeverEnableCredentialsFromEitherModeAlias(String mode) {
+        for (String alias : java.util.List.of("naver.search.provider", "NAVER_SEARCH_PROVIDER")) {
+            var env = bothNaverNamespaces().withProperty(alias, mode).withProperty("GEMINI_API_KEY", "unrelated-gemini");
+            var resolver = new ProviderCredentialResolver(env);
+            var result = resolver.resolve(ProviderCredentialResolver.Provider.NAVER);
+            assertFalse(result.enabled(), alias);
+            assertNull(result.valueOrNull());
+            assertEquals("invalid_naver_search_provider", result.disabledReason());
+            assertTrue(resolver.resolve(ProviderCredentialResolver.Provider.GEMINI).enabled());
+            assertEquals("", new KeyResolver(env).resolveNaverKeysCsvSafe());
+            assertEquals("invalid_naver_search_provider", com.example.lms.search.TraceStore.get("naver.cred.disabledReason"));
+            assertFalse(result.diagnostics().toString().contains("hub-secret"));
+            com.example.lms.search.TraceStore.clear();
+        }
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"auto,hub", "apihub,hub", "openapi,legacy", "APIHUB,hub", "OPENAPI,legacy"})
+    void canonicalAndEnvironmentModesSelectTheSameNamespace(String mode, String namespace) {
+        for (String alias : java.util.List.of("naver.search.provider", "NAVER_SEARCH_PROVIDER")) {
+            var env = bothNaverNamespaces().withProperty(alias, "  " + mode + "  ");
+            var result = new ProviderCredentialResolver(env).resolve(ProviderCredentialResolver.Provider.NAVER);
+            assertTrue(result.enabled(), alias);
+            assertEquals(namespace + "-id:" + namespace + "-secret", result.valueOrNull());
+            assertFalse(result.diagnostics().toString().contains(namespace + "-secret"));
+        }
+    }
+
+    @Test
+    void explicitCanonicalNaverModeRetainsSpringPropertyPrecedence() {
+        var env = bothNaverNamespaces().withProperty("naver.search.provider", "apihub")
+                .withProperty("NAVER_SEARCH_PROVIDER", "openapi");
+        assertEquals("hub-id:hub-secret", new KeyResolver(env).resolveNaverKeysCsvSafe());
+        com.example.lms.search.TraceStore.clear();
+    }
+
+    @Test
+    void forcedHubNeverBorrowsLegacySecretEvenWhenModeComesFromEnvironment() {
+        for (String alias : java.util.List.of("naver.search.provider", "NAVER_SEARCH_PROVIDER")) {
+            var env = new MockEnvironment().withProperty(alias, "apihub")
+                    .withProperty("NAVER_APIHUB_CLIENT_ID", "hub-id")
+                    .withProperty("NAVER_CLIENT_ID", "legacy-id").withProperty("NAVER_CLIENT_SECRET", "legacy-secret");
+            var result = new ProviderCredentialResolver(env).resolve(ProviderCredentialResolver.Provider.NAVER);
+            assertFalse(result.enabled(), alias);
+            assertEquals("missing-credential", result.disabledReason());
+            assertNull(result.valueOrNull());
+        }
+    }
+
+    @Test
+    void autoWithPartialHubKeepsTheCompleteLegacyPair() {
+        var env = new MockEnvironment().withProperty("NAVER_APIHUB_CLIENT_ID", "hub-id")
+                .withProperty("NAVER_CLIENT_ID", "legacy-id").withProperty("NAVER_CLIENT_SECRET", "legacy-secret");
+        assertEquals("legacy-id:legacy-secret", new KeyResolver(env).resolveNaverKeysCsvSafe());
+        com.example.lms.search.TraceStore.clear();
+    }
+
+    private static MockEnvironment bothNaverNamespaces() {
+        return new MockEnvironment().withProperty("NAVER_APIHUB_CLIENT_ID", "hub-id")
+                .withProperty("NAVER_APIHUB_CLIENT_SECRET", "hub-secret")
+                .withProperty("NAVER_CLIENT_ID", "legacy-id").withProperty("NAVER_CLIENT_SECRET", "legacy-secret");
+    }
+
+    @Test
+    void validNaverCsvIgnoresUnusedIncompletePairAcrossPropertySources() {
+        var env = new MockEnvironment();
+        env.getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("Process", java.util.Map.of(
+                "NAVER_SEARCH_PROVIDER", "openapi", "NAVER_KEYS", "synthetic-csv-id:synthetic-csv-secret",
+                "NAVER_CLIENT_ID", "synthetic-incomplete-id-A")));
+        env.getPropertySources().addLast(new org.springframework.core.env.MapPropertySource("User", java.util.Map.of(
+                "NAVER_CLIENT_ID", "synthetic-incomplete-id-B")));
+        var result = new ProviderCredentialResolver(env).resolve(ProviderCredentialResolver.Provider.NAVER);
+        assertTrue(result.enabled());
+        assertTrue("synthetic-csv-id:synthetic-csv-secret".equals(result.valueOrNull()));
+        assertFalse(result.diagnostics().toString().contains("synthetic-csv-secret"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"", "${UNRESOLVED_MODE:}"})
+    void invalidHigherModeDoesNotFallThroughToValidLowerPropertySource(String mode) {
+        var env = bothNaverNamespaces();
+        env.getPropertySources().addFirst(new org.springframework.core.env.MapPropertySource("Process", java.util.Map.of(
+                "NAVER_SEARCH_PROVIDER", mode)));
+        env.getPropertySources().addLast(new org.springframework.core.env.MapPropertySource("User", java.util.Map.of(
+                "NAVER_SEARCH_PROVIDER", "apihub")));
+        var result = new ProviderCredentialResolver(env).resolve(ProviderCredentialResolver.Provider.NAVER);
+        assertFalse(result.enabled());
+        assertNull(result.valueOrNull());
+        assertEquals("invalid_naver_search_provider", result.disabledReason());
     }
 }

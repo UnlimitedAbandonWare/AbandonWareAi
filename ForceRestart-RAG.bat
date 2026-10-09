@@ -13,12 +13,14 @@ if not "%AWX_ARGS%"=="%*" set "AWX_RAG_NO_PAUSE=1"
 chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" begin "%~nx0" %*
 title AbandonWare RAG Force Restart (no browser)
 rem Usage: ForceRestart-RAG.bat [extra start_rag_stack.ps1 args]
 rem Set AWX_FORCE_RESTART_DRY=1 to print the planned commands without touching the runtime.
 if defined AWX_FORCE_RESTART_DRY (
   echo [DRY] powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\stop_rag_stack.ps1" -MetaDisplay
   echo [DRY] powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_rag_stack.ps1" -MetaDisplay -ForceRestart -DevWatch %AWX_ARGS%
+  if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" 0
   exit /b 0
 )
 echo [INFO] Stopping RAG stack (MetaDisplay)...
@@ -27,6 +29,7 @@ set "AWX_STOP_EXIT=%ERRORLEVEL%"
 if not "%AWX_STOP_EXIT%"=="0" (
   echo [RESULT] stop_rag_stack exit code: %AWX_STOP_EXIT% - aborting restart.
   if not defined AWX_RAG_NO_PAUSE pause
+  if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_STOP_EXIT%
   exit /b %AWX_STOP_EXIT%
 )
 echo [INFO] Waiting for ports to release...
@@ -41,4 +44,5 @@ if "%AWX_START_EXIT%"=="0" (
   echo [RESULT] start_rag_stack exit code: %AWX_START_EXIT%
 )
 if not defined AWX_RAG_NO_PAUSE pause
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_START_EXIT%
 exit /b %AWX_START_EXIT%

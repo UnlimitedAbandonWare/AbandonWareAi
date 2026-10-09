@@ -120,7 +120,7 @@ try {
         Assert-Contains 'smoke enables probe by env' $source 'PROBE_WEBSOAK_KPI_ENABLED'
         Assert-Contains 'smoke requires header key' $source 'X-Probe-Key'
         Assert-Contains 'smoke avoids query-param key' $source 'PROBE_WEBSOAK_KPI_ALLOW_QUERY_PARAM_KEY'
-        Assert-Contains 'smoke clears Naver keys for disabled path' $source 'NAVER_KEYS'
+        Assert-Contains 'smoke clears Naver APIHUB keys for disabled path' $source 'NAVER_APIHUB_CLIENT_ID'
         Assert-Contains 'smoke clears Brave key for disabled path' $source 'BRAVE_API_KEY'
         Assert-Contains 'smoke clears SerpApi key for disabled path' $source 'SERPAPI_API_KEY'
         Assert-Contains 'smoke checks provider disabled fields' $source 'providerDisabled'

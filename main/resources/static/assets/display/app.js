@@ -4,10 +4,62 @@
   const testChannel=query.get('clientRole')==='test'?(query.get('channel')||'test-'+crypto.randomUUID().replace(/-/g,'')):null;
   const standalone=document.body.hasAttribute('data-fold6-test')||new URLSearchParams(window.location.search).get('mode')==='phone-test';
   let phoneMode=standalone,pages=[],page=0,captionKey='',codeTimer=null,pendingAck=null,acked='',busy=false,voice,focusControls;
+  const resumeKey='awx.display.captureResume.'+(testChannel||'live');
+  let resumeIntent=null,resumePending=false,resumeAllowed=true,resumeAttempt=0;
+  try{
+    const saved=JSON.parse(sessionStorage.getItem(resumeKey)||'null'),age=Date.now()-saved?.savedAt;
+    if(standalone&&age>=0&&age<60000&&/^[a-f0-9-]{36}$/.test(saved?.assistId||'')&&/^[a-f0-9-]{36}$/.test(saved?.generation||''))resumeIntent=saved;
+    else sessionStorage.removeItem(resumeKey);
+  }catch{}
+  function clearResumeIntent(){resumeIntent=null;resumePending=false;resumeAttempt++;try{sessionStorage.removeItem(resumeKey);}catch{}}
+  function saveResumeIntent(){
+    if(standalone&&voice?.isActive()&&!client.state.autoVoiceSettings?.modeEnabled&&client.state.assistId){
+      try{sessionStorage.setItem(resumeKey,JSON.stringify({assistId:client.state.assistId,generation:crypto.randomUUID(),savedAt:Date.now()}));}catch{}
+    }else clearResumeIntent();
+  }
+  async function resumeCaptureAfterReload(s){
+    if(!resumeAllowed||!resumeIntent||!voice||!s.ready||s.connection!=='READY')return;
+    if(s.assistId!==resumeIntent.assistId||s.autoVoiceSettings?.modeEnabled||Date.now()-resumeIntent.savedAt>=60000){clearResumeIntent();return;}
+    if(!canCapture(s))return;
+    clearResumeIntent();resumePending=true;
+    $('microphone').textContent='폴드6 수음 재개';
+    const attempt=resumeAttempt,assistId=s.assistId;
+    let permission;try{permission=await navigator.permissions?.query({name:'microphone'});}catch{}
+    if(!resumeAllowed||attempt!==resumeAttempt||voice.isActive()||client.state.assistId!==assistId||client.state.autoVoiceSettings?.modeEnabled||!canCapture(client.state))return;
+    if(permission?.state==='granted'){
+      const started=await voice.start(true);
+      if(started)resumePending=false;
+      else $('microphone').textContent='폴드6 수음 재개';
+    }
+  }
+  let autoPrepared=false,autoScope='',autoSettingsKey='';
+  function stopAutoVoice(){clearResumeIntent();autoPrepared=false;client.setAutoVoicePresentation(false);return voice?.stop('자동 음성 시작을 중지했습니다.');}
+  function fillAutoVoice(s){
+    const p=s.autoVoiceSettings,host=$('auto-voice-settings');if(!p||!host||!document.createElement)return;
+    const scope=s.assistId;
+    if(autoScope&&autoScope!==scope){autoPrepared=false;$('av-informed').checked=false;$('av-consent').checked=false;if(voice?.isActive())void voice.stop('새 세션에서 다시 준비해 주세요.');}
+    autoScope=scope;
+    const key=JSON.stringify(p);if(autoSettingsKey!==key){autoSettingsKey=key;
+      $('av-mode').checked=p.modeEnabled;$('av-hints').checked=p.hintsEnabled;$('av-language').value=p.language;$('av-preset').value=p.preset;$('av-lines').value=p.hintLines;$('av-chars').value=p.hintChars;
+      $('av-phrases').replaceChildren();for(const phrase of p.phrases||[])addAutoPhrase(phrase);
+    }
+    const phase=s.autoVoiceRuntime?.state||'DISARMED';
+    $('av-status').textContent=phase+' · '+(p.hintsEnabled?'힌트 켜짐':'힌트 꺼짐 · 수음은 유지')+' · 최대 '+p.hintLines+'줄 / '+p.hintChars+'자';
+    $('av-prepare').disabled=!p.modeEnabled||!canCapture(s)||!!voice?.isActive();
+    if(autoPrepared&&phase==='DISARMED'&&voice?.state.phase==='LISTENING')void stopAutoVoice();
+  }
+  function addAutoPhrase(p={}){
+    const row=document.createElement('div');row.dataset.phraseId=p.id||'p'+crypto.randomUUID().replace(/-/g,'');
+    const language=document.createElement('select');for(const value of ['ko','en']){const option=document.createElement('option');option.value=value;option.textContent=value==='ko'?'한국어':'English';language.append(option);}language.value=p.language||$('av-language').value;
+    const text=document.createElement('input');text.value=p.text||'';text.setAttribute('aria-label','등록 문구');text.autocomplete='off';
+    const remove=document.createElement('button');remove.type='button';remove.textContent='삭제';remove.onclick=()=>row.remove();row.append(language,text,remove);$('av-phrases').append(row);
+  }
+  function readAutoVoice(){return {modeEnabled:$('av-mode').checked,hintsEnabled:$('av-hints').checked,language:$('av-language').value,preset:$('av-preset').value,hintLines:Number($('av-lines').value),hintChars:Number($('av-chars').value),phrases:Array.from($('av-phrases').children,row=>({id:row.dataset.phraseId,language:row.querySelector('select').value,text:row.querySelector('input').value}))};}
   const errorMessages={pair_code_invalid:'연결 번호가 만료됐거나 맞지 않습니다.',pair_same_browser:'서로 다른 기기에서 연결해 주세요.',link_exists:'기존 연결을 먼저 해제해 주세요.',pair_expired:'승인 시간이 지났습니다. 새 연결 번호를 만드세요.',link_pending:'안경에서 확인 번호를 승인해 주세요.',asr_capacity:'다른 수음이 진행 중입니다.',asr_disabled:'전사 서버가 준비되지 않았습니다.',asr_unavailable:'전사에 연결하지 못했습니다. 잠시 후 다시 시작해 주세요.',display_rate_limited:'요청 한도에 도달했습니다. 잠시 후 다시 시도하세요.'};
   Object.assign(errorMessages,{phone_test_disabled:'단독 전사 테스트가 서버에서 꺼져 있습니다.',phone_test_transcription_only:'단독 테스트에서는 전사만 표시합니다.',asr_budget_exhausted:'전사 테스트 예산에 도달했습니다. 새 연결을 시작하지 않았습니다.',asr_budget_unavailable:'전사 예산을 확인할 수 없습니다. 서버 상태를 확인해 주세요.',asr_budget_invalid:'전사 예산 설정을 확인해 주세요.',asr_budget_busy:'전사 예산 확인이 진행 중입니다. 잠시 후 다시 시도하세요.',asr_budget_ledger_limit:'전사 예산 기록을 확인해 주세요.'});
   Object.assign(errorMessages,{context_limit:'UTF-8 TXT 파일을 8,000자 이하로 선택해 주세요.',capture_active:'수음을 중지한 후 배경을 바꿔 주세요.',lens_seconds_range:'전사·힌트 유지와 자동 넘김은 1~100초 정수로 입력해 주세요. 자동 넘김만 0으로 끌 수 있습니다.',context_range:'참조 범위는 0 또는 5~300초, 글자는 0 또는 200~8192, 토큰은 0 또는 50~4096으로 입력해 주세요.'});
   Object.assign(errorMessages,{microphone_device_missing:'입력 장치를 찾을 수 없습니다. 연결·입력 설정에서 장치를 다시 확인해 주세요.',microphone_device_changed:'저장된 입력 장치가 바뀌었습니다. 기본 입력으로 다시 시도해 주세요.',microphone_device_busy:'다른 앱이 마이크를 사용 중입니다. 해당 앱을 닫고 다시 시작해 주세요.',microphone_device_ended:'마이크 연결이 종료됐습니다. 다시 시작해 주세요.',microphone_start_failed:'마이크를 시작하지 못했습니다. 다시 연결 후 수음을 시작해 주세요.',microphone_permission_required:'마이크 권한을 확인한 뒤 수음을 다시 시작해 주세요.',microphone_permission_revoked:'마이크 권한이 해제됐습니다. 사이트 권한을 확인해 주세요.',microphone_permission_timeout:'마이크 권한 응답이 없습니다. 권한을 확인하고 다시 시작해 주세요.',paired_phone_required:'휴대폰 연결이 필요합니다. 연결 후 다시 시작해 주세요.',assist_not_found:'서버 세션이 초기화됐습니다. 다시 연결 후 수음을 시작해 주세요.',event_owner_required:'다른 기기가 이벤트 권한을 가지고 있습니다. 다시 연결로 권한을 확인해 주세요.',display_audio_disabled:'서버에서 음성 수음이 꺼져 있습니다. 다시 연결 후 확인해 주세요.',display_http:'서버 요청이 거부됐습니다. 다시 연결해 주세요.',invalid_output_client:'출력 화면 권한이 없습니다. 다시 연결해 주세요.'});
+  Object.assign(errorMessages,{auto_voice_consent_required:'이번 세션의 수음 안내와 동의를 확인한 뒤 준비해 주세요.',auto_voice_phrases_required:'선택한 언어의 문구를 등록하고 설정을 저장해 주세요.',auto_voice_reprepare_required:'수음이 중지되거나 세션이 바뀌었습니다. 다시 동의하고 준비해 주세요.',stt_language_unsupported:'영어는 Soniox만 지원합니다. 전사 엔진과 대체 경로를 확인해 주세요.'});
   function reportError(error){const code=error?.message||error?.code||'request_failed',shown=/^[a-z_][a-z0-9_-]{0,63}$/.test(code)?code:'request_failed';$('error').textContent=(errorMessages[shown]||'연결 상태를 확인하고 다시 시도해 주세요.')+' (코드: '+shown+')';}
   function debug(){
     const out=$('debug-state');if(!out)return;const s=client.state,v=voice?.state||{},d=s.testStatus||{};
@@ -57,6 +109,7 @@
   function act(fn){return async event=>{event?.preventDefault();if(busy)return;busy=true;$('error').textContent='';try{await fn();}catch(error){reportError(error);}finally{busy=false;}};}
   function showCaption(){$('caption-text').textContent=pages[page]||'폴드6에서 수음을 시작하면 대화가 표시됩니다.';$('caption-page').textContent=pages.length>1?(page+1)+'/'+pages.length:'';}
   function render(s){
+    fillAutoVoice(s);
     const focusFont=s.testStatus?.lensDisplay?.hintFontPx;
     if(standalone&&Number.isInteger(focusFont))$('nova-fold-answer')?.style.setProperty('--hint-font',focusFont+'px');
     focusControls?.update(s);
@@ -67,7 +120,7 @@
     if($('connect-lens'))$('connect-lens').disabled=!s.ready;
     $('reconnect').hidden=!standalone&&!['DISCONNECTED','RECONNECTING','PAUSED'].includes(s.connection)&&!['WAITING','RECONNECTING'].includes(voice?.state.phase);
     $('hints').textContent=s.hintsEnabled?'필요할 때만 자동 힌트':'자동 힌트 꺼짐';$('hints').setAttribute('aria-pressed',String(!!s.hintsEnabled));
-    $('hints').hidden=false;$('hints').disabled=!s.ready;$('microphone').disabled=voice?.state.phase==='FINISHING'||!voice?.isActive()&&!canCapture(s);
+    $('hints').hidden=!!s.autoVoiceSettings?.modeEnabled;$('hints').disabled=!s.ready;$('microphone').disabled=voice?.state.phase==='FINISHING'||!voice?.isActive()&&!canCapture(s);
     $('connection').textContent=({READY:'서버 연결됨',PREPARING:'서버 연결 중',RECONNECTING:'재연결 중',DISCONNECTED:'표시 연결 끊김',PAIRING:'승인 대기',PAUSED:'표시 일시 중지'})[s.connection]||s.connection;
     $('link-status').textContent=standalone?'Fold6 컨트롤 · 음성 전사와 힌트를 안경 전용 화면으로 전달합니다.':s.linked?(phone?'안경과 연결됨 · 시작을 눌러 폴드6 수음':'폴드6 연결됨 · 음성 유입 대기'):s.linkPending?'휴대폰 연결 승인 대기':'첫 연결: 안경의 번호를 폴드6에 입력하세요.';
     if(s.linkPending){$('pair-panel').hidden=false;$('approve').hidden=phone;$('pair-message').textContent='확인 번호 '+(s.confirmation||'확인 중')+' · '+(phone?'안경에서 같은 번호를 승인해 주세요.':'휴대폰에도 같은 번호가 보이면 승인하세요.');}
@@ -106,7 +159,7 @@
     if(s.ready&&!settingsApplied&&(!standalone||s.testStatus?.relay?.eventOwner==='THIS DEVICE')){
       settingsApplied=true;
       void (async()=>{
-        if(typeof settings.hints==='boolean'&&settings.hints!==s.hintsEnabled)await client.hints(settings.hints);
+        if(!s.autoVoiceSettings?.modeEnabled&&typeof settings.hints==='boolean'&&settings.hints!==s.hintsEnabled)await client.hints(settings.hints);
         if(standalone&&Number.isFinite(settings.segment)&&settings.segment>=0&&settings.segment<=60)await client.relaySettings(s.testStatus?.relay?.enabled!==false,settings.segment);
         // Legacy owner-less lens cache is preserved locally for manual import only.
         // Server echoes are authoritative; reconnect never auto-posts cached lens preferences.
@@ -118,13 +171,13 @@
       lensWasReady=true;lensReadyKey=readyKey;lensRestoreAttempts=0;clearTimeout(lensRestoreTimer);
       if(lensRequested)void restoreLensLink();
     }else if(!lensReady)lensWasReady=false;
-    if(voice)debug();
-    if(voice?.isActive()&&s.role==='PHONE'&&!s.linked&&voice.state.phase==='LISTENING')voice.stop('안경 표시 연결이 끊겨 수음을 중지했습니다.',true);
+    if(voice){debug();void resumeCaptureAfterReload(s);}
+    if(voice?.isActive()&&!s.autoVoiceSettings?.modeEnabled&&s.role==='PHONE'&&!s.linked&&voice.state.phase==='LISTENING')voice.stop('안경 표시 연결이 끊겨 수음을 중지했습니다.',true);
   }
   const client=window.DisplayConversate.createClient({transcription:true,standalone,testChannel,onChange:render});
   focusControls=window.NovaFocusControls?.mount({host:window,document,client});
-  voice=window.DisplayVoice.createCapture({client,continuous:true,sttPolicy:()=>settings.sttPolicy||null,segmentSeconds:()=>standalone?(client.state.testStatus?.relay?.segmentSeconds??0):0,deviceId:()=>$('input-device').value,onDeviceFallback:()=>{saveSetting('device',undefined);$('input-device').value='';$('input-label').textContent='저장된 입력 장치를 찾을 수 없어 시스템 기본 입력으로 시작했습니다.';},onChange(s){
-    $('microphone').textContent=voice.isActive()?'즉시 수음 중지':'폴드6 수음 시작';$('microphone').setAttribute('aria-pressed',String(voice.isActive()));
+  voice=window.DisplayVoice.createCapture({client,continuous:true,autoVoiceConsent:()=>autoPrepared,sttPolicy:()=>settings.sttPolicy||null,segmentSeconds:()=>standalone?(client.state.testStatus?.relay?.segmentSeconds??0):0,deviceId:()=>$('input-device').value,onDeviceFallback:()=>{saveSetting('device',undefined);$('input-device').value='';$('input-label').textContent='저장된 입력 장치를 찾을 수 없어 시스템 기본 입력으로 시작했습니다.';},onChange(s){
+    $('microphone').textContent=voice.isActive()?'즉시 수음 중지':resumePending?'폴드6 수음 재개':'폴드6 수음 시작';$('microphone').setAttribute('aria-pressed',String(voice.isActive()));
     $('microphone').disabled=s.phase==='FINISHING'||!voice.isActive()&&!canCapture(client.state);
     $('finish').hidden=!voice.isActive();$('finish').disabled=!voice.isActive();
     $('microphone-status').textContent=s.permission==='denied'?'마이크 권한을 확인해 주세요.':({STARTING:'마이크 권한을 확인하고 있습니다.',LISTENING:'녹음 중 · 언제든 중지할 수 있습니다.',RECONNECTING:'연결을 다시 확인하고 있습니다.',FINISHING:'녹음을 중지하고 마지막 전사를 기다립니다.',OFF:'녹음 중지',ERROR:'수음이 중지됐습니다. 권한과 연결을 확인하고 다시 시작해 주세요.',STALLED:'수음이 중단됐습니다. 휴대폰을 확인해 주세요.'})[s.phase];
@@ -133,7 +186,29 @@
     if(s.deviceLabel)$('input-label').textContent='선택 장치: '+s.deviceLabel+' · 장치명은 내장 마이크 증명이 아닙니다. 가까이 말하기 비교로 확인하세요.';
     if(s.errorCode){if(s.permission==='denied')$('error').textContent='마이크 권한을 확인해 주세요.';else reportError({code:s.errorCode});}
   }});
-  $('microphone').onclick=()=>{if(voice.isActive())voice.finish();else voice.start();};
+  $('microphone').onclick=()=>{const continuation=resumePending;clearResumeIntent();if(voice.isActive()){if(client.state.autoVoiceSettings?.modeEnabled)void stopAutoVoice();else voice.finish();}else if(client.state.autoVoiceSettings?.modeEnabled)$('av-prepare').click();else voice.start(continuation);};
+  if($('auto-voice-settings')&&document.createElement){
+    $('av-add').onclick=()=>addAutoPhrase();
+    $('av-aliases').onclick=()=>{addAutoPhrase({language:'ko',text:'노바'});addAutoPhrase({language:'en',text:'Nova'});};
+    $('av-save').onclick=act(async()=>{const next=readAutoVoice(),old=client.state.autoVoiceSettings;
+      if(old&&(next.modeEnabled!==old.modeEnabled||next.language!==old.language||next.preset!==old.preset||JSON.stringify(next.phrases)!==JSON.stringify(old.phrases)))await stopAutoVoice();
+      client.setAutoVoicePresentation(next.hintsEnabled);await client.lensSettings({autoVoiceTrigger:next},false);
+    });
+    $('av-hints').onchange=act(async()=>{const enabled=$('av-hints').checked;client.setAutoVoicePresentation(enabled);await client.lensSettings({autoVoiceTrigger:{hintsEnabled:enabled}},false);});
+    $('av-mode').onchange=act(async()=>{if(!$('av-mode').checked){await stopAutoVoice();await client.lensSettings({autoVoiceTrigger:{modeEnabled:false}},false);}});
+    $('av-reset').onclick=act(async()=>{await stopAutoVoice();await client.lensSettings({autoVoiceTrigger:{restoreDefaults:true}},false);});
+    $('av-prepare').onclick=act(async()=>{
+      const p=client.state.autoVoiceSettings;if(!p?.modeEnabled||!p.phrases?.some(x=>x.language===p.language))throw Error('auto_voice_phrases_required');
+      if(!$('av-informed').checked||!$('av-consent').checked)throw Error('auto_voice_consent_required');
+      const policy=settings.sttPolicy;if(p.language==='en'&&(policy?.engine!=='soniox'||policy.allowedFallbacks?.some(x=>x!=='soniox')))throw Error('stt_language_unsupported');
+      autoPrepared=true;client.setAutoVoicePresentation(p.hintsEnabled);await voice.start();if(!voice.isActive())autoPrepared=false;
+    });
+    $('av-stop').onclick=()=>{void stopAutoVoice();};
+    $('av-test').onclick=()=>{const p=readAutoVoice(),normalize=x=>String(x).normalize('NFC').trim().replace(/\s+/gu,' ').toLocaleLowerCase('und'),text=normalize($('av-test-input').value);
+      const match=p.phrases.filter(x=>x.language===p.language&&normalize(x.text)&&text.includes(normalize(x.text))).sort((a,b)=>Array.from(normalize(b.text)).length-Array.from(normalize(a.text)).length)[0];
+      $('av-test-result').textContent=match?'일치 · '+match.text:'일치하는 문구 없음';
+    };
+  }
   if($('context-file')){
     $('context-file').onchange=act(async()=>{
       const file=$('context-file').files?.[0];if(!file)return;
@@ -146,7 +221,7 @@
     });
     $('clear-context').onclick=act(async()=>{if(voice.isActive())await voice.finish();await client.background('');$('context-status').textContent='배경을 지웠습니다.';});
   }
-  $('finish').onclick=act(()=>voice.finish());
+  $('finish').onclick=act(()=>{clearResumeIntent();return voice.finish();});
   showLensLink(client.storedLensLink());
   const preview=$('lens-preview'),previewFrame=$('lens-preview-frame'),previewViewport=$('lens-preview-viewport');
   const previewKey='awx.display.lensPreview.'+(testChannel||'live');let previewObserver=null;
@@ -223,9 +298,9 @@
   $('pair-form').onsubmit=act(async()=>{await client.join($('pair-code').value);$('pair-code').value='';$('pair-form').hidden=true;});
   $('approve').onclick=act(()=>client.approve());
   $('pair-close').onclick=()=>{$('pair-panel').hidden=true;$('caption-card').focus();};
-  $('unlink').onclick=act(async()=>{await voice.stop();await client.unlink();phoneMode=false;client.pause();client.start();});
+  $('unlink').onclick=act(async()=>{clearResumeIntent();await voice.stop();await client.unlink();phoneMode=false;client.pause();client.start();});
   $('hints').onclick=act(async()=>{const enabled=!client.state.hintsEnabled;await client.hints(enabled);saveSetting('hints',enabled);});
-  $('stop').onclick=act(async()=>{await voice.stop();if(!standalone&&client.state.linked)await client.stopAudio();});
+  $('stop').onclick=act(async()=>{clearResumeIntent();await voice.stop();if(!standalone&&client.state.linked)await client.stopAudio();});
   $('reconnect').hidden=false;$('reconnect').onclick=act(async()=>{await voice.reconnect();});
   if(standalone&&$('broadcast')){
     if(testChannel)$('display-url').href='meta/index.html?clientRole=test&channel='+encodeURIComponent(testChannel);
@@ -302,8 +377,8 @@
     else{client.pause();client.start();if(voice.isActive())void voice.resume();}
   });
   window.addEventListener('online',()=>{void voice.reconnect();});
-  // Page exit stops capture; restoring the connection still requires an explicit microphone start.
-  window.addEventListener('pagehide',()=>{voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
-  window.addEventListener('pageshow',event=>{if(event.persisted)client.start();});
+  // Only a fresh document can resume manual capture; bfcache restores the connection alone.
+  window.addEventListener('pagehide',()=>{saveResumeIntent();resumeAllowed=false;resumeAttempt++;voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
+  window.addEventListener('pageshow',event=>{if(event.persisted){resumeAllowed=false;client.start();}});
   $('caption-card').focus();client.start();
 })();

@@ -194,7 +194,7 @@ jev:
 # allowlist; the global allow-remote-model-selection flag stays false.
 app:
   ai:
-    remote-model-selection-routes: ${CHAT_REMOTE_MODEL_SELECTION_ROUTES:api3,gemini-pro}
+    remote-model-selection-routes: ${CHAT_REMOTE_MODEL_SELECTION_ROUTES:api3,gemini-pro,gemini-cue}
 
 # Existing routes remain fallback-only for unrelated llmrouter.auto consumers.
 # Conversate explicitly selects these API roles after credential/health checks.

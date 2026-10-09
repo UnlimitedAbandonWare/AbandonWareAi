@@ -21,7 +21,8 @@ import java.util.function.*;
 @ConditionalOnProperty(name="conversate.enabled",havingValue="true")
 public final class ConversateCloudStt {
     /** Immutable start policy. Null retains the configured legacy route. */
-    public record StreamPolicy(String engine,boolean fallbackAllowed,List<String> allowedFallbacks){
+    public record StreamPolicy(String engine,boolean fallbackAllowed,List<String> allowedFallbacks,String language){
+        public StreamPolicy(String engine,boolean fallbackAllowed,List<String> allowedFallbacks){this(engine,fallbackAllowed,allowedFallbacks,null);}
         public StreamPolicy{
             engine=engine==null?"auto":engine;
             if(!Set.of("auto","local","soniox","deepgram").contains(engine))throw new IllegalArgumentException("stt_engine_invalid");
@@ -30,6 +31,8 @@ public final class ConversateCloudStt {
                 ||allowedFallbacks.stream().anyMatch(p->!Set.of("soniox","deepgram").contains(p))
                 ||!fallbackAllowed&&!allowedFallbacks.isEmpty())throw new IllegalArgumentException("stt_fallback_invalid");
             if("local".equals(engine)&&(fallbackAllowed||!allowedFallbacks.isEmpty()))throw new IllegalArgumentException("stt_local_fallback_unsupported");
+            if(language!=null&&!Set.of("ko","en").contains(language))throw new IllegalArgumentException("stt_language_unsupported");
+            if("en".equals(language)&&(!"soniox".equals(engine)||allowedFallbacks.stream().anyMatch(p->!"soniox".equals(p))))throw new IllegalArgumentException("stt_language_unsupported");
         }
     }
     private final DeepgramSttService service;private final ConversateSttBudget budget;private final ObjectMapper json;
@@ -190,20 +193,21 @@ public final class ConversateCloudStt {
         }catch(Exception failed){ticket.close();if(failed instanceof IOException io)throw io;throw new IOException("stt_cloud_unavailable");}
     }
     private ConversateAsrBridge.Transport openSelectedProvider(Ticket ticket,String name,ConversateSttRouting.Attempt initial,Consumer<JsonNode> events,Consumer<String> failure)throws IOException{
-        if(!name.equals("soniox")||sidecar==null||!sidecar.configured())return openProvider(name,initial,false,events,failure);
+        String language=ticket.policy==null?null:ticket.policy.language();
+        if(!name.equals("soniox")||sidecar==null||!sidecar.configured())return openProvider(name,initial,false,events,failure,language);
         // Node and Java are two transports for the same provider. Both attempts remain under this ticket.
-        return new FailoverAsrTransport(json,(e,f)->openProvider(name,initial,true,e,f),(e,f)->{
+        return new FailoverAsrTransport(json,(e,f)->openProvider(name,initial,true,e,f,language),(e,f)->{
             synchronized(ticket){
                 ConversateSttRouting.Attempt next;
                 try{next=ticket.attempt(name,streamSeconds()+1,true);}catch(IOException denied){ticket.close();String reason=Objects.toString(denied.getMessage(),"");failure.accept(reason.matches("stt_budget_(exhausted|unavailable|invalid|busy|ledger_limit)")?"ASR_"+reason.substring(4).toUpperCase(Locale.ROOT):"ASR_BUDGET_UNAVAILABLE");throw denied;}
-                return openProvider(name,next,false,e,f);
+                return openProvider(name,next,false,e,f,language);
             }
         },events,failure,why->"ASR_SIDECAR_FAILED".equals(why));
     }
     private static boolean streamRetryable(String reason){
         return reason!=null&&(reason.matches("ASR_(FALLBACK_UNAVAILABLE|STREAM_FAILED|STREAM_ENDED|HTTP_(401|402|403|408|429|5[0-9]{2})|TIMEOUT|TRANSPORT_ERROR|AUTH_FAILED|QUOTA_EXCEEDED|RATE_LIMITED|PROVIDER_ERROR|UNEXPECTED_CLOSE)")||retryable(new IOException(reason)));
     }
-    private ConversateAsrBridge.Transport openProvider(String name,ConversateSttRouting.Attempt attempt,boolean nativeSoniox,Consumer<JsonNode> events,Consumer<String> failure)throws IOException{
+    private ConversateAsrBridge.Transport openProvider(String name,ConversateSttRouting.Attempt attempt,boolean nativeSoniox,Consumer<JsonNode> events,Consumer<String> failure,String language)throws IOException{
         try{
             Consumer<JsonNode> receive=event->{
                 if("ready".equals(event.path("type").asText()))attempt.connected();
@@ -225,7 +229,7 @@ public final class ConversateCloudStt {
                 }
                 attempt.failure(reason(new IOException(why)));attempt.close();failure.accept(why);
             };
-            ConversateAsrBridge.Transport transport=nativeSoniox?sidecar.connectAdmittedStream(receive,failed):name.equals("soniox")?new SonioxAsrTransport(json,soniox,receive,failed):new DeepgramAsrTransport(json,service,receive,failed);
+            ConversateAsrBridge.Transport transport=nativeSoniox?(language==null?sidecar.connectAdmittedStream(receive,failed):sidecar.connectAdmittedStream(receive,failed,language)):name.equals("soniox")?new SonioxAsrTransport(json,soniox,receive,failed,language):new DeepgramAsrTransport(json,service,receive,failed);
             return new ConversateAsrBridge.Transport(){
                 public void send(String line)throws IOException{
                     // Validate/count locally without retaining a second PCM buffer.

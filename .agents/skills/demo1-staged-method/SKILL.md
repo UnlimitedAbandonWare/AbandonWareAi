@@ -1,22 +1,22 @@
 ---
 name: demo1-staged-method
-description: 'Use when starting any new PASTE/directive on demo-1 or when work looks wild/random (스킬 없이·단계 없이·감으로 휘두르기) — enforces the STAGED_METHOD 6-gate order (지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음). SSOT: docs/agents-rules/DEMO1-STAGED-METHOD.md'
+description: 'Use when starting any new PASTE/directive on demo-1 or when work looks wild/random (스킬 resolve 없이·단계 없이·감으로 휘두르기) — enforces the STAGED_METHOD 6-gate order (지시서 1개 → 스킬 resolve → 사실 → 작은 단계 → 검증 → 닫기 → 다음). SSOT: docs/agents-rules/DEMO1-STAGED-METHOD.md'
 ---
 
 # demo1-staged-method
 
-모든 에이전트의 기본 작업 순서: **지시서 하나 → 스킬 → 사실 → 단계 → 검증 → 닫기 → 다음**.
+모든 에이전트의 기본 작업 순서: **지시서 하나 → 스킬 resolve → 사실 → 단계 → 검증 → 닫기 → 다음**.
 
 ## When
 
 - 새 PASTE/지시서로 작업을 시작할 때 — 6게이트(G1~G6) 순서를 먼저 확인
 - 에이전트 교대·목표 전환 직후 다음 단계를 잡을 때
-- "야생/랜덤/감으로" 작업이 의심될 때 — 스킬 0개, 사실 근거 0건, 단계 표기 0건
+- "야생/랜덤/감으로" 작업이 의심될 때 — resolve 미실행, 사실 근거 0건, 단계 표기 0건
 
 ## Do
 
 1. G1 목표 1개 확인 — 활성 PASTE 1개, journal purpose 1개 (SERIAL_LANE)
-2. G2 스킬 resolve — `python -B scripts/demo1_vibe_skill_router.py resolve "<ask>"`
+2. G2 스킬 resolve — `python -B scripts/demo1_vibe_skill_router.py resolve "<ask>"`; `intent: null`이면 스킬 없이 진행한다 (`docs/agents-rules/DEMO1-VIBE-SKILL-ROUTER.md`).
 3. G3 사실 확인 — file:line 근거 또는 `확인 필요` 표기 후에만 수정
 4. G4 작은 단계 — W0→Wn/단계 마커로 쪼개고 한 번에 한 seam
 5. G5 검증 — 실제 명령 exit·Acceptance 칸 기록; 안 돌린 것은 NOT_RUN

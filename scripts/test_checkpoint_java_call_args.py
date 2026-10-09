@@ -77,6 +77,22 @@ class JavaCallWithArgsCheckpointTest(unittest.TestCase):
         loop = "while ((" + KEYWORD + " = parser.nextToken()) != null) { }"
         CP.secret_free(java_file(loop).encode(), "main/java/E.java")
 
+    def test_enhanced_loop_over_literal_free_helper_is_code(self):
+        loop = "for (String " + KEYWORD + " : splitCsv(rawKeys)) { }"
+        CP.secret_free(java_file(loop).encode(), "main/java/E.java")
+
+    def test_helper_iteration_keeps_literals_and_mimics_strict(self):
+        loop = "for (String " + KEYWORD + " : splitCsv(rawKeys)) { }"
+        for text in ("// " + loop, "/* " + loop + " */", '"' + loop + '"',
+                     loop.replace("rawKeys", '"private-value"'),
+                     loop.replace("splitCsv(rawKeys)", 'splitCsv(rawKeys).stream().filter(x -> x.equals("private-value")).toList()'),
+                     loop + "\n" + statement('"private-value";'),
+                     loop.replace("rawKeys", "gsk" + "_" + "x" * 32)):
+            with self.subTest(text=text), self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+                CP.secret_free(text.encode(), "main/java/E.java")
+        with self.assertRaisesRegex(CP.CheckpointError, "secret-pattern"):
+            CP.secret_free(loop.encode(), "docs/example.md")
+
     def test_json_cursor_exception_keeps_mimics_and_literals_strict(self):
         loop = "while ((" + KEYWORD + " = parser.nextToken()) != null) { }"
         variants = ["// " + loop, "/* " + loop + " */", '"' + loop + '"',

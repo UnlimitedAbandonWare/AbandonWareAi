@@ -9,8 +9,9 @@
 
   save   --agent DEVIN --topic <topic> [--date YYYYMMDD] --from <파일|->
            [--dry-run] [--check]
-           → Downloads 와 agent-prompts/<agent>-<topic>-<date>/BRIEF.txt 두 곳에
-             새 파일로만 저장(같은 이름이면 _v2, _v3). 덮어쓰기·삭제 0.
+           → Downloads 에 새 파일로만 저장(같은 이름이면 _v2, _v3).
+             덮어쓰기·삭제 0. agent-prompts/<agent>-<topic>-<date>/BRIEF.txt
+             사본은 폐기됨(R6, 2026-10-06) — 옵트인 env로만 부활한다.
 
 2026-10-05 계약(아침 페이스 복구): dot 지시서의 완료 = Downloads 저장
 (output "delivery":"downloads"). ChatGPT Library 파일 카드는 호출측의 보조
@@ -28,6 +29,8 @@
   DOT_BRIEF_SAVE_DOWNLOADS   기본 %USERPROFILE%\\Downloads
   DOT_BRIEF_SAVE_TEMP        기본 %TEMP%
   DOT_BRIEF_SAVE_AGENT_PROMPTS  기본 <repo>/agent-prompts
+  DOT_BRIEF_SAVE_PROMPTS_COPY   기본 꺼짐. 1/true/yes/on 이면 폐기된
+                                agent-prompts BRIEF.txt 사본도 저장(R6 옵트인)
   DOT_BRIEF_SAVE_LOG         기본 <repo>/data/agent-handoff/dot-brief-save/log.jsonl
 """
 from __future__ import annotations
@@ -80,6 +83,12 @@ def temp_root() -> Path:
 
 def prompts_dir() -> Path:
     return _env_dir("DOT_BRIEF_SAVE_AGENT_PROMPTS", repo_root() / "agent-prompts")
+
+
+def prompts_copy_enabled() -> bool:
+    """agent-prompts BRIEF.txt 사본은 R6(2026-10-06)로 폐기 — 옵트인 env만."""
+    return os.environ.get("DOT_BRIEF_SAVE_PROMPTS_COPY", "").strip().lower() in (
+        "1", "true", "yes", "on")
 
 
 def log_path() -> Path:
@@ -191,9 +200,12 @@ def cmd_save(a) -> int:
         fail("BAD_FILENAME", detail=fname)
 
     t_dl = next_free_file(downloads_dir() / fname)
-    sub = f"{a.agent.lower()}-{a.topic}-{date}"
-    t_pp = next_free_prompt_dir(prompts_dir() / sub) / "BRIEF.txt"
-    planned = [str(t_dl), str(t_pp)]
+    planned = [str(t_dl)]
+    t_pp = None
+    if prompts_copy_enabled():
+        sub = f"{a.agent.lower()}-{a.topic}-{date}"
+        t_pp = next_free_prompt_dir(prompts_dir() / sub) / "BRIEF.txt"
+        planned.append(str(t_pp))
 
     if a.check:
         emit({"ok": True, "via": "dot", "check": True,
@@ -206,11 +218,13 @@ def cmd_save(a) -> int:
 
     try:
         write_new(t_dl, body)
-        write_new(t_pp, body)
+        if t_pp is not None:
+            write_new(t_pp, body)
     except OSError as e:
         fail("WRITE_FAILED", EXIT_IO, detail=str(e))
     verify_written(t_dl, digest, size)
-    verify_written(t_pp, digest, size)
+    if t_pp is not None:
+        verify_written(t_pp, digest, size)
 
     append_log({"ts": datetime.now().astimezone().isoformat(timespec="seconds"),
                 "via": "dot", "op": "save", "agent": a.agent, "topic": a.topic,
@@ -311,7 +325,7 @@ def main(argv=None) -> int:
                                  description="[DOT-BRIEF] 전용 지시서 저장기")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("save", help="지시서 파일을 Downloads+agent-prompts에 새 이름으로 저장")
+    sp = sub.add_parser("save", help="지시서 파일을 Downloads에 새 이름으로 저장(agent-prompts 사본은 R6 폐기, 옵트인 env)")
     sp.add_argument("--agent", required=True)
     sp.add_argument("--topic", required=True)
     sp.add_argument("--date", default=None, help="YYYYMMDD (기본: 오늘)")

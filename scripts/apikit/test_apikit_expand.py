@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """apikit expansion tests (2026-09-30) — cerebras provider + env-name gap
-coverage (KAKAO_REST_KEY, NAVER_KEYS csv). Fixture-driven, no network, no real
-keys. Run: python -m unittest scripts/apikit/test_apikit_expand.py"""
+coverage (KAKAO_REST_KEY, NAVER_APIHUB pair). Fixture-driven, no network, no
+real keys. Run: python -m unittest scripts/apikit/test_apikit_expand.py"""
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -14,7 +15,6 @@ for p in (str(HERE), str(HERE.parent.parent)):
 
 import common  # noqa: E402
 from providers import PROVIDERS  # noqa: E402
-from providers import naver  # noqa: E402
 
 FIXTURES = HERE / "fixtures"
 
@@ -115,44 +115,71 @@ class KakaoKeyEnvAlias(unittest.TestCase):
             common.http_request = orig
 
 
-class NaverKeysCsv(unittest.TestCase):
-    def test_parse_colon_and_semicolon_pairs(self):
-        self.assertEqual(("id1", "sec1", 2),
-                         naver._parse_naver_keys("id1:sec1, id2;sec2"))
-
-    def test_parse_positional_pair(self):
-        self.assertEqual(("id1", "sec1", 1),
-                         naver._parse_naver_keys("id1, sec1"))
-
-    def test_parse_empty_or_junk(self):
-        self.assertEqual((None, None, 0), naver._parse_naver_keys(""))
-        self.assertEqual((None, None, 0), naver._parse_naver_keys(None))
-        self.assertEqual((None, None, 0), naver._parse_naver_keys(":"))
-
-    def test_naver_keys_fallback_sends_headers(self):
-        """When the client pair is absent, NAVER_KEYS first pair is used."""
+class NaverApiHub(unittest.TestCase):
+    def test_apihub_pair_sends_ncp_headers(self):
+        """API HUB pair hits naverapihub.apigw.ntruss.com with NCP headers."""
         orig = common.http_request
         seen = {}
 
         def _http(method, url, headers=None, body=None, timeout=None):
+            seen["url"] = url
             seen["headers"] = headers or {}
             return {"status": 200, "headers": {}, "ms": 3, "error": None,
                     "error_kind": None,
                     "text": json.dumps({"total": 42, "items": []})}
         try:
             common.http_request = _http
-            scopes = {"Process": {"NAVER_KEYS": "nid-1:nsec-1,nid-2:nsec-2"},
+            scopes = {"Process": {"NAVER_APIHUB_CLIENT_ID": "hid-1",
+                                  "NAVER_APIHUB_CLIENT_SECRET": "hsec-1"},
                       "User": {}, "Machine": {}}
             rows = PROVIDERS["naver"].check(_ctx(scopes))
             row = rows[-1]
             self.assertEqual(common.OK, row["cls"])
-            self.assertEqual("NAVER_KEYS", row["key_env"])
-            self.assertEqual("nid-1", seen["headers"].get("X-Naver-Client-Id"))
-            self.assertEqual("nsec-1", seen["headers"].get("X-Naver-Client-Secret"))
+            self.assertEqual("NAVER_APIHUB_CLIENT_ID+SECRET", row["key_env"])
+            self.assertTrue(seen["url"].startswith(
+                "https://naverapihub.apigw.ntruss.com/search/v1/webkr"))
+            self.assertIn("format=json", seen["url"])
+            self.assertEqual("hid-1",
+                             seen["headers"].get("X-NCP-APIGW-API-KEY-ID"))
+            self.assertEqual("hsec-1",
+                             seen["headers"].get("X-NCP-APIGW-API-KEY"))
             blob = json.dumps(row)
-            self.assertNotIn("nsec-1", blob)
+            self.assertNotIn("hsec-1", blob)
         finally:
             common.http_request = orig
+
+    def test_apihub_base_url_override(self):
+        """NAVER_APIHUB_BASE_URL redirects the probe (loopback mock)."""
+        orig = common.http_request
+        seen = {}
+
+        def _http(method, url, headers=None, body=None, timeout=None):
+            seen["url"] = url
+            return {"status": 200, "headers": {}, "ms": 1, "error": None,
+                    "error_kind": None,
+                    "text": json.dumps({"total": 0, "items": []})}
+        try:
+            common.http_request = _http
+            os.environ["NAVER_APIHUB_BASE_URL"] = "http://127.0.0.1:18299"
+            scopes = {"Process": {"NAVER_APIHUB_CLIENT_ID": "hid",
+                                  "NAVER_APIHUB_CLIENT_SECRET": "hsec"},
+                      "User": {}, "Machine": {}}
+            rows = PROVIDERS["naver"].check(_ctx(scopes))
+            self.assertEqual(common.OK, rows[-1]["cls"])
+            self.assertTrue(seen["url"].startswith(
+                "http://127.0.0.1:18299/search/v1/webkr"))
+        finally:
+            common.http_request = orig
+            os.environ.pop("NAVER_APIHUB_BASE_URL", None)
+
+    def test_forced_apihub_ignores_legacy_names(self):
+        """Explicit apihub must not authenticate with legacy credentials."""
+        scopes = {"Process": {"NAVER_SEARCH_PROVIDER": "apihub", "NAVER_CLIENT_ID": "lid",
+                              "NAVER_CLIENT_SECRET": "lsec",
+                              "NAVER_KEYS": "lid:lsec"},
+                  "User": {}, "Machine": {}}
+        rows = PROVIDERS["naver"].check(_ctx(scopes))
+        self.assertEqual(common.KEY_MISSING, rows[-1]["cls"])
 
     def test_naver_missing_everything(self):
         rows = PROVIDERS["naver"].check(_ctx())

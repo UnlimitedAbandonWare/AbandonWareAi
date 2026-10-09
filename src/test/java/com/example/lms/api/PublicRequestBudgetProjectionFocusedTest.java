@@ -20,6 +20,58 @@ import static org.junit.jupiter.api.Assertions.fail;
  */
 class PublicRequestBudgetProjectionFocusedTest {
 
+    @Test
+    void earlyRejectionClearsThePreviousRequestsQueryMultipliers() {
+        var guard = new PublicRequestBudgetGuard();
+        guard.validateChatProjected(braveWebRequest(), null, true, false);
+        assertEquals(3L, TraceStore.get("public.request.budget.webQueryMultiplier"));
+
+        var rejection = org.junit.jupiter.api.Assertions.assertThrows(PublicRequestBudgetGuard.Rejection.class,
+                () -> guard.validateChat(ChatRequestDto.builder().message("").build()));
+        assertEquals("chat_message_required", rejection.reasonCode());
+        org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("public.request.budget.queryMultiplier"));
+        org.junit.jupiter.api.Assertions.assertNull(TraceStore.get("public.request.budget.webQueryMultiplier"));
+    }
+
+    @Test
+    void koreanAutoBraveRequestDoesNotChargeExtremeZWebQueriesBeyondSharedBudget() {
+        var budget = com.example.lms.service.rag.SelfAskSearchBudget.beginRequest(
+                com.example.lms.domain.enums.ExecutionMode.AUTO);
+        budget.allowExpansion("evidence-gap");
+        int admittedWebQueries = 0;
+        for (int i = 0; i < 15; i++) {
+            if (budget.tryQuery("synthetic web query " + i)) admittedWebQueries++;
+        }
+        assertEquals(3, admittedWebQueries);
+
+        var request = ChatRequestDto.builder()
+                .message("원신에서 스커크랑 조합이 좋은 캐릭터가 뭐냐?")
+                .model("chatgpt-oauth:gpt-5.6-sol").strictModelSelection(true)
+                .executionMode(com.example.lms.domain.enums.ExecutionMode.AUTO)
+                .useRag(true).useWebSearch(true).webTopK(8).searchQueries(0)
+                .searchMode(SearchMode.AUTO).build();
+        var plans = new PlanHintApplier(new DefaultResourceLoader());
+        var guard = new PublicRequestBudgetGuard();
+        assertDoesNotThrow(() -> guard.validateChatProjected(request, plans.load("brave.v1"), true, true));
+        // Web shares three logical queries; vector retains all twelve ExtremeZ branches.
+        assertEquals(174L, TraceStore.get("public.request.budget.retrievalWork"));
+        assertEquals(648L, TraceStore.get("public.request.budget.providerWork"));
+        assertEquals(18L, TraceStore.get("public.request.budget.branchCount"));
+        assertEquals((long) admittedWebQueries, TraceStore.get("public.request.budget.webQueryMultiplier"));
+        assertEquals(15L, TraceStore.get("public.request.budget.queryMultiplier"));
+        assertEquals(12, TraceStore.get("public.request.budget.extremeZQueries"));
+        assertEquals(SearchMode.AUTO, request.getSearchMode());
+        assertEquals(com.example.lms.domain.enums.ExecutionMode.AUTO, request.getExecutionMode());
+        assertEquals(Boolean.TRUE, request.getStrictModelSelection());
+
+        guard.setMaxRetrievalWork(174);
+        assertDoesNotThrow(() -> guard.validateChatProjected(request, plans.load("brave.v1"), true, true));
+        guard.setMaxRetrievalWork(173);
+        var rejection = org.junit.jupiter.api.Assertions.assertThrows(PublicRequestBudgetGuard.Rejection.class,
+                () -> guard.validateChatProjected(request, plans.load("brave.v1"), true, true));
+        assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.EnumSource(com.example.lms.domain.enums.ExecutionMode.class)
     void defaultDeepSearchFitsTheExistingCaps(com.example.lms.domain.enums.ExecutionMode executionMode) {
@@ -92,16 +144,16 @@ class PublicRequestBudgetProjectionFocusedTest {
             assertEquals(14, TraceStore.get("public.request.budget.policyMaxFinalQueries"));
             assertEquals(3, TraceStore.get("public.request.budget.workflowQueries"));
             assertEquals(2, TraceStore.get("public.request.budget.extremeZQueries"));
-            // (tuned web11 + vector10) * (workflow3 + ExtremeZ2) * DEEP2.
-            assertEquals(210L, TraceStore.get("public.request.budget.retrievalWork"));
-            assertEquals(1_320L, TraceStore.get("public.request.budget.providerWork"));
+            // (web11 * shared3 + vector10 * (workflow3 + ExtremeZ2)) * DEEP2.
+            assertEquals(166L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(792L, TraceStore.get("public.request.budget.providerWork"));
 
             var defaults = new PublicRequestBudgetGuard();
             assertDoesNotThrow(() -> defaults.validateChatProjected(request, plan, true, true));
             assertDoesNotThrow(() -> defaults.validateChatProjected(
                     request.toBuilder().searchMode(SearchMode.AUTO).build(), plan, true, true));
-            assertEquals(80L, TraceStore.get("public.request.budget.retrievalWork"));
-            assertEquals(480L, TraceStore.get("public.request.budget.providerWork"));
+            assertEquals(64L, TraceStore.get("public.request.budget.retrievalWork"));
+            assertEquals(288L, TraceStore.get("public.request.budget.providerWork"));
         }
     }
 
@@ -137,9 +189,9 @@ class PublicRequestBudgetProjectionFocusedTest {
 
         assertDoesNotThrow(() -> guard.validateChatProjected(
                 braveWebRequest(), applier.load("brave.v1"), true, false));
-        // Workflow envelope3 + additive ExtremeZ12; tuned plan webK18.
-        assertEquals(15L, TraceStore.get("public.request.budget.branchCount"));
-        assertEquals(270L, TraceStore.get("public.request.budget.retrievalWork"));
+        // Workflow and ExtremeZ web share envelope3; tuned plan webK18.
+        assertEquals(3L, TraceStore.get("public.request.budget.branchCount"));
+        assertEquals(54L, TraceStore.get("public.request.budget.retrievalWork"));
         assertEquals(12, ((Number) TraceStore.get("public.request.budget.extremeZQueries")).intValue());
     }
 
@@ -158,8 +210,8 @@ class PublicRequestBudgetProjectionFocusedTest {
 
         assertDoesNotThrow(() -> guard.validateChatProjected(
                 request, applier.load("brave.v1"), true, false));
-        // force_light: 플래너 생략 단일 질의(1) + extremeZ additive(12) = 13.
-        assertEquals(13L, TraceStore.get("public.request.budget.branchCount"));
+        // force_light keeps the shared web envelope at one logical query.
+        assertEquals(1L, TraceStore.get("public.request.budget.branchCount"));
     }
 
     @Test
@@ -191,7 +243,7 @@ class PublicRequestBudgetProjectionFocusedTest {
             fail("expected rejection");
         } catch (PublicRequestBudgetGuard.Rejection rejection) {
             assertEquals("chat_retrieval_budget_exceeded", rejection.reasonCode());
-            assertEquals(270L,
+            assertEquals(54L,
                     rejection.getBody().getProperties().get("projectedRetrievalWork"));
             assertEquals("web_topK", rejection.getBody().getProperties().get("dominantTerm"));
         }

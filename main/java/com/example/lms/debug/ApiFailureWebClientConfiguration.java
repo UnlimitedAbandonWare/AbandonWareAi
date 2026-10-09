@@ -11,12 +11,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 @Configuration(proxyBeanMethods=false)
 public class ApiFailureWebClientConfiguration {
+    public static final String SEARCH_TERMINAL_OWNER="api.failure.search-terminal-owned";
     @Bean
     WebClientCustomizer apiFailureWebClientCustomizer(ApiFailureRecorder recorder) {
         return builder->builder.filter(filter(recorder));
     }
     static ExchangeFilterFunction filter(ApiFailureRecorder recorder) {
         return (request,next)->Mono.defer(()-> {
+            // The NAVER parser's per-subscription observation counts both HTTP and terminal outcomes once.
+            if(Boolean.TRUE.equals(request.attribute(SEARCH_TERMINAL_OWNER).orElse(false)))return next.exchange(request);
             String url=request.url().toString();
             String model=request.attribute("api.failure.model").map(Object::toString).orElseGet(()-> {
                 String path=request.url().getPath();int start=path.indexOf("/models/");

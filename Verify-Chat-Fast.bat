@@ -13,10 +13,12 @@ if not "%AWX_ARGS%"=="%*" set "AWX_RAG_NO_PAUSE=1"
 chcp 65001 >nul
 set "PYTHONIOENCODING=utf-8"
 cd /d "%~dp0"
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" begin "%~nx0" %*
 title AbandonWare Chat Fast Verify (offline stream boundaries)
 where node >nul 2>nul
 if errorlevel 1 (
   echo [RESULT] node not found on PATH; install Node.js to run src\test\js\chat-stream-boundaries.test.cjs.
+  if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" 1
   exit /b 1
 )
 node --test "%~dp0src\test\js\chat-stream-boundaries.test.cjs"
@@ -28,4 +30,5 @@ if "%AWX_CHAT_TEST_EXIT%"=="0" (
   echo [RESULT] chat-stream-boundaries exit code: %AWX_CHAT_TEST_EXIT%
 )
 if not defined AWX_RAG_NO_PAUSE pause
+if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_CHAT_TEST_EXIT%
 exit /b %AWX_CHAT_TEST_EXIT%

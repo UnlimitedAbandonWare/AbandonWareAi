@@ -90,6 +90,10 @@ skill), Meta Display lens content, or PatchDrop bundle ingestion.
    that hide the symptom).
 5. Report format: changed files + hashes, and a table separating mock / build /
    live boot / real API / browser evidence.
+6. Preserve current scope/non-goals and per-artifact required delivery methods,
+   environments, exact destinations, versions and proof in the existing task
+   `state.md` via `demo1-session-state-checkpoint`. DRAFT and final delivery use
+   the same state; attachment never substitutes for a required local save.
 
 ## Anti-regression close-out
 
@@ -100,6 +104,10 @@ skill), Meta Display lens content, or PatchDrop bundle ingestion.
   (DEMO1-STALE-HANDOFF-REFERENCE).
 - Follow `$demo1-goal-complete-stop` for termination. Do not expand work to
   erase a `not_observed` or `auth_blocked` item.
+- Before claiming all deliveries complete, run the task-aware `reject-complete`
+  command documented in `demo1-session-state-checkpoint` with the latest actual
+  user instruction ref/revision and verified environment. Missing proof stays
+  incomplete; report matching pre-existing files without claiming authorship.
 
 ## References
 

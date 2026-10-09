@@ -355,9 +355,12 @@
 <!-- END DEMO1-AUTH-MODEL-MATRIX -->
 <!-- BEGIN DEMO1-OUTPUT-BUDGET -->
 ## Tool output budget + session state
-- 도구 출력 예산·wait·JSON-parse·patch 재시도·세션 state.md 체크포인트 SSOT. — 상세: `docs/agents-rules/DEMO1-OUTPUT-BUDGET.md`
+- Output/state: `docs/agents-rules/DEMO1-OUTPUT-BUDGET.md`.
+- Delivery/storage (dot final→Downloads, reviews→project): `docs/agents-rules/DEMO1-TASK-CONTINUITY-DELIVERY.md`.
 <!-- END DEMO1-OUTPUT-BUDGET -->
 <!-- BEGIN DEMO1-VIBE-OPEN -->
 ## VIBE_OPEN: security-question auto-defer
 - 바이브 단계 보안 검증·접근 인증 질문 자동 개방유지+DEFERRED_SECURITY (스위치 configs/vibe-open.yaml). — 상세: `docs/security/VIBE_OPEN.md`
 <!-- END DEMO1-VIBE-OPEN -->
+- Nightly: docs/agents-rules/DEMO1-CODEX-NIGHTLY-REVIEW.md
+- OFF.
