@@ -17,7 +17,7 @@ tag grants no source, Git, auth, or deployment authority — AGENTS.md
 ownership, lease, preimage, spend, and redaction gates still apply on top.
 
 The tool catalog itself (what exists, upstream sources, call shapes) stays in
-`EXTERNAL_SKILLS.md` + `demo1-mcp-control-tower/references/external-skills.md`.
+`EXTERNAL_SKILLS.md` + `data/agent-archive/skills/demo1-mcp-control-tower/references/external-skills.md` (archived).
 This skill owns only the work-type allowlist and the per-plugin contract.
 
 ## Work type → plugin lanes

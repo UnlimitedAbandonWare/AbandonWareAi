@@ -1181,6 +1181,7 @@ def apply(root, run_relative, target, content_file):
         require(current in allowed, "apply-precondition-conflict")
         data = contents(Path(content_file))
         require(data is not None, "apply-content-missing")
+        replacement_sha256 = digest(data)
         secret_free(row["path"].encode("utf-8"))
         secret_free(data, row["path"])
         temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".apply")
@@ -1190,15 +1191,16 @@ def apply(root, run_relative, target, content_file):
                 stream.flush()
                 os.fsync(stream.fileno())
             require(digest(contents(path)) in allowed, "apply-precondition-conflict")
+            lease_check(root, manifest)
             os.replace(temp, path)
         finally:
             if temp.exists():
                 temp.unlink()
-        require(digest(contents(path)) == digest(data), "apply-verification-failed")
+        require(digest(contents(path)) == replacement_sha256, "apply-verification-failed")
         state.setdefault("appliedFiles", {})[row["path"]] = {
-            "at": datetime.now(timezone.utc).isoformat(), "sha256": digest(data)}
+            "at": datetime.now(timezone.utc).isoformat(), "sha256": replacement_sha256}
         save(run, state)
-        return {"status": "applied", "path": row["path"], "postimageSha256": digest(data),
+        return {"status": "applied", "path": row["path"], "postimageSha256": replacement_sha256,
                 "run": run_relative, "nextAction": "seal-then-verify"}
 
 
@@ -1477,6 +1479,21 @@ def lease_conflict_autoflow(root, targets, run=None):
         return None
 
 
+def output_view(result, verbose=False):
+    """Rendering only; full on-disk receipts and Python return values stay intact."""
+    if verbose:
+        return result
+    # Preserve blocker context and recovery guidance even in compact output.
+    keys = ("status", "run", "path", "targetCount", "firstBlockingRule",
+            "nextAction", "holdScope", "blockingEvidence", "blockingDetail",
+            "repositoryWideHold", "independentWorkCompleted", "approvalReasons",
+            "verificationExitCode", "failureClass", "leaseConflictAutoflow")
+    summary = {key: result[key] for key in keys if key in result}
+    if result.get("run"):
+        summary["evidenceRef"] = result["run"] + "/checkpoint.json"
+    return summary
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("assess", "begin", "apply", "seal", "finish", "restore", "status"))
@@ -1490,6 +1507,8 @@ def main():
     parser.add_argument("--exit-code", type=int)
     parser.add_argument("--command-id", default="focused-verification")
     parser.add_argument("--log", help="Existing verification log, read locally; only counts/hash are saved")
+    parser.add_argument("--verbose", "--json", dest="verbose", action="store_true",
+                        help="Print the complete legacy JSON schema (default: compact JSON view)")
     args = parser.parse_args()
     try:
         if args.action in ("assess", "begin"):
@@ -1515,7 +1534,7 @@ def main():
             root = root_path(args.root)
             run_path(root, args.run)
             result = json.loads(contents(relative_path(root, args.run + "/checkpoint.json")))
-        print(json.dumps(result, ensure_ascii=True))
+        print(json.dumps(output_view(result, args.verbose), ensure_ascii=True))
         return 0 if result["status"] in ("autonomous", "prepared", "sealed", "verified",
                                          "applied", "restored", "restore_staged") else 2
     except (CheckpointError, OSError, ValueError, KeyError, TypeError) as error:
@@ -1530,7 +1549,7 @@ def main():
             flow = lease_conflict_autoflow(args.root, args.target, run=args.run)
             if flow is not None:
                 hold["leaseConflictAutoflow"] = flow
-        print(json.dumps(hold, ensure_ascii=True))
+        print(json.dumps(output_view(hold, args.verbose), ensure_ascii=True))
         return 2
 
 

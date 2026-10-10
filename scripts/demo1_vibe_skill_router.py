@@ -30,7 +30,9 @@ fallback no-match), 2 on index/usage/missing-skill errors.
 from __future__ import annotations
 
 import argparse
+import copy
 import difflib
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -39,6 +41,192 @@ import sys
 SCHEMA = "awx.vibe-skill-router.v1"
 DEFAULT_INDEX = ".agents/skills-intent-index.yaml"
 SKILLS_DIR = ".agents/skills"
+_PROJECTION_CACHE = {}
+
+
+def projection_json(value):
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+def project_routes(root, page=0, max_bytes=8000):
+    """Read-only, paginated view of the typed SSOT; never an authority cache.
+
+    Every call reads current input bytes. Only parsing/rendering is reusable.
+    The complete route body stays at source and is loaded on demand by callers.
+    """
+    root = Path(root).resolve()
+    if type(page) is not int or page < 0 or not 2000 <= max_bytes <= 8000:
+        raise ValueError("invalid-projection-page-or-budget")
+    inputs, snapshots = [], {}
+    def fresh_bytes(path):
+        key = path
+        if key not in snapshots:
+            try:
+                data = path.read_bytes()
+                stat = path.stat()
+                snapshots[key] = (data, (stat.st_dev, stat.st_ino))
+            except FileNotFoundError:
+                snapshots[key] = (None, None)
+        return snapshots[key]
+    def checked_path(relative):
+        relative = relative.partition("#")[0]
+        path = Path(relative)
+        if (path.is_absolute() or ":" in relative or "\\" in relative
+                or any(part.casefold() in ("", ".", "..", ".secrets") for part in relative.split("/"))
+                or path.name.casefold().startswith(".env") or path.name.casefold() in ("auth.json", "models_cache.json")):
+            raise ValueError("invalid-route-path")
+        path = root / path
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root):
+            raise ValueError("route-path-outside-root")
+        if (any(part.casefold() == '.secrets' for part in resolved.relative_to(root).parts)
+                or resolved.name.casefold().startswith('.env')
+                or resolved.name.casefold() in ('auth.json', 'models_cache.json')):
+            raise ValueError('invalid-route-path')
+        return path
+    def read(relative):
+        path = checked_path(relative)
+        data, stamp = fresh_bytes(path)
+        inputs.append((relative, hashlib.sha256(data).hexdigest() if data is not None else None, stamp))
+        fragment = relative.partition("#")[2]
+        if data is not None and fragment:
+            if path.suffix == ".json":
+                def names(value):
+                    if isinstance(value, dict):
+                        return any(value.get(key) == fragment for key in ("id", "name", "canonicalId")) or any(names(v) for v in value.values())
+                    return isinstance(value, list) and any(names(v) for v in value)
+                present = names(json.loads(data))
+            else:
+                present = bool(re.search(r"(?m)^\s*-?\s*id:\s*['\"]?" + re.escape(fragment) + r"['\"]?\s*$", data.decode("utf-8-sig")))
+            if not present:
+                raise ValueError("route-fragment-missing")
+        return data
+    raw = read(".agents/skills/INDEX.md")
+    if raw is None or len(raw) > 512 * 1024:
+        raise ValueError("typed-index-missing-or-oversize")
+    # Include the applicable instruction hierarchy and actual tool code bytes;
+    # same-size rewrites and recreate operations cannot reuse an old view.
+    for directory in list(reversed(root.parents)) + [root, root / ".agents", root / SKILLS_DIR]:
+        for name in ("AGENTS.md", "AGENTS.override.md"):
+            path = directory / name
+            data, stamp = fresh_bytes(path)
+            inputs.append((str(path), hashlib.sha256(data).hexdigest() if data is not None else None, stamp))
+    inputs.append(("tool", hashlib.sha256(fresh_bytes(Path(__file__))[0]).hexdigest()))
+    missing = []
+    layout_key = ("layout", str(root), root.stat().st_dev, root.stat().st_ino,
+                  projection_json(inputs), max_bytes)
+    if layout_key in _PROJECTION_CACHE:
+        pages = copy.deepcopy(_PROJECTION_CACHE[layout_key])
+        # Parsing can be cached; current path resolution/protection cannot.
+        for cached_page in pages:
+            for row in cached_page["routes"]:
+                for field in ("source", "pairedArtifact"):
+                    if row.get(field):
+                        checked_path(row[field])
+    else:
+        # Only scalar projection fields are read; nested routing contracts stay at
+        # the typed source. This accepts its folded trigger without a new YAML dependency.
+        text = raw.decode("utf-8-sig")
+        starts = list(re.finditer(r"(?m)^  - [A-Za-z_]+:\s*([^\n]+)", text))
+        rows, identities = [], set()
+        for number, match in enumerate(starts):
+            block = text[match.start():starts[number + 1].start() if number + 1 < len(starts) else len(text)]
+            kind = re.search(r"(?m)^\s*-?\s*kind:\s*([^\n]+)", block)
+            if not kind:
+                raise ValueError("route-kind-missing")
+            fields = {"kind": _scalar(kind.group(1))}
+            for key in ("canonicalId", "source", "pairedArtifact", "status"):
+                field = re.search(r"(?m)^\s+" + key + r":\s*([^\n]+)", block)
+                if field:
+                    fields[key] = _scalar(field.group(1))
+            identity = (fields["kind"], fields.get("canonicalId"))
+            if not all(isinstance(value, str) and value for value in identity) or not fields.get("source"):
+                raise ValueError("route-identity-or-source-missing")
+            if identity in identities:
+                raise ValueError("duplicate-route-identity")
+            identities.add(identity)
+            trigger = re.search(r"(?m)^\s+trigger:\s*(.*)$", block)
+            if trigger:
+                value = trigger.group(1).strip()
+                if value in (">-", ">", "|-", "|"):
+                    value = " ".join(line.strip() for line in block[trigger.end():].splitlines()
+                                     if line.strip() and not line.strip().startswith("```"))
+                fields["trigger"] = str(_scalar(value) or "")[:80]
+            for key in ("source", "pairedArtifact"):
+                relative = fields.get(key)
+                if relative:
+                    checked_path(relative)
+                    fields["sha256" if key == "source" else "pairedSha256"] = "0" * 64
+            rows.append(fields)
+        if not rows:
+            raise ValueError("typed-index-no-routes")
+        base = {"schemaVersion": "awx.skill-projection.v1", "totalRoutes": len(rows),
+                "page": 0, "nextPage": None, "cache": "miss", "fingerprint": "0" * 64,
+                "missingPaths": [], "missingPathsScope": "page", "routes": []}
+        pages = [copy.deepcopy(base)]
+        for row in rows:
+            pages[-1]["routes"].append(row)
+            if len(projection_json(pages[-1]).encode("utf-8")) + 32 > max_bytes:
+                pages[-1]["routes"].pop()
+                if not pages[-1]["routes"]:
+                    raise ValueError("projection-row-or-missing-list-oversize")
+                pages[-1]["nextPage"] = len(pages)
+                pages.append({**copy.deepcopy(base), "page": len(pages), "routes": [row]})
+        if len(_PROJECTION_CACHE) >= 16:
+            _PROJECTION_CACHE.clear()
+        _PROJECTION_CACHE[layout_key] = copy.deepcopy(pages)
+    if page >= len(pages):
+        raise ValueError("projection-page-out-of-range")
+    # Read/hash only this page's bodies; pagination does not eagerly load every
+    # skill or script. Missing-path metadata is explicitly page-scoped.
+    for fields in pages[page]["routes"]:
+        for field in ("source", "pairedArtifact"):
+            if fields.get(field):
+                data = read(fields[field])
+                fields["sha256" if field == "source" else "pairedSha256"] = inputs[-1][1]
+                if data is None:
+                    missing.append(fields[field])
+                directory = checked_path(fields[field]).parent
+                while directory != root:
+                    for name in ("AGENTS.md", "AGENTS.override.md"):
+                        read((directory / name).relative_to(root).as_posix())
+                    directory = directory.parent
+        source = fields["source"]
+        if source.startswith(SKILLS_DIR + "/") and source.endswith("/SKILL.md"):
+            current, seen = source.split("/")[2], set()
+            for _ in range(4):
+                if current in seen:
+                    raise ValueError("route-alias-cycle")
+                seen.add(current)
+                content = read(SKILLS_DIR + "/" + current + "/SKILL.md")
+                target = _frontmatter_redirect(root, current, content=content) if content is not None else None
+                if not target:
+                    break
+                if not re.fullmatch(r"[A-Za-z0-9_.-]+", target):
+                    raise ValueError("invalid-route-alias")
+                if read(SKILLS_DIR + "/" + target + "/SKILL.md") is None:
+                    raise ValueError("route-alias-target-missing")
+                directory = root / SKILLS_DIR / target
+                while directory != root:
+                    for name in ('AGENTS.md', 'AGENTS.override.md'):
+                        read((directory / name).relative_to(root).as_posix())
+                    directory = directory.parent
+                current = target
+            else:
+                raise ValueError("route-alias-depth")
+    fingerprint = hashlib.sha256(projection_json(inputs).encode()).hexdigest()
+    pages[page]["fingerprint"] = fingerprint
+    pages[page]["missingPaths"] = sorted(set(missing))
+    if len(projection_json(pages[page]).encode("utf-8")) > max_bytes:
+        raise ValueError("projection-missing-list-oversize")
+    key = (str(root), root.stat().st_dev, root.stat().st_ino, fingerprint, max_bytes, page)
+    hit = key in _PROJECTION_CACHE
+    result = copy.deepcopy(_PROJECTION_CACHE.get(key, pages[page]))
+    result["cache"] = "hit" if hit else "miss"
+    if len(_PROJECTION_CACHE) >= 16:
+        _PROJECTION_CACHE.clear()
+    _PROJECTION_CACHE[key] = copy.deepcopy(result)
+    return result
 
 
 # --- minimal YAML-subset loader (fallback when PyYAML is absent) -------------
@@ -164,11 +352,11 @@ def _match_count(patterns, text):
 
 # --- skill folder / alias redirect resolution -------------------------------
 
-def _frontmatter_redirect(root, skill_name):
+def _frontmatter_redirect(root, skill_name, *, content=None):
     """`redirect:` target declared in a skill's SKILL.md frontmatter, or None."""
     path = Path(root) / SKILLS_DIR / skill_name / "SKILL.md"
     try:
-        head = path.read_bytes()[:8192].decode("utf-8-sig", errors="replace")
+        head = (path.read_bytes() if content is None else content)[:8192].decode("utf-8-sig", errors="replace")
     except OSError:
         return None
     lines = head.splitlines()
@@ -440,10 +628,11 @@ def _list_intents(index):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", nargs="?", default="resolve", choices=("resolve",))
+    parser.add_argument("action", nargs="?", default="resolve", choices=("resolve", "catalog"))
     parser.add_argument("text", nargs="?", default="", help="User ask to resolve")
     parser.add_argument("--root", default=".")
     parser.add_argument("--index", default=DEFAULT_INDEX)
+    parser.add_argument("--page", type=int, default=0, help="catalog: zero-based page, at most 8000 UTF-8 bytes")
     parser.add_argument("--list-intents", action="store_true",
                         help="Print the intent table as JSON and exit")
     parser.add_argument("--text-file", default=None,
@@ -451,6 +640,9 @@ def main():
                              "takes precedence over positional text")
     args = parser.parse_args()
     try:
+        if args.action == "catalog":
+            print(projection_json(project_routes(args.root, args.page)))
+            return 0
         index = load_index(args.root, args.index)
         if args.list_intents:
             result = _list_intents(index)

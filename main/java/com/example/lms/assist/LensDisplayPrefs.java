@@ -12,9 +12,9 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
                                boolean historyEnabled,long historyWindowMs,int historyMaxChars,int historyMaxTokens,
                                boolean topicResetEnabled,
                                long triggerQuietMs,long cueCooldownMs,long forceAfterMs,AutoVoiceTrigger autoVoiceTrigger){
-    public LensDisplayPrefs {if(autoVoiceTrigger==null)autoVoiceTrigger=AutoVoiceTrigger.defaults();}
+    public LensDisplayPrefs {if(autoVoiceTrigger==null)autoVoiceTrigger=AutoVoiceTrigger.defaults();if(transcriptMaxLines>=1&&transcriptMaxLines<3)transcriptMaxLines=3;}
     public static final int MIN_FONT=20,MAX_FONT=36;
-    public static final int MIN_TRANSCRIPT_LINES=1,MAX_TRANSCRIPT_LINES=8;
+    public static final int MIN_TRANSCRIPT_LINES=3,MAX_TRANSCRIPT_LINES=8;
     public static final int MIN_HINT_PAGE_LINES=4,MAX_HINT_PAGE_LINES=13;
     /** Transcript and hint holds share one independent 1-100 s window each. */
     public static final long MIN_TTL_MS=1_000,MAX_TTL_MS=100_000;
@@ -47,7 +47,7 @@ public record LensDisplayPrefs(int transcriptFontPx,int hintFontPx,int transcrip
         return new LensDisplayPrefs(
                 pick(p.transcriptFontPx(),base.transcriptFontPx,MIN_FONT,MAX_FONT,"transcriptFontPx"),
                 pick(p.hintFontPx(),base.hintFontPx,MIN_FONT,MAX_FONT,"hintFontPx"),
-                pick(p.transcriptMaxLines(),base.transcriptMaxLines,MIN_TRANSCRIPT_LINES,MAX_TRANSCRIPT_LINES,"transcriptMaxLines"),
+                pick(p.transcriptMaxLines(),base.transcriptMaxLines,1,MAX_TRANSCRIPT_LINES,"transcriptMaxLines"),
                 pick(p.hintPageLines(),base.hintPageLines,MIN_HINT_PAGE_LINES,MAX_HINT_PAGE_LINES,"hintPageLines"),
                 pick(p.transcriptTtlMs(),base.transcriptTtlMs,MIN_TTL_MS,MAX_TTL_MS,"transcriptTtlMs"),
                 pick(p.hintTtlMs(),base.hintTtlMs,MIN_TTL_MS,MAX_TTL_MS,"hintTtlMs"),

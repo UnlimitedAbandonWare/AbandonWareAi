@@ -72,6 +72,9 @@ final class NovaFocusState {
     private final ConversateQuestionPolicy delivery=new ConversateQuestionPolicy();
     private final NovaFocusTurnAssembler draft=new NovaFocusTurnAssembler();
     private final Set<String> committed=new LinkedHashSet<>();
+    private record PendingInput(String text,Set<String> keys){PendingInput{keys=Collections.unmodifiableSet(new LinkedHashSet<>(keys));}}
+    private final ArrayDeque<PendingInput> queued=new ArrayDeque<>();
+    private View retained;
     private String phase="OFF",activation="",turn="",question="",answer="",receipt="",candidate="",target="lens",reason="";
     private String wakeKind="NOVA",snapshotTrigger="none",snapshotOutcome="none";
     private String activationWakeWord="";
@@ -126,7 +129,7 @@ final class NovaFocusState {
     void open(long now,String renderTarget){
         if(!Set.of("lens","fold").contains(renderTarget))throw new IllegalArgumentException("invalid_focus_target");
         if(active())return;
-        activation=UUID.randomUUID().toString();target=renderTarget;phase="LISTENING";draft.clear();draftKeys.clear();
+        activation=UUID.randomUUID().toString();target=renderTarget;phase="LISTENING";draft.clear();draftKeys.clear();queued.clear();retained=null;
         foldPartial="";partialVersionReserved=false;answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();wakeDeadline=now+WAKE_PREVIEW_LIMIT_MS;version++;
         grounding=null;modelOutcome=null;answerHoldUntil=0;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
@@ -134,7 +137,7 @@ final class NovaFocusState {
     }
     void close(String cause){
         log.info("[AWX][nova-focus] close reason={} phase={} version={}",cause!=null&&cause.matches("[a-z][a-z0-9_]{0,63}")?cause:"unknown",phase,version+1);
-        phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
+        phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();queued.clear();retained=null;foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
         grounding=null;modelOutcome=null;answerHoldUntil=0;wakeKind="NOVA";activationWakeWord="";cameraShotPending=false;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
     private String key(ConversateQuestionPolicy.Utterance u){
@@ -147,6 +150,9 @@ final class NovaFocusState {
         var decision=delivery.acceptForCue(u);
         if(Set.of("DUPLICATE","STALE").contains(decision.kind()))return active();
         String source=key(u);if(committed.contains(source))return active();
+        var exit=active()&&u.isFinal()?NovaWakeMatcher.find(u.text(),settings.exitWordOrDefault()):Optional.<NovaWakeMatcher.Match>empty();
+        if(exit.isPresent()&&exit.get().question().isEmpty()&&u.text().substring(0,exit.get().start()).matches("[\\p{P}\\p{Z}\\s]*")){close("voice_exit");return true;}
+        if(queued.stream().anyMatch(p->p.keys().contains(source))){reason="focus_question_already_queued";version++;return true;}
         if(!active()){
             if(!settings.enabled())return false;
             var wake=NovaWakeMatcher.find(u.text(),settings.wakeWord());
@@ -170,9 +176,9 @@ final class NovaFocusState {
         String text=u.text();
         if(source.equals(candidate))text=NovaWakeMatcher.find(text,activeWakeWord()).map(NovaWakeMatcher.Match::question).orElse("");
         if(phase.equals("WAITING")){phase="LISTENING";idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();}
-        if(!draft.contains(source)&&draft.hasInput()&&(source.startsWith("typed-")
-                ||Set.of("SNAPSHOT","THINKING","ANSWER_READY","PRESENTING").contains(phase)&&draft.finalReady(now,settings.utteranceQuietMs()))){
-            reason="focus_next_question_full";version++;return true;
+        if(!draft.contains(source)&&draft.hasInput()&&draft.finalReady(now,settings.utteranceQuietMs())){
+            if(queued.size()>=2){reason="focus_next_question_full";version++;return true;}
+            queued.addLast(new PendingInput(draft.text(),draftKeys));draft.clear();draftKeys.clear();
         }
         if(draft.update(source,text,u.isFinal(),now))version++;
         return true;
@@ -205,18 +211,16 @@ final class NovaFocusState {
     Request tick(long now,boolean capacity,long settingsVersion){
         if(!active())return null;
         if(draft.overLimit()){draft.clear();draftKeys.clear();reason="focus_input_limit";version++;}
-        // Keep duplex ASR and its one pending question while the accepted answer remains visible.
-        if(done&&phase.equals("PRESENTING")&&(now>=answerHoldUntil
-                ||capacity&&draft.finalReady(now,settings.utteranceQuietMs())
-                    &&draftKeys.size()==1&&draftKeys.iterator().next().startsWith("typed-"))){
-            phase=draft.hasInput()?"LISTENING":"WAITING";version++;
-        }
+        // Model capacity and confirmed speech, never display animation, drive the next request.
+        if(!inFlight&&!phase.equals("SNAPSHOT")&&!phase.equals("WAKE_PREVIEW")
+                &&(!queued.isEmpty()||draft.finalReady(now,settings.utteranceQuietMs()))){phase="LISTENING";version++;}
+        if(done&&!inFlight&&phase.equals("PRESENTING")&&now>=answerHoldUntil){phase="WAITING";version++;}
         if(phase.equals("WAKE_PREVIEW")&&now>=listenUntil){close("wake_unconfirmed");return null;}
-        if(inFlight&&now>=generationUntil){close("generation_timeout");return null;}
-        if(!done&&Set.of("ANSWER_READY","PRESENTING").contains(phase)&&now>=presentationUntil){close("presentation_unconfirmed");return null;}
-        if(phase.equals("WAITING")&&now>=idleUntil){close("idle_timeout");return null;}
-        if(phase.equals("LISTENING")&&!draft.hasInput()&&now>=listenUntil){close("wake_no_question");return null;}
-        if(draft.hasInput()&&!draft.finalized()&&now-draft.changedAt()>60000){close("input_unconfirmed");return null;}
+        if(inFlight&&now>=generationUntil){recoverRequest("generation_timeout");return null;}
+        if(!done&&Set.of("ANSWER_READY","PRESENTING").contains(phase)&&now>=presentationUntil){phase="WAITING";receipt="";reason="presentation_unconfirmed";version++;}
+        if(phase.equals("WAITING")&&idleUntil>0&&now>=idleUntil){idleUntil=0;reason="idle_timeout";version++;}
+        if(phase.equals("LISTENING")&&!draft.hasInput()&&queued.isEmpty()&&now>=listenUntil){phase="WAITING";reason="wake_no_question";version++;}
+        if(draft.hasInput()&&!draft.finalized()&&now-draft.changedAt()>60000){draft.clear();draftKeys.clear();reason="input_unconfirmed";phase=inFlight?phase:"WAITING";version++;}
         if(phase.equals("SNAPSHOT")&&!snapshotReady&&now>=snapshotUntil)snapshotFailed("snapshot_timeout",now);
         if(capacity&&phase.equals("SNAPSHOT")&&snapshotReady){
             var request=new Request(activation,pendingRequest.requestId(),pendingRequest.question(),snapshotImageBase64,snapshotImageMediaType,pendingRequest.sourceIds(),
@@ -224,15 +228,20 @@ final class NovaFocusState {
             pendingRequest=null;snapshotImageBase64=null;snapshotImageMediaType=null;clearCapture();snapshotReady=false;
             phase="THINKING";inFlight=true;inFlightRequest=request.requestId();generationUntil=now+90000;version++;return request;
         }
-        if(capacity&&phase.equals("LISTENING")&&draft.finalReady(now,settings.utteranceQuietMs())){
-            question=draft.text();if(question.codePointCount(0,question.length())>2000){draft.clear();draftKeys.clear();reason="focus_input_limit";version++;return null;}
-            String source=String.join("\n",draftKeys);
-            String requestKey=NovaFocusHistoryService.digest((draftKeys.size()==1&&source.startsWith("typed-")?"typed:":"")+source);
-            var request=new Request(activation,requestKey,question,null,null,draftKeys.stream().map(NovaFocusHistoryService::digest).collect(java.util.stream.Collectors.toSet()),
+        if(capacity&&!inFlight&&phase.equals("LISTENING")&&(!queued.isEmpty()||draft.finalReady(now,settings.utteranceQuietMs()))){
+            boolean fromDraft=queued.isEmpty();
+            var next=fromDraft?new PendingInput(draft.text(),draftKeys):queued.removeFirst();
+            if(fromDraft){draft.clear();draftKeys.clear();}
+            if(next.text().codePointCount(0,next.text().length())>2000){reason="focus_input_limit";version++;return null;}
+            if(!answer.isEmpty())retained=view(now);
+            question=next.text();
+            String source=String.join("\n",next.keys());
+            String requestKey=NovaFocusHistoryService.digest((next.keys().size()==1&&source.startsWith("typed-")?"typed:":"")+source);
+            var request=new Request(activation,requestKey,question,null,null,next.keys().stream().map(NovaFocusHistoryService::digest).collect(java.util.stream.Collectors.toSet()),
                 settings.answerSelectionOrDefault(),settingsVersion,settings.effectiveAnswerLengthChars(),settings.quickAnswer(),settings.webSearchEnabled(),settings.effectiveReasoningPreset());
             runPresentation=settings.effectivePresentation();
-            committed.addAll(draftKeys);while(committed.size()>128)committed.remove(committed.iterator().next());
-            draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";
+            committed.addAll(next.keys());while(committed.size()>128)committed.remove(committed.iterator().next());
+            foldPartial="";partialVersionReserved=false;answer=receipt="";turn="";
             grounding=null;modelOutcome=null;answerHoldUntil=0;
             // 사진 호출어로 연 활성화는 첫 확정 질문에만 사진 1장을 시도한다. 후속 질문은 찍지 않는다.
             boolean cameraShot=cameraShotPending;cameraShotPending=false;
@@ -321,15 +330,25 @@ final class NovaFocusState {
     }
     void answer(Request request,String turnId,String text,String ticket,long now,com.example.lms.learning.gemini.GeminiGateway.GroundedAnswer grounded,NovaFocusAnswer.ModelOutcome outcome){
         if(!accepts(request)||!turnId.equals(turn))return;
-        if(grounded!=null&&(!grounded.publicationReady()||!Objects.equals(text,grounded.originalText()))){close("focus_grounding_publication_held");return;}
-        if(!foldPrefixMatches(text)){close("focus_stream_final_mismatch");return;}
+        if(text==null||text.isBlank()){recoverRequest("focus_empty_answer");return;}
+        if(grounded!=null&&(!grounded.publicationReady()||!Objects.equals(text,grounded.originalText()))){recoverRequest("focus_grounding_publication_held");return;}
+        if(!foldPrefixMatches(text)){recoverRequest("focus_stream_final_mismatch");return;}
+        retained=null;
         grounding=grounded;modelOutcome=outcome;
         inFlight=false;runAnswerLength=request.answerLengthChars();answer=NovaFocusHistoryService.clip(text,8000);answerTruncated=!answer.equals(text);if(!partialVersionReserved)answerVersion++;foldPartial="";partialVersionReserved=false;receipt=ticket;phase="ANSWER_READY";reason="";
         firstVisible=done=false;idleUntil=answerHoldUntil=0;
         presentationUntil=now+Math.max(120000,Math.min(1500000L,answer.codePointCount(0,answer.length())*(long)settings.presentation().charIntervalMs()+120000));
         version++;
     }
-    void failed(Request request,String code){if(accepts(request))close(code);}
+    void failed(Request request,String code){if(accepts(request))recoverRequest(code);}
+    /** Finish a failed request without destroying the wearer's active conversation. */
+    private void recoverRequest(String code){
+        if(retained!=null){answer=retained.answerText();question=retained.questionText();turn=retained.turnId();answerVersion=retained.answerVersion();grounding=retained.grounding();modelOutcome=retained.modelOutcome();retained=null;}
+        foldPartial="";partialVersionReserved=false;inFlight=false;inFlightRequest="";pendingRequest=null;clearCapture();snapshotImageBase64=snapshotImageMediaType=null;
+        receipt="";firstVisible=done=false;idleUntil=0;phase="WAITING";reason=code;version++;
+    }
+    void suspend(String code){if(!active())return;recoverRequest(code);}
+    void resume(String ticket,long now){if(!active())return;receipt=answer.isEmpty()?"":ticket;firstVisible=done=false;phase=answer.isEmpty()?"WAITING":"ANSWER_READY";presentationUntil=now+120000;reason="";version++;}
     boolean receipt(String instance,String activationId,String turnId,long answerVer,String ticket,String event,long now){
         if(!server.equals(instance)||!activation.equals(activationId)||!turn.equals(turnId)||answerVersion!=answerVer||receipt.isEmpty()||!receipt.equals(ticket)||!active())return false;
         if(event.equals("first_visible")){if(!firstVisible){firstVisible=true;phase="PRESENTING";version++;}return true;}
@@ -337,11 +356,13 @@ final class NovaFocusState {
         if(!done){done=true;answerHoldUntil=now+(runPresentation==null?settings.effectivePresentation():runPresentation).tailHoldMs();
             idleUntil=now+settings.followupIdleMs();listenUntil=idleUntil;version++;}return true;
     }
-    View view(long now){return new View(server,activation,turn,version,answerVersion,active(),phase,
+    View view(long now){
+        if(retained!=null)return new View(server,activation,retained.turnId(),version,retained.answerVersion(),active(),phase,NovaFocusHistoryService.clip(draft.text(),2000),retained.questionText(),retained.answerText(),retained.renderTarget(),null,0,reason,retained.presentation(),retained.answerTruncated(),retained.hasMoreOnFold(),retained.answerLengthChars(),retained.grounding(),true,retained.modelOutcome());
+        return new View(server,activation,turn,version,answerVersion,active(),phase,
         NovaFocusHistoryService.clip(draft.text(),2000),question,inFlight&&!foldPartial.isEmpty()?foldPartial:answer,grounding==null?target:"fold",receipt,Math.max(0,idleUntil-now),reason,runPresentation==null?settings.effectivePresentation():runPresentation,answerTruncated,answerTruncated,runAnswerLength,grounding,!inFlight||foldPartial.isEmpty(),modelOutcome);}
     Map<String,Object> diagnostics(){var m=new LinkedHashMap<String,Object>();
         m.put("active",active());m.put("phase",phase);m.put("stateVersion",version);m.put("answerVersion",answerVersion);
-        m.put("bufferedQuestions",draft.hasInput()?1:0);m.put("snapshotPending",phase.equals("SNAPSHOT")&&pendingRequest!=null);
+        m.put("bufferedQuestions",queued.size()+(draft.hasInput()?1:0));m.put("snapshotPending",phase.equals("SNAPSHOT")&&pendingRequest!=null);
         m.put("captureAttempts",captureAttempts);m.put("capturesCompleted",capturesCompleted);m.put("duplicateSuppressed",duplicatesSuppressed);
         m.put("captureGrants",captureGrants);m.put("textFallbacks",textFallbacks);
         m.put("wakeKind",wakeKind);m.put("snapshot.trigger",snapshotTrigger);m.put("snapshot.outcome",snapshotOutcome);return Map.copyOf(m);}

@@ -146,6 +146,15 @@ public final class ChatConversationExportSupport {
             snapshot.put("consistency", "serializable_db_fence_non_atomic_diagnostics");
             snapshot.put("contentUpdateDetection", "serializable_transaction");
             snapshot.put("messageComplete", true); snapshot.put("diagnosticCompleteness", "partial");
+            snapshot.put("completeWithinFence", true);
+            snapshot.put("messageCompleteScope", "captured_db_fence");
+            snapshot.put("latestTurnCoverage", sessions.stream().map(s -> s.get("latestTurnCoverage").toString())
+                    .min(Comparator.comparingInt(coverage -> switch (coverage) {
+                        case "in_progress" -> 0;
+                        case "awaiting_assistant" -> 1;
+                        case "unknown" -> 2;
+                        default -> 3;
+                    })).orElse("unknown"));
             snapshot.put("exportStatus", status);
             snapshot.put("reasons", publicCount == 0 ? List.of("no_retained_messages")
                     : List.of("historical_raw_prompt_run_and_retrieval_not_fully_retained"));
@@ -317,7 +326,14 @@ public final class ChatConversationExportSupport {
         result.put("countExported", rows.size()); result.put("lastCursor", Long.toString(cursor));
         result.put("excludedSystemCount", excluded); result.put("messages", messages); result.put("turns", turns);
         result.put("understanding", summaries); result.put("attachments", attachments(c, session));
-        result.put("inProgress", runs == null ? "unknown" : runs.isRunning(session.id));
+        Boolean running = runs == null ? null : runs.isRunning(session.id);
+        result.put("inProgress", running == null ? "unknown" : running);
+        result.put("runStateSampledAt", clock.instant().toString());
+        boolean awaitingAssistant = !messages.isEmpty()
+                && "user".equals(messages.get(messages.size() - 1).get("role"));
+        result.put("latestTurnCoverage", Boolean.TRUE.equals(running) ? "in_progress"
+                : awaitingAssistant ? "awaiting_assistant"
+                : running == null ? "unknown" : "persisted_within_fence");
         result.put("sessionDerivedData", source("excluded", "ownership_or_exact_link_unproven", "derived_stores"));
         return result;
     }
@@ -326,9 +342,11 @@ public final class ChatConversationExportSupport {
         var value = pointer.value;
         Map<String, Object> diagnostics = new LinkedHashMap<>(value.diagnostics());
         var snapshot = traces == null ? null : traces.get(value.snapshotId()).orElse(null);
-        String sessionHash = SafeRedactor.hashValue(Long.toString(session.id));
-        boolean sameSession = snapshot != null && sessionHash.equals(snapshot.sessionId())
-                && (snapshot.sid() == null || sessionHash.equals(snapshot.sid()));
+        // Authorize the numeric DB session first; accept only its two exact producer formats.
+        Set<String> sessionHashes = Set.of(SafeRedactor.hashValue(Long.toString(session.id)),
+                SafeRedactor.hashValue("chat-" + session.id));
+        boolean sameSession = snapshot != null && snapshot.sessionId() != null && sessionHashes.contains(snapshot.sessionId())
+                && (snapshot.sid() == null || snapshot.sessionId().equals(snapshot.sid()));
         String ringReason = snapshot == null ? "ring_expired_or_restarted"
                 : sameSession ? "safe_typed_projection_only" : "session_hash_missing_or_mismatch";
         List<String> conflicts = new ArrayList<>();
@@ -352,7 +370,7 @@ public final class ChatConversationExportSupport {
         turn.put("trace", Map.of("status", diagnostics.isEmpty() ? "unavailable" : "partial",
                 "reason", "durable_projection_with_optional_exact_ring", "diagnostics", diagnostics,
                 "ring", source(sameSession ? "partial" : "unavailable", ringReason, "process_ring"), "conflicts", conflicts));
-        turn.put("events", sameSession ? correlatedEvents(snapshot, sessionHash, budget) : source("unavailable", ringReason, "process_ring"));
+        turn.put("events", sameSession ? correlatedEvents(snapshot, snapshot.sessionId(), budget) : source("unavailable", ringReason, "process_ring"));
         turn.put("run", source("unavailable", "historical_exact_run_not_recorded", "process_registry"));
         turn.put("evidence", source("partial", "saved_answer_sources_only_raw_retrieval_not_retained", "assistant_body"));
         turn.put("prompt", source("partial", "typed_metadata_only_delivery_unknown", "durable_pointer"));

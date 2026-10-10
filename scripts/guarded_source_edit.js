@@ -97,6 +97,38 @@ async function guardedSourceEdit(tools, options) {
     return result;
   }
   let receipt;
+  let renewalTimer, renewalInFlight, stopped = false, renewalPaused = false, renewalFailure = null, renewalCount = 0;
+  const interval = options.renewIntervalMs ?? 30000;
+  if (!Number.isFinite(interval) || interval < 10) throw new Error('invalid-renewal-interval');
+  const now = options.now || (() => performance.now());
+  let lastRenewal = now();
+  const cancelled = () => options.signal?.aborted === true;
+  function writable() {
+    if (cancelled()) { result.reason = 'caller-cancelled'; return false; }
+    if (renewalFailure != null) { result.reason = 'lease-renewal-failed'; result.renewExitCode = renewalFailure; return false; }
+    return true;
+  }
+  async function renewIfDue() {
+    if (renewalInFlight) { await renewalInFlight; return; }
+    if (stopped || cancelled() || renewalFailure != null || now() - lastRenewal < interval) return;
+    renewalInFlight = (async () => {
+      try {
+        const renewed = await completed('heartbeat', receipt.fingerprint);
+        if (renewed.exit_code !== 0) renewalFailure = renewed.exit_code ?? 'unknown';
+        else { lastRenewal = now(); renewalCount++; }
+      } catch { renewalFailure = 'tool-error'; }
+    })();
+    try { await renewalInFlight; } finally { renewalInFlight = null; }
+  }
+  function scheduleRenewal() {
+    if (stopped || renewalPaused || cancelled() || renewalFailure != null) return;
+    renewalTimer = setTimeout(async () => {
+      if (renewalPaused || stopped) return;
+      await renewIfDue();
+      scheduleRenewal();
+    }, interval);
+    renewalTimer.unref?.();
+  }
   async function run(action, fingerprint, expectedInputDigest) {
     return await tools.exec_command({cmd: command(options, action, fingerprint, expectedInputDigest), workdir: options.root,
       yield_time_ms: 1000, max_output_tokens: 2000});
@@ -133,6 +165,7 @@ async function guardedSourceEdit(tools, options) {
   }
   let chunks = [];
   try {
+    if (!writable()) return result;
     // Keep all chunks including output before an asynchronous yield.
     let begun = await run('begin');
     chunks.push(begun.output || '');
@@ -162,6 +195,9 @@ async function guardedSourceEdit(tools, options) {
     result.phase = 'scope';
     const allowed = new Set(receipt.writePaths.map(canonical));
     if (paths.some(path => !allowed.has(path))) { result.reason = 'patch-outside-declared-targets'; return result; }
+    lastRenewal = now();
+    scheduleRenewal();
+    if (!writable()) return result;
     let resumeProof;
     if (options.resume) {
       result.phase = 'resume';
@@ -169,6 +205,7 @@ async function guardedSourceEdit(tools, options) {
       if (!resumeProof) return result;
     }
     result.phase = 'verify';
+    const renewalBeforeVerify = renewalCount;
     const verified = await completed('verify', receipt.fingerprint);
     result.verifyExitCode = verified.exit_code ?? null;
     if (verified.exit_code !== 0) {
@@ -176,6 +213,21 @@ async function guardedSourceEdit(tools, options) {
       result.outputTail = tail(chunks.join(''));
       result.failureLine = failureLine(chunks.join(''));
       return result;
+    }
+    if (!writable()) return result;
+    // Serialize the final renewal/check/write-entry boundary. No timer may
+    // renew between this strict verification and invoking the edit tool.
+    renewalPaused = true;
+    clearTimeout(renewalTimer);
+    if (renewalInFlight) await renewalInFlight;
+    await renewIfDue();
+    if (!writable()) return result;
+    // Renewal only extends our generation; it never substitutes for a fresh
+    // strict preimage/owner/manifest verification before the write.
+    if (renewalCount !== renewalBeforeVerify) {
+      const fresh = await completed('verify', receipt.fingerprint);
+      result.verifyExitCode = fresh.exit_code ?? null;
+      if (fresh.exit_code !== 0) return result;
     }
     if (resumeProof) {
       result.phase = 'resume-final';
@@ -186,14 +238,25 @@ async function guardedSourceEdit(tools, options) {
         return result;
       }
     }
+    if (renewalInFlight) await renewalInFlight;
+    if (!writable()) return result;
     result.phase = 'edit';
     result.editCalls++;
+    renewalPaused = false;
+    scheduleRenewal();
     const edited = await tools.apply_patch(options.patch);
     if (edited?.isError || (edited?.exit_code != null && edited.exit_code !== 0))
       throw new Error('edit-tool-failed');
+    result.editCompleted = true;
+    if (renewalInFlight) await renewalInFlight;
+    if (!writable()) return result;
     result.status = 'applied';
     return result;
   } finally {
+    stopped = true;
+    clearTimeout(renewalTimer);
+    if (renewalInFlight) await renewalInFlight;
+    if (result.editCompleted && !writable()) result.status = 'hold';
     if (receipt) {
       const ended = await completed('end', receipt.fingerprint);
       result.releaseExitCode = ended.exit_code ?? null;

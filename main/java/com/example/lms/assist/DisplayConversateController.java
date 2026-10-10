@@ -359,7 +359,7 @@ public class DisplayConversateController {
         var prior=relay.active(channel);
         var requested=new DisplayRelay.Producer(caller,request.clientId(),b.id);
         if(((request.activate()||request.assistId()==null)&&!requested.equals(prior))||(prior!=null&&prior.owner().equals(caller)&&prior.client().equals(request.clientId())&&!prior.assistId().equals(b.id))){
-            if(prior!=null){Binding old=bindings.get(prior.owner());if(old!=null&&old.id!=null)try{var oldState=sessions.status(old.owner,old.id);sessions.control(old.owner,old.id,oldState.epoch(),prior.owner().equals(caller)&&prior.assistId().equals(b.id)?"producer_reclaimed":"producer_changed");}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;}}
+            if(prior!=null){Binding old=bindings.get(prior.owner());if(old!=null&&prior.assistId()!=null)try{var oldState=sessions.status(prior.owner(),prior.assistId());sessions.control(prior.owner(),prior.assistId(),oldState.epoch(),prior.owner().equals(caller)?"producer_reclaimed":"producer_changed");}catch(ResponseStatusException missing){if(missing.getStatusCode().value()!=404)throw missing;}}
             b.relayChannel=channel;b.producerClient=request.clientId();b.lastStartAt=0;b.segmentSeconds=defaultSegmentSeconds==0?0:Math.max(5,Math.min(60,defaultSegmentSeconds));
             var producer=relay.activate(channel,caller,request.clientId(),b.id);relay.configure(channel,producer,true,b.segmentSeconds);
             s=sessions.status(caller,b.id);s=sessions.pollOutput(caller,b.id,s.epoch(),request.clientId());

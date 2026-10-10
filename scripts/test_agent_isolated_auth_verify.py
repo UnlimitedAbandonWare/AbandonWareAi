@@ -12,6 +12,8 @@ import json
 import re
 import sys
 import unittest
+import tempfile
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -52,6 +54,16 @@ class IsolatedAuthVerifyTest(unittest.TestCase):
         verdict, reason = m.verdict_from_evidence(_pass_evidence(), 0, False)
         self.assertEqual("ISOLATED_PASS", verdict)
         self.assertIn("harness", reason)
+
+    def test_pass_evidence_requires_successful_execution(self):
+        # A stale/partial PASS receipt cannot overrule the process outcome.
+        cases = ((1, False), (None, True), (None, False), (0, True))
+        for run_exit, timed_out in cases:
+            with self.subTest(run_exit=run_exit, timed_out=timed_out):
+                verdict, reason = m.verdict_from_evidence(
+                    _pass_evidence(), run_exit, timed_out)
+                self.assertNotEqual("ISOLATED_PASS", verdict)
+                self.assertIn("execution", reason)
 
     def test_verdict_fail_maps_isolated_fail(self):
         ev = _pass_evidence()
@@ -106,6 +118,35 @@ class IsolatedAuthVerifyTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 m.port_guard(port)
         m.port_guard(18234)  # 정상 포트는 통과
+
+    def test_spawn_error_does_not_publish_private_exception_text(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "run.log"
+            with patch.object(m.subprocess, "run", side_effect=OSError(
+                    "pass" + "word=" + "synthetic-private-marker")):
+                observed = m.run_harness(Path(folder), 18234,
+                    Path(folder) / m.EVIDENCE_NAME, "synthetic", 1, log)
+            self.assertEqual((None, False), observed)
+            self.assertNotIn("synthetic-private-marker", log.read_text(encoding="utf-8"))
+            self.assertIn("harness_spawn_failed", log.read_text(encoding="utf-8"))
+            self.assertIn("OSError", log.read_text(encoding="utf-8"))
+
+    def test_release_failure_cannot_complete_a_pass_run(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            def fake_harness(root, port, evidence, *args):
+                evidence.write_text(json.dumps(_pass_evidence()), encoding="utf-8")
+                return 0, False
+            with patch.object(m, "acquire_port", return_value=(
+                    {"port": 18234, "leaseId": "synthetic-lease"}, {})), \
+                    patch.object(m, "run_harness", side_effect=fake_harness), \
+                    patch.object(m, "release_port", return_value=False):
+                result = m.verify(root, "synthetic", "synthetic-task", "18200-18399",
+                                  1, None, False, mode="browser")
+            self.assertFalse(result["leasedPortReleased"])
+            self.assertEqual("ISOLATED_FAIL", result["verdict"])
+            self.assertEqual("port_release_failed", result["reason"])
+            self.assertIsNone(result["sharedPortContacts"])
 
     def test_dry_run_is_not_run(self):
         root = Path(__file__).resolve().parent.parent

@@ -19,6 +19,7 @@ failures, keyed by agent+actor+path+cause (not session_id alone).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -206,13 +207,18 @@ def trace_path(root: Path) -> Path:
     return root / "var" / "agent-work-guard" / "hook-trace.jsonl"
 
 
-def write_trace(root: Path, row: dict) -> None:
+def write_trace(root: Path, row: dict) -> bool:
     """One JSONL line: event, tool name/id, decision, exit, elapsed. No cmd/body."""
     try:
         p = trace_path(root)
         p.parent.mkdir(parents=True, exist_ok=True)
         if p.is_file() and p.stat().st_size > 262144:
-            p.write_text("", encoding="utf-8")
+            # Preserve historical evidence; a size limit must not erase it.
+            archive = p.with_name(f"hook-trace.rotated-{time.time_ns()}-{os.getpid()}.jsonl")
+            try:
+                p.rename(archive)
+            except FileNotFoundError:
+                pass  # Another concurrent writer already rotated this file.
         safe = {
             "at": row.get("at") or utcnow(),
             "phase": row.get("phase") or "",
@@ -222,11 +228,51 @@ def write_trace(root: Path, row: dict) -> None:
             "decision": (row.get("decision") or "")[:24],
             "exit": row.get("exit"),
             "elapsedMs": row.get("elapsedMs"),
+            "stage": "python",
         }
+        if row.get("reasonCode") in ("path-does-not-exist", "doubled-src-prefix", "same-target-retry"):
+            safe["reasonCode"] = row["reasonCode"]
+        if re.fullmatch(r"[a-f0-9]{64}", str(row.get("commandHash") or "")):
+            safe["commandHash"] = row["commandHash"]
         with p.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(safe, ensure_ascii=True) + "\n")
+        return True
     except OSError:
-        return
+        sys.stderr.write("guard-trace-write-failed\n")
+        return False
+
+
+def summarize_trace(rows):
+    """Count paired stages, never add PS and Python elapsed or infer false positives."""
+    unique, unidentified = {}, 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        call = row.get("toolUseId")
+        if not call:
+            unidentified += row.get("phase") == "exit"
+            continue
+        stage = row.get("stage") or ("ps1" if row.get("wrapper") == "ps1" else "python")
+        if stage not in ("python", "ps1") or row.get("phase") not in ("enter", "exit"):
+            continue
+        event = str(row.get("event") or "").removesuffix(":hidden-fail")
+        key = (call, event, stage, row["phase"])
+        unique.setdefault(key, row)
+    stages, blocked = {}, set()
+    for stage in ("python", "ps1"):
+        exits = [(key, row) for key, row in unique.items() if key[2:] == (stage, "exit")]
+        elapsed = sorted(row["elapsedMs"] for _, row in exits
+                         if type(row.get("elapsedMs")) is int and row["elapsedMs"] >= 0)
+        missing = sum(key[:3] + ("enter",) not in unique for key, _ in exits)
+        missing += sum(key[:3] + ("exit",) not in unique for key in unique if key[2:] == (stage, "enter"))
+        stages[stage] = {"N": len(elapsed), "elapsedSumMs": sum(elapsed),
+                         "p95Ms": elapsed[(95 * len(elapsed) + 99) // 100 - 1] if elapsed else None,
+                         "missingPair": missing}
+        blocked.update(key[:2] for key, row in exits if row.get("exit") == 2)
+    return {"schemaVersion": "awx.guard-trace-summary.v1", "blockedCalls": len(blocked),
+            "true_block": 0, "false_positive": 0, "unknown": len(blocked),
+            "classificationBasis": "contemporaneous-rule-and-same-request-result-required",
+            "stages": stages, "unpairedUnidentifiedRows": unidentified}
 
 
 def ledger_path(root: Path, override=None) -> Path:
@@ -629,12 +675,15 @@ def hook(root: Path, event: dict, ledger=None) -> tuple:
             write_trace(root, {"phase": "exit", "event": hook_event,
                                "toolName": tool_name, "toolUseId": call_id,
                                "decision": (payload or {}).get("decision"), "exit": 2,
+                               "reasonCode": verdict["reason"],
+                               "commandHash": hashlib.sha256(cmd.encode("utf-8")).hexdigest(),
                                "elapsedMs": int((time.time() - started) * 1000)})
             return payload, 2
         payload = emit_payload(agent, False, "", "", verdict)
         write_trace(root, {"phase": "exit", "event": hook_event,
                            "toolName": tool_name, "toolUseId": call_id,
                            "decision": (payload or {}).get("decision"), "exit": 0,
+                           "commandHash": hashlib.sha256(cmd.encode("utf-8")).hexdigest(),
                            "elapsedMs": int((time.time() - started) * 1000)})
         return payload, 0
     except Exception as exc:

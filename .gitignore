@@ -172,6 +172,7 @@ backup/
 **/backup/**
 _build_fix_report.json
 __reports__/
+docs/reports/agent-reviews/**/gradle-cache/
 /__archive__/
 /legacy-quarantine/
 /_patch_artifacts/

@@ -13,6 +13,39 @@ function fixture(overrides={}) {
   return {capture,client,env,calls,nodes,timers,media,stopped:()=>stopped};
 }
 
+for(const boundary of ['complete','cancel','timeout','focus_close']) {
+ test(`camera ${boundary} preserves a separate active microphone and subsequent PCM`,async()=>{
+  const {createSnapshotter}=require('../../../main/resources/static/assets/display/display-snapshot.js');
+  const {mount}=require('../../../main/resources/static/assets/display/display-focus-controls.js');
+  const f=fixture();let videoStops=0;const cameraTimers=new Map(),mediaCalls=[];
+  const videoStream={getTracks:()=>[{stop(){videoStops++;}}],getVideoTracks:()=>[{getSettings:()=>({facingMode:'environment'})}]};
+  const navigator={mediaDevices:{async getUserMedia(constraints){mediaCalls.push(constraints);return constraints.audio===false?videoStream:f.media;}}};
+  f.env.navigator=navigator;
+  const video={readyState:boundary==='complete'?2:0,videoWidth:640,videoHeight:480,play:async()=>{},srcObject:null};
+  const canvas={getContext:()=>({drawImage(){},getImageData:()=>({data:new Uint8ClampedArray(64).fill(64)})}),toDataURL:()=>'data:image/jpeg;base64,QUJD'};
+  const snapshotter=createSnapshotter({navigator,document:{createElement:tag=>tag==='video'?video:canvas},setTimer(fn){const id={};cameraTimers.set(id,fn);return id;},clearTimer:id=>cameraTimers.delete(id)});
+  const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,hidden:true,append(){},replaceChildren(){},removeAttribute(){}});return elements.get(id);};
+  const focusCalls=[];const controls=mount({host:{DisplaySnapshot:{createSnapshotter:()=>snapshotter},NovaFocus:{createProjection:()=>({update(){},dismiss(){},visibility(){},dispose(){},isActive:()=>false}),receiptSender:()=>()=>{}}},document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{async focusRequest(route){focusCalls.push(route);return {};}}});
+  try{
+   await f.capture.start();f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();
+   const chunksBefore=f.calls.filter(c=>Array.isArray(c)&&c[0]==='chunk').length;
+   const shot=snapshotter.captureOnce();await flush();
+   if(boundary==='cancel')snapshotter.stop();
+   if(boundary==='timeout')cameraTimers.values().next().value();
+   if(boundary==='focus_close')await element('nova-close').onclick();
+   const result=await shot;assert.equal(result.ok,boundary==='complete');
+   if(boundary==='timeout')assert.equal(result.error,'camera_frame_timeout');
+   assert.ok(videoStops>0);assert.equal(video.srcObject,null);assert.equal(snapshotter.busy,false);
+   assert.equal(f.stopped(),0);assert.equal(f.calls.filter(c=>c==='close'||c==='stop').length,0);assert.equal(f.capture.isActive(),true);
+   f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();
+   assert.equal(f.calls.filter(c=>Array.isArray(c)&&c[0]==='chunk').length,chunksBefore+1);
+   assert.equal(mediaCalls.length,2);assert.equal(mediaCalls[0].video,false);assert.equal(mediaCalls[1].audio,false);
+   if(boundary==='focus_close')assert.deepEqual(focusCalls,['close']);
+   await f.capture.stop();assert.equal(f.stopped(),1);assert.equal(f.calls.filter(c=>c==='close').length,1);
+  }finally{controls.dispose();snapshotter.stop();await f.capture.stop();}
+ });
+}
+
 for(const outcome of ['success','event_owner_required','asr_quota_exceeded','asr_rate_limited','transport']) {
  test(`late renewal ${outcome} cannot affect a capture started after explicit stop`,async()=>{
   let settle,begins=0,ends=0;
@@ -164,14 +197,68 @@ test('stale_epoch on beginVoice is recoverable waiting, not a fatal stop',async(
   const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){const e=Error('stale_epoch');e.status=409;throw e;}}});
   await f.capture.start();assert.equal(f.stopped(),0);assert.equal(f.capture.state.phase,'WAITING');assert.equal(f.timers.size>0,true);await f.capture.stop();
 });
-test('drop recovery uses one backoff retry at a time while preserving capture intent',async()=>{
+test('persistent stale conflicts back off then stop with the reason after three retries',async()=>{
   let starts=0,n=0;const timers=new Map();
   const f=fixture({options:{continuous:true,setTimer(fn,ms){timers.set(++n,fn);return n;},clearTimer:k=>timers.delete(k)},
     client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){starts++;const e=Error('segment_not_ready');e.status=409;throw e;},async endVoice(){},async voiceChunk(){}}});
   await f.capture.start();assert.equal(f.capture.state.phase,'WAITING');
-  for(let i=0;i<40;i++){const batch=[...timers.values()];timers.clear();for(const fn of batch)fn();await flush();await flush();}
-  assert.equal(f.stopped(),0);assert.equal(f.capture.state.phase,'WAITING');
-  assert.ok(starts>=13,'transport retries must not require acoustic quiet: '+starts);await f.capture.stop();const stopped=starts;for(const fn of timers.values())fn();await flush();assert.equal(starts,stopped);
+  for(let i=0;i<3;i++){const batch=[...timers.values()];timers.clear();for(const fn of batch)fn();await flush();await flush();
+    assert.equal(f.stopped(),0);assert.equal(f.capture.state.phase,'WAITING');}
+  for(const [k,fn] of [...timers]){timers.delete(k);fn();await flush();await flush();}
+  assert.equal(starts,4,'초기 시도 + 지수 백오프 재시도 3회에서 멈춰야 한다');
+  assert.equal(f.stopped(),1);assert.equal(f.capture.state.phase,'ERROR');assert.equal(f.capture.state.errorCode,'segment_not_ready');
+  assert.equal(f.timers.size,0);
+  for(const fn of [...timers.values()])fn();await flush();assert.equal(starts,4);
+});
+test('successful starts cannot reset a persistent chunk409 recovery budget',async()=>{
+  let starts=0,chunks=0,n=0;const timers=new Map();
+  const f=fixture({options:{continuous:true,setTimer(fn,ms){const id=++n;timers.set(id,{fn,ms});return id;},clearTimer:k=>timers.delete(k)},
+    client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){starts++;},async endVoice(){},
+      async voiceChunk(){chunks++;throw Object.assign(Error('stale_epoch'),{status:409});}}});
+  try{
+    await f.capture.start();
+    for(let cycle=0;cycle<8&&f.capture.isActive();cycle++){
+      f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();await flush();
+      assert.equal(f.capture.state.phase,'WAITING');
+      const retry=[...timers.entries()].filter(([,value])=>value.ms<=30251).at(-1);
+      assert.ok(retry);timers.delete(retry[0]);retry[1].fn();await flush();await flush();
+    }
+    assert.equal(starts,4,'initial start plus three retries must bound persistent PCM conflicts');
+    assert.equal(chunks,4);assert.equal(f.capture.isActive(),false);
+    assert.equal(f.capture.state.phase,'ERROR');assert.equal(f.capture.state.errorCode,'stale_epoch');
+    assert.equal(f.stopped(),1);assert.equal(timers.size,0);
+    await f.capture.stop();await flush();assert.equal(starts,4);
+  }finally{await f.capture.stop();}
+});
+test('confirmed PCM delivery resets the budget for a later independent conflict',async()=>{
+  let starts=0,accepted=0,rejectChunk=true,n=0;const timers=new Map();
+  const f=fixture({options:{continuous:true,setTimer(fn,ms){const id=++n;timers.set(id,{fn,ms});return id;},clearTimer:k=>timers.delete(k)},
+    client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){starts++;},async endVoice(){},
+      async voiceChunk(){if(rejectChunk)throw Object.assign(Error('stale_epoch'),{status:409});accepted++;}}});
+  try{
+    await f.capture.start();
+    for(let episode=0;episode<5;episode++){
+      rejectChunk=true;
+      for(let conflict=0;conflict<2;conflict++){
+        f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();await flush();
+        assert.equal(f.capture.state.phase,'WAITING');
+        const retry=[...timers.entries()].filter(([,value])=>value.ms<=30251).at(-1);
+        assert.ok(retry);timers.delete(retry[0]);retry[1].fn();await flush();await flush();
+        assert.equal(f.capture.state.phase,'LISTENING');
+      }
+      rejectChunk=false;f.nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(7680)}});await flush();await flush();
+      assert.equal(f.capture.state.phase,'LISTENING');assert.equal(f.stopped(),0);
+    }
+    assert.equal(starts,11);assert.equal(accepted,5);
+  }finally{await f.capture.stop();}
+});
+test('a stale conflict recovery restarts once and clears the bound after a healthy begin',async()=>{
+  let starts=0,n=0;const timers=new Map();
+  const f=fixture({options:{continuous:true,setTimer(fn,ms){timers.set(++n,fn);return n;},clearTimer:k=>timers.delete(k)},
+    client:{state:{role:'STANDALONE',audioAvailable:true},beginVoice(){starts++;if(starts===1){const e=Error('stale_epoch');e.status=409;throw e;}return Promise.resolve();},async endVoice(){},async voiceChunk(){},async reconnect(){}}});
+  await f.capture.start();assert.equal(f.capture.state.phase,'WAITING');
+  for(let i=0;i<8&&f.capture.state.phase==='WAITING';i++){const batch=[...timers.values()];timers.clear();for(const fn of batch)fn();await flush();await flush();}
+  assert.equal(starts,2);assert.equal(f.capture.state.phase,'LISTENING');assert.equal(f.stopped(),0);await f.capture.stop();
 });
 test('audio/stop on a drifted epoch refreshes once and keeps the assist session',async()=>{
   let stops=0,boots=0;
@@ -252,4 +339,40 @@ test('assist_not_found without a reconnect-capable client still surfaces the cod
  const f=fixture({options:{continuous:true},client:{state:{role:'STANDALONE',audioAvailable:true},async beginVoice(){throw Error('assist_not_found');}}});
  await f.capture.start();assert.equal(f.capture.state.phase,'ERROR');
  assert.equal(f.capture.state.errorCode,'assist_not_found');assert.equal(f.capture.state.errorStage,'server_begin');
+});
+test('each voice start refetches status so a stale epoch is replaced before the retry',async()=>{
+ let starts=0,boots=0;
+ const f=respond(route=>{
+   if(route==='bootstrap'){boots++;return f.ok(view({epoch:boots}));}
+   if(route==='audio/start'){starts++;return starts===1?f.bad(409,'stale_epoch'):f.ok(view({epoch:boots+10,audioState:'READY'}));}
+   return f.ok(view());});
+ f.client.start();await flush();await assert.rejects(f.client.beginVoice(),/stale_epoch/);
+ await f.client.beginVoice();
+ const chunks=f.calls.filter(c=>c.route==='audio/start');
+ assert.equal(chunks.length,2);assert.notEqual(chunks[0].body.epoch,chunks[1].body.epoch);
+ assert.ok(boots>=3,'각 시작 시도는 서버 상태를 먼저 다시 읽는다: '+boots);
+ await f.client.endVoice();f.client.dispose();
+});
+test('caption acknowledgements retry at most three times per rendered revision',async()=>{
+ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+ const nodes=new Map(),rafQ=[],acks=[];
+ const el=()=>({value:'',hidden:true,checked:false,disabled:false,textContent:'',style:{setProperty(){}},classList:{toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},focus(){},add(){},replaceChildren(){},querySelectorAll:()=>[]});
+ const document={body:{hasAttribute:()=>true},visibilityState:'visible',hidden:false,addEventListener(){},getElementById:key=>{if(!nodes.has(key))nodes.set(key,el());return nodes.get(key);}};
+ const state={assistId:id,epoch:2,version:5,connection:'READY',ready:true,role:'STANDALONE',audioAvailable:true,audioFinished:true,reconnects:0,
+   caption:{utteranceId:'u1',revision:1,isFinal:true,text:'합성 전사 문장'},captionTtlMs:60000,cardTtlMs:14000,hintsEnabled:false};
+ let onChange;const client={state,start(){onChange?.(state)},pause(){},dispose(){},storedLensLink:()=>null,relaySettings:async()=>{},
+   acknowledge(version,phase){acks.push({version,phase});return Promise.reject(Object.assign(Error('stale_epoch'),{status:409}));}};
+ vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../../main/resources/static/assets/display/app.js'),'utf8'),{
+   document,navigator:{},location:{search:''},URLSearchParams,Date,crypto:{randomUUID:()=>id},
+   sessionStorage:{getItem:()=>null,setItem(){},removeItem(){}},localStorage:{getItem:()=>null,setItem(){},removeItem(){}},
+   window:{location:{search:''},DisplayCore:require('../../../main/resources/static/assets/display/display-core.js'),
+     DisplayConversate:{createClient(options){onChange=options.onChange;return client;}},
+     DisplayVoice:{createCapture:()=>({state:{},isActive:()=>false,stop(){},resume(){},reconnect(){},deviceChanged(){},finish(){},start:async()=>{}})},addEventListener(){}},
+   requestAnimationFrame:fn=>rafQ.push(fn),setTimeout:()=>1,clearTimeout(){}});
+ const pump=async()=>{const batch=rafQ.splice(0);for(const fn of batch)fn();await flush();await flush();const next=rafQ.splice(0);for(const fn of next)fn();await flush();await flush();};
+ await pump();for(let i=0;i<6;i++){onChange(state);await pump();}
+ assert.equal(acks.length,3,'한 캡션 리비전의 수신 확인 재시도는 3회에서 멈춘다');
+ state.version=6;state.caption={utteranceId:'u1',revision:2,isFinal:true,text:'합성 전사 문장'};
+ for(let i=0;i<6;i++){onChange(state);await pump();}
+ assert.equal(acks.length,6,'새 리비전은 새 시도 한도를 가진다');
 });

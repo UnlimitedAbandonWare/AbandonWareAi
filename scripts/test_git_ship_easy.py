@@ -441,6 +441,22 @@ class EasyCase(unittest.TestCase):
         self.assertIsInstance(res,dict);self.assertEqual(res['shipped'],3)
         self.assertEqual(res['remainingStaged'],0)
 
+    # (27) 자동 보류 목록은 사유별로 묶고 전체는 파일에 남긴다
+    def test_hold_lines_groups_by_reason_and_writes_full_list(self):
+        holds = {f"uploads/chat/{i}.md": ["대량 삭제"] for i in range(5)}
+        holds[".env.example"] = ["비밀값 검사: sensitive-assignment"]
+        ge._hold_lines(holds, self.out.append, root=self.repo)
+        text = self.joined()
+        self.assertIn("[5개] 대량 삭제", text)
+        self.assertIn("uploads/chat/0.md", text)
+        self.assertIn("... 외 2개", text)
+        self.assertIn("[1개] 비밀값 검사: sensitive-assignment", text)
+        dump = self.repo / "var/git-ship/last-holds.txt"
+        self.assertTrue(dump.is_file())
+        body = dump.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(6, len([l for l in body if l.strip()]))
+        self.assertTrue(any(".env.example" in l for l in body))
+
 
 class AutoShipCase(unittest.TestCase):
     """T1~T10: 빈 Enter = 자동 올리기(auto_ship_flow) fixture 검증.

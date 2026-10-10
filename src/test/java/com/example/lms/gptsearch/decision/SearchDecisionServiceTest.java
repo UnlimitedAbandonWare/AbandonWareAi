@@ -16,6 +16,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SearchDecisionServiceTest {
+    @org.junit.jupiter.api.Test
+    void currentComparisonStableConceptAndExplicitOffKeepSeparateDecisions() {
+        SearchDecisionService service = new SearchDecisionService();
+        String current = "Fixture-A와 Fixture-B의 최신 공식 발표 수치를 비교해줘";
+        var comparison = service.decide(current, SearchMode.AUTO, null, 5);
+        assertTrue(comparison.shouldSearch());
+        assertEquals(SearchDecision.Depth.DEEP, comparison.depth());
+        assertFalse(service.decide("Fixture-A의 기본 개념을 한 문장으로 설명해줘", SearchMode.AUTO, null, 5).shouldSearch());
+        assertFalse(service.decide(current, SearchMode.OFF, null, 5).shouldSearch());
+    }
 
     @AfterEach
     void clearTrace() {

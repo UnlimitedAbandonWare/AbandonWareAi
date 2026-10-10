@@ -7,11 +7,11 @@
 격리 서버를 띄운 뒤 stdlib HTTP로 같은 4장면을 검증한다.
 proto-open=false + 실행마다 프로세스 안에서 무작위 생성 계정.
 
-보장:
-  - 실제 .env/.secrets·운영 계정·저장된 쿠키·인증 상태는 읽지 않는다.
-  - 비밀번호·토큰은 출력·env·로그 어디에도 나오지 않는다.
-  - 공유 개발 서버 18180~18182에는 접촉하지 않는다(포트 lease가 보호 포트를 제외).
-  - 끝나면 포트 lease를 반납한다(실패 경로에서도 finally로 반납).
+확인 범위:
+  - 포트 선택은 보호 포트 18180~18182를 거부하고 finally에서 lease 반납을 시도한다.
+  - browser/http 경로는 부모 환경과 기본 앱 설정을 상속한다. 환경·설정·자손
+    프로세스 격리는 아직 입증되지 않았으므로 격리 판정만으로 그 보장을 주장하지 않는다.
+  - 실제 계정/저장된 인증 상태를 격리 시험의 대체 증거로 사용하지 않는다.
 
 Usage:
   python -B scripts/agent_isolated_auth_verify.py --task <taskId>
@@ -89,6 +89,12 @@ def verdict_from_evidence(evidence: dict | None, run_exit: int | None,
     if missing:
         return "ISOLATED_FAIL", "checks_incomplete:" + ",".join(missing)
     if evidence.get("verdict") == "PASS" and not evidence.get("failures"):
+        if timed_out:
+            return "NOT_RUN", "execution_timeout"
+        if run_exit is None:
+            return "NOT_RUN", "execution_not_observed"
+        if run_exit != 0:
+            return "ISOLATED_FAIL", "execution_failed:%s" % run_exit
         return "ISOLATED_PASS", "harness_pass"
     return "ISOLATED_FAIL", "harness_fail:" + ",".join(
         str(f) for f in (evidence.get("failures") or ["verdict=" +
@@ -160,7 +166,7 @@ def run_harness(root: Path, port: int, evidence: Path, host_id: str,
         timed_out = True
         blob = "".join(str(p) for p in (exc.stdout or "", exc.stderr or ""))
     except OSError as exc:
-        log_path.write_text("harness_spawn_failed: %s\n" % exc,
+        log_path.write_text("harness_spawn_failed: %s\n" % type(exc).__name__,
                             encoding="utf-8")
         return None, False
     # 로그에 비밀값 형태가 있으면 남기지 않고 사유만 기록한다.
@@ -466,7 +472,7 @@ def verify(root: Path, owner: str, task: str, port_range: str,
             requests=(data or {}).get("requests") or [],
             generationPosts=(data or {}).get("generationPosts"),
             restoredAuthState=(data or {}).get("restoredAuthState"),
-            sharedPortContacts=0,
+            sharedPortContacts=None,  # No network-contact observer is installed.
             secretLeakCount=secret_leak_count(
                 json.dumps(data or {}, ensure_ascii=False)),
             gradleExit=code,
@@ -477,6 +483,9 @@ def verify(root: Path, owner: str, task: str, port_range: str,
     if result is not None:
         result["leasedPortReleased"] = released
         result["leaseId"] = lease_id
+        if not released and result["verdict"] == "ISOLATED_PASS":
+            result["verdict"] = "ISOLATED_FAIL"
+            result["reason"] = "port_release_failed"
     return result
 
 

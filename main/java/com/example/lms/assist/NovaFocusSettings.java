@@ -7,7 +7,11 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
                                 int wakeListenTimeoutMs,Presentation presentation,boolean recallEnabled,boolean rememberFactsEnabled,
                                 Snapshot snapshot,AnswerSelection answerSelection,RecentContext recentContext,Memory memory,
                                 @com.fasterxml.jackson.databind.annotation.JsonDeserialize(using=StrictInteger.class) Integer answerLengthChars,Boolean quickAnswerEnabled,Boolean webSearchEnabled,ReasoningPreset reasoningPreset,
-                                String answerInstruction,AnswerPreset answerPreset,String cameraWakeWord) {
+                                String answerInstruction,AnswerPreset answerPreset,String cameraWakeWord,String exitWord) {
+    /** Retain the former constructor and old JSON payloads. */
+    public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory,Integer length,Boolean quick,Boolean web,ReasoningPreset reasoning,String instruction,AnswerPreset preset,String camera){
+        this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,length,quick,web,reasoning,instruction,preset,camera,null);
+    }
     public NovaFocusSettings(boolean enabled,String wakeWord,int quiet,int idle,int listen,Presentation presentation,boolean recall,boolean remember,Snapshot snapshot,AnswerSelection selection,RecentContext recent,Memory memory,Integer length,Boolean quick,Boolean web){
         this(enabled,wakeWord,quiet,idle,listen,presentation,recall,remember,snapshot,selection,recent,memory,length,quick,web,null,null,null,null);
     }
@@ -124,10 +128,16 @@ public record NovaFocusSettings(boolean enabled,String wakeWord,int utteranceQui
         if(cameraWakeWord!=null){cameraWakeWord=cameraWakeWord.strip();
             if(!cameraWakeWord.isEmpty()){if(cameraWakeWord.codePointCount(0,cameraWakeWord.length())>16||cameraWakeWord.codePoints().anyMatch(Character::isISOControl)||cameraWakeWord.equals(wakeWord))throw new IllegalArgumentException("invalid_nova_settings");}}
         if(presentation==null)presentation=Presentation.defaults();
+        if(exitWord!=null){exitWord=exitWord.strip();
+            if(exitWord.isBlank()||exitWord.codePointCount(0,exitWord.length())>16||exitWord.codePoints().anyMatch(Character::isISOControl))throw new IllegalArgumentException("invalid_nova_settings");}
+        String effectiveExit=exitWord==null?"\uD074\uB9B0":exitWord;
+        if(sameCommand(effectiveExit,wakeWord)||sameCommand(effectiveExit,cameraWakeWord==null?"\uB370\uBE48":cameraWakeWord))throw new IllegalArgumentException("invalid_nova_settings");
         if(answerLengthChars!=null)range(answerLengthChars,80,800);
         answerInstruction=normalizeInstruction(answerInstruction);
     }
     public int effectiveAnswerLengthChars(){return answerLengthChars==null?400:answerLengthChars;}
+    public String exitWordOrDefault(){return exitWord==null?"\uD074\uB9B0":exitWord;}
+    static boolean sameCommand(String left,String right){return java.text.Normalizer.normalize(left.strip(),java.text.Normalizer.Form.NFC).equalsIgnoreCase(java.text.Normalizer.normalize(right.strip(),java.text.Normalizer.Form.NFC));}
     public AnswerPreset effectiveAnswerPreset(){return answerPreset==null?AnswerPreset.GENERAL:answerPreset;}
     /** 비어 있으면 프리셋 기본 문구가 적용되고 GENERAL은 빈 문자열로 기존 동작을 유지한다. */
     public String effectiveAnswerInstruction(){return answerInstruction!=null&&!answerInstruction.isBlank()?answerInstruction:effectiveAnswerPreset()==AnswerPreset.INTERVIEW?INTERVIEW_ANSWER_INSTRUCTION:"";}

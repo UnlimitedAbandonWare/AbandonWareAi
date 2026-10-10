@@ -8304,14 +8304,14 @@ public class ChatWorkflow {
                     false,
                     true,
                     false);
-            case GATE_REJECTED, EVIDENCE_PROMOTED, METADATA_GAP -> new FinalVerificationReleaseDecision(
+            case GATE_REJECTED, EVIDENCE_PROMOTED, METADATA_GAP, CITATION_UNAVAILABLE -> new FinalVerificationReleaseDecision(
                     "제시된 자료의 근거 검증을 완료하지 못했습니다. 다른 범위로 다시 질문해 주세요.",
                     "HOLD",
                     "evidence_scope_unverified",
                     false,
                     true,
                     false);
-            case NOT_REQUESTED, EXECUTION_FAILED -> new FinalVerificationReleaseDecision(
+            case NOT_REQUESTED, NOT_EXECUTED, EXECUTION_FAILED -> new FinalVerificationReleaseDecision(
                     "요청하신 문서·첨부 범위의 검색을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.",
                     "HOLD",
                     "retrieval_scope_unavailable",
@@ -8327,9 +8327,11 @@ public class ChatWorkflow {
      */
     enum RetrievalExecution {
         NOT_REQUESTED,
+        NOT_EXECUTED,
         EXECUTED_EMPTY,
         GATE_REJECTED,
         EXECUTION_FAILED,
+        CITATION_UNAVAILABLE,
         EVIDENCE_PROMOTED,
         METADATA_GAP
     }
@@ -8349,13 +8351,16 @@ public class ChatWorkflow {
                 || (contract.retrievalContractRequested()
                         && !contract.effectiveWeb()
                         && !contract.effectiveRag())) {
-            // 요청한 검색 범위가 실제 실행 경로에 도달하지 못한 경우
-            return RetrievalExecution.EXECUTION_FAILED;
+            // Effective-source flags describe eligibility, not a failed provider call.
+            return RetrievalExecution.NOT_EXECUTED;
         }
-        if (promotionResult == null
-                || promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.FAILED
+        if (promotionResult == null) {
+            return RetrievalExecution.METADATA_GAP;
+        }
+        if (promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.FAILED
                 || promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.UNAVAILABLE) {
-            return RetrievalExecution.EXECUTION_FAILED;
+            // Attribution/verification failure cannot prove retrieval transport failure.
+            return RetrievalExecution.CITATION_UNAVAILABLE;
         }
         if (promotionResult.status() == RagEvidenceAttributionService.PromotionStatus.CONFIRMED_EMPTY) {
             return promotionResult.reason() == RagEvidenceAttributionService.PromotionReason.EVIDENCE_GATE_BLOCKED
@@ -14203,9 +14208,10 @@ public class ChatWorkflow {
                 - The strict answer has already been generated.
                 - Your job is to propose CREATIVE, SPECULATIVE ideas,
                   alternative angles, or story-style elaborations.
-                - Mark clearly that this part is '異붿륫/鍮꾧났???꾩씠?붿뼱'.
+                - Return only the creative body; do not add a section heading or separator.
+                  The application adds the experimental label.
                 - Do NOT contradict hard facts from strict answer.
-                - ?듬?? ?쒓뎅?대줈, 吏㏃? ?⑤씫 2~3媛??대궡.
+                - Answer in Korean in two or three short paragraphs.
                 """;
         String user = """
                 [USER QUESTION]
@@ -14417,7 +14423,7 @@ public class ChatWorkflow {
             if (out == null || out.isBlank()) {
                 return mergedAnswer;
             }
-            return out.trim();
+            return projectionMergeService == null ? out.trim() : projectionMergeService.normalizeMergedView(out.trim());
         } catch (Exception e) {
             log.debug("[ProjectionAgent] final answer polish failed: {}", String.format("errorHash=%s errorLength=%d", SafeRedactor.hashValue(String.valueOf(e)), String.valueOf(e).length()));
             return mergedAnswer;

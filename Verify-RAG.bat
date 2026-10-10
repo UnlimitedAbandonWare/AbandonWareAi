@@ -14,6 +14,15 @@ if defined CI set "RAG_JSON_ARG=-JsonStdout"
 set "RAG_PAUSE=1"
 if defined AWX_RAG_NO_PAUSE set "RAG_PAUSE="
 if defined RAG_JSON_ARG set "RAG_PAUSE="
+if defined DEVIN set "RAG_PAUSE="
+if defined AGENT_SESSION set "RAG_PAUSE="
+if defined AWX_AGENT_WORKER set "RAG_PAUSE="
+if defined CODEX set "RAG_PAUSE="
+if defined CODEX_SESSION set "RAG_PAUSE="
+if defined CODEX_THREAD_ID set "RAG_PAUSE="
+if defined ANTIGRAVITY set "RAG_PAUSE="
+if defined AGY_SESSION set "RAG_PAUSE="
+if defined NONINTERACTIVE set "RAG_PAUSE="
 if defined RAG_PAUSE echo %cmdcmdline% | findstr /i /c:"/c " >nul && set "RAG_PAUSE="
 set "RAG_VRF_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 "%RAG_VRF_PS%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\debug_rag_stack.ps1" -Role dev -Action verify -WithCompile %RAG_JSON_ARG% %*
@@ -24,6 +33,6 @@ if defined RAG_JSON_ARG (
   echo.
   if not "%RAG_VRF_EXIT%"=="0" echo [RESULT] RAG verify exit code: %RAG_VRF_EXIT% ^(0=verified, 3=not-running, 6=checks-failed, 1=tool error^). See [DBG ...] output above and var\debug\ logs.
 )
-if defined RAG_PAUSE pause
 if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %RAG_VRF_EXIT%
+if defined RAG_PAUSE pause
 exit /b %RAG_VRF_EXIT%

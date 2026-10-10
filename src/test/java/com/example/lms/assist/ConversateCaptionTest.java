@@ -78,7 +78,12 @@ class ConversateCaptionTest {
                     var at=json.valueToTree(ack).path("diagnostics").path("captionRenderedAt");assertTrue(at.asLong()>0);assertEquals(version,ack.version());
                     assertEquals(at,json.valueToTree(service.acknowledge("owner",id,epoch,version,"caption_rendered")).path("diagnostics").path("captionRenderedAt"));
                     service.submit("owner",id,epoch,new ConversateQuestionPolicy.Utterance("dg-1","dg-1",1,false,"다음 합성 자막"),"phone_voice",null);
-                    assertThrows(org.springframework.web.server.ResponseStatusException.class,()->service.acknowledge("owner",id,epoch,version,"caption_rendered"));
+                    var currentCaption=service.status("owner",id);assertTrue(currentCaption.version()>version);
+                    var staleAck=assertDoesNotThrow(()->service.acknowledge("owner",id,epoch,version,"caption_rendered"));
+                    assertEquals(currentCaption.version(),staleAck.version());assertEquals("dg-1",staleAck.caption().utteranceId());
+                    assertNull(staleAck.diagnostics().captionRenderedAt(),"an obsolete ACK must not mark the new caption rendered");
+                    assertThrows(org.springframework.web.server.ResponseStatusException.class,()->service.acknowledge("owner",id,epoch,0,"caption_rendered"));
+                    assertThrows(org.springframework.web.server.ResponseStatusException.class,()->service.acknowledge("owner",id,epoch,currentCaption.version()+1,"caption_rendered"));
                     service.submit("owner",id,epoch,new ConversateQuestionPolicy.Utterance("dg-0","dg-0",99,true,"오래된 자막"),"phone_voice",null);
                     assertEquals("dg-1",json.valueToTree(service.status("owner",id)).path("caption").path("utteranceId").asText());
                 }finally{output.dispose();}

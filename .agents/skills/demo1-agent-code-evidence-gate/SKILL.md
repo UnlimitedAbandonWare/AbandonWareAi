@@ -14,7 +14,7 @@ contracts still govern a later authorized edit.
 
 - Reuse `scripts/run_verified_command.py` for the execution ID, command hash,
   exit status, selected JUnit XML, result hashes, counts, and freshness checks.
-- Use `demo1-docker-autograder` when isolated execution is required. Its ready-last
+- Use `demo1-docker-autograder` (archived at `data/agent-archive/skills/demo1-docker-autograder`) when isolated execution is required. Its ready-last
   job/result hashes, COMPLETE status, actual isolation evidence, expected signal,
   and nonzero tests must agree. A HOLD result's default isolation fields do not
   prove Docker ran. Missing Docker, a digest-pinned local image, or root authority

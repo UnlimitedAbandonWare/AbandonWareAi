@@ -26,6 +26,11 @@ final class DecisionEvidenceReconstructionValidator {
             Object rawRelations,
             Object rawLineage,
             Object rawFinalResponses) {
+        return audit(rawDecisions, rawEvidence, rawRelations, rawLineage, rawFinalResponses, true);
+    }
+
+    static Summary audit(Object rawDecisions, Object rawEvidence, Object rawRelations,
+            Object rawLineage, Object rawFinalResponses, boolean requireFinalResponse) {
         List<Map<String, Object>> decisions = rows(rawDecisions);
         List<Map<String, Object>> evidence = rows(rawEvidence);
         List<Map<String, Object>> relations = rows(rawRelations);
@@ -60,6 +65,9 @@ final class DecisionEvidenceReconstructionValidator {
         long lineageMismatchCount = 0L;
         long providerAttemptCount = 0L;
         long providerResponseCount = 0L;
+        long applicationAttemptCount = 0L;
+        long applicationResponseCount = 0L;
+        long providerReceiptCount = 0L;
         long linkedDecisionCount = 0L;
         long providerResponseWithoutAttemptCount = 0L;
         long providerAttemptWithoutResponseCount = 0L;
@@ -74,7 +82,10 @@ final class DecisionEvidenceReconstructionValidator {
         boolean hasUnlinkedLineageRows = false;
         for (Map<String, Object> row : lineage) {
             boolean providerAttemptObserved = bool(row.get("providerAttemptObserved"));
-            boolean responseObserved = bool(row.get("responseObserved"));
+            boolean responseObserved = providerResponse(row);
+            if (applicationAttempt(row)) applicationAttemptCount++;
+            if (bool(row.get("responseObserved"))) applicationResponseCount++;
+            if (bool(row.get("providerReceiptObserved"))) providerReceiptCount++;
             if (providerAttemptObserved) {
                 providerAttemptCount++;
             }
@@ -85,7 +96,7 @@ final class DecisionEvidenceReconstructionValidator {
                 providerResponseWithoutAttemptCount++;
                 reasonCodes.add("provider_response_without_attempt");
             }
-            if (providerAttemptObserved && !responseObserved) {
+            if (providerAttemptObserved && !responseObserved && !terminalFailure(row)) {
                 providerAttemptWithoutResponseCount++;
                 reasonCodes.add("provider_attempt_without_response");
             }
@@ -183,7 +194,7 @@ final class DecisionEvidenceReconstructionValidator {
                         lineageMismatch = true;
                         reasonCodes.add("options_hash_mismatch");
                     }
-                    boolean rowProviderAttemptObserved = bool(row.get("providerAttemptObserved"));
+                    boolean rowProviderAttemptObserved = applicationAttempt(row);
                     boolean rowResponseObserved = bool(row.get("responseObserved"));
                     providerAttemptObserved |= rowProviderAttemptObserved;
                     providerResponseObserved |= rowResponseObserved;
@@ -191,7 +202,7 @@ final class DecisionEvidenceReconstructionValidator {
                         lineageMismatch = true;
                         reasonCodes.add("provider_response_without_attempt");
                     }
-                    if (rowProviderAttemptObserved && !rowResponseObserved) {
+                    if (rowProviderAttemptObserved && !rowResponseObserved && !terminalFailure(row)) {
                         lineageMismatch = true;
                         reasonCodes.add("provider_attempt_without_response");
                     }
@@ -204,7 +215,8 @@ final class DecisionEvidenceReconstructionValidator {
                     lineageMismatch = true;
                     reasonCodes.add("provider_attempt_missing");
                 }
-                if (!providerResponseObserved) {
+                if (!providerResponseObserved && decisionLineage.stream().noneMatch(
+                        row -> applicationAttempt(row) && terminalFailure(row))) {
                     lineageMismatch = true;
                     reasonCodes.add("provider_response_missing");
                 }
@@ -216,7 +228,9 @@ final class DecisionEvidenceReconstructionValidator {
 
             List<Map<String, Object>> decisionFinalResponses = finalResponsesForDecision(
                     finalResponses, decisionId);
-            if (decisionFinalResponses.isEmpty()) {
+            if (decisionFinalResponses.isEmpty() && !requireFinalResponse) {
+                reasonCodes.add("final_response_pending");
+            } else if (decisionFinalResponses.isEmpty()) {
                 missingFinalResponseCount++;
                 finalResponseMismatch = true;
                 reasonCodes.add("final_response_missing");
@@ -261,7 +275,7 @@ final class DecisionEvidenceReconstructionValidator {
             if (finalResponseMismatch) {
                 finalResponseMismatchCount++;
             }
-            if (!missingEvidence && !orphanRelation && !lineageMismatch && !finalResponseMismatch) {
+            if (requireFinalResponse && !missingEvidence && !orphanRelation && !lineageMismatch && !finalResponseMismatch) {
                 reconstructableCount++;
                 reasonCodes.add("reconstructable");
             }
@@ -293,6 +307,9 @@ final class DecisionEvidenceReconstructionValidator {
                 lineageMismatchCount,
                 providerAttemptCount,
                 providerResponseCount,
+                applicationAttemptCount,
+                applicationResponseCount,
+                providerReceiptCount,
                 linkedDecisionCount,
                 providerResponseWithoutAttemptCount,
                 providerAttemptWithoutResponseCount,
@@ -306,6 +323,25 @@ final class DecisionEvidenceReconstructionValidator {
                 reconstructionRate,
                 runtimeLineagePassRate,
                 List.copyOf(reasonCodes));
+    }
+
+    private static boolean applicationAttempt(Map<String, Object> row) {
+        return switch (text(row.get("evidenceBoundary"))) {
+            case "model_adapter" -> bool(row.get("modelAdapterAttemptObserved"));
+            case "client_http_response", "client_http_exchange" -> bool(row.get("clientHttpExchangeObserved"));
+            default -> bool(row.get("providerAttemptObserved"));
+        };
+    }
+
+    private static boolean providerResponse(Map<String, Object> row) {
+        return bool(row.get("responseObserved")) && (text(row.get("evidenceBoundary")).isBlank()
+                || bool(row.get("providerReceiptObserved")));
+    }
+
+    private static boolean terminalFailure(Map<String, Object> row) {
+        return !text(row.get("evidenceBoundary")).isBlank()
+                && Set.of("failed", "cancelled", "timeout").contains(text(row.get("outcome")))
+                && Set.of("error", "timeout", "cancelled").contains(text(row.get("terminalClass")));
     }
 
     private static List<Map<String, Object>> lineageForDecision(
@@ -392,6 +428,9 @@ final class DecisionEvidenceReconstructionValidator {
             long lineageMismatchCount,
             long providerAttemptCount,
             long providerResponseCount,
+            long applicationAttemptCount,
+            long applicationResponseCount,
+            long providerReceiptCount,
             long linkedDecisionCount,
             long providerResponseWithoutAttemptCount,
             long providerAttemptWithoutResponseCount,
@@ -417,6 +456,11 @@ final class DecisionEvidenceReconstructionValidator {
             out.put("providerAttemptCountMeaning", "observed_provider_lineage_rows");
             out.put("providerAttemptCoverage", providerAttemptCount == 0 ? "not_observed" : "observed_partial");
             out.put("providerResponseCount", providerResponseCount);
+            out.put("schemaVersion", "decision-evidence-reconstruction.v2");
+            out.put("providerResponseCountMeaning", "explicit_receipt_or_legacy_provider_rows");
+            out.put("applicationAttemptCount", applicationAttemptCount);
+            out.put("applicationResponseCount", applicationResponseCount);
+            out.put("providerReceiptCount", providerReceiptCount);
             out.put("linkedDecisionCount", linkedDecisionCount);
             out.put("providerResponseWithoutAttemptCount", providerResponseWithoutAttemptCount);
             out.put("providerAttemptWithoutResponseCount", providerAttemptWithoutResponseCount);

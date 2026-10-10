@@ -53,6 +53,7 @@ import java.util.Map;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -2154,12 +2155,12 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
     }
 
     @Test
-    void scopeBoundFailedRetrievalHoldsWithUnavailableNotice() {
+    void scopeBoundAttributionUnavailableHoldsWithUnverifiedNotice() {
         var d = ChatWorkflow.applyEvidenceReleasePolicy(
                 releasedBase(), ChatWorkflow.EvidenceReleaseState.METADATA_INCOMPLETE,
                 false, false, true, failed(), ragOnlyContract());
         assertEquals("HOLD", d.releaseStatus());
-        assertEquals("retrieval_scope_unavailable", d.reasonCode());
+        assertEquals("evidence_scope_unverified", d.reasonCode());
         assertFalse(d.releaseAllowed());
         assertFalse(d.knowledgeWriteAllowed());
     }
@@ -2213,7 +2214,7 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 ChatWorkflow.classifyRetrievalExecution(completedEmpty(0, 0, 0, 0), contract));
         assertEquals(ChatWorkflow.RetrievalExecution.GATE_REJECTED,
                 ChatWorkflow.classifyRetrievalExecution(completedEmpty(2, 0, 0, 0), contract));
-        assertEquals(ChatWorkflow.RetrievalExecution.EXECUTION_FAILED,
+        assertEquals(ChatWorkflow.RetrievalExecution.CITATION_UNAVAILABLE,
                 ChatWorkflow.classifyRetrievalExecution(failed(), contract));
         var offContract = new ChatWorkflow.RetrievalReleaseContract(
                 false, false, false, false, false, true);
@@ -2221,8 +2222,19 @@ class ChatWorkflowFinalVerificationReleaseGateTest {
                 ChatWorkflow.classifyRetrievalExecution(null, offContract));
         var disabledContract = new ChatWorkflow.RetrievalReleaseContract(
                 true, true, true, false, true, false);
-        assertEquals(ChatWorkflow.RetrievalExecution.EXECUTION_FAILED,
+        assertEquals(ChatWorkflow.RetrievalExecution.NOT_EXECUTED,
                 ChatWorkflow.classifyRetrievalExecution(null, disabledContract));
+    }
+
+    @Test
+    void requestedButDisabledSourceAndAttributionFailureDoNotProveProviderFailure() {
+        var disabled = new ChatWorkflow.RetrievalReleaseContract(true, true, true, false, true, false);
+        assertNotEquals(ChatWorkflow.RetrievalExecution.EXECUTION_FAILED,
+                ChatWorkflow.classifyRetrievalExecution(null, disabled));
+        assertNotEquals(ChatWorkflow.RetrievalExecution.EXECUTION_FAILED,
+                ChatWorkflow.classifyRetrievalExecution(failed(), ragOnlyContract()));
+        assertEquals(ChatWorkflow.RetrievalExecution.METADATA_GAP,
+                ChatWorkflow.classifyRetrievalExecution(null, ragOnlyContract()));
     }
 
     @Test

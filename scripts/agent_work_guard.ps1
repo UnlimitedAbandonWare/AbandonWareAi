@@ -5,12 +5,19 @@
 param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }
+$script:workGuardQuiet = ($env:AWX_WORK_GUARD_QUIET -eq '1')
+$script:workGuardDirReady = $false
 $root = ''
 function Write-WorkGuardTrace([string]$Root, [string]$Phase, $ExitCode, $ElapsedMs) {
+    if ($script:workGuardQuiet) { return }
     try {
         $dir = Join-Path $Root 'var\agent-work-guard'
-        if (-not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        if (-not $script:workGuardDirReady) {
+            if (-not (Test-Path -LiteralPath $dir)) {
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            }
+            $script:workGuardDirReady = $true
         }
         $line = '{"at":"' + ([DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')) + '","phase":"' + $Phase + '","wrapper":"ps1"'
         if ($null -ne $ExitCode) { $line += ',"exit":' + $ExitCode }
@@ -24,10 +31,10 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($env:DEVIN_PROJECT_DIR) -and (Test-Path -LiteralPath $env:DEVIN_PROJECT_DIR)) {
         $root = [IO.Path]::GetFullPath($env:DEVIN_PROJECT_DIR).TrimEnd('\', '/')
     }
-    Write-WorkGuardTrace $root 'enter' $null $null
     $started = [Diagnostics.Stopwatch]::StartNew()
     $py = Join-Path $root 'scripts\agent_work_guard.py'
-    if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { Write-WorkGuardTrace $root 'exit' 0 $started.ElapsedMilliseconds; exit 0 }
+    if (-not (Test-Path -LiteralPath $py -PathType Leaf)) { exit 0 }
+    Write-WorkGuardTrace $root 'enter' $null $null
     $pinfo = [Diagnostics.ProcessStartInfo]::new()
     $pinfo.FileName = 'python'
     $pinfo.Arguments = '-B "' + $py + '" hook --root "' + $root + '"'
@@ -43,13 +50,21 @@ try {
     if ($stdin.Length -gt 65536) { $stdin = $stdin.Substring(0, 65536) }
     $p.StandardInput.Write($stdin)
     $p.StandardInput.Close()
-    if (-not $p.WaitForExit(12000)) { $p.Kill(); exit 1 }
+    if (-not $p.WaitForExit(12000)) {
+        try { $p.Kill() } catch { }
+        $p.Dispose()
+        [Console]::Error.Write("work-guard-timeout: python hook exceeded 12000ms")
+        Write-WorkGuardTrace $root 'timeout' 1 $started.ElapsedMilliseconds
+        exit 1
+    }
     $out = $p.StandardOutput.ReadToEnd()
     $err = $p.StandardError.ReadToEnd()
+    $exitCode = $p.ExitCode
+    $p.Dispose()
     if ($err) { [Console]::Error.Write($err) }
     if ($out) { [Console]::Out.Write($out) }
-    Write-WorkGuardTrace $root 'exit' $p.ExitCode $started.ElapsedMilliseconds
-    exit $p.ExitCode
+    Write-WorkGuardTrace $root 'exit' $exitCode $started.ElapsedMilliseconds
+    exit $exitCode
 } catch {
     [Console]::Error.Write("work-guard-error: $($_.Exception.Message)")
     if ($root) { Write-WorkGuardTrace $root 'exit' 1 $null }

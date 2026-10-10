@@ -57,11 +57,17 @@ def detect_caller(env=None):
     env = env if env is not None else os.environ
     if env.get("AWX_CALLER"):
         return env["AWX_CALLER"][:32]
-    names = set(env.keys())
-    if any(n == "DEVIN" or n.startswith("DEVIN_") for n in names):
+    # Only active-session identifiers count as agent callers. Credential-like
+    # vars (*_API_KEY, *_TOKEN, *_SECRET) are machine-global and must never
+    # attribute a run (a persistent DEVIN_API_KEY used to force "devin").
+    if any(env.get(n) for n in
+           ("DEVIN", "DEVIN_SESSION_ID", "DEVIN_ACTIVE", "DEVIN_TASK_ID")):
         return "devin"
-    if any(n.startswith("CODEX") for n in names):
+    if any(env.get(n) for n in
+           ("CODEX", "CODEX_SESSION", "CODEX_THREAD_ID", "CODEX_ACTIVE")):
         return "codex"
+    if env.get("ANTIGRAVITY") or env.get("AGY_SESSION"):
+        return "agy"
     if env.get("AGENT_SESSION") or env.get("AWX_AGENT_WORKER"):
         return "agent"
     return "user"
@@ -191,7 +197,10 @@ def cmd_tail(a):
     rows = iter_records(a.days)
     if a.bat:
         rows = [r for r in rows if (r.get("bat") or "").lower() == a.bat.lower()]
+    open_state = {id(r): s for r, s in open_begins(rows)}
     for r in rows[-(a.limit or 50):]:
+        if id(r) in open_state:
+            r = dict(r, state=open_state[id(r)])
         print(json.dumps(r, ensure_ascii=False))
     return 0
 
@@ -205,8 +214,50 @@ def _ends(rows):
     return ends
 
 
+OPEN_BEGIN_HOURS = 2
+
+
+def _parse_ts(rec):
+    try:
+        return datetime.fromisoformat(str(rec.get("ts_kst") or ""))
+    except Exception:
+        return None
+
+
+def open_begins(rows, now=None, hours=OPEN_BEGIN_HOURS):
+    """Return [(rec, state)] for 'begin' records with no matching 'end'.
+
+    A begin is matched when an 'end' shares its runKey, or — for records with
+    no runKey — an 'end' for the same bat exists at a later ts_kst.
+    state is "RUNNING/ORPHAN" when the begin is within `hours`, else "ORPHAN".
+    """
+    now = now or _now_kst()
+    ended_keys = {r.get("runKey") for r in rows
+                  if r.get("phase") == "end" and r.get("runKey")}
+    out = []
+    for r in rows:
+        if r.get("phase") != "begin":
+            continue
+        key = r.get("runKey")
+        if key and key in ended_keys:
+            continue
+        if not key:
+            bat = (r.get("bat") or "").lower()
+            ts = r.get("ts_kst") or ""
+            if any(x.get("phase") == "end" and
+                   (x.get("bat") or "").lower() == bat and
+                   (x.get("ts_kst") or "") >= ts for x in rows):
+                continue
+        ts = _parse_ts(r)
+        recent = bool(ts) and (now - ts) <= timedelta(hours=hours)
+        out.append((r, "RUNNING/ORPHAN" if recent else "ORPHAN"))
+    return out
+
+
 def cmd_summary(a):
-    rows = _ends(iter_records(a.days))
+    all_rows = iter_records(a.days)
+    rows = _ends(all_rows)
+    opens = open_begins(all_rows)
     per = {}
     for r in rows:
         b = r.get("bat") or "?"
@@ -226,7 +277,11 @@ def cmd_summary(a):
         rate = (100.0 * d["ok"] / d["n"]) if d["n"] else 0.0
         print("%-28s runs=%-4d ok=%.0f%% last=%s %-10s streak=%d" % (
             b, d["n"], rate, last.get("ts_kst", "?"), last_sig, streak))
-    print("total=%d days=%d" % (len(rows), a.days))
+    for r, state in opens:
+        print("[%s] %-28s begin=%s runKey=%s caller=%s" % (
+            state, r.get("bat") or "?", r.get("ts_kst", "?"),
+            r.get("runKey") or "-", r.get("caller") or "?"))
+    print("total=%d days=%d open=%d" % (len(rows), a.days, len(opens)))
     return 0
 
 

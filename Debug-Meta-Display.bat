@@ -14,6 +14,15 @@ if defined CI set "RAG_JSON_ARG=-JsonStdout"
 set "RAG_PAUSE=1"
 if defined AWX_RAG_NO_PAUSE set "RAG_PAUSE="
 if defined RAG_JSON_ARG set "RAG_PAUSE="
+if defined DEVIN set "RAG_PAUSE="
+if defined AGENT_SESSION set "RAG_PAUSE="
+if defined AWX_AGENT_WORKER set "RAG_PAUSE="
+if defined CODEX set "RAG_PAUSE="
+if defined CODEX_SESSION set "RAG_PAUSE="
+if defined CODEX_THREAD_ID set "RAG_PAUSE="
+if defined ANTIGRAVITY set "RAG_PAUSE="
+if defined AGY_SESSION set "RAG_PAUSE="
+if defined NONINTERACTIVE set "RAG_PAUSE="
 if defined RAG_PAUSE echo %cmdcmdline% | findstr /i /c:"/c " >nul && set "RAG_PAUSE="
 set "DISPLAY_DBG_PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 "%DISPLAY_DBG_PS%" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\debug_rag_stack.ps1" -Role wear %RAG_JSON_ARG% %*
@@ -24,6 +33,6 @@ if defined RAG_JSON_ARG (
   echo.
   if not "%DISPLAY_DBG_EXIT%"=="0" echo [RESULT] Meta Display debug exit code: %DISPLAY_DBG_EXIT% ^(0=ready/verified, 2=blocked, 3=not-running, 4=degraded, 5=verbose-not-applied, 6=verify-checks-failed, 1=failed^). See [DBG ...] output above and var\debug\ logs.
 )
-if defined RAG_PAUSE pause
 if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %DISPLAY_DBG_EXIT%
+if defined RAG_PAUSE pause
 exit /b %DISPLAY_DBG_EXIT%

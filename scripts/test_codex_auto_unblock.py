@@ -42,6 +42,107 @@ def journal(task_id, result=None, status="closed", events=None, purpose="g",
     }
 
 
+class AutoflowDispatchTest(unittest.TestCase):
+    def test_dispatch_forwards_exact_argv_stdout_and_exit(self):
+        import lease_conflict_autoflow as flow
+        args = ['scan', '--root', 'synthetic root', '--targets', 'scripts/x.py']
+        with patch.object(flow, 'main', return_value=7) as delegate:
+            self.assertEqual(7, CAU.main(['autoflow'] + args))
+            delegate.assert_called_once_with(args)
+
+    def test_direct_and_primary_cli_match_on_invalid_command(self):
+        import subprocess
+        commands = [[sys.executable,'-B',str(HERE/'lease_conflict_autoflow.py'),'unknown-command'],
+                    [sys.executable,'-B',str(SCRIPT),'autoflow','unknown-command']]
+        results = [subprocess.run(c,capture_output=True,timeout=10) for c in commands]
+        self.assertEqual(results[0].returncode,results[1].returncode)
+        self.assertEqual(results[0].stdout,results[1].stdout)
+        self.assertEqual(results[0].stderr.replace(b'lease_conflict_autoflow.py', b'entry.py').split(), results[1].stderr.replace(b'codex_auto_unblock.py', b'entry.py').split())
+
+
+    def test_positive_commands_preserve_outputs_and_side_effects(self):
+        import lease_conflict_autoflow as flow
+        from test_lease_conflict_autoflow import Fixture, NOW
+        from contextlib import redirect_stderr
+        fx = Fixture(self)
+        owner, task = 'owner-00000001', 'caller-00000001'
+        fx.journal(owner)
+        fx.journal(task)
+        lease, _ = fx.lease('live-owner', ['target.txt'], owner)
+        fx.lease('unknown-expired', ['unknown.txt'], 'unknown', expired=True)
+        corrupt = fx.root / '__patch_drop__/source-edit-locks/corrupt.lock/lease.json'
+        write(corrupt, '{ invalid-owner')
+        def snapshot():
+            return {p.relative_to(fx.root).as_posix(): p.read_bytes()
+                    for p in fx.root.rglob('*') if p.is_file()}
+        baseline = snapshot()
+        cases = [
+            ('scan', '--targets', 'target.txt', 'other.txt'),
+            ('plan', '--goal-files', 'target.txt', 'other.txt', '--task', task),
+            ('plan', '--no-mark', '--goal-files', 'target.txt', '--task', task),
+            ('plan', '--execute', '--goal-files', 'target.txt', 'other.txt', '--task', task),
+            ('plan', '--waited', '--goal-files', 'target.txt', '--task', task),
+            ('plan', '--waited', '--goal-files', 'other.txt', '--task', task),
+            ('reclaim', '--targets', 'unknown.txt', '--dry-run'),
+            ('reclaim', '--targets', 'unknown.txt'),
+            ('reclaim', '--include-orphan'),
+        ]
+        for case in cases:
+            outcomes = []
+            for primary in (False, True):
+                for p in fx.root.rglob('*'):
+                    if p.is_file():
+                        p.unlink()
+                for relative, data in baseline.items():
+                    p = fx.root / relative
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(data)
+                out, err = io.StringIO(), io.StringIO()
+                args = ['--root', str(fx.root), *case]
+                with patch.object(flow, 'utcnow', return_value=NOW), \
+                     patch.object(flow, 'session_status_rows', return_value=None), \
+                     patch.object(flow, 'bus_event_ref', return_value='synthetic-event') as bus, \
+                     patch.object(flow.scope, 'journal_note', return_value=True) as note, \
+                     redirect_stdout(out), redirect_stderr(err):
+                    code = CAU.main(['autoflow', *args]) if primary else flow.main(args)
+                outcomes.append((code, out.getvalue(), err.getvalue(), snapshot(),
+                                 bus.call_args_list, note.call_args_list))
+            with self.subTest(case=case):
+                self.assertEqual(outcomes[0], outcomes[1])
+                self.assertEqual(baseline[lease.relative_to(fx.root).as_posix()], lease.read_bytes())
+                self.assertEqual(b'{ invalid-owner', corrupt.read_bytes())
+                row = json.loads(outcomes[1][1])
+                if '--waited' in case and 'target.txt' in case:
+                    self.assertEqual(7, outcomes[1][0])
+                    self.assertEqual('HOLD', row['nextAction'])
+                if '--no-mark' in case:
+                    self.assertEqual(baseline, outcomes[1][3])
+                if '--execute' in case:
+                    self.assertEqual(2, len(outcomes[1][4]))
+                    self.assertEqual(1, len(outcomes[1][5]))
+                    self.assertTrue((fx.root / 'data/agent-handoff/codex-autonomy' / owner /
+                                     'LEASE_RELEASE_REQUEST.md').is_file())
+
+    def test_help_and_errors_match_in_cp949_from_unrelated_cwd(self):
+        import os, subprocess
+        with tempfile.TemporaryDirectory(prefix='cli root with spaces ') as cwd:
+            for args in (['--help'], ['scan', '--help'], ['plan', '--help'],
+                         ['reclaim', '--help'], ['scan', '--unknown-option']):
+                results = []
+                for entry in ([str(HERE / 'lease_conflict_autoflow.py')],
+                              [str(SCRIPT), 'autoflow']):
+                    proc = subprocess.run([sys.executable, '-B', *entry, *args],
+                        cwd=cwd, env={**os.environ, 'PYTHONIOENCODING': 'cp949:strict'},
+                        capture_output=True, timeout=10)
+                    def normalize(data):
+                        return data.decode('cp949').replace('lease_conflict_autoflow.py',
+                            'entry.py').replace('codex_auto_unblock.py', 'entry.py').split()
+                    results.append((proc.returncode, normalize(proc.stdout), normalize(proc.stderr)))
+                with self.subTest(args=args):
+                    self.assertEqual(results[0], results[1])
+                    self.assertEqual(2 if '--unknown-option' in args else 0, results[1][0])
+
+
 class BudgetTest(unittest.TestCase):
     def run_budget(self, ledger, cap=10):
         return CAU.budget_eval(str(ledger), cap)

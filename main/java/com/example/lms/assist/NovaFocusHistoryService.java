@@ -17,6 +17,7 @@ import java.util.function.Supplier;
 /** Short DB transactions only. No provider work, audio, or polling timers here. */
 @Service
 public class NovaFocusHistoryService {
+    private static final org.slf4j.Logger log=org.slf4j.LoggerFactory.getLogger(NovaFocusHistoryService.class);
     public record Settings(long settingsVersion,NovaFocusSettings settings) {}
     public record LensSettings(long settingsVersion,LensDisplayPrefs display) {}
     private static final String LENS_SETTINGS_CHANNEL="LENS_SETTINGS";
@@ -115,11 +116,23 @@ public class NovaFocusHistoryService {
         return new NovaFocusSettings(stored.enabled(),stored.wakeWord(),stored.utteranceQuietMs(),stored.followupIdleMs(),
             listen,stored.presentation(),stored.recallEnabled(),stored.rememberFactsEnabled(),stored.snapshot(),
             selection,stored.recentContext(),stored.memory(),stored.answerLengthChars(),stored.quickAnswerEnabled(),
-            stored.webSearchEnabled(),stored.reasoningPreset(),stored.answerInstruction(),stored.answerPreset(),stored.cameraWakeWord());
+            stored.webSearchEnabled(),stored.reasoningPreset(),stored.answerInstruction(),stored.answerPreset(),stored.cameraWakeWord(),stored.exitWord());
     }
     private NovaFocusSettings decode(String json) {
         if(json==null)return serverDefaults();
-        try{return mapper.readValue(json,NovaFocusSettings.class);}
+        try{
+            var raw=mapper.readTree(json);
+            if(raw instanceof com.fasterxml.jackson.databind.node.ObjectNode node&&!node.hasNonNull("exitWord")){
+                var defaults=NovaFocusSettings.defaults();String wake=node.path("wakeWord").asText(defaults.wakeWord());
+                String camera=node.path("cameraWakeWord").asText(defaults.cameraWakeWordOrDefault());
+                if(NovaFocusSettings.sameCommand(defaults.exitWordOrDefault(),wake)||NovaFocusSettings.sameCommand(defaults.exitWordOrDefault(),camera)){
+                    for(String alternative:List.of("포커스 종료","집중 종료","finish"))
+                        if(!NovaFocusSettings.sameCommand(alternative,wake)&&!NovaFocusSettings.sameCommand(alternative,camera)){node.put("exitWord",alternative);break;}
+                    log.debug("[nova-focus] settings reason=legacy_exit_word_default_conflict");
+                }
+            }
+            return mapper.treeToValue(raw,NovaFocusSettings.class);
+        }
         catch(Exception e){throw new IllegalStateException("focus_settings_unreadable");}
     }
     private LensDisplayPrefs decodeLens(String json,int defaultHintTargetChars){
@@ -154,7 +167,7 @@ public class NovaFocusHistoryService {
         return transaction(()->{var p=locked(owner,channel);
             if(p.getSettingsVersion()!=expected)throw new IllegalArgumentException("focus_settings_conflict");
             var merged=value;
-            if(value.snapshot()==null||value.snapshot().cameraAllowed()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null||value.reasoningPreset()==null||value.answerInstruction()==null||value.answerPreset()==null||value.cameraWakeWord()==null){ // Omitted optional blocks preserve server-owned values.
+            if(value.snapshot()==null||value.snapshot().cameraAllowed()==null||value.answerSelection()==null||value.answerSelection().routing()==null||value.recentContext()==null||value.memory()==null||value.answerLengthChars()==null||value.quickAnswerEnabled()==null||value.webSearchEnabled()==null||value.reasoningPreset()==null||value.answerInstruction()==null||value.answerPreset()==null||value.cameraWakeWord()==null||value.exitWord()==null){ // Omitted optional blocks preserve server-owned values.
                 var stored=decode(p.getSettingsJson());
                 var selection=value.answerSelection()==null?stored.answerSelection():value.answerSelection();
                 if(p.getSettingsJson()!=null&&value.answerSelection()!=null&&value.answerSelection().routing()==null&&stored.answerSelection()!=null)
@@ -174,7 +187,8 @@ public class NovaFocusHistoryService {
                     value.reasoningPreset()==null?stored.effectiveReasoningPreset():value.reasoningPreset(),
                     value.answerInstruction()==null?stored.answerInstruction():value.answerInstruction(),
                     value.answerPreset()==null?stored.answerPreset():value.answerPreset(),
-                    value.cameraWakeWord()==null?stored.cameraWakeWord():value.cameraWakeWord());
+                    value.cameraWakeWord()==null?stored.cameraWakeWord():value.cameraWakeWord(),
+                    value.exitWord()==null?stored.exitWord():value.exitWord());
             }
             // Validate new saves with the actual matcher after legacy-field merge;
             // decoding existing profiles retains its compatibility contract.

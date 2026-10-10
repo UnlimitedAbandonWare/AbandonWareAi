@@ -934,15 +934,40 @@ def _write_last_ship(root, record):
         pass
 
 
-def _hold_lines(holds, out, limit=29):
+HOLDS_DUMP = "var/git-ship/last-holds.txt"
+
+
+def _write_last_holds(root, holds):
+    """자동 보류 전체 목록을 파일에 남긴다 (잘려도 전부 읽을 수 있게)."""
+    try:
+        t = Path(root) / HOLDS_DUMP
+        t.parent.mkdir(parents=True, exist_ok=True)
+        lines = [f"{p}  -- {'; '.join(whys)}"
+                 for p, whys in sorted(holds.items())]
+        t.write_text("\n".join(lines) + ("\n" if lines else ""),
+                     encoding="utf-8")
+        return HOLDS_DUMP
+    except OSError:
+        return None
+
+
+def _hold_lines(holds, out, root=None, examples=3):
     if not holds:
         return
-    out(f"자동 보류 {len(holds)}개 (이번 Enter에서 제외, 이유):")
-    for i, (p, whys) in enumerate(sorted(holds.items())):
-        if i >= limit:
-            out(f"  ... 외 {len(holds) - limit}개")
-            break
-        out(f"  {p}  -- {'; '.join(whys)}")
+    out(f"자동 보류 {len(holds)}개 (이번 Enter에서 제외):")
+    groups = {}
+    for p, whys in sorted(holds.items()):
+        groups.setdefault("; ".join(whys), []).append(p)
+    for why, paths in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        out(f"  [{len(paths)}개] {why}")
+        for p in paths[:examples]:
+            out(f"    {p}")
+        if len(paths) > examples:
+            out(f"    ... 외 {len(paths) - examples}개")
+    if root is not None:
+        dump = _write_last_holds(root, holds)
+        if dump:
+            out(f"  전체 목록: {dump}")
 
 
 def _remote_ahead(g, remote, branch):
@@ -1058,7 +1083,7 @@ def auto_ship_flow(g, root, input_fn=input, out=print, push_fn=None,
                 unstage(blocked)
                 result["stagedThenHeld"] = len(added & set(blocked))
             scope -= set(holds)
-        _hold_lines(holds, out)
+        _hold_lines(holds, out, root=root)
         if scope:
             step = "commit"
             msg = "chore: 자동 올리기 " + datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -1158,7 +1183,7 @@ def plan_only(root, git_exe, out=print):
         f"보류 {len(holds)}개 · 인덱스에서 뺄 {drop_staged}개 · "
         f"push 대상 {st['branch']} (앞 {_ab(st['ahead'])} / "
         f"뒤 {_ab(st['behind'])}) ==")
-    _hold_lines(holds, out)
+    _hold_lines(holds, out, root=root)
     return 0
 
 

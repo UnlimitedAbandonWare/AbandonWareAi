@@ -1,7 +1,149 @@
 # codex_sandbox_doctor_tests.ps1 -- offline dry-run tests for codex_sandbox_doctor.ps1.
 # Uses temp fake runtime/log/state dirs; never touches the real Codex install or sandbox dir.
 # Run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts\codex_sandbox_doctor_tests.ps1
-[CmdletBinding()] param()
+[CmdletBinding()] param([switch]$LoggerOnly, [string]$LoggerSource)
+if ($LoggerOnly) {
+  $ErrorActionPreference = 'Stop'
+  $source = if ($LoggerSource) { $LoggerSource } else { Join-Path $PSScriptRoot 'codex_sandbox_doctor.ps1' }
+  $ast = [Management.Automation.Language.Parser]::ParseFile($source, [ref]$null, [ref]$null)
+  $functions = @($ast.FindAll({param($n) $n -is [Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -in @('Write-DoctorLog','Get-DoctorLogDigest','Get-LogErrorSummary')}, $true))
+  $fixture = Join-Path $env:TEMP ('doctor-log-test-' + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $fixture | Out-Null
+  try {
+    $StateDir = $fixture; $MaxActiveBytes = 1200; $MaxFiles = 3; $MaxTotalBytes = 3600
+    foreach ($f in $functions) { . ([scriptblock]::Create($f.Extent.Text)) }
+    for ($i=0; $i -lt 30; $i++) {
+      Write-DoctorLog @{ action='Check'; result='error'; errorsToday=$i; error=('Bearer ' + ('fake-secret-' * 100)); dir='private-path' }
+    }
+    $active = Join-Path $fixture 'doctor.jsonl'
+    $files = @(Get-ChildItem -LiteralPath $fixture -Filter 'doctor*.jsonl')
+    $rows = @($files | ForEach-Object { Get-Content -LiteralPath $_.FullName })
+    $text = $rows -join "`n"
+    if ($text -match 'fake-secret|Bearer|private-path') { throw 'logger-secret-leak' }
+    if ((Get-Item -LiteralPath $active).Length -gt $MaxActiveBytes -or $files.Count -gt $MaxFiles -or ($files | Measure-Object Length -Sum).Sum -gt $MaxTotalBytes) { throw 'logger-bounds' }
+    $state = Get-Content (Join-Path $fixture 'doctor-log-state.json') -Raw | ConvertFrom-Json
+    if ($state.seq -ne 30 -or $state.evictedRows -le 0) { throw 'logger-sequence-or-eviction' }
+    foreach ($row in $rows) {
+      $obj = $row | ConvertFrom-Json
+      if (-not $obj.hash -or -not $obj.reasonCode) { throw 'logger-integrity-or-reason-missing' }
+      $content = [ordered]@{}
+      foreach ($property in $obj.PSObject.Properties) { if ($property.Name -ne 'hash') { $content[$property.Name] = $property.Value } }
+      if ((Get-DoctorLogDigest ($content | ConvertTo-Json -Compress)) -ne $obj.hash) { throw 'logger-hash-mismatch' }
+
+    }
+    # Interrupted append is preserved and the next event can still be logged.
+    [IO.File]::AppendAllText($active, '{"seq":31,', [Text.UTF8Encoding]::new($false))
+    Write-DoctorLog @{action='Check';result='ok'}
+    $recovered = Get-Content (Join-Path $fixture 'doctor-log-state.json') -Raw | ConvertFrom-Json
+    if ($recovered.seq -ne 31 -or $recovered.dropped -ne 1) { throw 'logger-torn-append-recovery' }
+    if (@(Get-ChildItem $fixture -Filter 'doctor.legacy-recovery-*.jsonl').Count -ne 1) { throw 'logger-torn-bytes-lost' }
+    # Crash after repairing bytes but before saving the loss counter.
+    $receiptArchive='doctor.legacy-recovery-'+[guid]::NewGuid().ToString('N')+'.jsonl'
+    $clean=[IO.File]::ReadAllText($active);$prefix=@([IO.File]::ReadAllLines($active)).Count
+    [IO.File]::WriteAllText((Join-Path $fixture $receiptArchive),$clean+'{"seq":32,',[Text.UTF8Encoding]::new($false))
+    $intent=@{target='doctor.jsonl';archive=$receiptArchive;archiveHash=(Get-DoctorLogDigest ([IO.File]::ReadAllText((Join-Path $fixture $receiptArchive))));prefixLines=$prefix}
+    $recovered|Add-Member -NotePropertyName pendingRepair -NotePropertyValue $intent -Force
+    [IO.File]::WriteAllText((Join-Path $fixture 'doctor-log-state.json'),($recovered|ConvertTo-Json -Compress -Depth 5))
+    Write-DoctorLog @{action='Check'};Write-DoctorLog @{action='Check'}
+    $recovered=Get-Content (Join-Path $fixture 'doctor-log-state.json') -Raw|ConvertFrom-Json
+    if($recovered.dropped -ne 2 -or $recovered.pendingRepair){throw 'logger-repair-loss-exactly-once'}
+    # A pending eviction receipt survives interruption before/after deletion.
+    $archive = @(Get-ChildItem $fixture -Filter 'doctor.rotated-v1-*.jsonl' | Sort-Object Name)[0]
+    $pending = @{name=$archive.Name;rows=@([IO.File]::ReadAllLines($archive.FullName)).Count;bytes=$archive.Length}
+    $recovered | Add-Member -NotePropertyName pendingEviction -NotePropertyValue $pending -Force
+    [IO.File]::WriteAllText((Join-Path $fixture 'doctor-log-state.json'),($recovered|ConvertTo-Json -Compress))
+    [IO.File]::Delete($archive.FullName)
+    Write-DoctorLog @{action='Check';result='ok'}
+    $resumed = Get-Content (Join-Path $fixture 'doctor-log-state.json') -Raw | ConvertFrom-Json
+    if ($resumed.evictedRows -lt ($recovered.evictedRows + $pending.rows) -or $resumed.pendingEviction) { throw 'logger-eviction-loss-accounting' }
+    $retained=@(Get-ChildItem $fixture -Filter 'doctor.rotated-v1-*.jsonl')+@(Get-Item $active)
+    $retainedRows=0;foreach($file in $retained){$retainedRows+=@([IO.File]::ReadAllLines($file.FullName)).Count}
+    if($resumed.evictedRows+$retainedRows -ne $resumed.seq){throw 'logger-eviction-overcount-or-loss'}
+    Write-DoctorLog @{action='Check'}
+    $again=Get-Content (Join-Path $fixture 'doctor-log-state.json') -Raw|ConvertFrom-Json
+    $retained=@(Get-ChildItem $fixture -Filter 'doctor.rotated-v1-*.jsonl')+@(Get-Item $active)
+    $retainedRows=0;foreach($file in $retained){$retainedRows+=@([IO.File]::ReadAllLines($file.FullName)).Count}
+    if($again.evictedRows+$retainedRows -ne $again.seq){throw 'logger-eviction-repeat-overcount'}
+    # Two independent processes serialize writes under the same logger lock.
+    $shared = Join-Path $fixture 'concurrent'; New-Item -ItemType Directory $shared | Out-Null
+    $definition = ($functions | ForEach-Object {$_.Extent.Text}) -join "`n"
+    $jobs = @(1..2 | ForEach-Object { Start-Job -ScriptBlock {
+      param($code,$dir)
+      $ErrorActionPreference='Stop'; $StateDir=$dir; $MaxActiveBytes=1200; $MaxFiles=3; $MaxTotalBytes=3600
+      . ([scriptblock]::Create($code))
+      1..20 | ForEach-Object { Write-DoctorLog @{action='Check';result='ok'} }
+    } -ArgumentList $definition,$shared })
+    try {
+      $null = $jobs | Wait-Job -Timeout 30
+      if (@($jobs | Where-Object {$_.State -ne 'Completed'}).Count) { throw 'logger-concurrent-writer-failed' }
+      $null = $jobs | Receive-Job -ErrorAction Stop
+      $concurrent = Get-Content (Join-Path $shared 'doctor-log-state.json') -Raw | ConvertFrom-Json
+      if ($concurrent.seq -ne 40) { throw 'logger-concurrent-sequence' }
+      $chain = @(Get-ChildItem $shared -Filter 'doctor.rotated-v1-*.jsonl' | Sort-Object Name | ForEach-Object {Get-Content $_.FullName})
+      $chain += @(Get-Content (Join-Path $shared 'doctor.jsonl')); $previous=$null
+      foreach ($line in $chain) {
+        $event=$line|ConvertFrom-Json; $content=[ordered]@{}
+        foreach ($prop in $event.PSObject.Properties) {if($prop.Name -ne 'hash'){$content[$prop.Name]=$prop.Value}}
+        if ((Get-DoctorLogDigest ($content|ConvertTo-Json -Compress)) -ne $event.hash) {throw 'logger-concurrent-hash'}
+        if ($previous -and ($event.prevHash -ne $previous.hash -or $event.seq -ne $previous.seq+1)) {throw 'logger-concurrent-chain'}
+        $previous=$event
+      }
+    } finally { $jobs | Stop-Job; $jobs | Remove-Job -Force }
+    # A legacy file survives its first adoption into the bounded logger.
+    $legacy = Join-Path $fixture 'legacy'; New-Item -ItemType Directory -Path $legacy | Out-Null
+    [IO.File]::WriteAllText((Join-Path $legacy 'doctor.jsonl'), 'original historical bytes')
+    $StateDir = $legacy
+    Write-DoctorLog @{ action='Check'; result='ok' }
+    $preserved = @(Get-ChildItem -LiteralPath $legacy -Filter 'doctor.legacy-*.jsonl')
+    if ($preserved.Count -ne 1 -or [IO.File]::ReadAllText($preserved[0].FullName) -ne 'original historical bytes') { throw 'legacy-not-preserved' }
+    # Failed writes cannot silently report success.
+    $StateDir = Join-Path $fixture 'failure'; New-Item -ItemType Directory -Path $StateDir | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $StateDir 'doctor-log-state.json') | Out-Null
+    $failed = $false
+    try { Write-DoctorLog @{action='Check'} } catch { $failed = $true }
+    if (-not $failed) { throw 'logger-write-failure-hidden' }
+    $failures = Get-Content (Join-Path $StateDir 'doctor-log-failures.json') -Raw | ConvertFrom-Json
+    if ($failures.writeFailure -ne 1 -or $failures.dropped -ne 0) { throw 'logger-failure-accounting' }
+
+    Remove-Item -LiteralPath (Join-Path $StateDir 'doctor-log-state.json')
+    Write-DoctorLog @{action='Check'}
+    $firstRecovery=Get-Content (Join-Path $StateDir 'doctor-log-state.json') -Raw|ConvertFrom-Json
+    if($firstRecovery.seq -ne 2 -or @(Get-ChildItem $StateDir -Filter 'doctor.legacy-*.jsonl').Count){throw 'logger-first-metadata-recovery'}
+    $StateDir=Join-Path $fixture 'append-fault'; New-Item -ItemType Directory (Join-Path $StateDir 'doctor.jsonl') -Force | Out-Null
+    1..2 | ForEach-Object {try {Write-DoctorLog @{action='Check'}} catch {}}
+    $failure=Get-Content (Join-Path $StateDir 'doctor-log-failures.json') -Raw|ConvertFrom-Json
+    if($failure.writeFailure -ne 2 -or $failure.dropped -ne 2){throw 'logger-append-loss-unreported'}
+    Remove-Item -LiteralPath (Join-Path $StateDir 'doctor.jsonl')
+    Write-DoctorLog @{action='Check'};Write-DoctorLog @{action='Check'}
+    $restored=Get-Content (Join-Path $StateDir 'doctor-log-state.json') -Raw|ConvertFrom-Json
+    if($restored.seq -ne 2 -or $restored.dropped -ne 2 -or $restored.writeFailure -ne 2){throw 'logger-loss-double-count-or-missing'}
+    # A real partial append followed by an exception is one lost attempt.
+    $normalWriter=($functions|Where-Object {$_.Name -eq 'Write-DoctorLog'})[0].Extent.Text
+    $append='[IO.File]::AppendAllText($active, $line, [Text.UTF8Encoding]::new($false))'
+    if (-not $normalWriter.Contains($append)) {throw 'logger-fixture-append-boundary-missing'}
+    foreach($mode in @('partial','complete')) {
+      $StateDir=Join-Path $fixture ('write-then-fault-'+$mode);[void][IO.Directory]::CreateDirectory($StateDir)
+      Write-DoctorLog @{action='Check'}
+      $injected=if($mode -eq 'partial') {'[IO.File]::AppendAllText($active, $line.Substring(0,17), [Text.UTF8Encoding]::new($false)); throw "synthetic-append-interruption"'} else {$append+'; throw "synthetic-close-failure"'}
+      try {
+        . ([scriptblock]::Create($normalWriter.Replace($append,$injected)))
+        $failed=$false;try{Write-DoctorLog @{action='Check'}}catch{$failed=$true}
+        if(-not $failed){throw 'logger-injected-append-failure-missing'}
+      } finally {. ([scriptblock]::Create($normalWriter))}
+      Write-DoctorLog @{action='Check'};Write-DoctorLog @{action='Check'}
+      $observed=Get-Content (Join-Path $StateDir 'doctor-log-state.json') -Raw|ConvertFrom-Json
+      $expectedDropped=if($mode -eq 'partial'){1}else{0}
+      $expectedSeq=if($mode -eq 'partial'){3}else{4}
+      if($observed.dropped -ne $expectedDropped -or $observed.seq -ne $expectedSeq -or $observed.writeFailure -ne 1){throw ('logger-append-attempt-double-count-'+$mode)}
+    }
+
+    Write-Output 'PASS logger redaction, bounded rotation, sequence, legacy preservation, write-failure visibility; ACL/Heal/Git/scheduler calls=0'
+    exit 0
+  } finally {
+    if ([IO.Path]::GetFullPath($fixture).StartsWith([IO.Path]::GetFullPath($env:TEMP) + '\', [StringComparison]::OrdinalIgnoreCase)) { Remove-Item -LiteralPath $fixture -Recurse -Force }
+  }
+}
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 

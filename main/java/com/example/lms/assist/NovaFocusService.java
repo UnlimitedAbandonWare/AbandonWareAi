@@ -37,6 +37,7 @@ public class NovaFocusService implements AutoCloseable {
         String assistId;
         long epoch,lastSeen,settingsVersion;
         boolean busy;
+        boolean suspended;
         Long room;
         String pendingTurn;
         String preparedRequestId;
@@ -135,11 +136,12 @@ public class NovaFocusService implements AutoCloseable {
                 // The assist binding owns conversation lifetime; an audio segment only fences ASR.
                 if(!Objects.equals(s.assistId,assistId)){
                     if(s.assistId!=null)sessions.remove(s.assistId,s);
-                    cancel(s,"session_changed");
+                    if(!s.suspended)cancel(s,"session_changed");
                     clearTranscript(s);
                 }
                 s.assistId=assistId;s.epoch=epoch;s.state.sourceNamespace(assistId+":"+epoch);sessions.put(assistId,s);
             }
+            if(s.suspended){s.suspended=false;byte[] ticket=new byte[32];random.nextBytes(ticket);s.state.resume(HexFormat.of().formatHex(ticket),clock.millis());}
             s.lastSeen=clock.millis();
         }
     }
@@ -267,8 +269,10 @@ public class NovaFocusService implements AutoCloseable {
         synchronized(s){
             if(sessions.get(assistId)!=s||!s.owner.equals(owner)||s.epoch!=epoch)return false;
             long now=clock.millis();s.lastSeen=now;
+            boolean wasActive=s.state.active();
             boolean consumed=s.state.input(utterance,now);
-            rememberFinal(s,utterance,now);
+            if(wasActive&&!s.state.active()){cancel(s,s.state.view(now).reason());clearTranscript(s);}
+            else rememberFinal(s,utterance,now);
             return consumed;
         }
     }
@@ -321,13 +325,27 @@ public class NovaFocusService implements AutoCloseable {
         synchronized(s){if(s.owner.equals(owner)&&s.epoch==epoch){cancel(s,"context_reset");clearTranscript(s);}}
     }
     public void detach(String assistId,String reason){
-        var s=sessions.remove(assistId);if(s!=null)synchronized(s){cancel(s,reason);clearTranscript(s);}
+        var s=sessions.remove(assistId);if(s!=null)synchronized(s){
+            if(s.suspended&&"disconnected_cleanup".equals(reason)){s.assistId=null;clearTranscript(s);return;}
+            cancel(s,reason);clearTranscript(s);}
+    }
+    /** Owner/epoch verified transport suspension. Does not change user intent. */
+    void suspend(String owner,String assistId,long epoch,String reason){
+        var s=sessions.get(assistId);if(s==null)return;
+        synchronized(s){if(!s.owner.equals(owner)||epoch!=s.epoch+1)return;
+            emitDiagnostic(terminalDiagnostic(s,s.observation,"cancelled",reason),"NovaFocusService.suspend");
+            s.state.suspend(reason);s.suspended=true;s.epoch=epoch;s.state.sourceNamespace(assistId+":"+epoch);
+            s.preparedContext=null;s.preparedRequestId=null;
+            if(s.pendingTurn!=null)history.terminal(s.owner,s.channel,s.pendingTurn,"CANCELLED",null);
+            var adapter=answers.getIfAvailable();if(adapter!=null&&s.busy&&s.room!=null)adapter.cancel(s.room);
+        }
     }
     private void cancel(Slot s,String reason){
         emitDiagnostic(terminalDiagnostic(s,s.observation,"cancelled",reason),"NovaFocusService.cancel");
         emitDiagnostic(closedDiagnostic(s,reason),"NovaFocusService.cancel");
         s.preparedContext=null;s.preparedRequestId=null;
         s.answerDiagnostics=Map.of();
+        s.suspended=false;
         s.recent.clear();
         s.state.close(reason);
         if(s.pendingTurn!=null)history.terminal(s.owner,s.channel,s.pendingTurn,"CANCELLED",null);
@@ -358,7 +376,13 @@ public class NovaFocusService implements AutoCloseable {
             NovaFocusHistoryService.Context context=null;
             Observation observation=null;Map<String,Object> confirmed=null,terminal=null,closed=null;
             synchronized(s){
+                if(s.suspended)continue;
+                boolean wasInFlight=s.state.inFlight();
                 boolean was=s.state.active();request=s.state.tick(now,!s.busy,s.settingsVersion);
+                if(wasInFlight&&!s.state.inFlight()&&s.busy){
+                    terminal=terminalDiagnostic(s,s.observation,"timeout",s.state.view(now).reason());
+                    var adapter=answers.getIfAvailable();if(adapter!=null&&s.room!=null)adapter.cancel(s.room);
+                }
                 if(was&&!s.state.active()){
                     String reason=s.state.view(now).reason();
                     terminal=terminalDiagnostic(s,s.observation,reason.endsWith("timeout")?"timeout":"cancelled",reason);

@@ -18,7 +18,7 @@
     재확인한 후 격리한다. 내 journal에는 AUTO:lease-reclaimed를 기록한다.
   - request-release: live lease 소유자 task dir에 LEASE_RELEASE_REQUEST.md
     하나만 둔다(소유자 에이전트 채널). 사용자에게 "그 작업에 전달해 주세요"라고
-    중개를 요청하지 않는다 — 사용자 노출 문구는 live lease 현황 1줄 보고이며
+    중개를 요청하지 않는다 - 사용자 노출 문구는 live lease 현황 1줄 보고이며
     동일 충돌 지문(정렬된 path+ownerTaskId 해시)당 1회만 발생한다.
 
 출력은 항상 JSON 한 줄. 종료 코드: 0 ok, 2 usage, 3 소유/신원 오류,
@@ -986,7 +986,7 @@ def build_parser() -> argparse.ArgumentParser:
                    default=DEFAULT_STALE_GRACE_SECONDS,
                    help="min seconds past effective expiry before stale reclaim")
     p.add_argument("--waited", action="store_true",
-                   help="lease-wait를 이미 돌린 뒤의 재계획 — free면 RESUME, "
+                   help="lease-wait를 이미 돌린 뒤의 재계획 - free면 RESUME, "
                         "여전히 live면 HOLD+resumeWhen")
     p.set_defaults(func=cmd_plan)
 

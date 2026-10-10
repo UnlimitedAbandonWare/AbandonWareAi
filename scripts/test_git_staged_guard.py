@@ -33,6 +33,13 @@ class StagedGuardTest(unittest.TestCase):
         self.git("add", "--", name)
         return path
 
+    def stage_bytes(self, name, data):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        self.git("add", "--", name)
+        return path
+
     def check(self):
         return subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(GUARD),
                                "-Mode", "pre-commit"], cwd=self.root, env=self.env,
@@ -98,6 +105,52 @@ class StagedGuardTest(unittest.TestCase):
     def test_readme_with_fake_key_keeps_content_finding(self):
         self.stage("__patch_drop__/README.md", "docs " + "sk-" + "B" * 30)
         self.assertNotEqual(0, self.check().returncode)
+
+    def test_empty_env_assignments_do_not_read_the_next_line(self):
+        self.stage_bytes(
+            ".env.example",
+            ("DEEPGRAM_API_" + "KEY=\r\n"
+             "DEEPGRAM_API_" + "KEY_SECONDARY=\r\n"
+             "NAVER_APIHUB_CLIENT_" + "ID=\r\n"
+             "NAVER_APIHUB_CLIENT_" + "SECRET=\r\n").encode())
+        result = scanner.scan(self.root)
+        self.assertTrue(result["ok"], result["findings"])
+
+    def test_placeholder_env_assignment_passes(self):
+        self.stage(".env.example",
+                   "API_" + "KEY=<your-key-here>\r\nCLIENT_" + "SECRET=changeme\r\n")
+        result = scanner.scan(self.root)
+        self.assertTrue(result["ok"], result["findings"])
+
+    def test_real_value_sensitive_assignment_stays_blocked(self):
+        self.stage(".env.example", "API_" + "KEY=" + "A" * 30 + "\r\n")
+        result = scanner.scan(self.root)
+        self.assertFalse(result["ok"])
+        rules = {f["rule"] for f in result["findings"]}
+        self.assertIn("sensitive-assignment", rules)
+
+    def test_small_report_screenshot_is_not_binary_held(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"\0" * 256
+        self.stage_bytes("docs/reports/agent-reviews/r1/evidence.png", png)
+        result = scanner.scan(self.root)
+        self.assertTrue(result["ok"], result["findings"])
+
+    def test_report_machine_blob_and_large_image_stay_held(self):
+        self.stage_bytes("docs/reports/agent-reviews/r1/state.bin",
+                         b"\0" * 128)
+        big = b"\x89PNG\r\n\x1a\n" + b"\0" * (1024 * 1024 + 16)
+        self.stage_bytes("docs/reports/agent-reviews/r1/big.png", big)
+        result = scanner.scan(self.root)
+        rules = {f["rule"] for f in result["findings"]}
+        self.assertEqual({"binary-scan-unavailable"}, rules)
+
+    def test_secret_bytes_inside_report_image_still_blocked(self):
+        blob = b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + ("AK" + "IA" + "Z" * 16).encode()
+        self.stage_bytes("docs/reports/agent-reviews/r1/evidence.png", blob)
+        result = scanner.scan(self.root)
+        self.assertFalse(result["ok"])
+        rules = {f["rule"] for f in result["findings"]}
+        self.assertIn("aws-access-key", rules)
 
 
 if __name__ == "__main__":

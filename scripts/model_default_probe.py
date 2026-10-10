@@ -720,11 +720,35 @@ def focus_proof(root, since, lines=None, max_bytes=4_000_000, owner=None):
         if ok: res['lastSuccessAt'] = ok[-1]['at'].strftime('%H:%M:%S KST')
     return res
 
+def conflict_loop_proof(root, since, lines=None, max_bytes=4_000_000):
+    """(warn) display_conflict_loop events within <since> from logs/debug-events.ndjson tail."""
+    if lines is None:
+        p = pathlib.Path(root) / 'logs' / 'debug-events.ndjson'
+        if not p.exists(): return {'present': False, 'recent': 0}
+        with open(p, 'rb') as fh:
+            fh.seek(0, 2); size = fh.tell(); fh.seek(max(0, size - max_bytes))
+            lines = fh.read().decode('utf-8', 'replace').splitlines()
+    hits = []
+    for line in lines:
+        if 'display_conflict_loop' not in line: continue
+        try: e = json.loads(line)
+        except ValueError: continue
+        at = _kst_from_iso(e.get('ts'))
+        if not at or at < since: continue
+        d = e.get('data') or {}
+        hits.append({'at': at, 'path': d.get('path'), 'reason': d.get('reason'), 'count': d.get('count')})
+    res = {'present': True, 'recent': len(hits)}
+    if hits:
+        last = hits[-1]
+        res['last'] = dict(last, at=last['at'].strftime('%H:%M:%S KST'))
+    return res
+
 def ready_gate(a, root, http=http_json, profile_runner=None, log_text=None, probes=None, event_lines=None, now=None):
     now = now or _dt_mod.datetime.now(KST)
     out = {'checkedAt': now.strftime('%Y-%m-%d %H:%M:%S KST')}
     rt = runtime_state(root, probes); out['runtime'] = rt
     reasons = []
+    warnings = []
     if rt['state'] in ('RUNTIME_DOWN', 'LAUNCHER_BUSY', 'RUNTIME_RECORD_STALE'):
         reasons.append(rt['state'])
     if rt['state'] != 'RUNTIME_DOWN':
@@ -753,6 +777,10 @@ def ready_gate(a, root, http=http_json, profile_runner=None, log_text=None, prob
         elif not fp.get('successSinceRestart'): reasons.append('NOT_PROVEN_FOCUS')
     out['restartsLast60m'] = [dict(e, at=e['at'].strftime('%H:%M:%S')) for e in
                               restarts_since(root, now - _dt_mod.timedelta(minutes=60), log_text=log_text)]
+    cl = conflict_loop_proof(root, now - _dt_mod.timedelta(minutes=10), lines=event_lines)
+    out['conflictLoops'] = cl
+    if cl.get('recent'): warnings.append('DISPLAY_CONFLICT_LOOP')
+    out['warnings'] = warnings
     verdict = sorted(set(reasons), key=READY_ORDER.index)[0] if reasons else 'READY'
     out['verdict'] = verdict; out['reasons'] = sorted(set(reasons), key=READY_ORDER.index)
     out['koreanOneLiner'] = ready_ko(out)
@@ -794,11 +822,17 @@ def ready_main(args):
     if args.json_out: Path(args.json_out).write_text(text, encoding='utf-8')
     if args.json: print(text)
     rt = out.get('runtime') or {}; fp = out.get('focusProof') or {}
+    cl = out.get('conflictLoops') or {}
     print(f"NOVA_READY={out['verdict']} reasons={','.join(out['reasons']) or '-'} runtime={rt.get('state')} "
           f"role={rt.get('role')} pid={rt.get('recordedListenerPid')} health={rt.get('health')} "
           f"mutexHeld={rt.get('launcherMutexHeld')} lastRestart={out.get('lastRestart')} "
           f"focus={((out.get('focus') or {}).get('verdicts') or ['-'])} focusSuccessSinceRestart={fp.get('successSinceRestart')} "
           f"lastFocus={(fp.get('last') or {}).get('outcome')}@{(fp.get('last') or {}).get('at')}")
+    for w in out.get('warnings') or []:
+        if w == 'DISPLAY_CONFLICT_LOOP':
+            print(f"WARN display_conflict_loop={cl.get('recent')}건(10분) last={cl.get('last')}")
+        else:
+            print(f"WARN {w}")
     print('한 줄: ' + out['koreanOneLiner'])
     return code
 

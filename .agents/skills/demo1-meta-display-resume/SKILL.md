@@ -43,3 +43,6 @@ description: Use when resuming the existing Meta Ray-Ban Display task — E0 int
 - rollback: 읽기에는 복구 작업 없음. 잘못된 요약은 원래 실행 증거에 따라 해당 요약만 복구한다. 스킬 제거는 이 폴더·역할 참조·task binding 항목만 대상으로 하고 실행 근거는 보존한다.
 - 중복 방지 근거: 기존 webapp의 접수/재개 판단을 분리했다. Desktop resolver, selector, source-owner gate와 기록 schema는 새로 만들지 않는다.
 - 반증 사례: 오래된 E3 timestamp만 현재 시각으로 바꾸거나, E1 core가 바뀌었는데 E3부터 진행하거나, Notebook에서 E0 PASS를 대신 만들면 실패다.
+- 같은 사용자 재연결 = 마지막 연결이 이긴다: 새 producer가 같은 세션과 캡션을 이어받고 새 epoch를 받는다(다른 owner는 그대로 거절).
+- 409 stale은 반복하지 않는다: status 재조회 후 수음 재시작은 지수 백오프 최대 3회, 캡션 ack 재시도도 키당 3회에서 멈춘다(구 버전 ack는 서버가 no-op으로 수렴).
+- 감시: 같은 owner+경로+이유 409가 60초 안에 10회를 넘으면 `display_conflict_loop` 이벤트를 분당 1건 남기고 `--ready`는 WARN으로만 보고한다.

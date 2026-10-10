@@ -354,7 +354,7 @@ public class ConversateSessionService implements AutoCloseable {
         var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
             switch(action){
                 case "producer_reclaimed" -> {
-                    var caption=s.caption;long captionEpoch=s.captionEpoch;var visible=new ArrayDeque<>(s.visible);pause(s,"producer_changed",true);
+                    var caption=s.caption;long captionEpoch=s.captionEpoch;var visible=new ArrayDeque<>(s.visible);pause(s,"producer_reclaimed",true);
                     s.state="RUNNING";s.caption=caption;s.captionEpoch=captionEpoch;s.visible.addAll(visible);
                     s.audio=new AudioMetrics(s.audio.chunks(),s.audio.partials(),s.audio.finals(),s.audio.duplicates(),s.audio.lastAsrMs(),"WAITING",s.audio.runtime());s.reason="READY";
                 }
@@ -453,7 +453,10 @@ public class ConversateSessionService implements AutoCloseable {
         if(s.caption!=null&&s.caption.expiresAt()<=now){s.caption=null;s.version++;}
     }}
     private void pause(Session s,String reason){pause(s,reason,false);}
-    private void pause(Session s,String reason,boolean retainEvidence){if(novaFocus!=null)novaFocus.detach(s.id,reason);s.state="PAUSED";s.reason=reason;s.epoch++;s.pollOutputs.clear();
+    private void pause(Session s,String reason,boolean retainEvidence){if(novaFocus!=null){
+        if(Set.of("output_lost","producer_reclaimed").contains(reason))novaFocus.suspend(s.owner,s.id,s.epoch+1,reason);
+        else novaFocus.detach(s.id,reason);
+        }s.state="PAUSED";s.reason=reason;s.epoch++;s.pollOutputs.clear();
         if(!retainEvidence){s.policy.clear();s.context.clear();s.card=null;}else {pruneContext(s,clock.millis());if(s.card!=null&&s.card.expiresAt()<=clock.millis())s.card=null;}
         s.autoState="DISARMED";s.activationId=null;s.activationValidUntil=0;s.hintDisplayValidUntil=0;
         resetCueTracking(s);s.version++;closeCapture(s);cancelPending(s);}

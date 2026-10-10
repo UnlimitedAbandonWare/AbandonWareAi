@@ -12,6 +12,8 @@ import java.util.Map;
  */
 @Service
 public class ProjectionMergeService {
+    private static final String CANONICAL_HEADER = "### (실험적 아이디어 · 비공식)";
+    private static final String LEGACY_HEADER = "### 異붿륫/鍮꾧났???꾩씠?붿뼱";
 
     @Value("${projection.merge.keep-free-side-notes:true}")
     private boolean keepFreeSideNotes = true;
@@ -36,11 +38,36 @@ public class ProjectionMergeService {
             return c;
 
         boolean keep = resolveBool(effectiveConfig.get("keep-free-side-notes"), keepFreeSideNotes);
-        String header = resolveString(effectiveConfig.get("free-header"), freeHeader);
+        String header = resolveString(effectiveConfig.get("free-header"), resolveString(freeHeader, CANONICAL_HEADER));
         if (!keep)
             return g;
 
-        return g + "\n\n---\n" + header + "\n" + c;
+        c = creativeBody(c, header);
+        if (c.isBlank()) return g;
+        String block = "\n\n---\n" + header + "\n" + c;
+        return g.endsWith(block) ? g : g + block;
+    }
+
+    /** Only the application-owned trailing section may be normalized after final polish. */
+    public String normalizeMergedView(String answer) {
+        if (answer == null || answer.isBlank()) return answer;
+        String header = resolveString(freeHeader, CANONICAL_HEADER);
+        String marker = "\n\n---\n" + header + "\n";
+        int start = answer.lastIndexOf(marker);
+        if (start < 0) return answer;
+        return answer.substring(0, start + marker.length())
+                + creativeBody(answer.substring(start + marker.length()), header);
+    }
+
+    private static String creativeBody(String creative, String header) {
+        String body = creative.strip();
+        while (!body.isEmpty()) {
+            int newline = body.indexOf('\n');
+            String first = (newline < 0 ? body : body.substring(0, newline)).strip();
+            if (!first.equals(header) && !first.equals(CANONICAL_HEADER) && !first.equals(LEGACY_HEADER)) break;
+            body = newline < 0 ? "" : body.substring(newline + 1).stripLeading();
+        }
+        return body;
     }
 
     private static boolean resolveBool(Object v, boolean fallback) {

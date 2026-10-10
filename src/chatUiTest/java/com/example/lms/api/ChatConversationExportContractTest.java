@@ -196,6 +196,89 @@ class ChatConversationExportContractTest {
         verifyNoInteractions(events);
     }
 
+    @Test void realProducerChatSidBindsOnlyAuthorizedRingAndExactEvents() throws Exception {
+        var beans = new org.springframework.beans.factory.support.DefaultListableBeanFactory();
+        var traces = new TraceSnapshotStore(beans.getBeanProvider(com.example.lms.service.trace.TraceHtmlBuilder.class));
+        org.springframework.test.util.ReflectionTestUtils.setField(traces, "enabled", true);
+        org.springframework.test.util.ReflectionTestUtils.setField(traces, "allowReasonsCsv", "");
+        org.springframework.test.util.ReflectionTestUtils.setField(traces, "denyReasonsCsv", "");
+        org.springframework.test.util.ReflectionTestUtils.setField(traces, "maxValueLen", 1000);
+        org.springframework.test.util.ReflectionTestUtils.setField(traces, "maxSize", 20);
+        String snapshotId;
+        try {
+            org.slf4j.MDC.put("sid", "chat-1");
+            org.slf4j.MDC.put("traceId", "fixture-trace");
+            org.slf4j.MDC.put("x-request-id", "fixture-request");
+            snapshotId = traces.captureCustom("unit_test", "POST", "/api/chat", 200, null,
+                    Map.of("finalAnswer.releaseAllowed", true), null, false);
+        } finally { org.slf4j.MDC.clear(); }
+        var snapshot = traces.get(snapshotId).orElseThrow();
+        assertEquals(SafeRedactor.hashValue("chat-1"), snapshot.sessionId());
+        assertEquals(snapshot.sessionId(), snapshot.sid());
+        message(1, 1, "assistant", "answer"); message(2, 1, "system", pointer(snapshotId, 1));
+        var events = mock(DebugEventStore.class);
+        List<DebugEvent> rows = new ArrayList<>();
+        for (String sid : List.of("chat-1", "1", "chat-3", "unknown")) {
+            rows.add(new DebugEvent("e-" + sid, Instant.EPOCH, 0, DebugEventLevel.INFO,
+                    DebugProbeType.values()[0], "fp", "fixture", SafeRedactor.hashValue(sid),
+                    null, null, null, null, Map.of(), null, null));
+        }
+        when(events.page(eq(snapshot.requestId()), eq(snapshot.traceId()), isNull(), eq(200)))
+                .thenReturn(new DebugEventStore.EventPage(rows, null, false, "ok"));
+        export = new ChatConversationExportSupport(ds, mapper, traces, events, null, clock);
+        var turn = context(capture("1")).path("sessions").get(0).path("turns").get(0);
+        assertEquals("safe_typed_projection_only", turn.path("trace").path("ring").path("reason").asText());
+        assertEquals(1, turn.path("events").path("items").size());
+        assertEquals("e-chat-1", turn.path("events").path("items").get(0).path("id").asText());
+        assertEquals(3, turn.path("events").path("unboundExcludedCount").asInt());
+        verify(events).page(snapshot.requestId(), snapshot.traceId(), null, 200);
+    }
+
+    @Test void inFlightCaptureDeclaresFenceAndRequiresFreshCaptureAfterCommit() throws Exception {
+        message(1, 1, "user", "question");
+        var runs = mock(com.example.lms.service.chat.ChatRunRegistry.class);
+        when(runs.isRunning(1L)).thenReturn(true);
+        export = new ChatConversationExportSupport(ds, mapper, null, null, runs, clock);
+        try (Connection writer = ds.getConnection()) {
+            writer.setAutoCommit(false);
+            try (var insert = writer.prepareStatement("INSERT INTO chat_message VALUES(2,1,'assistant','answer',CURRENT_TIMESTAMP)")) {
+                insert.executeUpdate();
+            }
+            var captured = capture("1"); byte[] original = json(captured);
+            var before = mapper.readTree(original);
+            assertEquals(1, before.path("sessions").get(0).path("messages").size());
+            assertEquals("in_progress", before.path("snapshot").path("latestTurnCoverage").asText());
+            assertTrue(before.path("snapshot").path("completeWithinFence").asBoolean());
+            assertEquals("captured_db_fence", before.path("snapshot").path("messageCompleteScope").asText());
+            writer.commit(); when(runs.isRunning(1L)).thenReturn(false);
+            assertArrayEquals(original, json(captured));
+            var after = context(capture("1"));
+            assertEquals(2, after.path("sessions").get(0).path("messages").size());
+            assertEquals("persisted_within_fence", after.path("snapshot").path("latestTurnCoverage").asText());
+        }
+    }
+
+    @Test void postFenceCommitDoesNotChangeRetainedCapture() throws Exception {
+        message(1, 1, "user", "question");
+        try (Connection writer = ds.getConnection()) {
+            writer.setAutoCommit(false);
+            try (var insert = writer.prepareStatement("INSERT INTO chat_message VALUES(2,1,'assistant','answer',CURRENT_TIMESTAMP)")) {
+                insert.executeUpdate();
+            }
+            var committed = new java.util.concurrent.atomic.AtomicBoolean();
+            export = new ChatConversationExportSupport(observe(new ArrayList<>(), () -> {
+                if (committed.compareAndSet(false, true)) {
+                    try { writer.commit(); } catch (java.sql.SQLException error) { throw new RuntimeException(error); }
+                }
+            }), mapper, null, null, null, clock);
+            var captured = capture("1"); byte[] original = json(captured);
+            assertEquals(1, mapper.readTree(original).path("sessions").get(0).path("messages").size());
+            assertEquals("awaiting_assistant", mapper.readTree(original).path("snapshot").path("latestTurnCoverage").asText());
+            assertEquals(2, context(capture("1")).path("sessions").get(0).path("messages").size());
+            assertArrayEquals(original, json(captured));
+        }
+    }
+
     @Test void twoHundredFiftySevenAttachmentsSurviveRingLossWithoutRawUnits() throws Exception {
         String namespace=AttachmentOwnerIdentity.forAnonymous("browser-alice").hash();
         for(int i=0;i<257;i++)sql.update("INSERT INTO attachment_source VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",String.format("a%03d",i),namespace,"1","GENERAL",false,"a".repeat(64),1,"parser-v1",12,clock.millis(),0,"READY","NOT_INDEXED","READY",1);

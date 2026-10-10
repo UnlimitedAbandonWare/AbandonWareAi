@@ -813,7 +813,7 @@ intents:
     primary_skill: demo1-evidence-debugging
     optional_skill: null
     forbid_families: []
-    notes: 단일 디버그 진입; invisible-eye/observed-debugging은 기본 경로 밖 보존
+    notes: 단일 디버그 진입; invisible-eye는 기본 경로 밖 보존
 
   - intent: ops-surface-thin
     match:

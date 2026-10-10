@@ -18,6 +18,37 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class NovaFocusHistoryTest {
+    @Test void oldWakeMatchingNewDefaultExitGetsVisibleCompatibleExitWithoutChangingUserQuiet() throws Exception {
+        var mapper=new ObjectMapper();String owner=UUID.randomUUID().toString();
+        for(String field:List.of("wakeWord","cameraWakeWord")){
+            String channel="legacy-"+field;var initial=store.settings(owner,channel).settings();
+            store.settings(owner,channel,0,initial);
+            var raw=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(initial);
+            raw.remove("exitWord");raw.put(field,"클린");raw.put("utteranceQuietMs",1234);
+            var em=context.getBean(EntityManagerFactory.class).createEntityManager();
+            try{em.getTransaction().begin();em.find(NovaFocusProfile.class,NovaFocusHistoryService.scope(owner,channel)).setSettingsJson(mapper.writeValueAsString(raw));em.getTransaction().commit();}
+            finally{em.close();}
+            var read=store.settings(owner,channel).settings();assertEquals(1234,read.utteranceQuietMs());
+            assertEquals("포커스 종료",read.exitWord());assertEquals("클린",field.equals("wakeWord")?read.wakeWord():read.cameraWakeWord());
+            assertDoesNotThrow(()->store.settings(owner,channel,1,read));
+            raw.put("exitWord","클린");assertThrows(Exception.class,()->mapper.treeToValue(raw,NovaFocusSettings.class));
+        }
+    }
+    @Test void exitWordSurvivesSaveReopenLegacyMergeAndOwnerIsolation() throws Exception {
+        String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
+        var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"exit-word").settings());
+        ((com.fasterxml.jackson.databind.node.ObjectNode)node.path("snapshot")).put("cameraAllowed",false);
+        ((com.fasterxml.jackson.databind.node.ObjectNode)node.path("answerSelection")).set("routing",mapper.valueToTree(new NovaFocusSettings.Routing(NovaFocusSettings.ExecutionTarget.AUTO,false,List.of())));
+        node.put("cameraWakeWord","camera").put("answerInstruction","").put("answerPreset","GENERAL").put("reasoningPreset","STANDARD").put("webSearchEnabled",true);
+        node.put("exitWord","finish");store.settings(owner,"exit-word",0,mapper.treeToValue(node,NovaFocusSettings.class));
+        assertEquals("finish",store.settings(owner,"exit-word").settings().exitWordOrDefault());
+        node.remove("exitWord");store.settings(owner,"exit-word",1,mapper.treeToValue(node,NovaFocusSettings.class));
+        var restarted=new NovaFocusHistoryService(context.getBean(org.springframework.transaction.PlatformTransactionManager.class),mapper,null);
+        org.springframework.test.util.ReflectionTestUtils.setField(restarted,"em",SharedEntityManagerCreator.createSharedEntityManager(context.getBean(EntityManagerFactory.class)));
+        assertEquals("finish",restarted.settings(owner,"exit-word").settings().exitWordOrDefault());
+        assertEquals("클린",restarted.settings("other-"+owner,"exit-word").settings().exitWordOrDefault());
+        node.put("exitWord",node.path("wakeWord").asText());assertThrows(Exception.class,()->mapper.treeToValue(node,NovaFocusSettings.class));
+    }
     @Test void dedicatedModeAndFallbackPreferencesSurviveLegacySaveCasReconnectAndOwnerIsolation() throws Exception {
         String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
         var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"dedicated").settings());

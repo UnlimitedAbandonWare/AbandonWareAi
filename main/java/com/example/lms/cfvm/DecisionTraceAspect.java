@@ -80,16 +80,45 @@ public class DecisionTraceAspect {
         return result;
     }
 
-    @Around("execution(* com.example.lms.service.ChatHistoryService+.appendMessageReturningId(..))")
+    @Around("execution(* com.example.lms.service.ChatHistoryService+.appendMessageReturningId(..)) || "
+            + "execution(* com.example.lms.service.ChatHistoryService+.appendMessageStrictReturningId(..))")
     public Object tracePersistedFinalResponse(ProceedingJoinPoint pjp) throws Throwable {
         Object persisted = pjp.proceed();
         Object[] args = pjp.getArgs();
-        if (args != null
+        if (persisted != null && args != null
                 && args.length >= 3
                 && "assistant".equalsIgnoreCase(text(args[1]))) {
+            Map<String, Object> ownerContext = TraceStore.context();
+            Map<String, Object> packet = new LinkedHashMap<>();
+            ownerContext.forEach((key, value) -> {
+                if (key.startsWith(RECONSTRUCTION_PREFIX)) packet.put(key, value);
+            });
+            String content = args[2] == null ? "" : String.valueOf(args[2]);
+            Runnable committedAudit = () -> {
+                Map<String, Object> previous = TraceStore.context();
+                TraceStore.installContext(new java.util.concurrent.ConcurrentHashMap<>(packet));
+                try {
+                    capturePersistedFinalResponse(content);
+                    auditTraceContext();
+                    TraceStore.context().forEach((key, value) -> {
+                        if (key.startsWith(RECONSTRUCTION_PREFIX)) ownerContext.put(key, value);
+                    });
+                } catch (RuntimeException auditFailure) {
+                    ownerContext.put(RECONSTRUCTION_PREFIX + "finalResponseAuditFailureReason",
+                            "final_response_reconstruction_audit_failed");
+                } finally { TraceStore.installContext(previous); }
+            };
             try {
-                capturePersistedFinalResponse(args[2] == null ? "" : String.valueOf(args[2]));
-                auditTraceContext();
+                if (org.springframework.transaction.support.TransactionSynchronizationManager.isActualTransactionActive()) {
+                    if (org.springframework.transaction.support.TransactionSynchronizationManager.isSynchronizationActive()) {
+                        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                                new org.springframework.transaction.support.TransactionSynchronization() {
+                                    @Override public void afterCommit() { committedAudit.run(); }
+                                });
+                    }
+                } else {
+                    committedAudit.run();
+                }
             } catch (RuntimeException auditFailure) {
                 TraceStore.inc(RECONSTRUCTION_PREFIX + "finalResponseAuditFailureCount");
                 TraceStore.put(RECONSTRUCTION_PREFIX + "finalResponseAuditFailureReason",
@@ -109,7 +138,8 @@ public class DecisionTraceAspect {
                         TraceStore.get(RECONSTRUCTION_PREFIX + "evidence"),
                         TraceStore.get(RECONSTRUCTION_PREFIX + "relations"),
                         TraceStore.get(RECONSTRUCTION_PREFIX + "lineage"),
-                        TraceStore.get(RECONSTRUCTION_PREFIX + "finalResponses"));
+                        TraceStore.get(RECONSTRUCTION_PREFIX + "finalResponses"),
+                        !"workflow_returned".equals(TraceStore.get(RECONSTRUCTION_PREFIX + "auditPhase")));
         publishSummary(summary);
     }
 
@@ -171,6 +201,7 @@ public class DecisionTraceAspect {
         TraceStore.put(RECONSTRUCTION_PREFIX + "relations", List.copyOf(relations));
         TraceStore.put(RECONSTRUCTION_PREFIX + "lineage", List.copyOf(lineage));
         TraceStore.put(RECONSTRUCTION_PREFIX + "finalResponses", List.of());
+        TraceStore.put(RECONSTRUCTION_PREFIX + "auditPhase", "workflow_returned");
         TraceStore.put(RECONSTRUCTION_PREFIX + "evidenceRowCount", evidence.size());
         TraceStore.put(RECONSTRUCTION_PREFIX + "relationRowCount", relations.size());
         TraceStore.put(RECONSTRUCTION_PREFIX + "lineageRowCount", lineage.size());
@@ -210,6 +241,7 @@ public class DecisionTraceAspect {
         finalResponse.put("contentHash", contentHash);
         finalResponse.put("evidenceIds", List.copyOf(evidenceIds));
         TraceStore.put(RECONSTRUCTION_PREFIX + "finalResponses", List.of(Map.copyOf(finalResponse)));
+        TraceStore.put(RECONSTRUCTION_PREFIX + "auditPhase", "persistence_committed");
         TraceStore.put(RECONSTRUCTION_PREFIX + "finalResponseRowCount", 1L);
     }
 
@@ -230,6 +262,13 @@ public class DecisionTraceAspect {
             normalized.put("attemptOrdinal", number(row.get("sequence")));
             normalized.put("providerAttemptObserved", Boolean.TRUE.equals(row.get("providerAttemptObserved")));
             normalized.put("responseObserved", Boolean.TRUE.equals(row.get("responseObserved")));
+            for (String key : List.of("evidenceBoundary", "providerReceiptSource", "outcome", "terminalClass")) {
+                normalized.put(key, text(row.get(key)));
+            }
+            for (String key : List.of("providerReceiptObserved", "modelAdapterAttemptObserved",
+                    "clientHttpExchangeObserved", "clientHttpResponseObserved", "wireAttemptObserved")) {
+                normalized.put(key, Boolean.TRUE.equals(row.get(key)));
+            }
             out.add(Map.copyOf(normalized));
         }
         return List.copyOf(out);
@@ -268,7 +307,10 @@ public class DecisionTraceAspect {
     }
 
     private void publishSummary(DecisionEvidenceReconstructionValidator.Summary summary) {
-        Map<String, Object> metrics = summary.toTraceMap();
+        Map<String, Object> metrics = new LinkedHashMap<>(summary.toTraceMap());
+        boolean provisional = "workflow_returned".equals(TraceStore.get(RECONSTRUCTION_PREFIX + "auditPhase"));
+        metrics.put("auditPhase", provisional ? "workflow_returned" : "persistence_committed");
+        metrics.put("auditState", provisional ? "provisional" : "final");
         metrics.forEach((key, value) -> TraceStore.put(RECONSTRUCTION_PREFIX + key, value));
 
         boolean complete = summary.checkedDecisionCount() > 0
@@ -276,14 +318,17 @@ public class DecisionTraceAspect {
         if (debugEventStore != null) {
             debugEventStore.emit(
                     DebugProbeType.ORCHESTRATION,
-                    complete ? DebugEventLevel.INFO : DebugEventLevel.WARN,
+                    complete || provisional && summary.lineageMismatchCount() == 0
+                            && summary.missingEvidenceCount() == 0 && summary.orphanRelationCount() == 0
+                            ? DebugEventLevel.INFO : DebugEventLevel.WARN,
                     "decision-evidence-reconstruction",
                     "decision_evidence_reconstruction",
                     "DecisionTraceAspect.auditTraceContext",
                     metrics,
                     null);
         }
-        if (complete) {
+        if (complete || provisional && summary.lineageMismatchCount() == 0
+                && summary.missingEvidenceCount() == 0 && summary.orphanRelationCount() == 0) {
             log.info("[DecisionEvidenceReconstruction] checked={} attempts={} responses={} linked={} "
                             + "lineageMismatch={} passRate={} reconstructable={} missingEvidence={} "
                             + "orphanRelation={} reasonCodes={} providerAttemptCoverage={}",

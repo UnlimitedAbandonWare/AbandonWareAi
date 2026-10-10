@@ -80,8 +80,10 @@ class NovaFocusCameraWakeTest {
         s.receipt("server",first.activationId(),"t1",1,"tk","presentation_done",1600);
         // 같은 활성화의 후속 질문은 답변 유지시간(tailHold)이 끝난 뒤 사진 없이 발행된다.
         s.input(u("b","두 번째 질문"),1700);
-        assertNull(s.tick(2900));
-        var second=s.tick(6600);assertNotNull(second);assertNull(second.imageBase64());
+        assertNull(s.tick(2899));assertNull(s.tick(2900,false));
+        var second=s.tick(2900,true);assertNotNull(second);assertNull(second.imageBase64());
+        assertNull(s.tick(6600));assertTrue(s.accepts(second));
+        assertEquals(1L,((Number)s.diagnostics().get("captureAttempts")).longValue());
         assertNull(s.pendingCommand(6600,1));assertEquals("none",s.diagnostics().get("snapshot.trigger"));
     }
     // d) cameraAllowed=false + 데빈 → 촬영 0, 정상 답변

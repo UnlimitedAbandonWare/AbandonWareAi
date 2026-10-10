@@ -206,8 +206,17 @@ class ChatWorkflowProjectionFinalFieldsTest {
             when(router.resolveModelName(model)).thenReturn("fixture.route-default");
             DynamicChatModelFactory factory = mock(DynamicChatModelFactory.class);
             when(factory.canServeQuietly(anyString())).thenReturn(true);
+            when(factory.lcForPreparedAnswer(anyString(), nullable(Double.class), nullable(Double.class),
+                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt(),
+                    nullable(com.example.lms.llm.spec.ModelSpecSnapshot.class))).thenAnswer(call -> {
+                        builds.add(new Build(stage.get(), call.getArgument(0), call.getArgument(5)));
+                        assertEquals(InteractionEvidencePolicy.FeatureMode.OFF, context.getInteractionPolicyDecision().featureMode());
+                        assertFalse(context.getInteractionPolicyDecision().defensive());
+                        return model;
+                    });
             when(factory.lcWithTimeout(anyString(), nullable(Double.class), nullable(Double.class),
-                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt())).thenAnswer(call -> {
+                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt(),
+                    nullable(Integer.class), nullable(com.example.lms.llm.spec.ModelSpecSnapshot.class))).thenAnswer(call -> {
                         builds.add(new Build(stage.get(), call.getArgument(0), call.getArgument(5)));
                         assertEquals(InteractionEvidencePolicy.FeatureMode.OFF, context.getInteractionPolicyDecision().featureMode());
                         assertFalse(context.getInteractionPolicyDecision().defensive());

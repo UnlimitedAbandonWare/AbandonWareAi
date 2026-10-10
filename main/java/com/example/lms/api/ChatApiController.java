@@ -2798,7 +2798,8 @@ public class ChatApiController {
                 AtomicReference<ChatStreamEvent.PipelineSnapshot> persistedPipelineSnapshotRef =
                         new AtomicReference<>(pipelineSnapshotBeforePersistence);
                 AtomicReference<Long> persistedAssistantMessageIdRef = new AtomicReference<>();
-                Runnable durablePersistence = () -> {
+                Runnable durablePersistence = () -> withPersistenceTraceContext(
+                        streamTraceMetaRef.get(), persistenceTraceMeta, () -> {
                     Long assistantMessageId = deferredService == null ? historyService.appendMessageReturningId(
                             persistenceSessionId, "assistant", persistableFinalText)
                             : deferredService.persistOrigin(committingRun, persistenceSessionId, persistableFinalText, understandingPlan);
@@ -2806,6 +2807,8 @@ public class ChatApiController {
                         throw new IllegalStateException("exact transcript persistence outcome rejected");
                     }
                     persistedAssistantMessageIdRef.set(assistantMessageId);
+                    // The append/afterCommit audit must reach the pointer before it projects metadata.
+                    persistenceTraceMeta.putAll(TraceStore.getByPrefix("decision.reconstruction."));
 
                     historyService.appendMessage(persistenceSessionId, "system",
                             String.format("%s%s", MODEL_META_PREFIX, modelUsedFinal));
@@ -2837,7 +2840,7 @@ public class ChatApiController {
                     } catch (Exception ignore) {
                         logSuppressed("stream.answerModeTracePersist");
                     }
-                };
+                });
                 boolean durablePersistenceAccepted;
                 if (committingRun == null) {
                     durablePersistence.run();
@@ -3766,6 +3769,29 @@ public class ChatApiController {
             }
         } catch (Throwable ignore) {
             logSuppressed("stream.traceStash");
+        }
+    }
+
+    /** Carry only this request's bounded reconstruction packet across the existing clear. */
+    private static void withPersistenceTraceContext(java.util.Map<String, Object> captured,
+            java.util.Map<String, Object> persistedMeta, Runnable persistence) {
+        java.util.Map<String, Object> previous = TraceStore.context();
+        java.util.Map<String, Object> scoped = new java.util.concurrent.ConcurrentHashMap<>(previous);
+        if (captured != null) captured.forEach((key, value) -> {
+            if (key.startsWith("decision.reconstruction.")) scoped.put(key, value);
+        });
+        TraceStore.installContext(scoped);
+        try { persistence.run(); }
+        finally {
+            try {
+                scoped.forEach((key, value) -> {
+                    if (key.startsWith("decision.reconstruction.")) {
+                        if (captured != null) captured.put(key, value);
+                        if (persistedMeta != null) persistedMeta.put(key, value);
+                    }
+                });
+            } catch (RuntimeException ignored) { logSuppressed("stream.persistenceTraceCopy"); }
+            finally { TraceStore.installContext(previous); }
         }
     }
 

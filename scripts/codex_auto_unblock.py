@@ -2,8 +2,11 @@
 """codex_auto_unblock.py — D30~D33 자동 해제 판정 보조 도구 (읽기 전용, stdlib만).
 
 Codex 목표 세션이 "되돌릴 수 있는 일"에서 멈추지 않게, 분류기 D30~D33이
-지시하는 판정 근거를 수집한다. 어느 서브명령도 lease 해제·reclaim·쓰기를
-하지 않는다.
+지시하는 판정 근거를 수집한다. lease-wait는 자기 대기 ticket만 기록하며
+free 관측은 쓰기 권한이 아니다. autoflow는 기존 CLI에 그대로 위임하므로
+plan의 marker 및 --execute의 request/bus/journal/reclaim 부작용을 유지한다.
+사용 형식: codex_auto_unblock.py autoflow --root <repo> plan ...
+autoflow는 첫 인수여야 하며, 옵션 의미를 자동으로 바꾸지 않는다.
 
 서브명령:
   budget --ledger <dir> [--cap N]
@@ -917,11 +920,17 @@ def _safe_console_streams():
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ['autoflow']:
+        import lease_conflict_autoflow
+        return lease_conflict_autoflow.main(argv[1:])
     _safe_console_streams()
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=
                                  argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("autoflow", help="existing lease-conflict autoflow CLI (arguments forwarded unchanged)", add_help=False)
 
     b = sub.add_parser("budget", help="D30 라이브 상한 재집계·증액 판정")
     b.add_argument("--ledger", required=True)

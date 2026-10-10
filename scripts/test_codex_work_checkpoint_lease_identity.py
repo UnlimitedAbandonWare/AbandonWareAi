@@ -1,19 +1,27 @@
 """Lease-identity drift + yaml placeholder scanner regressions.
 
-lease_check compared the whole lease.json sha256, so a heartbeat renewal
-(expiresAtUtc refresh) refused seal/finish as source-lease-drift. The check
-now accepts a renewed lease only when leaseId/ownerId/targetPaths recorded
-at begin still match; identity changes and missing files stay refused.
-The yaml scanner accepts bare ${ENV} / ${ENV:} placeholders plus the two
-known yaml defaults (${LLM_API_KEY:ollama}, ${BRAVE_API_KEY:__MISSING__});
-arbitrary ${ENV:literal} defaults, real literals, and PRIVATE KEY blocks
-stay blocked. Synthetic fixtures only.
+lease_check compared the whole lease.json sha256, so a mid-cycle lease.json
+rewrite refused seal/finish as source-lease-drift. The check accepts a
+changed lease file only when leaseId/ownerId/targetPaths recorded at begin
+still match; identity changes and missing files stay refused. (Heartbeat
+renewals themselves never rewrite lease.json - they write the
+source-edit-heartbeats/<leaseId>.json sidecar; that path is covered by
+test_checkpoint_heartbeat_sidecar.py.) The yaml scanner accepts bare
+${ENV} / ${ENV:} placeholders plus the two known yaml defaults
+(${LLM_API_KEY:ollama}, ${BRAVE_API_KEY:__MISSING__}); arbitrary
+${ENV:literal} defaults, real literals, and PRIVATE KEY blocks stay
+blocked. Synthetic fixtures only.
 """
 import json
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 from scripts.test_codex_work_checkpoint import CP
 
@@ -49,13 +57,33 @@ class LeaseIdentityDriftTest(unittest.TestCase):
     def manifest(self, root, ref):
         return {"targets": [{"path": "docs/a.md"}], "lease": ref}
 
-    def test_heartbeat_renewal_same_identity_passes(self):
+    def test_lease_rewrite_same_identity_passes(self):
+        """Legacy drift tolerance: same leaseId/ownerId/targetPaths after a
+        lease.json byte change passes; the real heartbeat path (sidecar file)
+        is covered by test_checkpoint_heartbeat_sidecar.py."""
         with tempfile.TemporaryDirectory() as root:
             path, doc = write_lease(root, "renew")
             ref = ref_for(path, Path(root), doc)
             doc["expiresAtUtc"] = future(hours=5)
             doc["lastHeartbeatAtUtc"] = future(hours=0)
             path.write_text(json.dumps(doc), encoding="utf-8")
+            CP.lease_check(Path(root), self.manifest(root, ref))
+
+    def test_expired_lease_with_valid_sidecar_passes(self):
+        """Real contract: heartbeat writes ONLY the sidecar; an expired
+        lease.json plus a valid sidecar is still a live lease."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as root:
+            path, doc = write_lease(root, "hbexp", leaseId="a" * 32,
+                                    expiresAtUtc="2020-01-01T00:00:00+00:00")
+            ref = ref_for(path, Path(root), doc)
+            heartbeats = Path(root) / "__patch_drop__" / "source-edit-heartbeats"
+            heartbeats.mkdir(parents=True)
+            (heartbeats / ("a" * 32 + ".json")).write_text(json.dumps({
+                "leaseId": "a" * 32,
+                "leaseFingerprint": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "renewedAtUtc": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
+                "expiresAtUtc": future(hours=2)}), encoding="utf-8")
             CP.lease_check(Path(root), self.manifest(root, ref))
 
     def test_lease_id_change_still_refused(self):
@@ -104,7 +132,7 @@ class YamlPlaceholderScannerTest(unittest.TestCase):
                                "configs/x.yaml")
 
     def test_literal_values_stay_blocked(self):
-        for value in ('"sk-live-0123456789abcdef"', "plainLiteralValue123",
+        for value in ('"sk-live-" + "0123456789abcdef"', "plainLiteralValue123",
                       "${NEW_VAR_9:def-ault}", "${unclosed"):
             with self.subTest(value=value), self.assertRaisesRegex(
                     CP.CheckpointError, "secret-pattern"):

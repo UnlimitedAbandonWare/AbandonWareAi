@@ -43,6 +43,57 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 class ChatWorkflowProjectionMergeConfigTest {
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"normal", "duplicate", "blank", "error"})
+    void finalPolishKeepsOneOwnedHeadingIncludingFallback(String outcome) throws Exception {
+        clearState();
+        ChatWorkflow workflow = ReflectionTestUtils.invokeMethod(ChatWorkflowProjectionDefaultProfileTest.class, "workflowFixture");
+        String header = "### (실험적 아이디어 · 비공식)";
+        String merged = "grounded\n\n---\n" + header + "\ncreative";
+        ReflectionTestUtils.setField(workflow, "projectionMergeService", new ProjectionMergeService());
+        ChatModel model = mock(ChatModel.class);
+        when(model.chat(org.mockito.ArgumentMatchers.<List<dev.langchain4j.data.message.ChatMessage>>any())).thenAnswer(call -> {
+            if ("error".equals(outcome)) throw new IllegalStateException("fixture error");
+            String text = "blank".equals(outcome) ? " " : "duplicate".equals(outcome)
+                    ? "grounded\n\n---\n" + header + "\n" + header + "\ncreative" : merged;
+            return ChatResponse.builder().aiMessage(AiMessage.from(text)).build();
+        });
+        ModelRouter router = mock(ModelRouter.class);
+        when(router.route(anyString(), nullable(String.class), anyString(), anyInt(), nullable(String.class))).thenReturn(model);
+        ReflectionTestUtils.setField(workflow, "modelRouter", router);
+        DynamicChatModelFactory factory = mock(DynamicChatModelFactory.class);
+        when(factory.lcWithTimeout(anyString(), nullable(Double.class), nullable(Double.class),
+                nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt(),
+                nullable(Integer.class), nullable(com.example.lms.llm.spec.ModelSpecSnapshot.class))).thenReturn(model);
+        ReflectionTestUtils.setField(workflow, "dynamicChatModelFactory", factory);
+        var spec = loader(authored()).loadProjectionAgent(PLAN).orElseThrow();
+        var profile = mock(com.example.lms.service.verbosity.VerbosityProfile.class);
+        when(profile.hint()).thenReturn("deep");
+        String result = ReflectionTestUtils.invokeMethod(workflow, "finalizeProjectionAnswerFromPlan", "fixture", merged, profile,
+                ChatRequestDto.builder().model("fixture-model").maxTokens(256).build(), spec);
+        assertEquals(merged, result);
+        verify(model, atLeastOnce()).chat(org.mockito.ArgumentMatchers.<List<dev.langchain4j.data.message.ChatMessage>>any());
+        clearState();
+    }
+    @org.junit.jupiter.api.Test
+    void legacyFreeIdeaUsesPromptBuilderAndRequestsOnlyKoreanBody() throws Exception {
+        ChatWorkflow workflow = ReflectionTestUtils.invokeMethod(ChatWorkflowProjectionDefaultProfileTest.class, "workflowFixture");
+        ChatModel model = mock(ChatModel.class);
+        ModelRouter router = mock(ModelRouter.class);
+        when(router.route(anyString(), nullable(String.class), anyString(), anyInt(), anyString())).thenReturn(model);
+        when(model.chat(org.mockito.ArgumentMatchers.<List<dev.langchain4j.data.message.ChatMessage>>any())).thenAnswer(call -> {
+            List<dev.langchain4j.data.message.ChatMessage> messages = call.getArgument(0);
+            String prompt = ((UserMessage) messages.get(0)).singleText();
+            assertTrue(prompt.contains("do not add a section heading or separator"));
+            assertTrue(prompt.contains("Answer in Korean in two or three short paragraphs"));
+            assertFalse(prompt.contains("異붿륫"));
+            return ChatResponse.builder().aiMessage(AiMessage.from("creative body")).build();
+        });
+        assertEquals("creative body", ReflectionTestUtils.invokeMethod(workflow, "generateFreeIdeaDraft",
+                "fixture question", "grounded", "", router, null, "fixture-model"));
+        assertEquals(true, com.example.lms.search.TraceStore.get("prompt.postOrchestration.usesPromptBuilder"));
+        clearState();
+    }
     private static final String PLAN = "projection_agent.v1";
     private static final String CREATIVE = "fixture violet windmill creative member";
     private static final ObjectMapper YAML = new ObjectMapper(new YAMLFactory());
@@ -149,8 +200,17 @@ class ChatWorkflowProjectionMergeConfigTest {
             });
             when(router.resolveModelName(model)).thenReturn("release-gate-recording-fake");
             DynamicChatModelFactory factory = mock(DynamicChatModelFactory.class);
+            when(factory.lcForPreparedAnswer(anyString(), nullable(Double.class), nullable(Double.class),
+                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt(),
+                    nullable(com.example.lms.llm.spec.ModelSpecSnapshot.class))).thenAnswer(call -> {
+                        factoryCalls.incrementAndGet();
+                        assertEquals(InteractionEvidencePolicy.FeatureMode.OFF, context.getInteractionPolicyDecision().featureMode());
+                        assertFalse(context.getInteractionPolicyDecision().defensive());
+                        return model;
+                    });
             when(factory.lcWithTimeout(anyString(), nullable(Double.class), nullable(Double.class),
-                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt())).thenAnswer(call -> {
+                    nullable(Double.class), nullable(Double.class), nullable(Integer.class), anyInt(),
+                    nullable(Integer.class), nullable(com.example.lms.llm.spec.ModelSpecSnapshot.class))).thenAnswer(call -> {
                         factoryCalls.incrementAndGet();
                         assertEquals(InteractionEvidencePolicy.FeatureMode.OFF, context.getInteractionPolicyDecision().featureMode());
                         assertFalse(context.getInteractionPolicyDecision().defensive());

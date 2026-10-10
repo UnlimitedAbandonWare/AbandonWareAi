@@ -44,6 +44,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -561,6 +563,52 @@ class ChatApiControllerInputGuardTest {
         } finally {
             ReflectionTestUtils.invokeMethod(runRegistry, "shutdown");
         }
+    }
+
+    @Test
+    void committedReconstructionReachesActualStreamPointerCaptureBeforeScopeExit() throws Throwable {
+        var history = mock(ChatHistoryService.class);
+        var chat = mock(ChatService.class);
+        var settings = mock(SettingsService.class);
+        var owner = mock(ClientOwnerKeyResolver.class);
+        var registry = mock(ChatRunRegistry.class);
+        var aspect = new com.example.lms.cfvm.DecisionTraceAspect();
+        var proxyFactory = new org.springframework.aop.aspectj.annotation.AspectJProxyFactory(history);
+        proxyFactory.addAspect(aspect);
+        ChatHistoryService proxy = proxyFactory.getProxy();
+        var controller = controller(proxy, chat, settings, owner, registry);
+        var session = new ChatSession("fixture lineage", "owner-a", "ANON"); session.setId(12L);
+        when(settings.getAllSettings()).thenReturn(Map.of());
+        when(owner.ownerKey()).thenReturn("owner-a");
+        when(history.startNewSession(any(), any(), any(), any(), any())).thenReturn(Optional.of(session));
+        stubOwnerRun(registry, 12L);
+        when(history.appendMessageReturningId(12L, "assistant", "fixture answer")).thenReturn(55L);
+        when(chat.continueChat(any(ChatRequestDto.class), any())).thenAnswer(inv -> {
+            var point = mock(org.aspectj.lang.ProceedingJoinPoint.class);
+            when(point.proceed()).thenReturn(ChatResult.of("fixture answer", "fixture:model", false));
+            return aspect.traceFinalDecision(point);
+        });
+        var snapshots = mock(com.example.lms.trace.TraceSnapshotStore.class);
+        var captured = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        when(snapshots.captureCustom(anyString(), anyString(), anyString(),
+                org.mockito.ArgumentMatchers.nullable(Integer.class),
+                org.mockito.ArgumentMatchers.nullable(Throwable.class), anyMap(),
+                org.mockito.ArgumentMatchers.nullable(String.class), eq(false))).thenAnswer(inv -> {
+            captured.set(new java.util.LinkedHashMap<>(inv.<Map<String, Object>>getArgument(5)));
+            return "fixture_committed";
+        });
+        ReflectionTestUtils.setField(controller, "traceSnapshotStore", snapshots);
+        var events = controller.chatStream(ChatRequestDto.builder().message("fixture lineage")
+                        .useWebSearch(false).useRag(false).build(), false, false, null,
+                        new MockHttpServletRequest()).collectList().block(Duration.ofSeconds(5));
+        assertNotNull(events); assertNotNull(captured.get());
+        assertEquals("persistence_committed", captured.get().get("decision.reconstruction.auditPhase"));
+        assertEquals("final", captured.get().get("decision.reconstruction.auditState"));
+        assertEquals(1L, ((Number) captured.get().get("decision.reconstruction.linkedFinalResponseCount")).longValue());
+        assertEquals(1L, ((Number) captured.get().get("decision.reconstruction.finalResponseRowCount")).longValue());
+        assertEquals(0L, ((Number) captured.get().get("decision.reconstruction.providerResponseCount")).longValue());
+        verify(history).appendMessageReturningId(eq(12L), eq("system"),
+                argThat(value -> value.startsWith("?TRACESNAP?fixture_committed|v3|")));
     }
 
     @Test

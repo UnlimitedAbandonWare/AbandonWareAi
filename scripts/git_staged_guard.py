@@ -9,6 +9,8 @@ import subprocess
 import sys
 
 MAX_BYTES = 2 * 1024 * 1024
+REPORT_IMAGE_MAX = 1 * 1024 * 1024
+REPORT_IMAGE_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp")
 PATTERNS = (
     ("aws-access-key", rb"\bAKIA[0-9A-Z]{16}\b"),
     ("github-token", rb"\b(?:github_pat_|ghp_)[A-Za-z0-9_]{20,}\b"),
@@ -16,7 +18,7 @@ PATTERNS = (
     ("provider-key", rb"(?<![A-Za-z0-9_-])(?:sk-|gsk_|pcsk_|AIza)[A-Za-z0-9_-]{20,}"),
     ("supabase-key", rb"(?<![A-Za-z0-9_-])(?:sb_secret_|sb_publishable_|sbp_)[A-Za-z0-9_-]{10,}"),
     ("private-key", rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
-    ("sensitive-assignment", rb"(?i)(?:api[-_]?key|client[-_]?secret|owner[-_]?token|password|authorization)\s*[:=]\s*['\x22]?(?!\$\{|dummy\b|test\b|changeme\b|sk-local\b)[A-Za-z0-9_./+=:-]{24,}"),
+    ("sensitive-assignment", rb"(?i)(?:api[-_]?key|client[-_]?secret|owner[-_]?token|password|authorization)[ \t]*[:=][ \t]*['\x22]?(?!\$\{|dummy\b|test\b|changeme\b|sk-local\b)[A-Za-z0-9_./+=:-]{24,}"),
 )
 
 
@@ -58,6 +60,17 @@ def path_rule(path):
     if leaf in ("application.properties", "bootstrap.properties"):
         return "private-profile"
     return None
+
+
+def _small_report_image(path, size):
+    """docs/reports 아래 1MB 이하 이미지는 커밋 가능한 증거 스크린샷.
+
+    비밀 패턴 검사는 이미 적용됐다 -- 여기서는 '바이너리라 읽지 못함'
+    보류만 건너뛴다."""
+    lower = path.lower()
+    return (lower.startswith("docs/reports/")
+            and lower.endswith(REPORT_IMAGE_EXT)
+            and size <= REPORT_IMAGE_MAX)
 
 
 def snapshot(root):
@@ -111,7 +124,7 @@ def scan(root, expected_paths=None, expected_index=None):
                     raise GuardFailure("incomplete-blob-read")
                 scanned += 1
                 rules = [name for name, pattern in PATTERNS if re.search(pattern, blob)]
-                if b"\0" in blob:
+                if b"\0" in blob and not _small_report_image(path, size):
                     rules.append("binary-scan-unavailable")
                 if rules:
                     rule = ",".join(rules)

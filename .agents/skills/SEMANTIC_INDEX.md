@@ -2,12 +2,10 @@
 
 Generated from source-bound annotations. Originals retain authority. Unknown usage is not zero.
 
-Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
+Content hash: `7c99663bfc1da3fd9b430ba5c85fdf248ca413af4e2b8b2afc56ca155f8ad545`
 
 | Kind | Route / source | Functions | Review | Invocations |
 |---|---|---|---|---|
-| skill | [abandonware-desktop-zombie-purge-safe-patch](abandonware-desktop-zombie-purge-safe-patch/SKILL.md) | retirement, source-ownership | current | unknown |
-| reference | [.agents/skills/abandonware-desktop-zombie-purge-safe-patch/references/zombie-purge-candidates.md](abandonware-desktop-zombie-purge-safe-patch/references/zombie-purge-candidates.md) |  | unreviewed | unknown |
 | skill | [agent-session-watchdog](agent-session-watchdog/SKILL.md) |  | unreviewed | unknown |
 | skill | [api-cost-routing](api-cost-routing/SKILL.md) |  | unreviewed | unknown |
 | skill | [archive.restore](archive-restore/SKILL.md) | archive-restore, integrity | current | unknown |
@@ -15,8 +13,6 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | skill | [build_error_miner](build-error-miner/SKILL.md) | debugging, error-analysis | current | unknown |
 | skill | [compile-verify-smoke](compile-verify-smoke/SKILL.md) |  | unreviewed | unknown |
 | skill | [context-purity-vector-memory](context-purity-vector-memory/SKILL.md) | metrics, memory-integrity | current | unknown |
-| skill | [demo1-ablation-harmony-tracker](demo1-ablation-harmony-tracker/SKILL.md) | ablation, metrics | current | unknown |
-| reference | [.agents/skills/demo1-ablation-harmony-tracker/references/ablation-harmony-reference.md](demo1-ablation-harmony-tracker/references/ablation-harmony-reference.md) | ablation, metrics | current | unknown |
 | skill | [demo1-adaptive-rule-lab](demo1-adaptive-rule-lab/SKILL.md) | semantic-catalog, experiment-loop | current | 1 |
 | reference | [.agents/skills/demo1-adaptive-rule-lab/references/experiment-contract.md](demo1-adaptive-rule-lab/references/experiment-contract.md) | semantic-catalog, experiment-loop | current | unknown |
 | skill | [demo1-adaptive-verifier-escalation](demo1-adaptive-verifier-escalation/SKILL.md) | verifier-escalation, counter-evidence | current | unknown |
@@ -24,36 +20,21 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | skill | [demo1-agent-api-spend-guard](demo1-agent-api-spend-guard/SKILL.md) |  | unreviewed | unknown |
 | reference | [.agents/skills/demo1-agent-api-spend-guard/references/hotspots.md](demo1-agent-api-spend-guard/references/hotspots.md) |  | unreviewed | unknown |
 | skill | [demo1-agent-code-evidence-gate](demo1-agent-code-evidence-gate/SKILL.md) | evidence-verdict, source-ownership | current | unknown |
-| skill | [demo1-agentic-chat-postprocess](demo1-agentic-chat-postprocess/SKILL.md) | chat-quality, verification | current | unknown |
-| reference | [.agents/skills/demo1-agentic-chat-postprocess/references/execution-contract.md](demo1-agentic-chat-postprocess/references/execution-contract.md) | chat-quality, verification | current | unknown |
-| reference | [.agents/skills/demo1-agentic-chat-postprocess/references/review-packets.md](demo1-agentic-chat-postprocess/references/review-packets.md) | chat-quality, verification | current | unknown |
-| reference | [.agents/skills/demo1-agentic-chat-postprocess/references/stop-conditions.md](demo1-agentic-chat-postprocess/references/stop-conditions.md) | chat-quality, verification | current | unknown |
 | skill | [demo1-api-routing-inventory](demo1-api-routing-inventory/SKILL.md) |  | unreviewed | unknown |
 | reference | [.agents/skills/demo1-api-routing-inventory/references/live-inventory.md](demo1-api-routing-inventory/references/live-inventory.md) |  | unreviewed | unknown |
 | skill | [demo1-api-spec-drift-guard](demo1-api-spec-drift-guard/SKILL.md) |  | unreviewed | unknown |
 | reference | [.agents/skills/demo1-api-spec-drift-guard/references/last-drift-report.md](demo1-api-spec-drift-guard/references/last-drift-report.md) |  | unreviewed | unknown |
 | skill | [demo1-artifact-trace-curator](demo1-artifact-trace-curator/SKILL.md) | integrity, handoff | current | unknown |
 | reference | [.agents/skills/demo1-artifact-trace-curator/references/artifact-trace-contract.md](demo1-artifact-trace-curator/references/artifact-trace-contract.md) | integrity, handoff | current | unknown |
-| skill | [demo1-autonomous-patch-conductor](demo1-autonomous-patch-conductor/SKILL.md) | safe-patch, experiment-loop | current | unknown |
-| reference | [.agents/skills/demo1-autonomous-patch-conductor/references/autonomous-patch-conductor-reference.md](demo1-autonomous-patch-conductor/references/autonomous-patch-conductor-reference.md) | safe-patch, experiment-loop | current | unknown |
-| skill | [demo1-bounded-hypernova-probe](demo1-bounded-hypernova-probe/SKILL.md) | ablation, experiment-loop | current | unknown |
-| reference | [.agents/skills/demo1-bounded-hypernova-probe/references/desktop-postprocess-directive.md](demo1-bounded-hypernova-probe/references/desktop-postprocess-directive.md) | ablation, experiment-loop | current | unknown |
-| skill | [demo1-codex-usage-triage](demo1-codex-usage-triage/SKILL.md) | usage-cost, agent-routing | current | unknown |
-| reference | [.agents/skills/demo1-codex-usage-triage/references/codex-usage-triage-reference.md](demo1-codex-usage-triage/references/codex-usage-triage-reference.md) | usage-cost, agent-routing | current | unknown |
 | skill | [demo1-completed-directive-cleanup](demo1-completed-directive-cleanup/SKILL.md) | retirement, integrity | current | unknown |
 | reference | [.agents/skills/demo1-completed-directive-cleanup/references/request-contract.md](demo1-completed-directive-cleanup/references/request-contract.md) | retirement, integrity | current | unknown |
 | reference | [.agents/skills/demo1-completed-directive-cleanup/references/retention-review.md](demo1-completed-directive-cleanup/references/retention-review.md) | retirement, integrity | current | unknown |
 | reference | [.agents/skills/demo1-completed-directive-cleanup/references/task-cleanup-contract.md](demo1-completed-directive-cleanup/references/task-cleanup-contract.md) |  | unreviewed | unknown |
-| skill | [demo1-consolidating-notebook-directives](demo1-consolidating-notebook-directives/SKILL.md) | directive-merge, handoff | current | unknown |
-| reference | [.agents/skills/demo1-consolidating-notebook-directives/references/consolidation-contract.md](demo1-consolidating-notebook-directives/references/consolidation-contract.md) | directive-merge, handoff | current | unknown |
-| reference | [.agents/skills/demo1-consolidating-notebook-directives/tests/pressure-scenarios.md](demo1-consolidating-notebook-directives/tests/pressure-scenarios.md) | directive-merge, handoff | current | unknown |
 | skill | [demo1-conversate-hint-context](demo1-conversate-hint-context/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-conversate-hint-evidence](demo1-conversate-hint-evidence/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-core-request-router](demo1-core-request-router/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-cross-subsystem-guard](demo1-cross-subsystem-guard/SKILL.md) | subsystem-boundary, verification | current | unknown |
 | reference | [.agents/skills/demo1-cross-subsystem-guard/references/cross-subsystem-guard-reference.md](demo1-cross-subsystem-guard/references/cross-subsystem-guard-reference.md) | subsystem-boundary, verification | current | unknown |
-| skill | [demo1-debugging-with-two-tools](demo1-debugging-with-two-tools/SKILL.md) |  | stale | unknown |
-| reference | [.agents/skills/demo1-debugging-with-two-tools/references/ai-assisted-observation.md](demo1-debugging-with-two-tools/references/ai-assisted-observation.md) | debugging, hypothesis | current | unknown |
 | skill | [demo1-demand-driven-external-proof](demo1-demand-driven-external-proof/SKILL.md) | external-proof, verification | current | unknown |
 | reference | [.agents/skills/demo1-demand-driven-external-proof/references/demand-driven-external-proof-reference.md](demo1-demand-driven-external-proof/references/demand-driven-external-proof-reference.md) | external-proof, verification | current | unknown |
 | skill | [demo1-desktop-autonomous-safe-patch](demo1-desktop-autonomous-safe-patch/SKILL.md) | safe-patch, goal-intake | current | unknown |
@@ -61,14 +42,10 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | skill | [demo1-desktop-canonical-goal-intake](demo1-desktop-canonical-goal-intake/SKILL.md) | goal-intake, source-ownership | current | unknown |
 | reference | [.agents/skills/demo1-desktop-canonical-goal-intake/references/directive-rebinding-contract.md](demo1-desktop-canonical-goal-intake/references/directive-rebinding-contract.md) | goal-intake, source-ownership | current | unknown |
 | reference | [.agents/skills/demo1-desktop-canonical-goal-intake/references/tool-readiness.md](demo1-desktop-canonical-goal-intake/references/tool-readiness.md) | goal-intake, source-ownership | current | unknown |
-| skill | [demo1-desktop-only-proof-loop](demo1-desktop-only-proof-loop/SKILL.md) | verification, local-proof | current | unknown |
-| reference | [.agents/skills/demo1-desktop-only-proof-loop/references/desktop-only-proof-loop-reference.md](demo1-desktop-only-proof-loop/references/desktop-only-proof-loop-reference.md) | verification, local-proof | current | unknown |
 | skill | [demo1-dev-reload](demo1-dev-reload/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-devin-directive-loop](demo1-devin-directive-loop/SKILL.md) |  | unreviewed | unknown |
 | reference | [.agents/skills/demo1-devin-directive-loop/references/review-loop-patterns.md](demo1-devin-directive-loop/references/review-loop-patterns.md) |  | unreviewed | unknown |
 | skill | [demo1-devin-source-orchestrator](demo1-devin-source-orchestrator/SKILL.md) |  | unreviewed | unknown |
-| skill | [demo1-docker-autograder](demo1-docker-autograder/SKILL.md) | test-execution, verification | current | unknown |
-| reference | [.agents/skills/demo1-docker-autograder/references/docker-autograder-contract.md](demo1-docker-autograder/references/docker-autograder-contract.md) | test-execution, verification | current | unknown |
 | skill | [demo1-evidence-debugging](demo1-evidence-debugging/SKILL.md) |  | stale | unknown |
 | reference | [.agents/skills/demo1-evidence-debugging/references/case-contract.md](demo1-evidence-debugging/references/case-contract.md) | debugging, hypothesis | current | unknown |
 | reference | [.agents/skills/demo1-evidence-debugging/references/evaluation-cases.md](demo1-evidence-debugging/references/evaluation-cases.md) | debugging, hypothesis | current | unknown |
@@ -81,8 +58,6 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | reference | [.agents/skills/demo1-goal-asset-preservation/references/research-basis.md](demo1-goal-asset-preservation/references/research-basis.md) | capability-preservation, retirement | current | unknown |
 | skill | [demo1-goal-complete-stop](demo1-goal-complete-stop/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-grok-subscription-review](demo1-grok-subscription-review/SKILL.md) | public-review, external-proof | current | unknown |
-| skill | [demo1-harmony-contamination-scanner](demo1-harmony-contamination-scanner/SKILL.md) | memory-integrity, metrics | current | unknown |
-| reference | [.agents/skills/demo1-harmony-contamination-scanner/references/harmony-contamination-reference.md](demo1-harmony-contamination-scanner/references/harmony-contamination-reference.md) | memory-integrity, metrics | current | unknown |
 | skill | [demo1-invisible-eye](demo1-invisible-eye/SKILL.md) | hidden-behavior, debugging | current | unknown |
 | reference | [.agents/skills/demo1-invisible-eye/references/evaluation-cases.md](demo1-invisible-eye/references/evaluation-cases.md) | hidden-behavior, debugging | current | unknown |
 | reference | [.agents/skills/demo1-invisible-eye/references/mechanism-contract.md](demo1-invisible-eye/references/mechanism-contract.md) | hidden-behavior, debugging | current | unknown |
@@ -91,29 +66,8 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | reference | [.agents/skills/demo1-local-llm-gpu-gateway/references/runtime-models.md](demo1-local-llm-gpu-gateway/references/runtime-models.md) | local-model, verification | current | unknown |
 | skill | [demo1-long-think-goal-composer](demo1-long-think-goal-composer/SKILL.md) | goal-intake, hypothesis | current | unknown |
 | reference | [.agents/skills/demo1-long-think-goal-composer/references/long-think-goal-composer-reference.md](demo1-long-think-goal-composer/references/long-think-goal-composer-reference.md) | goal-intake, hypothesis | current | unknown |
-| skill | [demo1-macsrc-defect-intake](demo1-macsrc-defect-intake/SKILL.md) | defect-intake, handoff | current | unknown |
-| reference | [.agents/skills/demo1-macsrc-defect-intake/references/defect-intent-contract.md](demo1-macsrc-defect-intake/references/defect-intent-contract.md) | defect-intake, handoff | current | unknown |
-| skill | [demo1-macsrc-guarded-patch-session](demo1-macsrc-guarded-patch-session/SKILL.md) | source-ownership, safe-patch | current | unknown |
-| reference | [.agents/skills/demo1-macsrc-guarded-patch-session/references/session-contract.md](demo1-macsrc-guarded-patch-session/references/session-contract.md) | source-ownership, safe-patch | current | unknown |
-| skill | [demo1-macsrc-patch-postprocessor](demo1-macsrc-patch-postprocessor/SKILL.md) | postprocess, metrics | current | unknown |
-| reference | [.agents/skills/demo1-macsrc-patch-postprocessor/references/postprocess-contract.md](demo1-macsrc-patch-postprocessor/references/postprocess-contract.md) | postprocess, metrics | current | unknown |
 | skill | [demo1-macsrc-smb-direct-patch](demo1-macsrc-smb-direct-patch/SKILL.md) | source-ownership, smb | current | unknown |
 | reference | [.agents/skills/demo1-macsrc-smb-direct-patch/references/direct-patch-contract.md](demo1-macsrc-smb-direct-patch/references/direct-patch-contract.md) | source-ownership, smb | current | unknown |
-| skill | [demo1-mcp-control-tower](demo1-mcp-control-tower/SKILL.md) | multi-node, agent-routing | current | unknown |
-| reference | [.agents/skills/demo1-mcp-control-tower/references/control-tower-reference.md](demo1-mcp-control-tower/references/control-tower-reference.md) | multi-node, agent-routing | current | unknown |
-| reference | [.agents/skills/demo1-mcp-control-tower/references/external-skills.md](demo1-mcp-control-tower/references/external-skills.md) | multi-node, agent-routing | current | unknown |
-| reference | [.agents/skills/demo1-mcp-control-tower/references/node-playbook.md](demo1-mcp-control-tower/references/node-playbook.md) | multi-node, agent-routing | current | unknown |
-| skill | [demo1-memory-integrity-autopatch](demo1-memory-integrity-autopatch/SKILL.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/feedback-contract.md](demo1-memory-integrity-autopatch/references/feedback-contract.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/source-directive.md](demo1-memory-integrity-autopatch/references/source-directive.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/tri-negative-agent.md](demo1-memory-integrity-autopatch/references/tri-negative-agent.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/tri-neutral-agent.md](demo1-memory-integrity-autopatch/references/tri-neutral-agent.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/tri-positive-agent.md](demo1-memory-integrity-autopatch/references/tri-positive-agent.md) | memory-integrity, ablation | current | unknown |
-| reference | [.agents/skills/demo1-memory-integrity-autopatch/references/tri-query-postprocess.md](demo1-memory-integrity-autopatch/references/tri-query-postprocess.md) | memory-integrity, ablation | current | unknown |
-| skill | [demo1-meta-display-browser-repair](demo1-meta-display-browser-repair/SKILL.md) | browser-proof, debugging | current | unknown |
-| reference | [.agents/skills/demo1-meta-display-browser-repair/references/evidence.md](demo1-meta-display-browser-repair/references/evidence.md) | browser-proof, debugging | current | unknown |
-| reference | [.agents/skills/demo1-meta-display-browser-repair/references/scenarios.md](demo1-meta-display-browser-repair/references/scenarios.md) | browser-proof, debugging | current | unknown |
-| reference | [.agents/skills/demo1-meta-display-browser-repair/references/tool-routing.md](demo1-meta-display-browser-repair/references/tool-routing.md) | browser-proof, debugging | current | unknown |
 | skill | [demo1-meta-display-resume](demo1-meta-display-resume/SKILL.md) |  | stale | unknown |
 | skill | [demo1-meta-display-simple-caption](demo1-meta-display-simple-caption/SKILL.md) |  | unreviewed | unknown |
 | skill | [demo1-meta-display-sync-client](demo1-meta-display-sync-client/SKILL.md) | display-client, implementation | current | unknown |
@@ -124,13 +78,7 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | reference | [.agents/skills/demo1-meta-display-webapp/references/source-contract.md](demo1-meta-display-webapp/references/source-contract.md) | display-routing, agent-routing | current | unknown |
 | skill | [demo1-notebook-targeted-directive-canary](demo1-notebook-targeted-directive-canary/SKILL.md) | handoff, integrity | current | unknown |
 | skill | [demo1-nova-focus](demo1-nova-focus/SKILL.md) |  | unreviewed | unknown |
-| skill | [demo1-observed-debugging-meta](demo1-observed-debugging-meta/SKILL.md) | debugging, metrics, error-analysis | current | unknown |
-| reference | [.agents/skills/demo1-observed-debugging-meta/references/measurement-contract.md](demo1-observed-debugging-meta/references/measurement-contract.md) | debugging, metrics, error-analysis | current | unknown |
-| skill | [demo1-patchdrop-manual-default](demo1-patchdrop-manual-default/SKILL.md) | patchdrop, agent-routing | current | unknown |
-| reference | [.agents/skills/demo1-patchdrop-manual-default/references/patchdrop-manual-default-reference.md](demo1-patchdrop-manual-default/references/patchdrop-manual-default-reference.md) | patchdrop, agent-routing | current | unknown |
 | skill | [demo1-project-root](demo1-project-root/SKILL.md) |  | unreviewed | unknown |
-| skill | [demo1-prompt-directive-integrator](demo1-prompt-directive-integrator/SKILL.md) | directive-merge, integrity | current | unknown |
-| reference | [.agents/skills/demo1-prompt-directive-integrator/references/prompt-directive-integrator-reference.md](demo1-prompt-directive-integrator/references/prompt-directive-integrator-reference.md) | directive-merge, integrity | current | unknown |
 | skill | [demo1-rag-platform](demo1-rag-platform/SKILL.md) | rag, source-ownership | current | unknown |
 | reference | [.agents/skills/demo1-rag-platform/references/runtime-map.md](demo1-rag-platform/references/runtime-map.md) | rag, source-ownership | current | unknown |
 | skill | [demo1-rag-resilience-observability](demo1-rag-resilience-observability/SKILL.md) | resilience, error-analysis | current | unknown |
@@ -159,8 +107,6 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 | skill | [frontend-display-debug](frontend-display-debug/SKILL.md) |  | unreviewed | unknown |
 | skill | [judge-recovery](judge-recovery/SKILL.md) | resilience, debugging | current | unknown |
 | skill | [macmini-safe-patch-assistant](macmini-safe-patch-assistant/SKILL.md) |  | stale | unknown |
-| skill | [mainfw-safe-repair](mainfw-safe-repair/SKILL.md) | safe-patch, verification | current | unknown |
-| reference | [.agents/skills/mainfw-safe-repair/tests/pressure-scenarios.md](mainfw-safe-repair/tests/pressure-scenarios.md) | safe-patch, verification | current | unknown |
 | skill | [meta-rayban-display](meta-rayban-display/SKILL.md) |  | unreviewed | unknown |
 | skill | [nextjs-rag-bff](nextjs-rag-bff/SKILL.md) | frontend, rag | current | unknown |
 | reference | [.agents/skills/nextjs-rag-bff/references/integration-map.md](nextjs-rag-bff/references/integration-map.md) | frontend, rag | current | unknown |
@@ -406,16 +352,10 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 - `repo|skill|demo1-generating-falsifiable-hypotheses` → **produces_input_for** → `repo|skill|demo1-retrieving-counter-evidence`: When a decision-changing evidence gap remains. (keep_distinct)
 - `repo|skill|demo1-retrieving-counter-evidence` → **produces_input_for** → `repo|skill|demo1-verifying-evidence-coherence`: When normalized evidence is ready for adjudication. (keep_distinct)
 - `repo|skill|demo1-triangulating-counter-evidence` → **requires** → `repo|skill|demo1-verifying-evidence-coherence`: When the claim and evidence matrix are already ready. (keep_distinct)
-- `repo|skill|quantitative-metric-normalizer` → **produces_input_for** → `repo|skill|demo1-ablation-harmony-tracker`: After metric units and denominators are normalized. (keep_distinct)
-- `repo|skill|demo1-macsrc-defect-intake` → **produces_input_for** → `repo|skill|demo1-macsrc-guarded-patch-session`: After a prepared PatchIntent has focused RED evidence. (keep_distinct)
-- `repo|skill|demo1-macsrc-guarded-patch-session` → **produces_input_for** → `repo|skill|demo1-macsrc-patch-postprocessor`: When the guarded session reaches a terminal result. (keep_distinct)
-- `repo|skill|demo1-adaptive-rule-lab` → **overlaps_with** → `repo|skill|demo1-observed-debugging-meta`: When an experiment needs actual helper/debugging trace measurements. (keep_distinct)
 - `repo|skill|demo1-adaptive-rule-lab` → **related_to** → `repo|skill|quantitative-metric-normalizer`: When imported metrics use different units or denominators. (keep_distinct)
 - `repo|skill|demo1-adaptive-rule-lab` → **related_to** → `repo|skill|demo1-goal-asset-preservation`: When a proposed consolidation could remove a required capability. (keep_distinct)
 - `repo|prompt-pack|demo1_quant_metric_normalization_antigravity` → **related_to** → `repo|skill|quantitative-metric-normalizer`: When this prompt pack is selected for its matching workflow. (keep_distinct)
-- `repo|prompt-pack|demo1_ablation_harmony_patch_directive` → **related_to** → `repo|skill|demo1-ablation-harmony-tracker`: When this prompt pack is selected for its matching workflow. (keep_distinct)
 - `repo|prompt-pack|demo1_notebook_desktop_goal_handoff` → **related_to** → `repo|skill|demo1-desktop-canonical-goal-intake`: When this prompt pack is selected for its matching workflow. (keep_distinct)
-- `repo|directive|agent-prompts/agents/demo1_macsrc_defect_intake/system_ko.md` → **related_to** → `repo|skill|demo1-macsrc-defect-intake`: When this prompt pack is selected for its matching workflow. (keep_distinct)
 - `repo|directive|agent-prompts/agents/demo1_artifact_trace_integrity_harness/system_ko.md` → **related_to** → `repo|skill|demo1-artifact-trace-curator`: When this prompt pack is selected for its matching workflow. (keep_distinct)
 
 ## Diagnostics
@@ -423,7 +363,6 @@ Content hash: `b66b6b662c530df42615b7545b6c74e2607de742518251c0020ef325666f8433`
 ```json
 [
   {
-    "id": "repo|skill|demo1-debugging-with-two-tools",
     "reason": "stale-annotation"
   },
   {

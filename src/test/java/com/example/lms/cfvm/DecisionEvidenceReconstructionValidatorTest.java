@@ -33,6 +33,148 @@ import static org.mockito.Mockito.when;
 
 class DecisionEvidenceReconstructionValidatorTest {
 
+    @Test
+    void ordinaryClientResponseStaysApplicationEvidenceAndWorkflowAuditIsProvisional() throws Throwable {
+        var tracker = new ModelRuntimeHealthTracker();
+        var aspect = new DecisionTraceAspect();
+        setField(aspect, "modelRuntimeHealthTracker", tracker);
+        String request = "ordinary-client-request";
+        String timeline = tracker.beginRequestTimeline(request, "ordinary-session");
+        tracker.recordRequestPhase(timeline, "dispatch", "fixture-model", null, "none");
+        tracker.recordRequestPhase(timeline, "pending", "fixture-model", null, "none");
+        TraceStore.putInternal(ModelRuntimeHealthTracker.REQUEST_TIMELINE_TRACE_KEY, timeline);
+        TraceStore.put("requestId", SafeRedactor.hashValue(request));
+        recordSyntheticProviderExchange(tracker, timeline, false, true);
+        var result = ChatResult.of("fixture answer", "fixture:model", false, Set.of(), List.of());
+        var pjp = mock(ProceedingJoinPoint.class); when(pjp.proceed()).thenReturn(result);
+        aspect.traceFinalDecision(pjp);
+        var row = (Map<?, ?>) ((List<?>) TraceStore.get("decision.reconstruction.lineage")).get(0);
+        assertEquals("client_http_response", row.get("evidenceBoundary"));
+        assertEquals(false, row.get("providerReceiptObserved"));
+        assertMetric("providerResponseCount", 0L);
+        assertMetric("applicationResponseCount", 1L);
+        assertMetric("lineageMismatchCount", 0L);
+        assertMetric("missingFinalResponseCount", 0L);
+        assertEquals("workflow_returned", TraceStore.get("decision.reconstruction.auditPhase"));
+        invokePersistedAssistantResponse(aspect, result.content());
+        assertMetric("linkedFinalResponseCount", 1L);
+        assertMetric("providerResponseCount", 0L);
+        assertMetric("lineageMismatchCount", 0L);
+    }
+
+    @Test
+    void explicitFailedAttemptAndSuccessfulFallbackRemainLinkedWithoutProviderProof() throws Exception {
+        String did = "hash:terminal-decision", req = "hash:terminal-request", opts = "hash:terminal-options";
+        TraceStore.put("decision.reconstruction.decisions", List.of(decision(did, List.of(), req, List.of(opts), false, true)));
+        var failed = new java.util.LinkedHashMap<String, Object>(Map.of(
+                "decisionId", did, "requestIdHash", req, "optionsHash", opts, "attemptOrdinal", 1,
+                "evidenceBoundary", "model_adapter", "modelAdapterAttemptObserved", true,
+                "providerAttemptObserved", false, "responseObserved", false, "outcome", "failed", "terminalClass", "error"));
+        var fallback = new java.util.LinkedHashMap<String, Object>(failed);
+        fallback.put("attemptOrdinal", 2); fallback.put("responseObserved", true);
+        fallback.put("outcome", "success"); fallback.put("terminalClass", "success");
+        TraceStore.put("decision.reconstruction.lineage", List.of(failed, fallback));
+        invokeAudit(new DecisionTraceAspect());
+        assertMetric("lineageMismatchCount", 0L);
+        assertMetric("applicationAttemptCount", 2L);
+        assertMetric("applicationResponseCount", 1L);
+        assertMetric("providerResponseCount", 0L);
+        assertMetric("reconstructableCount", 1L);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void strictAppendAuditsOnlyAfterCommitAndRestoresControllerContext(boolean commit) throws Throwable {
+        var aspect = new DecisionTraceAspect();
+        var events = new DebugEventStore(); setField(events, "ndjsonEnabled", false);
+        setField(aspect, "debugEventStore", events);
+        var pjp = mock(ProceedingJoinPoint.class);
+        when(pjp.proceed()).thenReturn(ChatResult.of("workflow", "fixture:model", false, Set.of(), List.of()));
+        aspect.traceFinalDecision(pjp);
+        Map<String, Object> captured = new java.util.LinkedHashMap<>(TraceStore.getAll());
+        captured.put("unrelated.fixture", "must-not-travel");
+        TraceStore.clear(); TraceStore.put("current.sentinel", "preserve");
+        Map<String, Object> prior = TraceStore.context();
+        var metadata = new java.util.LinkedHashMap<String, Object>();
+        var auditScope = new java.util.concurrent.atomic.AtomicReference<Map<String, Object>>();
+        var ds = new org.springframework.jdbc.datasource.DriverManagerDataSource(
+                "jdbc:h2:mem:" + java.util.UUID.randomUUID() + ";DB_CLOSE_DELAY=-1", "sa", "");
+        var jdbc = new org.springframework.jdbc.core.JdbcTemplate(ds);
+        jdbc.execute("CREATE TABLE fixture_message(id BIGINT PRIMARY KEY, content VARCHAR(30))");
+        var history = mock(ChatHistoryService.class);
+        when(history.appendMessageStrictReturningId(7L, "assistant", "persisted")).thenAnswer(inv -> {
+            jdbc.update("INSERT INTO fixture_message VALUES(42,'persisted')"); return 42L;
+        });
+        var proxyFactory = new AspectJProxyFactory(history); proxyFactory.addAspect(aspect);
+        ChatHistoryService proxy = proxyFactory.getProxy();
+        var scope = com.example.lms.api.ChatApiController.class.getDeclaredMethod(
+                "withPersistenceTraceContext", Map.class, Map.class, Runnable.class);
+        scope.setAccessible(true);
+        var transaction = new org.springframework.transaction.support.TransactionTemplate(
+                new org.springframework.jdbc.datasource.DataSourceTransactionManager(ds));
+        transaction.executeWithoutResult(status -> {
+            try {
+                scope.invoke(null, captured, metadata, (Runnable) () -> {
+                    auditScope.set(TraceStore.context());
+                    assertEquals(null, TraceStore.get("unrelated.fixture"));
+                    assertEquals(42L, proxy.appendMessageStrictReturningId(7L, "assistant", "persisted"));
+                    assertMetric("linkedFinalResponseCount", 0L);
+                    assertEquals("workflow_returned", TraceStore.get("decision.reconstruction.auditPhase"));
+                });
+            } catch (ReflectiveOperationException failure) { throw new AssertionError(failure); }
+            assertSame(prior, TraceStore.context());
+            if (!commit) status.setRollbackOnly();
+        });
+        assertSame(prior, TraceStore.context());
+        assertEquals("preserve", TraceStore.get("current.sentinel"));
+        assertEquals(null, TraceStore.get("decision.reconstruction.decisions"));
+        assertEquals(commit ? 1 : 0, jdbc.queryForObject("SELECT COUNT(*) FROM fixture_message", Integer.class));
+        assertEquals(commit ? "persistence_committed" : "workflow_returned",
+                auditScope.get().get("decision.reconstruction.auditPhase"));
+        assertEquals(commit ? 1L : 0L,
+                ((Number) auditScope.get().get("decision.reconstruction.linkedFinalResponseCount")).longValue());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void failedClientExchangeRequiresExplicitTerminalEvenWithSuccessfulFallback(boolean terminal) throws Exception {
+        String did = "hash:exchange-decision", req = "hash:exchange-request", opts = "hash:exchange-options";
+        TraceStore.put("decision.reconstruction.decisions", List.of(decision(did, List.of(), req, List.of(opts), false, true)));
+        Map<String, Object> pending = new java.util.LinkedHashMap<>(Map.of(
+                "decisionId", did, "requestIdHash", req, "optionsHash", opts, "attemptOrdinal", 1,
+                "evidenceBoundary", "client_http_exchange", "clientHttpExchangeObserved", true,
+                "providerAttemptObserved", false, "responseObserved", false));
+        if (terminal) { pending.put("outcome", "failed"); pending.put("terminalClass", "error"); }
+        var success = new java.util.LinkedHashMap<String, Object>(pending);
+        success.put("attemptOrdinal", 2); success.put("evidenceBoundary", "client_http_response");
+        success.put("clientHttpResponseObserved", true); success.put("responseObserved", true);
+        success.put("outcome", "success"); success.put("terminalClass", "success");
+        TraceStore.put("decision.reconstruction.lineage", List.of(pending, success));
+        invokeAudit(new DecisionTraceAspect());
+        assertMetric("applicationAttemptCount", 2L); assertMetric("providerResponseCount", 0L);
+        assertMetric("lineageMismatchCount", terminal ? 0L : 1L);
+        assertMetric("reconstructableCount", terminal ? 1L : 0L);
+    }
+
+    @Test
+    void controllerPersistenceScopeRestoresPriorContextWhenPersistenceThrows() throws Exception {
+        Map<String, Object> captured = new java.util.LinkedHashMap<>(Map.of(
+                "decision.reconstruction.auditPhase", "workflow_returned", "other.request", "excluded"));
+        TraceStore.put("prior.sentinel", "preserve"); var prior = TraceStore.context();
+        var scope = com.example.lms.api.ChatApiController.class.getDeclaredMethod(
+                "withPersistenceTraceContext", Map.class, Map.class, Runnable.class);
+        scope.setAccessible(true);
+        var failure = org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException.class,
+                () -> scope.invoke(null, captured, Map.of(), (Runnable) () -> {
+                    assertEquals(null, TraceStore.get("other.request"));
+                    throw new IllegalStateException("fixture_persistence_failure");
+                }));
+        assertEquals("fixture_persistence_failure", failure.getCause().getMessage());
+        assertSame(prior, TraceStore.context());
+        assertEquals(null, TraceStore.get("decision.reconstruction.auditPhase"));
+        assertEquals("preserve", TraceStore.get("prior.sentinel"));
+    }
+
     @AfterEach
     void clearTrace() {
         TraceStore.clear();
@@ -411,10 +553,10 @@ class DecisionEvidenceReconstructionValidatorTest {
         when(workflowJoinPoint.proceed()).thenReturn(workflowResult);
         aspect.traceFinalDecision(workflowJoinPoint);
 
-        assertMetric("missingFinalResponseCount", 1L);
-        assertMetric("finalResponseMismatchCount", 1L);
+        assertMetric("missingFinalResponseCount", 0L);
+        assertMetric("finalResponseMismatchCount", 0L);
         assertMetric("reconstructableCount", 0L);
-        assertTrue(reasons().contains("final_response_missing"));
+        assertTrue(reasons().contains("final_response_pending"));
 
         String shapedContent = "controller-shaped final answer";
         assertEquals(42L, invokePersistedAssistantResponse(aspect, shapedContent));

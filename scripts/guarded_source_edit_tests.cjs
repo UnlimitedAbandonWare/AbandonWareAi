@@ -319,3 +319,50 @@ test('failed Windows PowerShell child surfaces exit code and masked stderr tail'
     assert.equal(fs.readFileSync(target,'utf8'),'old');
   } finally {fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+for (const code of [0,3,6,124,undefined]) test(`caller-bound renewal before write exit ${code}`,async()=>{
+  let now=0,edits=0,heartbeats=0;
+  const r=await guardedSourceEdit({exec_command:async args=>{
+    if(args.cmd.includes(' -Action verify ')){now=100;return {exit_code:0,output:''};}
+    if(args.cmd.includes(' -Action heartbeat ')){heartbeats++;assert.match(args.cmd,/ -LeaseFingerprint /);return {exit_code:code,output:''};}
+    return {exit_code:0,output:args.cmd.includes(' -Action begin ')?receipt:''};
+  },apply_patch:async()=>{edits++;return {exit_code:0};}}, {...options,renewIntervalMs:10,now:()=>now});
+  assert.equal(heartbeats,1);assert.equal(edits,code===0?1:0);assert.equal(r.released,true);
+});
+test('abort after strict verify prevents the edit and releases bound generation',async()=>{
+  const controller=new AbortController();let edits=0;
+  const r=await guardedSourceEdit({exec_command:async args=>{
+    if(args.cmd.includes(' -Action verify ')) controller.abort();
+    return {exit_code:0,output:args.cmd.includes(' -Action begin ')?receipt:''};
+  },apply_patch:async()=>{edits++;return {exit_code:0};}}, {...options,signal:controller.signal});
+  assert.equal(edits,0);assert.equal(r.reason,'caller-cancelled');assert.equal(r.released,true);
+});
+
+test('heartbeat loss while edit runs preserves edit fact and reports lifecycle failure', async () => {
+  let edits=0, renewed;
+  const renewal = new Promise(resolve => {renewed=resolve;});
+  const mock = {
+    exec_command: async ({cmd}) => {
+      if(cmd.includes('-Action heartbeat')) {renewed();return {exit_code:3,output:''};}
+      return {exit_code:0,output:cmd.includes('-Action begin') ? receipt : ''};
+    },
+    apply_patch: async () => {edits++;await Promise.race([renewal,new Promise(resolve=>setTimeout(resolve,200))]);return {};}
+  };
+  const result=await guardedSourceEdit(mock,{...options,renewIntervalMs:10});
+  assert.equal(edits,1); assert.equal(result.editCompleted,true);
+  assert.equal(result.status,'hold'); assert.equal(result.renewExitCode,3);assert.equal(result.released,true);
+});
+test('renewal success cannot bypass a changed strict preimage', async () => {
+  let now=0, verifies=0, edits=0;
+  const mock={exec_command:async ({cmd})=>{
+    if(cmd.includes('-Action verify')) {now=100;return {exit_code:++verifies===1?0:7,output:''};}
+    return {exit_code:0,output:cmd.includes('-Action begin')?receipt:''};
+  },apply_patch:async()=>{edits++;}};
+  const result=await guardedSourceEdit(mock,{...options,renewIntervalMs:10,now:()=>now});
+  assert.equal(verifies,2);assert.equal(edits,0);assert.equal(result.released,true);
+});
+test('cancel before acquisition starts no command or timer',async()=>{
+  const controller=new AbortController();controller.abort();let commands=0;
+  const result=await guardedSourceEdit({exec_command:async()=>{commands++;}},{...options,signal:controller.signal});
+  assert.equal(commands,0);assert.equal(result.reason,'caller-cancelled');
+});

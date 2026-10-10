@@ -11,6 +11,14 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class DisplayLensSettingsTest {
+    @Test void legacyTranscriptBandsRoundTripAsThreeAndInvalidBoundsRemainRejected() throws Exception {
+        for(int lines:new int[]{1,2}){
+            var upgraded=LensDisplayPrefs.defaults(540).patch(mapper.readValue("{\"transcriptMaxLines\":"+lines+"}",LensDisplayPrefs.Patch.class));
+            assertEquals(3,upgraded.transcriptMaxLines());
+            assertEquals(3,LensDisplayPrefs.defaults(540).patch(mapper.readValue(mapper.writeValueAsString(upgraded),LensDisplayPrefs.Patch.class)).transcriptMaxLines());
+        }
+        for(int lines:new int[]{0,9})assertThrows(Exception.class,()->LensDisplayPrefs.defaults(540).patch(mapper.readValue("{\"transcriptMaxLines\":"+lines+"}",LensDisplayPrefs.Patch.class)));
+    }
     final ObjectMapper mapper=new ObjectMapper();
     @Test void autoVoiceSettingsAreIndependentStrictAndRoundTrip() throws Exception {
         var defaults=LensDisplayPrefs.defaults(540);

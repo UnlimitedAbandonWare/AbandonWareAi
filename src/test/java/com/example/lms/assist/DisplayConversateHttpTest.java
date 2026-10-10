@@ -28,6 +28,30 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 class DisplayConversateHttpTest {
+    @Test void sameOwnerReplacementSuspendsFocusWhileDifferentOwnerDetachesAndOldProducerIsFenced() throws Exception {
+        var controller=context.getBean(DisplayConversateController.class);var sessions=context.getBean(ConversateSessionService.class);
+        Object priorFocus=org.springframework.test.util.ReflectionTestUtils.getField(sessions,"novaFocus");var focus=mock(NovaFocusService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(sessions,"novaFocus",focus);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
+        try{
+            var c=new Client("test-1029384756abcdef");var hello=c.connection(null,0);hello.put("activate",true);
+            var first=JSON.readTree(c.post("phone-test",hello).body());String oldId=first.path("assistId").asText();
+            var old=c.connection(oldId,first.path("epoch").asLong());assertEquals(200,c.post("audio/start",old).statusCode());
+            var bindings=(Map<?,?>)org.springframework.test.util.ReflectionTestUtils.getField(controller,"bindings");
+            Object binding=bindings.values().stream().filter(b->oldId.equals(org.springframework.test.util.ReflectionTestUtils.getField(b,"id"))).findFirst().orElseThrow();
+            String owner=(String)org.springframework.test.util.ReflectionTestUtils.getField(binding,"owner");
+            var replacement=sessions.startPublicDisplay(owner);
+            org.springframework.test.util.ReflectionTestUtils.setField(binding,"id",replacement.assistId());
+            hello.put("clientId",UUID.randomUUID().toString().replace("-",""));var result=c.post("phone-test",hello);assertEquals(200,result.statusCode());
+            verify(focus).suspend(eq(owner),eq(oldId),anyLong(),eq("producer_reclaimed"));verify(focus,never()).detach(eq(oldId),anyString());
+            assertEquals(404,c.post("audio/stop",old).statusCode());
+            var reclaimed=sessions.status(owner,oldId);assertTrue(reclaimed.epoch()>first.path("epoch").asLong());assertEquals("WAITING",reclaimed.audio().state());
+            assertEquals("RUNNING",sessions.status(owner,replacement.assistId()).state());assertEquals(0,context.getBean(ConversateAsrBridge.class).activeCount());
+            var foreign=new Client("test-1029384756abcdef");var takeover=foreign.connection(null,0);takeover.put("activate",true);
+            assertEquals(200,foreign.post("phone-test",takeover).statusCode());
+            verify(focus).detach(replacement.assistId(),"producer_changed");
+        }finally{org.springframework.test.util.ReflectionTestUtils.setField(sessions,"novaFocus",priorFocus);org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
+    }
     static ServletWebServerApplicationContext context;static String base;static final ObjectMapper JSON=new ObjectMapper();static final AtomicInteger calls=new AtomicInteger();static final java.util.concurrent.atomic.AtomicBoolean asrFails=new java.util.concurrent.atomic.AtomicBoolean();
     static final String SYNTHETIC_FINAL="지금 회의에서는 RAG 검색 품질과 안경 렌즈에 보이는 전사 줄 수를 어떻게 조정할지 이야기하고 있습니다. 방금 나온 질문과 다음 결정 사항, 그리고 렌즈에 표시할 문장을 빠짐없이 정리해 주시면 감사하겠습니다.";
     @BeforeAll static void boot(){

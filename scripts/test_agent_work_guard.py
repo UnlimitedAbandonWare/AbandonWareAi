@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+import json
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_work_guard as g  # noqa: E402
@@ -258,6 +259,51 @@ class SameFlowRetryRecovery(unittest.TestCase):
         pr, cr = g.hook(self.root, pre, self.ledger)
         self.assertEqual(0, cr)
         self.assertEqual("allow", pr["decision"])
+
+
+class TraceEvidence(unittest.TestCase):
+    def test_trace_reason_and_hash_allowlist_without_command_or_secret(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            g.write_trace(root, {"phase": "exit", "event": "PreToolUse", "toolUseId": "c1",
+                                "decision": "block", "exit": 2, "reasonCode": "path-does-not-exist",
+                                "commandHash": "a" * 64, "command": "private command",
+                                "error": "private credential"})
+            row = json.loads(g.trace_path(root).read_text())
+            self.assertEqual("path-does-not-exist", row["reasonCode"])
+            self.assertEqual("a" * 64, row["commandHash"])
+            self.assertEqual("python", row["stage"])
+            self.assertNotIn("command", row)
+            self.assertNotIn("error", row)
+
+    def test_trace_rotation_preserves_previous_bytes_and_reports_failure(self):
+        from unittest.mock import patch
+        from contextlib import redirect_stderr
+        import io
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d); p=g.trace_path(root); p.parent.mkdir(parents=True)
+            old=b'x'*262145; p.write_bytes(old)
+            self.assertTrue(g.write_trace(root,{'phase':'exit','event':'PreToolUse'}))
+            archived=list(p.parent.glob('hook-trace.rotated-*.jsonl'))
+            self.assertEqual(1,len(archived)); self.assertEqual(old,archived[0].read_bytes())
+            error=io.StringIO()
+            with patch.object(Path,'open',side_effect=OSError('private failure detail')),redirect_stderr(error):
+                self.assertFalse(g.write_trace(root,{}))
+            self.assertEqual('guard-trace-write-failed\n',error.getvalue())
+
+    def test_trace_pairs_and_stage_dedup_do_not_invent_classification(self):
+        enter = {"stage": "python", "phase": "enter", "toolUseId": "c1", "event": "PreToolUse"}
+        exit_row = {**enter, "phase": "exit", "exit": 2, "elapsedMs": 5, "reasonCode": "path-does-not-exist"}
+        ps = {**exit_row, "stage": "ps1", "elapsedMs": 20}
+        result = g.summarize_trace([enter, exit_row, exit_row, ps,
+                                   {"stage": "python", "phase": "exit", "elapsedMs": 9}])
+        self.assertEqual(1, result["blockedCalls"])
+        self.assertEqual(1, result["unknown"])
+        self.assertEqual(0, result["false_positive"])
+        self.assertEqual(1, result["stages"]["python"]["N"])
+        self.assertEqual(5, result["stages"]["python"]["p95Ms"])
+        self.assertEqual(1, result["unpairedUnidentifiedRows"])
+        self.assertEqual(1, result["stages"]["ps1"]["missingPair"])
 
 
 class Status(unittest.TestCase):

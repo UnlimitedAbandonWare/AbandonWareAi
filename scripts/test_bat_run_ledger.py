@@ -62,10 +62,42 @@ class BatRunLedgerTest(unittest.TestCase):
     def test_caller_rules(self):
         self.assertEqual(brl.detect_caller({"AWX_CALLER": "qa"}), "qa")
         self.assertEqual(brl.detect_caller({"DEVIN": "1"}), "devin")
-        self.assertEqual(brl.detect_caller({"DEVIN_API_KEY": "x"}), "devin")
-        self.assertEqual(brl.detect_caller({"CODEX_CI": "1"}), "codex")
+        self.assertEqual(brl.detect_caller({"DEVIN_SESSION_ID": "s"}), "devin")
+        # Credential-like vars are machine-global, not a live session marker:
+        # a persistent DEVIN_API_KEY/DEVIN_TOKEN alone must not read "devin".
+        self.assertEqual(brl.detect_caller({"DEVIN_API_KEY": "x"}), "user")
+        self.assertEqual(brl.detect_caller({"DEVIN_TOKEN": "x"}), "user")
+        self.assertEqual(brl.detect_caller({"CODEX": "1"}), "codex")
+        self.assertEqual(brl.detect_caller({"CODEX_SESSION": "s"}), "codex")
+        self.assertEqual(brl.detect_caller({"CODEX_API_KEY": "x"}), "user")
+        self.assertEqual(brl.detect_caller({"ANTIGRAVITY": "1"}), "agy")
+        self.assertEqual(brl.detect_caller({"AGY_SESSION": "s"}), "agy")
         self.assertEqual(brl.detect_caller({"AGENT_SESSION": "1"}), "agent")
         self.assertEqual(brl.detect_caller({}), "user")
+
+    def test_open_begins_orphan_marks(self):
+        brl.append_record({"phase": "begin", "bat": "Start-RAG.bat",
+                           "runKey": "k1", "caller": "test"})
+        brl.append_record({"phase": "end", "bat": "Start-RAG.bat",
+                           "runKey": "k1", "exit": 0, "caller": "test"})
+        brl.append_record({"phase": "begin", "bat": "Verify-RAG.bat",
+                           "runKey": "k2", "caller": "test"})
+        opens = brl.open_begins(brl.iter_records(3))
+        self.assertEqual(len(opens), 1)
+        self.assertEqual(opens[0][0].get("runKey"), "k2")
+        self.assertEqual(opens[0][1], "RUNNING/ORPHAN")
+        buf = io.StringIO()
+        with mock.patch("sys.stdout", buf):
+            self.assertEqual(brl.main(["tail", "--days", "3"]), 0)
+        marked = [json.loads(line) for line in buf.getvalue().splitlines()
+                  if line.strip()]
+        orphan = [r for r in marked if r.get("runKey") == "k2"]
+        self.assertEqual(orphan[0].get("state"), "RUNNING/ORPHAN")
+        buf = io.StringIO()
+        with mock.patch("sys.stdout", buf):
+            self.assertEqual(brl.main(["summary", "--days", "3"]), 0)
+        self.assertIn("[RUNNING/ORPHAN]", buf.getvalue())
+        self.assertIn("open=1", buf.getvalue())
 
     def test_summary_counts(self):
         for i, ex in enumerate([0, 1, 0]):

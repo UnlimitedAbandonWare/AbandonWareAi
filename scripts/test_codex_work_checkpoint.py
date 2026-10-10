@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import io
+import sys
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 
@@ -26,6 +28,80 @@ def decision(**gates):
 
 
 class WorkCheckpointTest(unittest.TestCase):
+    def test_apply_rechecks_lease_before_atomic_publish(self):
+        self.start()
+        replacement=self.root/'replacement.txt'; replacement.write_text('new')
+        before=self.file.read_bytes()
+        with patch.object(CP,'lease_check',side_effect=[None,CP.CheckpointError('lease-changed')]) as check:
+            with self.assertRaisesRegex(CP.CheckpointError,'lease-changed'):
+                CP.apply(self.root,self.run,'docs/notes.md',replacement)
+        self.assertEqual(2,check.call_count)
+        self.assertEqual(before,self.file.read_bytes())
+        self.assertEqual([],list(self.file.parent.glob('*.apply')))
+
+    def test_apply_hashes_fresh_replacement_bytes_once(self):
+        self.start()
+        replacement = self.root / "replacement.txt"
+        data = b"unique replacement bytes for digest counting\n"
+        replacement.write_bytes(data)
+        original = CP.digest
+        seen = []
+        def counted(value):
+            if value is data:
+                seen.append(value)
+            return original(value)
+        original_contents = CP.contents
+        def fresh(path):
+            return data if Path(path) == replacement else original_contents(path)
+        with patch.object(CP, "digest", side_effect=counted), patch.object(CP, "contents", side_effect=fresh):
+            result = CP.apply(self.root, self.run, "docs/notes.md", replacement)
+        self.assertEqual(1, len(seen))
+        self.assertEqual(original(data), result["postimageSha256"])
+
+    def test_cli_summary_and_full_modes_keep_evidence_and_exit(self):
+        self.start()
+        base = ["checkpoint", "status", "--root", str(self.root), "--run", self.run]
+        outputs = []
+        for option in ([], ["--verbose"], ["--json"]):
+            output = io.StringIO()
+            with patch.object(sys, "argv", base + option), patch("sys.stdout", output):
+                code = CP.main()
+            self.assertEqual(0, code)
+            outputs.append(json.loads(output.getvalue()))
+        summary, verbose, machine = outputs
+        self.assertEqual(verbose, machine)
+        for key in ("status", "run", "targetCount", "nextAction"):
+            self.assertEqual(verbose[key], summary[key])
+        self.assertEqual(self.run + "/checkpoint.json", summary["evidenceRef"])
+        self.assertNotIn("riskFactors", summary)
+        self.assertIn("riskFactors", verbose)
+
+    def test_compact_and_full_preserve_failure_recovery_and_approval(self):
+        self.start()
+        self.file.write_text('changed');CP.seal(self.root,self.run)
+        failed=CP.finish(self.root,self.run,1,'synthetic-failure','failure')
+        self.assertEqual('rolled_back',failed['status'])
+        evidence=self.root/self.run/'checkpoint.json';before=evidence.read_bytes()
+        for state in [failed,dict(failed,status='hold',firstBlockingRule='owner-mismatch',holdScope='target',blockingEvidence='fixture',repositoryWideHold=False)]:
+            evidence.write_text(json.dumps(state),encoding='utf-8');expected=evidence.read_bytes();outputs=[]
+            for flag in [[],['--verbose'],['--json']]:
+                out=io.StringIO()
+                with patch.object(sys,'argv',['cp','status','--root',str(self.root),'--run',self.run,*flag]),patch('sys.stdout',out):
+                    self.assertEqual(2,CP.main())
+                outputs.append(json.loads(out.getvalue()));self.assertEqual(expected,evidence.read_bytes())
+            self.assertEqual(outputs[1],outputs[2])
+            for key in ['status','verificationExitCode','failureClass','firstBlockingRule','holdScope','blockingEvidence','repositoryWideHold']:
+                if key in state:self.assertEqual(state[key],outputs[0][key])
+        packet=self.root/'decision.json';packet.write_text(json.dumps(decision(permissionChange=True)))
+        outputs=[]
+        for flag in [[],['--verbose'],['--json']]:
+            out=io.StringIO()
+            with patch.object(sys,'argv',['cp','assess','--decision',str(packet),*flag]),patch('sys.stdout',out):self.assertEqual(2,CP.main())
+            outputs.append(json.loads(out.getvalue()))
+        self.assertEqual(outputs[1],outputs[2]);self.assertEqual('approval_required',outputs[0]['status'])
+        self.assertEqual(outputs[1]['approvalReasons'],outputs[0]['approvalReasons'])
+        evidence.write_bytes(before)
+
     def test_config_bindings_are_references_but_literal_credentials_stay_blocked(self):
         for sentinel in ("ollama", "sk-local"):
             binding = "${llm.api-" + "key:${LLM_API_KEY:" + sentinel + "}}"

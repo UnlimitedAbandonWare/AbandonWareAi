@@ -78,6 +78,91 @@ def parse_stdout(out: bytes):
     return "object", payload
 
 
+class WorkGuardWrapperFixtures(unittest.TestCase):
+    """Process branches of the unchanged wrapper, isolated from the real guard."""
+    def fixture(self):
+        import tempfile
+        temp = tempfile.TemporaryDirectory(prefix='guard wrapper spaces ')
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root / 'scripts').mkdir()
+        return root
+
+    def run_wrapper(self, root, source, *, spawn_failure=False):
+        import shutil, time
+        wrapper = ROOT / 'scripts/agent_work_guard.ps1'
+        powershell = shutil.which(PWSH)
+        self.assertIsNotNone(powershell, 'required PowerShell fixture runtime unavailable')
+        (root / 'scripts/agent_work_guard.py').write_text(source, encoding='utf-8')
+        env = {**os.environ, 'DEVIN_PROJECT_DIR': str(root), 'AWX_WORK_GUARD_QUIET': '0'}
+        env.pop('PSModulePath', None)
+        if spawn_failure:
+            env['PATH'] = str(root)
+        started = time.perf_counter()
+        proc = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy',
+            'Bypass', '-File', str(wrapper)], input=b'{}', capture_output=True, env=env,
+            cwd=str(root), timeout=20)
+        rows=[]
+        trace=root / 'var/agent-work-guard/hook-trace.jsonl'
+        if trace.exists():
+            rows=[json.loads(line) for line in trace.read_text(encoding='utf-8-sig').splitlines()]
+        return proc, rows, time.perf_counter()-started
+
+    def test_wrapper_forwards_exit_stdout_stderr_without_trace_leak(self):
+        for code in (0, 1, 2):
+            with self.subTest(code=code):
+                root=self.fixture()
+                payload=b'{"decision":"block","reason":"synthetic"}' if code==2 else b''
+                source="import sys\nsys.stdin.read()\nsys.stdout.write("+repr(payload.decode())+")\nsys.stderr.write('synthetic-diagnostic')\nsys.exit("+str(code)+")\n"
+                proc,rows,_=self.run_wrapper(root,source)
+                self.assertEqual(code,proc.returncode)
+                self.assertEqual(payload,proc.stdout)
+                self.assertEqual(b'synthetic-diagnostic',proc.stderr)
+                self.assertEqual(['enter','exit'],[r['phase'] for r in rows])
+                self.assertEqual(code,rows[-1]['exit'])
+                self.assertTrue(all(set(r)<={'at','phase','wrapper','exit','elapsedMs'} for r in rows))
+
+    def test_spawn_failure_preserves_fail_open_exit_and_trace(self):
+        proc,rows,_=self.run_wrapper(self.fixture(),'raise AssertionError("must not run")',spawn_failure=True)
+        self.assertEqual(1,proc.returncode)
+        self.assertEqual(b'',proc.stdout)
+        self.assertIn(b'work-guard-error:',proc.stderr)
+        self.assertEqual(['enter','exit'],[r['phase'] for r in rows])
+        self.assertEqual(1,rows[-1]['exit'])
+
+    def test_trace_io_failure_does_not_change_policy_result(self):
+        root=self.fixture();(root/'var').mkdir();(root/'var/agent-work-guard').write_bytes(b'blocked trace directory')
+        proc,rows,_=self.run_wrapper(root,'import sys\nsys.exit(2)\n')
+        self.assertEqual(2,proc.returncode)
+        self.assertEqual(b'',proc.stdout)
+        self.assertEqual([],rows)
+
+    def test_timeout_kills_only_fixture_child_and_reports_elapsed_boundary(self):
+        import ctypes
+        self.assertEqual('nt', os.name, 'fixture requires the project Windows host')
+        root=self.fixture()
+        source="import os,time\nfrom pathlib import Path\nPath(__file__).with_suffix('.pid').write_text(str(os.getpid()))\ntime.sleep(30)\n"
+        proc,rows,elapsed=self.run_wrapper(root,source)
+        self.assertEqual(1,proc.returncode)
+        self.assertEqual(b'',proc.stdout)
+        self.assertIn(b'work-guard-timeout:',proc.stderr)
+        self.assertEqual(['enter','timeout'],[r['phase'] for r in rows])
+        self.assertGreaterEqual(rows[-1]['elapsedMs'],12000)
+        self.assertLessEqual(rows[-1]['elapsedMs'],elapsed*1000)
+        pid=int((root/'scripts/agent_work_guard.pid').read_text())
+        kernel=ctypes.WinDLL('kernel32',use_last_error=True)
+        kernel.OpenProcess.restype=ctypes.c_void_p
+        kernel.GetExitCodeProcess.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_ulong)]
+        kernel.CloseHandle.argtypes=[ctypes.c_void_p]
+        handle=kernel.OpenProcess(0x1000,False,pid)
+        if handle:
+            try:
+                code=ctypes.c_ulong()
+                self.assertTrue(kernel.GetExitCodeProcess(handle,ctypes.byref(code)))
+                self.assertNotEqual(259,code.value,'fixture child remained alive after timeout')
+            finally: kernel.CloseHandle(handle)
+
+
 class CommandShape(unittest.TestCase):
     def test_no_dollar_interpolation_in_command_windows(self):
         # powershell -Command strings are re-interpolated by the host's outer

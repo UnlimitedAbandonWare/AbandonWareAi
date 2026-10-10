@@ -6,6 +6,13 @@ if defined AGENT_SESSION set "AWX_RAG_NO_PAUSE=1"
 if defined AWX_AGENT_WORKER set "AWX_RAG_NO_PAUSE=1"
 if defined CI set "AWX_RAG_NO_PAUSE=1"
 if defined CONTINUOUS_INTEGRATION set "AWX_RAG_NO_PAUSE=1"
+if defined CODEX set "AWX_RAG_NO_PAUSE=1"
+if defined CODEX_SESSION set "AWX_RAG_NO_PAUSE=1"
+if defined CODEX_THREAD_ID set "AWX_RAG_NO_PAUSE=1"
+if defined ANTIGRAVITY set "AWX_RAG_NO_PAUSE=1"
+if defined AGY_SESSION set "AWX_RAG_NO_PAUSE=1"
+if defined NONINTERACTIVE set "AWX_RAG_NO_PAUSE=1"
+echo %cmdcmdline% | findstr /i /c:"/c " >nul && set "AWX_RAG_NO_PAUSE=1"
 set "AWX_ARGS=%*"
 if defined AWX_ARGS set "AWX_ARGS=%AWX_ARGS:--no-pause=%"
 if defined AWX_ARGS set "AWX_ARGS=%AWX_ARGS:-NoPause=%"
@@ -28,12 +35,12 @@ powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\st
 set "AWX_STOP_EXIT=%ERRORLEVEL%"
 if not "%AWX_STOP_EXIT%"=="0" (
   echo [RESULT] stop_rag_stack exit code: %AWX_STOP_EXIT% - aborting restart.
-  if not defined AWX_RAG_NO_PAUSE pause
   if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_STOP_EXIT%
+  if not defined AWX_RAG_NO_PAUSE pause
   exit /b %AWX_STOP_EXIT%
 )
 echo [INFO] Checking port 18180 release (fast check, exits early when free)...
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$d=(Get-Date).AddSeconds(5); do { $l=@(Get-NetTCPConnection -State Listen -LocalPort 18180 -ErrorAction SilentlyContinue); if ($l.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $d); Write-Host ('PORT_IN_USE port=18180 byPid=' + [int]$l[0].OwningProcess); exit 0"
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$d=(Get-Date).AddSeconds(5); do { $l=@(Get-NetTCPConnection -State Listen -LocalPort 18180 -ErrorAction SilentlyContinue); if ($l.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $d); Write-Host ('[WARN] PORT_IN_USE port=18180 byPid=' + [int]$l[0].OwningProcess + ' - continuing anyway'); exit 0"
 echo [INFO] Starting RAG stack clean (backend + DevWatch + ForceRestart, no browser)...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_rag_stack.ps1" -MetaDisplay -ForceRestart -DevWatch %AWX_ARGS%
 set "AWX_START_EXIT=%ERRORLEVEL%"
@@ -43,6 +50,6 @@ if "%AWX_START_EXIT%"=="0" (
 ) else (
   echo [RESULT] start_rag_stack exit code: %AWX_START_EXIT%
 )
-if not defined AWX_RAG_NO_PAUSE pause
 if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_START_EXIT%
+if not defined AWX_RAG_NO_PAUSE pause
 exit /b %AWX_START_EXIT%

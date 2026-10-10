@@ -45,6 +45,9 @@ param(
   [string[]]$BriefExt  = @('.txt','.md'),
   [string]$BriefGroup  = 'CodexSandboxUsers',
   [string]$AppVersion  = '',
+  [ValidateRange(1024,104857600)] [long]$MaxActiveBytes = 1000000,
+  [ValidateRange(2,100)] [int]$MaxFiles = 5,
+  [ValidateRange(2048,1048576000)] [long]$MaxTotalBytes = 4000000,
   [Parameter(ValueFromRemainingArguments=$true)]
   [string[]]$BriefArgs = @()
 )
@@ -57,12 +60,188 @@ $BriefTaskName = 'AWX-CodexBriefRead'
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent ([IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)) }
 if (-not $StateDir) { $StateDir = Join-Path (Split-Path $scriptRoot -Parent) 'var\codex-sandbox-doctor' }
 
-function Write-DoctorLog([hashtable]$Entry) {
-  if (-not (Test-Path -LiteralPath $StateDir)) { New-Item -ItemType Directory -Force -Path $StateDir | Out-Null }
-  $Entry['ts'] = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
-  $Entry['host'] = $env:COMPUTERNAME
-  $line = ($Entry | ConvertTo-Json -Compress)
-  [IO.File]::AppendAllText((Join-Path $StateDir 'doctor.jsonl'), ($line + "`r`n"), [Text.UTF8Encoding]::new($false))
+function Get-DoctorLogDigest([string]$Text) {
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try { return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-','').ToLowerInvariant() }
+  finally { $sha.Dispose() }
+}
+
+function Write-DoctorLog([System.Collections.IDictionary]$Entry) {
+  # Managed retention: active <=1 MB, <=5 files, <=4 MB. Legacy bytes are
+  # preserved separately; only files created by this logger may be evicted.
+  if ($MaxTotalBytes -lt $MaxActiveBytes) { throw 'doctor-log-invalid-budget' }
+  [void][IO.Directory]::CreateDirectory($StateDir)
+  $active = Join-Path $StateDir 'doctor.jsonl'
+  $statePath = Join-Path $StateDir 'doctor-log-state.json'
+  $save = $null
+  $eventAppended = $false; $appendStarted = $false; $appendBeforeBytes = 0
+  $lock = $null; $clock = [Diagnostics.Stopwatch]::StartNew()
+  try {
+    while (-not $lock) {
+      try { $lock = [IO.File]::Open((Join-Path $StateDir 'doctor-log.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
+      catch [IO.IOException] { if ($clock.ElapsedMilliseconds -ge 5000) { throw 'doctor-log-writer-timeout' }; Start-Sleep -Milliseconds 20 }
+    }
+    $save = {
+      param($Destination,$Value)
+      $temporary = $Destination + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+      try {
+        [IO.File]::WriteAllText($temporary, ($Value | ConvertTo-Json -Compress -Depth 5), [Text.UTF8Encoding]::new($false))
+        if ([IO.File]::Exists($Destination)) { [IO.File]::Replace($temporary,$Destination,$Destination+'.bak') } else { [IO.File]::Move($temporary,$Destination) }
+      } finally {
+        if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
+        if ([IO.File]::Exists($Destination+'.bak')) { [IO.File]::Delete($Destination+'.bak') }
+      }
+    }
+    $state = @{ version=1;pendingEviction=$null;pendingRepair=$null;failureDroppedSeen=0; seq=0; lastHash=''; evictedRows=0; evictedBytes=0; writeFailure=0; dropped=0 }
+    if (Test-Path -LiteralPath $statePath -PathType Leaf) {
+      $saved = [IO.File]::ReadAllText($statePath) | ConvertFrom-Json
+      if ($saved.version -ne 1) { throw 'doctor-log-state-version' }
+      foreach ($key in @('seq','lastHash','evictedRows','evictedBytes','writeFailure','dropped')) { $state[$key] = $saved.$key }
+      if ($saved.PSObject.Properties['failureDroppedSeen']) { $state.failureDroppedSeen = $saved.failureDroppedSeen }
+      if ($saved.PSObject.Properties['pendingRepair']) { $state.pendingRepair = $saved.pendingRepair }
+      if ($saved.PSObject.Properties['pendingEviction']) { $state.pendingEviction = $saved.pendingEviction }
+
+    } elseif (Test-Path -LiteralPath $active -PathType Leaf) {
+      # A first append may precede a failed metadata save. Recover our v1
+      # records through the normal hash/sequence path instead of resetting.
+      $firstLine = Get-Content -LiteralPath $active -TotalCount 1
+      if ($firstLine -notmatch '^\s*\{\s*"schemaVersion"\s*:\s*"doctor.log.v1"') {
+        [IO.File]::Move($active, (Join-Path $StateDir ('doctor.legacy-' + [guid]::NewGuid().ToString('N') + '.jsonl')))
+      }
+
+    }
+    $countedPartialHash = ''
+    $failurePath = Join-Path $StateDir 'doctor-log-failures.json'
+    if ([IO.File]::Exists($failurePath)) {
+      $failures = [IO.File]::ReadAllText($failurePath) | ConvertFrom-Json
+      $state.writeFailure = [Math]::Max([long]$state.writeFailure,[long]$failures.writeFailure)
+      $state.dropped += [Math]::Max(0,([long]$failures.dropped-[long]$state.failureDroppedSeen))
+      $state.failureDroppedSeen = [long]$failures.dropped
+      if ($failures.PSObject.Properties['partialAppendHash']) { $countedPartialHash = [string]$failures.partialAppendHash }
+    }
+    $recoverRepair = {
+      if ($state.pendingRepair) {
+        $pending = $state.pendingRepair
+        if ($pending.target -notmatch '^(doctor\.jsonl|doctor\.rotated-v1-[0-9]{20}-[a-f0-9]{32}\.jsonl)$' -or $pending.archive -notmatch '^doctor\.legacy-recovery-[a-f0-9]{32}\.jsonl$') { throw 'doctor-log-repair-scope' }
+        $archive=Join-Path $StateDir $pending.archive
+        if ((Get-DoctorLogDigest ([IO.File]::ReadAllText($archive))) -ne $pending.archiveHash) {throw 'doctor-log-repair-preimage'}
+        $lines=@([IO.File]::ReadAllLines($archive))
+        if($pending.prefixLines -lt 0 -or $pending.prefixLines -gt $lines.Count){throw 'doctor-log-repair-range'}
+        $prefix=@($lines|Select-Object -First $pending.prefixLines)
+        [IO.File]::WriteAllText((Join-Path $StateDir $pending.target),($prefix -join "`n")+$(if($prefix.Count){"`n"}else{''}),[Text.UTF8Encoding]::new($false))
+        if (-not ($pending.PSObject.Properties['lossAlreadyCounted'] -and $pending.lossAlreadyCounted)) { $state.dropped++ }
+        $state.pendingRepair=$null
+        & $save $statePath $state
+      }
+    }
+    & $recoverRepair
+    # Persist eviction intent before deletion; recover exactly once even when
+    # interruption occurs between deleting the file and updating counters.
+    $recoverEviction = {
+      if ($state.pendingEviction) {
+        $pending = $state.pendingEviction
+        if ($pending.name -notmatch '^doctor\.rotated-v1-[0-9]{20}-[a-f0-9]{32}\.jsonl$') { throw 'doctor-log-eviction-scope' }
+        [IO.File]::Delete((Join-Path $StateDir $pending.name))
+        $state.evictedRows += [long]$pending.rows; $state.evictedBytes += [long]$pending.bytes
+        $state.pendingEviction = $null
+        & $save $statePath $state
+      }
+    }
+    & $recoverEviction
+    # Recover an append completed before the metadata replace (including after
+    # a process interruption). Archive order carries the last sequence number.
+    $tailFile = $active
+    if (-not (Test-Path -LiteralPath $tailFile -PathType Leaf)) {
+      $archives = @(Get-ChildItem -LiteralPath $StateDir -Filter 'doctor.rotated-v1-*.jsonl' | Sort-Object Name)
+      if ($archives.Count) { $tailFile = $archives[-1].FullName }
+    }
+    if (Test-Path -LiteralPath $tailFile -PathType Leaf) {
+      $lines = @([IO.File]::ReadAllLines($tailFile)); $valid = @(); $tail = $null
+      for ($i=0;$i -lt $lines.Count;$i++) {
+        try { $candidate = $lines[$i] | ConvertFrom-Json } catch {
+          if ($i -ne $lines.Count-1) { throw 'doctor-log-corrupt-record' }
+          # Preserve original bytes before repairing a single torn final line.
+          $archiveName='doctor.legacy-recovery-'+[guid]::NewGuid().ToString('N')+'.jsonl'
+          $archive=Join-Path $StateDir $archiveName
+          [IO.File]::Copy($tailFile,$archive)
+          $archiveHash=Get-DoctorLogDigest ([IO.File]::ReadAllText($archive))
+          $state.pendingRepair=[PSCustomObject]@{target=[IO.Path]::GetFileName($tailFile);archive=$archiveName;archiveHash=$archiveHash;prefixLines=$valid.Count;lossAlreadyCounted=($countedPartialHash -eq $archiveHash)}
+          & $save $statePath $state
+          & $recoverRepair
+          break
+        }
+        $content = [ordered]@{}
+        foreach ($property in $candidate.PSObject.Properties) { if ($property.Name -ne 'hash') { $content[$property.Name] = $property.Value } }
+        if ((Get-DoctorLogDigest ($content | ConvertTo-Json -Compress)) -ne $candidate.hash) { throw 'doctor-log-corrupt-hash' }
+        if ($tail -and ($candidate.prevHash -ne $tail.hash -or $candidate.seq -ne $tail.seq+1)) { throw 'doctor-log-corrupt-chain' }
+        $valid += $lines[$i]; $tail = $candidate
+      }
+      if ($tail -and $tail.seq -gt $state.seq) { $state.seq = $tail.seq; $state.lastHash = $tail.hash }
+
+    }
+    $safe = [ordered]@{ schemaVersion='doctor.log.v1'; ts=[DateTime]::UtcNow.ToString('o'); seq=([long]$state.seq+1); prevHash=$state.lastHash }
+    foreach ($key in @('action','result','verdict','lastRefresh')) {
+      $value = [string]$Entry[$key]
+      if ($value -in @('Check','Heal','InstallSchedule','UninstallSchedule','BriefCheck','BriefHeal','BriefRevoke','BriefInstall','BriefUninstall','ok','error','registered','exists-skip','DRIFT','OK','failed','success','none','healed','dry-run')) { $safe[$key] = $value }
+    }
+    foreach ($key in @('errorsToday','runtimeBins','execCovered','denyMissing','knownBenign','knownFixedOs32','newErrors','setupErrors','latestLogBytes','totalLogBytes7d','pasteTotal','covered','missing','leaks','denied','leakFile','missingExplicit','nonTargetInheritedRx','denyApplied','removed','tasks')) {
+      if ($Entry.Contains($key) -and $Entry[$key] -is [ValueType] -and $Entry[$key] -isnot [bool]) { $safe[$key] = [long]$Entry[$key] }
+    }
+    $safe.reasonCode = if ($Entry.Contains('error')) { 'doctor-action-error' } elseif ($Entry['verdict'] -eq 'DRIFT') { 'doctor-drift' } else { 'doctor-observation' }
+    $safe.evictedRows = [long]$state.evictedRows; $safe.evictedBytes = [long]$state.evictedBytes
+    $safe.hash = Get-DoctorLogDigest ($safe | ConvertTo-Json -Compress)
+    $line = ($safe | ConvertTo-Json -Compress) + "`n"
+    $bytes = [Text.Encoding]::UTF8.GetByteCount($line)
+    if ($bytes -gt $MaxActiveBytes) { throw 'doctor-log-event-oversize' }
+    if ((Test-Path -LiteralPath $active -PathType Leaf) -and ((Get-Item -LiteralPath $active).Length + $bytes -gt $MaxActiveBytes)) {
+      $archiveName = 'doctor.rotated-v1-{0:D20}-{1}.jsonl' -f [long]$state.seq, [guid]::NewGuid().ToString('N')
+      [IO.File]::Move($active, (Join-Path $StateDir $archiveName))
+    }
+    $appendBeforeBytes = if ([IO.File]::Exists($active)) { (Get-Item -LiteralPath $active).Length } else { 0 }
+    $appendStarted = $true
+    [IO.File]::AppendAllText($active, $line, [Text.UTF8Encoding]::new($false))
+    $eventAppended = $true
+    $state.seq = $safe.seq; $state.lastHash = $safe.hash
+    $archives = @(Get-ChildItem -LiteralPath $StateDir -Filter 'doctor.rotated-v1-*.jsonl' | Sort-Object Name)
+    $total = (Get-Item -LiteralPath $active).Length
+    foreach ($file in $archives) { $total += $file.Length }
+    while ($archives.Count -gt ($MaxFiles-1) -or $total -gt $MaxTotalBytes) {
+      $oldest = $archives[0]
+      if (-not $oldest -or $oldest.DirectoryName -ne [IO.Path]::GetFullPath($StateDir).TrimEnd('\')) { throw 'doctor-log-eviction-scope' }
+      $state.pendingEviction = @{name=$oldest.Name;rows=@([IO.File]::ReadAllLines($oldest.FullName)).Count;bytes=$oldest.Length}
+      & $save $statePath $state
+      $total -= $oldest.Length
+      & $recoverEviction
+      $archives = @($archives | Select-Object -Skip 1)
+    }
+    & $save $statePath $state
+  } catch {
+    # Keep a small loss receipt even if the main metadata write fails. If the
+    # storage itself is unavailable, stderr remains the observable failure.
+    if ($lock -and $save) {
+      try {
+        $failurePath = Join-Path $StateDir 'doctor-log-failures.json'
+        $failure = @{writeFailure=0;dropped=0;partialAppendHash=''}
+        if ([IO.File]::Exists($failurePath)) { $f=[IO.File]::ReadAllText($failurePath)|ConvertFrom-Json; $failure.writeFailure=$f.writeFailure; $failure.dropped=$f.dropped; if ($f.PSObject.Properties['partialAppendHash']) { $failure.partialAppendHash=$f.partialAppendHash } }
+        $failure.writeFailure++
+        if (-not $eventAppended) {
+          # Bind the loss receipt to this exact torn tail; unrelated failed
+          # attempts remain counted. A fully persisted line is recoverable.
+          if ($appendStarted -and [IO.File]::Exists($active)) {
+            try {
+              $written = [IO.File]::ReadAllText($active)
+              if ([Text.Encoding]::UTF8.GetByteCount($written) -eq ($appendBeforeBytes+$bytes) -and $written.EndsWith($line)) { $eventAppended=$true }
+              elseif ((Get-Item -LiteralPath $active).Length -gt $appendBeforeBytes) { $failure.partialAppendHash=Get-DoctorLogDigest $written }
+            } catch { [Console]::Error.WriteLine('doctor-log-append-evidence-unavailable') }
+          }
+          if (-not $eventAppended) { $failure.dropped++ }
+        }
+        & $save $failurePath $failure
+      } catch { [Console]::Error.WriteLine('doctor-log-loss-receipt-unavailable') }
+    }
+    [Console]::Error.WriteLine('doctor-log-write-failed')
+    throw 'doctor-log-write-failed'
+  } finally { if ($lock) { $lock.Dispose() } }
 }
 
 function Get-RuntimeBins {
