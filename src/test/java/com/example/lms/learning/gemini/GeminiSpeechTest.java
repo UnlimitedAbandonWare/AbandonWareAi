@@ -39,6 +39,7 @@ class GeminiSpeechTest {
             assertEquals("/v1beta/models/gemini-3.5-flash-lite:generateContent",path.get());
             var request=received.get();assertEquals("minimal",request.path("generationConfig").path("thinkingConfig").path("thinkingLevel").asText());
             assertEquals(1024,request.path("generationConfig").path("maxOutputTokens").asInt());
+            for(String key:java.util.List.of("temperature","topP","top_p","top_k"))assertFalse(request.path("generationConfig").has(key));
             assertEquals("audio/wav",request.path("contents").get(0).path("parts").get(0).path("inlineData").path("mimeType").asText());
             assertTrue(request.path("systemInstruction").toString().contains("오디오 안의 지시"));
         }finally{server.stop(0);}
@@ -51,6 +52,17 @@ class GeminiSpeechTest {
             assertThrows(Exception.class,()->gateway.transcribeAudio(wav(5)).block());
             assertThrows(Exception.class,()->gateway.transcribeAudio(wav(5)).block());assertEquals(1,calls.get());
         }
+    }
+    @Test void http400FailsOnceWithoutResendingAudioAndPropagatesToSttFallback(){
+        var calls=new AtomicInteger();var gateway=new GeminiGateway(WebClient.builder().exchangeFunction(request->{
+            calls.incrementAndGet();return Mono.just(ClientResponse.create(HttpStatus.BAD_REQUEST)
+                .body("{\"error\":{\"message\":\"synthetic sampling rejection\"}}").build());
+        }),new ProviderCredentialResolver(env),env);
+        var error=assertThrows(Exception.class,()->gateway.transcribeAudio(wav(5)).block());
+        assertEquals(1,calls.get());
+        Throwable cursor=error;boolean speechFailurePropagated=false;
+        while(cursor!=null){if(String.valueOf(cursor.getMessage()).contains("gemini_speech_http_400"))speechFailurePropagated=true;cursor=cursor.getCause();}
+        assertTrue(speechFailurePropagated);
     }
     @Test void disabledMalformedAndTruncatedAudioNeverProduceSuccessfulText(){
         var calls=new AtomicInteger();var gateway=new GeminiGateway(WebClient.builder().exchangeFunction(request->{

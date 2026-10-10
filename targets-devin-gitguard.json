@@ -1,0 +1,12 @@
+{
+    "targets":  [
+                    {
+                        "sha256":  "76fc4058620109fa4e61b0a7c658c5fb01c78c287dc562cd203ed3d7b9d0f62d",
+                        "path":  "scripts/git_secret_guard.ps1"
+                    },
+                    {
+                        "sha256":  "7d29c32a97c3c68c778253876684f5dfd9369c95fd63442d88228e456af99a4e",
+                        "path":  "scripts/test_git_secret_guard_prepush.py"
+                    }
+                ]
+}

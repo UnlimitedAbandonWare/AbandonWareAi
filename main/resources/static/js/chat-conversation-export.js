@@ -88,8 +88,10 @@
     }
     function captureNote(result) {
       const fences = result.snapshot.fences.map(f => `${f.sessionId}:${f.highWatermark}`).join(', ');
+      const pending = ['in_progress', 'awaiting_assistant'].includes(result.snapshot.latestTurnCoverage)
+        ? ' · 진행 중인 답변은 이 캡처에 포함되지 않을 수 있습니다. 답변 완료 후 다시 캡처하세요.' : '';
       return `캡처 ${result.exportedAt} · 메시지 경계 ${fences} · ${result.snapshot.exportStatus === 'partial'
-        ? '일부 과거 진단은 보존되지 않았습니다.' : result.snapshot.exportStatus === 'empty' ? '보존된 메시지가 없습니다.' : '수집 완료'}`;
+        ? '일부 과거 진단은 보존되지 않았습니다.' : result.snapshot.exportStatus === 'empty' ? '보존된 메시지가 없습니다.' : '수집 완료'}${pending}`;
     }
     async function save(format) {
       if (busy || selected.size === 0) return;

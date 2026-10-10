@@ -146,19 +146,65 @@ class PrePushAllowanceTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 1)
         self.assertNotIn(self.value, proc.stdout + proc.stderr)
 
-    def test_missing_blob_in_tree_fails_closed_after_retry(self):
-        # gc 경합 재시도 뒤에도 진짜 missing blob은 차단돼야 한다.
-        self.commit_file("scripts/missing_blob.py", "gone = True\n")
-        oid = git(self.repo, "rev-parse", "HEAD:scripts/missing_blob.py").stdout.strip()
+    def _run_prepush(self):
+        tool = Path(__file__).resolve().with_name('git_secret_guard.ps1')
+        return subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                               '-File', str(tool), '-Mode', 'pre-push'], cwd=self.repo,
+                              capture_output=True, text=True, timeout=120)
+
+    def _drop_blob(self, path):
+        oid = git(self.repo, "rev-parse", "HEAD:" + path).stdout.strip()
         loose = self.repo / ".git" / "objects" / oid[:2] / oid[2:]
         loose.chmod(0o666)
         loose.unlink()
-        tool = Path(__file__).resolve().with_name('git_secret_guard.ps1')
-        proc = subprocess.run(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                               '-File', str(tool), '-Mode', 'pre-push'], cwd=self.repo,
-                              capture_output=True, text=True, timeout=60)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('push-blob-unavailable', proc.stdout + proc.stderr)
+        return oid
+
+    def test_missing_blob_in_tree_fails_closed_after_retry(self):
+        # gc 경합 재시도 뒤에도 진짜 missing blob은 차단돼야 한다.
+        self.commit_file("scripts/missing_blob.py", "gone = True\n")
+        oid = self._drop_blob("scripts/missing_blob.py")
+        proc = self._run_prepush()
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 1, out)
+        self.assertIn('[BLOCK]', out)
+        self.assertIn('blob-scan-unavailable', out)
+        self.assertIn('push-blob-unavailable', out)
+        self.assertIn('scripts/missing_blob.py', out)
+        self.assertIn(oid[:12], out)
+
+    def test_missing_blob_does_not_mask_secret_findings(self):
+        # missing blob 보류가 같은 커밋의 진짜 비밀값 발견을 덮지 않아야 한다.
+        self.value = "sk-" + "F" * 24
+        self.commit_file("main/fixture_secret.py", 'KEY = "' + self.value + '"\n')
+        self.commit_file("scripts/missing_blob.py", "gone = True\n")
+        self._drop_blob("scripts/missing_blob.py")
+        proc = self._run_prepush()
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 1, out)
+        self.assertIn('openai', out)
+        self.assertIn('blob-scan-unavailable', out)
+        self.assertIn('main/fixture_secret.py', out)
+        self.assertIn('scripts/missing_blob.py', out)
+        self.assertNotIn(self.value, out)
+
+    def test_binary_blob_scanned_without_crash(self):
+        # NUL이 섞인 blob은 텍스트 스캔 대상이 아니고 스캔이 죽으면 안 된다.
+        (self.repo / "scripts").mkdir(exist_ok=True)
+        (self.repo / "scripts" / "payload.bin").write_bytes(
+            b"\x00\xff\x01" + b"BINARY" * 16 + b"\x00")
+        self.assertEqual(git(self.repo, "add", "scripts/payload.bin").returncode, 0)
+        self.assertEqual(git(self.repo, "commit", "-m", "binary fixture").returncode, 0)
+        proc = self._run_prepush()
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertNotIn('blob-scan-unavailable', out)
+
+    def test_empty_blob_scanned_clean(self):
+        self.commit_file("scripts/empty.txt", "")
+        proc = self._run_prepush()
+        out = proc.stdout + proc.stderr
+        self.assertEqual(proc.returncode, 0, out)
+        self.assertNotIn('blob-scan-unavailable', out)
 
     def test_git_quoted_nonascii_path_scanned_not_crashed(self):
         # git ls-files quotes non-ASCII names as "dir/\ooo" octal escapes; the

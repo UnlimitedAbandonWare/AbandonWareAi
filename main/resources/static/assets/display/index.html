@@ -3,7 +3,7 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="mrbd-web-app-capable" content="yes"><meta name="description" content="폴드6 수음 · 한국어 실시간 전사"><meta name="referrer" content="no-referrer"><meta name="theme-color" content="#000000">
 <title>AWX · Fold6 수음</title><link rel="manifest" href="manifest.webmanifest"><link rel="icon" type="image/png" href="favicon.png"><link rel="stylesheet" href="styles.css?v=meta-relay-1">
-<script src="display-core.js" defer></script><script src="display-conversate.js?v=auto-voice-20261008" defer></script><script src="display-voice.js?v=auto-voice-20261008" defer></script><script src="display-focus-flow.js?v=nova-focus-1" defer></script><script src="display-focus.js?v=focus-keepalive-20261009" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=focus-keepalive-20261009" defer></script><script src="app.js?v=auto-voice-20261008" defer></script>
+<script src="display-core.js" defer></script><script src="display-conversate.js?v=auto-voice-20261008" defer></script><script src="display-voice.js?v=auto-voice-20261008" defer></script><script src="display-focus-flow.js?v=nova-stay-alive-20261010" defer></script><script src="display-focus.js?v=nova-stay-alive-20261010" defer></script><script src="display-snapshot.js?v=snapshot-3" defer></script><script src="display-focus-controls.js?v=nova-stay-alive-20261010" defer></script><script src="app.js?v=auto-voice-20261008" defer></script>
 <style>
 #app.transcription { display:block; height:auto; max-height:none; min-height:100dvh; }
 #app > * { margin-bottom:16px; }
@@ -12,8 +12,9 @@
 #caption-card { min-height:160px; max-height:320px; overflow:auto; }
 #nova-fold { position:fixed; z-index:20; inset:16px; width:min(620px,calc(100% - 32px)); max-height:calc(100dvh - 32px); box-sizing:border-box; margin:auto; overflow:auto; background:#090d11; border:1px solid #a4bdcb; border-radius:16px; padding:18px; box-shadow:0 0 0 100vmax #0009; }
 #nova-fold[hidden],#nova-history[hidden] { display:none; }
-#nova-fold-draft { color:#a8adb3; font-size:20px; line-height:1.45; max-height:58px; overflow:hidden; white-space:pre-wrap; }
-#nova-fold-answer { height:288px; overflow:hidden; font-size:var(--hint-font,26px); line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+#nova-fold-draft { color:#a8adb3; font-size:20px; line-height:1.45; min-height:87px; max-height:87px; overflow:auto; white-space:pre-wrap; }
+#nova-fold-question { margin:4px 0; font-size:16px; line-height:1.3; max-height:2.6em; overflow:auto; color:#dce7ef; }
+#nova-fold-answer { min-height:calc(4 * 1.6em); height:288px; overflow:hidden; font-size:var(--hint-font,26px); line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
 #nova-question { width:100%; font-size:18px; }
 #nova-history-list { max-height:65vh; overflow:auto; white-space:pre-wrap; }
 #nova-history-list article { border-bottom:1px solid #58626a; padding:12px 0; }
@@ -61,7 +62,7 @@
 <div class="actions"><button id="nova-open" class="focusable" type="button" disabled>노바 대화 열기</button><button id="nova-history-open" class="focusable" type="button" disabled>노바 처리 기록</button></div>
 <section id="nova-fold" hidden aria-label="노바 집중 대화">
 <div class="card-heading"><h2 id="nova-fold-status" role="status">노바</h2><button id="nova-close" class="focusable" type="button">집중창 닫기</button></div>
-<p id="nova-fold-draft"></p><div id="nova-fold-answer" aria-live="off"></div>
+<p id="nova-fold-draft" aria-label="현재 전사"></p><p id="nova-fold-question" aria-label="답변에 대응하는 질문"></p><div id="nova-fold-answer" aria-live="off"></div>
 <div class="actions"><button id="nova-pause" class="focusable" type="button">표시 잠시 멈춤</button><button id="nova-replay" class="focusable" type="button">답변 다시 보기</button></div>
 <form id="nova-question-form"><label for="nova-question">노바에게 질문</label><input id="nova-question" class="focusable" maxlength="2000" autocomplete="off"><button class="focusable" type="submit">질문 보내기</button></form>
 <p id="nova-snapshot-status" class="hint" role="status"></p>
@@ -100,6 +101,7 @@
 <label for="nf-embed-prefer">기억 임베딩 경로</label><select id="nf-embed-prefer" class="focusable"><option value="LOCAL_THEN_CLOUD">로컬 우선 · 허용 시 클라우드 대체</option><option value="LOCAL_ONLY">로컬만</option><option value="CLOUD_ONLY">클라우드만(설정된 경우)</option></select>
 <label for="nf-web-unknown">모를 때 웹 재시도</label><select id="nf-web-unknown" class="focusable"><option value="">서버 정책 따름(기본)</option><option value="false">이 프로필에서는 끔</option><option value="true">허용(서버가 켠 경우에만)</option></select>
 <label for="nf-wake">호출어</label><input id="nf-wake" class="focusable" type="text" value="노바" maxlength="16">
+<label for="nf-exit">종료 호출어 · 단독 발화</label><input id="nf-exit" class="focusable" type="text" value="클린" maxlength="16">
 <label for="nf-camera-wake">사진 호출어</label><input id="nf-camera-wake" class="focusable" type="text" value="데빈" maxlength="16">
 <span class="hint" style="grid-column:1/-1">이 호출어로 부르면 그 질문에만 사진 1장. 비우면 사진 호출어를 끕니다.</span>
 <label for="nf-target">답변을 읽을 화면</label><select id="nf-target" class="focusable"><option value="auto">연결된 안경 · 없으면 휴대폰</option><option value="lens">안경</option><option value="fold">이 휴대폰</option></select>
@@ -184,7 +186,7 @@
 <label for="ld-hint-font-range">Focus 답변·힌트 글자 크기 조절</label><input id="ld-hint-font-range" class="focusable" type="range" min="20" max="36" step="1" value="26">
 <p id="ld-font-preview" style="font-size:26px;line-height:1.25;overflow-wrap:anywhere">노바 답변 예문 · 노바 · é · 👨‍👩‍👧‍👦 · 3.5mg</p><button id="ld-hint-font-reset" class="focusable" type="button">답변·힌트 글자 기본값</button>
 <p>글자 크기는 분량과 독립이며 새 답변부터 적용합니다. 설정은 현재 서버에서 유지됩니다.</p>
-<label for="ld-cap-lines">전사 최대 줄</label><input id="ld-cap-lines" class="focusable" type="number" min="1" max="8" step="1" value="4">
+<label for="ld-cap-lines">전사 최대 줄</label><input id="ld-cap-lines" class="focusable" type="number" min="3" max="8" step="1" value="4">
 <label for="ld-cap-ttl">전사 유지(초 · 최신 내용부터 · 1~100)</label><input id="ld-cap-ttl" class="focusable" type="number" min="1" max="100" step="1" value="20">
 <label for="ld-hint-lines">힌트 페이지 줄</label><input id="ld-hint-lines" class="focusable" type="number" min="4" max="13" step="1" value="11">
 <label for="ld-hint-ttl">힌트 유지(초 · 최초 표시부터 · 1~100)</label><input id="ld-hint-ttl" class="focusable" type="number" min="1" max="100" step="1" value="20">

@@ -317,32 +317,38 @@ function Get-CommittedBlobMap {
 }
 
 function Read-CommittedTextOrNull {
-    param($Process, [string]$Oid)
+    param($Process, [string]$Oid, [string]$Path = '')
     $Process.StandardInput.WriteLine($Oid)
     $Process.StandardInput.Flush()
     $reader = [IO.BinaryReader]::new($Process.StandardOutput.BaseStream)
     $header = New-Object Text.StringBuilder
+    $where = 'path=' + $Path + ' oid=' + $Oid
     do {
         $b = $reader.ReadByte()
-        if ($b -lt 0) { throw 'push-blob-unavailable' }
+        if ($b -lt 0) { throw ('push-blob-unavailable ' + $where + ' reason=eof-before-header') }
         if ($b -ne 10) { [void]$header.Append([char]$b) }
     } while ($b -ne 10)
     $parts = $header.ToString().Split(' ')
-    if ($parts.Count -ne 3 -or $parts[0] -ne $Oid -or $parts[1] -ne 'blob') { throw 'push-blob-unavailable' }
+    if ($parts.Count -ne 3 -or $parts[0] -ne $Oid -or $parts[1] -ne 'blob') {
+        # 원시 응답 행은 넣지 않는다: 스트림이 어긋났으면 blob 본문(비밀값
+        # 후보)이 섞일 수 있으므로 사유 코드만 남긴다.
+        $reason = if ($header.ToString() -match '^[0-9a-f]{40,64} missing$') { 'missing-object' } else { 'bad-header' }
+        throw ('push-blob-unavailable ' + $where + ' reason=' + $reason)
+    }
     $size = [long]$parts[2]
     $bytes = $null
     if ($size -le 2MB) {
         $bytes = $reader.ReadBytes([int]$size)
-        if ($bytes.Length -ne $size) { throw 'push-blob-incomplete' }
+        if ($bytes.Length -ne $size) { throw ('push-blob-incomplete ' + $where + ' size=' + $size + ' read=' + $bytes.Length) }
     } else {
         $remaining = $size
         while ($remaining -gt 0) {
             $chunk = $reader.ReadBytes([int][Math]::Min($remaining, 65536))
-            if ($chunk.Length -eq 0) { throw 'push-blob-incomplete' }
+            if ($chunk.Length -eq 0) { throw ('push-blob-incomplete ' + $where + ' size=' + $size + ' drained=' + ($size - $remaining)) }
             $remaining -= $chunk.Length
         }
     }
-    if ($reader.ReadByte() -ne 10) { throw 'push-blob-framing' }
+    if ($reader.ReadByte() -ne 10) { throw ('push-blob-framing ' + $where) }
     if ($null -eq $bytes -or [Array]::IndexOf($bytes, [byte]0) -ge 0) { return $null }
     return [Text.UTF8Encoding]::new($false, $false).GetString($bytes)
 }
@@ -378,20 +384,34 @@ function Find-SecretGuardFindings {
         }
 
         if ($null -ne $BlobProcess) {
+            $blobOid = [string]$BlobMap[$rel]
+            if ([string]::IsNullOrWhiteSpace($blobOid)) {
+                $findings.Add([pscustomobject]@{ Path = $rel; Line = 0; Rule = 'blob-scan-unavailable'; Detail = 'commit tree blob mapping unavailable' }) | Out-Null
+                continue
+            }
             try {
-                $text = Read-CommittedTextOrNull $BlobProcess $BlobMap[$rel]
+                $text = Read-CommittedTextOrNull $BlobProcess $blobOid $rel
             } catch {
-                if ($_.Exception.Message -ne 'push-blob-unavailable') { throw }
+                $firstReason = $_.Exception.Message
                 # 장시간 살아 있는 batch 프로세스는 시작 시점의 pack 목록만 본다.
                 # 스캔 도중 자동 gc가 느슨 객체를 새 pack으로 옮겨 지우면 missing이
                 # 나오므로 새 프로세스(최신 pack 뷰)로 한 번만 재시도한다.
-                $retryProcess = Start-GitReader $Root 'cat-file --batch'
+                $retryProcess = $null
                 try {
-                    $text = Read-CommittedTextOrNull $retryProcess $BlobMap[$rel]
+                    $retryProcess = Start-GitReader $Root 'cat-file --batch'
+                    $text = Read-CommittedTextOrNull $retryProcess $blobOid $rel
+                } catch {
+                    # 재시도까지 못 읽은 blob은 스캔 전체를 죽이지 말고 그 경로만
+                    # 보류한다. 스캔 못 한 blob을 통과시키지 않는 닫힌 실패이고,
+                    # 진짜로 없는 blob은 git push 자체가 어차피 거절한다.
+                    $findings.Add([pscustomobject]@{ Path = $rel; Line = 0; Rule = 'blob-scan-unavailable'; Detail = ('retry-failed: ' + $firstReason + '; retry: ' + $_.Exception.Message) }) | Out-Null
+                    $text = $null
                 } finally {
-                    $retryProcess.StandardInput.Close()
-                    $retryProcess.WaitForExit()
-                    $retryProcess.Dispose()
+                    if ($null -ne $retryProcess) {
+                        $retryProcess.StandardInput.Close()
+                        $retryProcess.WaitForExit()
+                        $retryProcess.Dispose()
+                    }
                 }
             }
         } else {

@@ -162,6 +162,8 @@ test('a vacated snapshot inside the hold keeps the Fold answer while drafts pain
  assert.deepEqual(calls,['first_visible','presentation_done']);assert.equal(text(),'유지 답변');
  projection.update({...base,renderTarget:'fold',phase:'LISTENING',answerText:'',draftText:'후속 초안',stateVersion:2});advance(500);await new Promise(setImmediate);
  assert.equal(text(),'유지 답변');assert.equal(draft.textContent,'후속 초안');
- advance(6000);projection.update({...base,renderTarget:'fold',phase:'LISTENING',answerText:'',stateVersion:3});
+ const retainedText=text();advance(30000);projection.update({...base,renderTarget:'fold',phase:'LISTENING',answerText:'',stateVersion:3});
+ assert.equal(text(),retainedText);
+ projection.update({...base,active:false,phase:'ARMED',answerText:'',reason:'user_closed',stateVersion:4});
  assert.equal(text(),'');
 });

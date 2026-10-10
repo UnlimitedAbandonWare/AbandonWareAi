@@ -34,6 +34,8 @@
     const keepalive=options.target==='fold';
     let closeTimer=null,terminalKey='',terminalVisible=false,dismissedActivation='',lastDiagnostic='',scopeEndedActive=false;
     let fallbackStatus=options.fallbackStatus||null;
+    const waitingReasons={output_lost:'출력 연결을 기다립니다.',producer_reclaimed:'기기를 다시 연결하고 있습니다.',presentation_unconfirmed:'마지막 답변을 유지하며 표시 확인을 기다립니다.',idle_timeout:'다음 질문을 기다립니다.',wake_no_question:'질문을 말씀해 주세요.',input_unconfirmed:'발화를 확정하지 못했습니다. 다시 말씀해 주세요.',generation_timeout:'답변 요청 시간이 끝났습니다. 다시 질문해 주세요.',focus_next_question_full:'대기 질문이 가득 찼습니다. 답변 뒤 다시 말씀해 주세요.',focus_question_already_queued:'이미 접수된 질문은 대기 순서대로 처리합니다.'};
+    function clearQuestion(){if(options.question){options.question.textContent='';if(options.question.dataset)delete options.question.dataset.turnId;}}
     function renderFallback(next){
       const visible=keepalive&&next?.active&&next.isFallback===true&&!!next.answerText&&next.answerComplete!==false;
       if(visible&&!fallbackStatus&&doc?.createElement&&panel?.append){
@@ -48,6 +50,7 @@
       options.diagnostic?.(hidden?'hide_cause':'focus_visibility',{cause,hidden,stateVersion:current?.stateVersion||0,phase:current?.phase||'OFF'});
     }
     function dismiss(){
+      clearQuestion();
       renderFallback(null);dismissedActivation=current?.activationId||'';scopeEndedActive=false;cancelClose();clearGrounding();flow.accept(null);receipts.clear();
       if(panel)panel.hidden=true;
     }
@@ -68,7 +71,7 @@
         try{await options.receipt?.(entry.name,entry.detail);entry.done=true;}catch{}finally{entry.sending=false;}
       }
     }
-    function makeFlow(){return Flow.createFlow({host,element:options.answer,retainAfterPresentation:options.target==='lens',requestFrame:options.requestFrame,cancelFrame:options.cancelFrame,fitsLine:options.fitsLine,onEvent(name,detail){
+    function makeFlow(){return Flow.createFlow({host,element:options.answer,retainAfterPresentation:true,requestFrame:options.requestFrame,cancelFrame:options.cancelFrame,fitsLine:options.fitsLine,onEvent(name,detail){
       // The ticket is passed only to the receipt request, never to diagnostics.
       options.diagnostic?.(name,{answerVersion:detail.answerVersion,mode:detail.mode});
       if((name==='first_visible'||name==='presentation_done')&&current?.renderTarget===options.target&&detail.renderReceiptTicket){
@@ -79,6 +82,7 @@
     }});}
     let flow=makeFlow();
     function reset(){
+      clearQuestion();
       scopeEndedActive=scopeEndedActive||!!current?.active&&dismissedActivation!==current.activationId;
       renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();flow=makeFlow();
       current=null;server='';version=-1;terminalKey='';dismissedActivation='';lastDiagnostic='';awaitingFresh=true;
@@ -142,7 +146,9 @@
       if(next){server=next.serverInstanceId;version=next.stateVersion;}
       if(keepalive&&!next?.active&&!next?.reason&&terminalKey){current=next||current;if(panel)panel.hidden=!terminalVisible;return false;}
       const wasActive=!!current?.active||scopeEndedActive;if(next)scopeEndedActive=false;
+      if(current?.renderReceiptTicket!==next?.renderReceiptTicket)receipts.clear();
       current=next;renderFallback(next);
+      if(!next?.active)clearQuestion();
       if(keepalive&&next?.activationId&&dismissedActivation===next.activationId){if(panel)panel.hidden=true;return false;}
       if(keepalive&&!next?.active&&next?.reason&&(wasActive||terminalKey)){
         clearGrounding();flow.accept(null);receipts.clear();
@@ -158,9 +164,11 @@
       }
       if(next?.active){cancelClose();terminalKey='';dismissedActivation='';}
       if(panel)panel.hidden=!next?.active||!connected;
-      if(!next?.active){clearGrounding();flow.accept(null);receipts.clear();return false;}
+      if(!next?.active){clearQuestion();clearGrounding();flow.accept(null);receipts.clear();return false;}
       if(options.status)options.status.textContent='노바 · '+(LABELS[next.phase]||'대화 중')+(next.grounding?' · 검색 근거':next.hasMoreOnFold?' · 긴 응답 일부 표시':'');
-      if(options.draft)options.draft.textContent=next.draftText||next.questionText;
+      if(options.question){options.question.textContent=next.questionText;options.question.dataset&&(options.question.dataset.turnId=next.turnId);}
+      if(options.draft){options.draft.textContent=options.question?next.draftText:next.draftText||next.questionText;options.draft.scrollTop=options.draft.scrollHeight;}
+      if(next.reason&&options.status)options.status.textContent+=' · '+(waitingReasons[reasonCode(next.reason)]||options.reasonText?.(reasonCode(next.reason))||'요청을 완료하지 못했습니다. 다시 질문해 주세요.');
       if(!connected){awaitingFresh=true;flow.pause();diagnostic('not_connected:'+(/^[A-Z_]{1,32}$/.test(connection)?connection:'UNKNOWN'),!keepalive);if(keepalive){if(panel)panel.hidden=false;if(options.status)options.status.textContent='노바 · 재연결 중';}return true;}
       awaitingFresh=false;
       if(options.target==='fold'&&next.grounding){
@@ -173,7 +181,7 @@
     }
     function visibility(){if(doc?.hidden){awaitingFresh=true;flow.pause();}else if(!awaitingFresh)flow.pause(paused);}
     function togglePause(){paused=!paused;flow.pause(paused||awaitingFresh||!!doc?.hidden);return paused;}
-    function dispose(){disposed=true;renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
+    function dispose(){disposed=true;clearQuestion();renderFallback(null);cancelClose();clearGrounding();receipts.clear();flow.dispose();if(panel)panel.hidden=true;}
     return {update,visibility,togglePause,replay:()=>flow.replay(),dismiss,reset,dispose,isActive:()=>!!current?.active&&dismissedActivation!==current.activationId||terminalVisible};
   }
   function receiptSender(host=globalThis){

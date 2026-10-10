@@ -44,6 +44,21 @@ function harness({ sid = '1', responder, nativeDownload = false } = {}) {
     select, switch: value => { current = value; document.emit('brain-state:session'); }, response };
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
+test('in-progress capture warns without mutating the retained JSON/ZIP pair', async () => {
+  const h = harness({ responder: async (url, options, response) => options.method === 'POST' ? response({
+    exportId: 'capture-flight', exportedAt: '2026-10-10T00:00:00Z', snapshot: {
+      fences: [{ sessionId: '1', highWatermark: '1' }], exportStatus: 'partial', latestTurnCoverage: 'in_progress'
+    }
+  }) : null });
+  await h.controller.save('json');
+  assert.match(h.status.textContent, /진행 중인 답변/);
+  assert.match(h.status.textContent, /다시 캡처/);
+  h.document.emit('brain-state:answer'); await h.controller.save('zip');
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 1);
+  assert.equal(h.downloads[0].body, h.downloads[1].body);
+  h.fresh.click(); await h.controller.save('json');
+  assert.equal(h.calls.filter(c => c.options.method === 'POST').length, 2);
+});
 test('JSON and ZIP reuse one capture and only call export APIs', async () => {
   const h = harness(); await h.controller.load(); h.select('2', true);
   await h.controller.save('json'); await h.controller.save('zip');

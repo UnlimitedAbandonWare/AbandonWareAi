@@ -596,6 +596,52 @@ class GeminiGatewayContractTest {
     }
 
     @Test
+    void gemini3xRouterModelsSendNoSamplingKeysOnEitherSurface() throws Exception {
+        AtomicReference<com.fasterxml.jackson.databind.JsonNode> payload = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            payload.set(new com.fasterxml.jackson.databind.ObjectMapper().readTree(exchange.getRequestBody()));
+            byte[] response = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}]}"
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            try (OutputStream body = exchange.getResponseBody()) {
+                body.write(response);
+            }
+        });
+        server.start();
+
+        try {
+            MockEnvironment environment = baseEnvironment()
+                    .withProperty("GEMINI_API_KEY", "gemini-router-3x-test-value")
+                    .withProperty("gemini.gateway.purpose.router.enabled", "true");
+            GeminiGateway gateway = gateway(environment, request -> Mono.error(new AssertionError("native path unused")));
+            String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1beta/openai";
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+
+            for (String id : List.of("gemini-3.5-flash-lite", "gemini-3.6-flash",
+                    "gemini-3.7-flash", "gemini-3.8-flash")) {
+                ChatModel model = gateway.buildOpenAiCompatibleChatModel(new GeminiGateway.RouterSpec(
+                        baseUrl, id, Duration.ofSeconds(2), 0, 0.2, 0.9, 0.1, 0.1, 128), false);
+                model.chat(List.of(UserMessage.from("bounded router probe"))).aiMessage().text();
+                for (String key : List.of("temperature", "top_p", "topP", "top_k")) {
+                    assertFalse(payload.get().has(key), id + " compatible wire json carried " + key);
+                }
+
+                var nativeConfig = mapper.valueToTree(GeminiGateway.nativeChatBody(
+                        List.of(UserMessage.from("fixture")),
+                        new GeminiGateway.RouterSpec(baseUrl, id, Duration.ofSeconds(2), 0, 0.2, 0.9, null, null, 128),
+                        false)).path("generationConfig");
+                for (String key : List.of("temperature", "top_p", "topP", "top_k")) {
+                    assertFalse(nativeConfig.has(key), id + " native generationConfig carried " + key);
+                }
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void nonGemini38RouterModelRetainsSamplingFields() throws Exception {
         AtomicReference<com.fasterxml.jackson.databind.JsonNode> payload = new AtomicReference<>();
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
@@ -618,7 +664,24 @@ class GeminiGatewayContractTest {
             GeminiGateway gateway = gateway(environment, request -> Mono.error(new AssertionError("native path unused")));
             String baseUrl = "http://127.0.0.1:" + server.getAddress().getPort() + "/v1beta/openai";
 
-            ChatModel model = gateway.buildOpenAiCompatibleChatModel(new GeminiGateway.RouterSpec(
+            for (String id : List.of("gemini-2.5-flash", "non-gemini-fixture")) {
+                ChatModel model = gateway.buildOpenAiCompatibleChatModel(new GeminiGateway.RouterSpec(
+                        baseUrl,
+                        id,
+                        Duration.ofSeconds(2),
+                        0,
+                        0.2,
+                        0.9,
+                        null,
+                        null,
+                        128), false);
+                model.chat(List.of(UserMessage.from("bounded router probe"))).aiMessage().text();
+
+                assertEquals(0.2, payload.get().path("temperature").asDouble());
+                assertEquals(0.9, payload.get().path("top_p").asDouble());
+            }
+
+            ChatModel flashLite = gateway.buildOpenAiCompatibleChatModel(new GeminiGateway.RouterSpec(
                     baseUrl,
                     "gemini-3.5-flash-lite",
                     Duration.ofSeconds(2),
@@ -628,10 +691,10 @@ class GeminiGatewayContractTest {
                     null,
                     null,
                     128), false);
-            model.chat(List.of(UserMessage.from("bounded router probe"))).aiMessage().text();
+            flashLite.chat(List.of(UserMessage.from("bounded router probe"))).aiMessage().text();
 
-            assertEquals(0.2, payload.get().path("temperature").asDouble());
-            assertEquals(0.9, payload.get().path("top_p").asDouble());
+            assertFalse(payload.get().has("temperature"));
+            assertFalse(payload.get().has("top_p"));
         } finally {
             server.stop(0);
         }

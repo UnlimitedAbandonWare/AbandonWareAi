@@ -173,7 +173,6 @@ class ChatWorkflowGuardProfileIsolationTest {
             ChatRequestDto request = ChatRequestDto.builder().message(A)
                     .model("release-gate-recording-fake").maxTokens(256)
                     .memoryMode("EPHEMERAL").searchMode(SearchMode.AUTO)
-                    .executionMode(com.example.lms.domain.enums.ExecutionMode.SELF_ASK)
                     .useWebSearch(true).useRag(true).useVerification(true)
                     .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, true)).build();
             fixture.workflow().continueChat(request, ignored -> List.of());
@@ -364,7 +363,6 @@ class ChatWorkflowGuardProfileIsolationTest {
             ReflectionTestUtils.setField(fixture.workflow(), "webSearchRetriever", web);
             ChatRequestDto request = ChatRequestDto.builder().message(A).model("release-gate-recording-fake").maxTokens(256)
                     .memoryMode("EPHEMERAL").searchMode("light".equals(control) ? SearchMode.FORCE_LIGHT : SearchMode.AUTO)
-                    .executionMode(com.example.lms.domain.enums.ExecutionMode.SELF_ASK)
                     .useWebSearch(true).useRag(true).useVerification(true)
                     .retrievalRequestIntent(new ChatRequestDto.RetrievalRequestIntent(true, true)).build();
             fixture.workflow().continueChat(request, ignored -> List.of());
@@ -536,7 +534,6 @@ class ChatWorkflowGuardProfileIsolationTest {
     }
 
     private static void configureRetrieval(ChatWorkflow workflow) {
-        ReflectionTestUtils.setField(workflow, "executionSelfAskEnabled", true);
         var fused = List.of(dev.langchain4j.rag.content.Content.from(
                 dev.langchain4j.data.segment.TextSegment.from("marble canoe velvet",
                         dev.langchain4j.data.document.Metadata.from(Map.of("url", "https://reference.example.test/fixture")))));

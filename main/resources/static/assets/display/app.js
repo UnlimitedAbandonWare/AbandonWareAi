@@ -3,7 +3,7 @@
   const $=id=>document.getElementById(id),core=window.DisplayCore,query=new URLSearchParams(location.search);
   const testChannel=query.get('clientRole')==='test'?(query.get('channel')||'test-'+crypto.randomUUID().replace(/-/g,'')):null;
   const standalone=document.body.hasAttribute('data-fold6-test')||new URLSearchParams(window.location.search).get('mode')==='phone-test';
-  let phoneMode=standalone,pages=[],page=0,captionKey='',codeTimer=null,pendingAck=null,acked='',busy=false,voice,focusControls;
+  let phoneMode=standalone,pages=[],page=0,captionKey='',codeTimer=null,pendingAck=null,acked='',busy=false,voice,focusControls,ackAttempts=new Map();
   const resumeKey='awx.display.captureResume.'+(testChannel||'live');
   let resumeIntent=null,resumePending=false,resumeAllowed=true,resumeAttempt=0;
   try{
@@ -113,7 +113,7 @@
     fillAutoVoice(s);
     const focusFont=s.testStatus?.lensDisplay?.hintFontPx;
     if(standalone&&Number.isInteger(focusFont))$('nova-fold-answer')?.style.setProperty('--hint-font',focusFont+'px');
-    focusControls?.update(s);
+    focusControls?.update(s);voice.setFocusActive?.(!!s.focus?.active);
     const phone=s.role==='PHONE'||phoneMode;
     $('app').classList.toggle('phone',phone);$('phone-controls').hidden=!phone;
     $('pair').hidden=phone||s.linked;$('phone-mode').hidden=phone||s.linked;$('unlink').hidden=!s.linked&&!s.linkPending;
@@ -127,15 +127,15 @@
     if(s.linkPending){$('pair-panel').hidden=false;$('approve').hidden=phone;$('pair-message').textContent='확인 번호 '+(s.confirmation||'확인 중')+' · '+(phone?'안경에서 같은 번호를 승인해 주세요.':'휴대폰에도 같은 번호가 보이면 승인하세요.');}
     else if(s.linked){$('pair-panel').hidden=true;clearTimeout(codeTimer);}
     const c=s.caption,key=c?[s.epoch,c.utteranceId,c.revision,c.isFinal].join(':'):'';
-    if(key!==captionKey){captionKey=key;pages=c?(c.rolling?[c.text]:core.paginate(c.text.replace(/\s+/g,' '),54)):[];page=Math.max(0,pages.length-1);showCaption();}
+    if(key!==captionKey){captionKey=key;ackAttempts.clear();pages=c?(c.rolling?[c.text]:core.paginate(c.text.replace(/\s+/g,' '),54)):[];page=Math.max(0,pages.length-1);showCaption();}
     $('caption-label').textContent=c?(c.isFinal?'확정 발화':'듣는 중'):voice?.isActive()||(s.linked||standalone)&&['READY','STREAMING','CAPTURING','FINISHING'].includes(s.audioState)?'전사 대기':'마이크 대기';
     $('hint-text').hidden=!s.hint;$('hint-text').textContent=s.hint?'힌트 · '+s.hint.text:'';
     if(s.error)reportError(s.error);else if(!voice?.state.errorCode)$('error').textContent='';
-    if((!phone||standalone)&&c&&key!==acked&&key!==pendingAck&&document.visibilityState==='visible'){
+    if((!phone||standalone)&&c&&key!==acked&&key!==pendingAck&&document.visibilityState==='visible'&&(ackAttempts.get(key)||0)<3){
       pendingAck=key;const version=s.version;
       requestAnimationFrame(()=>requestAnimationFrame(()=>{
         if(captionKey!==key||document.visibilityState!=='visible'){pendingAck=null;return;}
-        client.acknowledge(version,'caption_rendered').then(()=>{acked=key;}).catch(()=>{}).finally(()=>{pendingAck=null;});
+        client.acknowledge(version,'caption_rendered').then(()=>{acked=key;}).catch(()=>{const tries=(ackAttempts.get(key)||0)+1;ackAttempts.set(key,tries);if(tries>=3)acked=key;}).finally(()=>{pendingAck=null;});
       }));
     }
     if(standalone&&$('owner-status')){
@@ -301,7 +301,7 @@
   $('pair-close').onclick=()=>{$('pair-panel').hidden=true;$('caption-card').focus();};
   $('unlink').onclick=act(async()=>{clearResumeIntent();await voice.stop();await client.unlink();phoneMode=false;client.pause();client.start();});
   $('hints').onclick=act(async()=>{const enabled=!client.state.hintsEnabled;await client.hints(enabled);saveSetting('hints',enabled);});
-  $('stop').onclick=act(async()=>{clearResumeIntent();await voice.stop();if(!standalone&&client.state.linked)await client.stopAudio();});
+  $('stop').onclick=act(async()=>{clearResumeIntent();if(focusControls?.active())await focusControls.close();await voice.stop();if(!standalone&&client.state.linked)await client.stopAudio();});
   $('reconnect').hidden=false;$('reconnect').onclick=act(async()=>{await voice.reconnect();});
   if(standalone&&$('broadcast')){
     if(testChannel)$('display-url').href='meta/index.html?clientRole=test&channel='+encodeURIComponent(testChannel);
@@ -327,7 +327,7 @@
   function fillLensInputs(d){
     if(!$('ld-apply')||!d)return;
     $('ld-cap-font').value=d.transcriptFontPx??26;$('ld-hint-font').value=d.hintFontPx??26;
-    $('ld-cap-lines').value=d.transcriptMaxLines??4;$('ld-cap-ttl').value=(d.transcriptTtlMs??20000)/1000;$('ld-hint-lines').value=d.hintPageLines??11;
+    $('ld-cap-lines').value=Math.max(3,d.transcriptMaxLines??4);$('ld-cap-ttl').value=(d.transcriptTtlMs??20000)/1000;$('ld-hint-lines').value=d.hintPageLines??11;
     $('ld-hint-ttl').value=(d.hintTtlMs??20000)/1000;$('ld-auto-page').value=(d.autoPageMs??5000)/1000;
     if($('ld-quiet'))$('ld-quiet').value=(d.triggerQuietMs??2500)/1000;
     if($('ld-cooldown'))$('ld-cooldown').value=(d.cueCooldownMs??10000)/1000;
@@ -375,11 +375,11 @@
   });
   document.addEventListener('visibilitychange',()=>{
     if(document.hidden){if(!standalone&&client.state.role!=='PHONE')client.pause();if(voice.isActive())$('microphone-status').textContent='수음 중에는 휴대폰 화면을 유지해 주세요. 일시 중단되면 입력을 기다렸다가 이어갑니다.';}
-    else{client.pause();client.start();if(voice.isActive())void voice.resume();}
+    else{client.pause();client.start();voice.setFocusActive?.(!!client.state.focus?.active);if(voice.isActive())void voice.resume();}
   });
   window.addEventListener('online',()=>{void voice.reconnect();});
   // Only a fresh document can resume manual capture; bfcache restores the connection alone.
-  window.addEventListener('pagehide',()=>{saveResumeIntent();resumeAllowed=false;resumeAttempt++;voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
+  window.addEventListener('pagehide',()=>{saveResumeIntent();resumeAllowed=false;resumeAttempt++;voice.setFocusActive?.(false);voice.stop();client.dispose();clearTimeout(codeTimer);clearTimeout(lensRestoreTimer);});
   window.addEventListener('pageshow',event=>{if(event.persisted){resumeAllowed=false;client.start();}});
   $('caption-card').focus();client.start();
 })();

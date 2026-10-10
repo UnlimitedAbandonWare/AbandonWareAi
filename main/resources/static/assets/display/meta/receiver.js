@@ -15,7 +15,7 @@
     const clamp=(v,lo,hi,f)=>Number.isFinite(v)?Math.min(hi,Math.max(lo,Math.round(v))):f;
     return {transcriptFontPx:clamp(d.transcriptFontPx,20,36,DISPLAY_DEFAULTS.transcriptFontPx),
       hintFontPx:clamp(d.hintFontPx,20,36,DISPLAY_DEFAULTS.hintFontPx),
-      transcriptMaxLines:clamp(d.transcriptMaxLines,1,8,DISPLAY_DEFAULTS.transcriptMaxLines),
+      transcriptMaxLines:clamp(d.transcriptMaxLines,3,8,DISPLAY_DEFAULTS.transcriptMaxLines),
       hintPageLines:clamp(d.hintPageLines,4,13,DISPLAY_DEFAULTS.hintPageLines),
       transcriptTtlMs:clamp(d.transcriptTtlMs,1000,100000,DISPLAY_DEFAULTS.transcriptTtlMs),
       hintTtlMs:clamp(d.hintTtlMs,1000,100000,DISPLAY_DEFAULTS.hintTtlMs),
@@ -203,6 +203,11 @@
   // ~13 measured rendered lines of the 600px stage. The transcript keeps its
   // newest complete units inside whatever band the current cue page leaves.
   const LENS_LINE_BUDGET=13,MIN_CAPTION_LINES=3;
+  function hintLineBudget(display,height=582,statusHeight=21,padding=28,gap=10){
+    const requested=display.autoVoiceTrigger?.modeEnabled?display.autoVoiceTrigger.hintLines:display.hintPageLines;
+    const available=height-padding-statusHeight-gap*2-MIN_CAPTION_LINES*display.transcriptFontPx*1.25-2;
+    return Math.max(1,Math.min(requested,LENS_LINE_BUDGET,Math.floor(available/(display.hintFontPx*1.25))));
+  }
   function dropOldestUnit(text){
     const raw=String(text||'').trim();
     if(!raw)return '';
@@ -282,12 +287,17 @@
     const transcript=document.getElementById('transcript');
     const status=document.getElementById('status');
     const diagnostic=options.preview===true?()=>{}:(event,data)=>{window.AwxDisplayBoot?.note(event,data);try{console.debug('[lens]'+event,JSON.stringify(data||{}));}catch{}};
-    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),answer:document.getElementById('nova-answer'),receipt:options.preview===true?()=>{}:window.NovaFocus.receiptSender(window),diagnostic}):null;
+    const focus=window.NovaFocus&&document.getElementById('nova-focus')?window.NovaFocus.createProjection({host:window,document,target:'lens',panel:document.getElementById('nova-focus'),status:document.getElementById('nova-status'),draft:document.getElementById('nova-draft'),question:document.getElementById('nova-question'),answer:document.getElementById('nova-answer'),receipt:options.preview===true?()=>{}:window.NovaFocus.receiptSender(window),diagnostic}):null;
     let hintRenderKey='',lastCueText='',hintPages=[],hintPage=0,hintPageTimer=null,lastState=null;
     const cfg=()=>{const d=lastState?.display||DISPLAY_DEFAULTS,a=lastState?.autoVoiceTrigger;return d.autoVoiceTrigger?.modeEnabled&&lastState.hint&&a?{...d,autoVoiceTrigger:{...d.autoVoiceTrigger,hintLines:a.appliedHintLines||d.autoVoiceTrigger.hintLines,hintChars:a.appliedHintChars||d.autoVoiceTrigger.hintChars}}:d;};
+    function hintBand(){
+      const style=stage&&window.getComputedStyle?.(stage);
+      const padding=style?(parseFloat(style.paddingTop)||0)+(parseFloat(style.paddingBottom)||0):28;
+      return hintLineBudget(cfg(),stage?.clientHeight||582,status?.clientHeight||21,padding,parseFloat(style?.rowGap)||10);
+    }
     function paint(){
       const state=lastState||{},c=cfg();
-      if(stage)for(const [k,v] of [['--cap-font',c.transcriptFontPx],['--hint-font',c.hintFontPx],['--cap-lines',c.transcriptMaxLines],['--hint-lines',c.autoVoiceTrigger?.modeEnabled?c.autoVoiceTrigger.hintLines:c.hintPageLines]])stage.style.setProperty(k,v+(k.endsWith('font')?'px':''));
+      if(stage)for(const [k,v] of [['--cap-font',c.transcriptFontPx],['--hint-font',c.hintFontPx],['--cap-lines',c.transcriptMaxLines],['--hint-lines',hintBand()]])stage.style.setProperty(k,v+(k.endsWith('font')?'px':''));
       const focused=focus?.update(state.focus,state.connection==='CONNECTED')===true;
       if(focused){if(hint)hint.hidden=true;if(transcript)transcript.hidden=true;if(status)status.hidden=true;return;}
       if(transcript)transcript.hidden=false;
@@ -327,12 +337,13 @@
       else if(key!==hintRenderKey){
         hintRenderKey=key;lastCueText=cue;
         if(hint){
+          if(stage){stage.style.setProperty('--hint-font',cfg().hintFontPx+'px');stage.style.setProperty('--hint-lines',hintBand());}
           if(cfg().autoVoiceTrigger?.modeEnabled){
-            const lines=state.autoVoiceTrigger?.appliedHintLines||cfg().autoVoiceTrigger.hintLines,chars=state.autoVoiceTrigger?.appliedHintChars||cfg().autoVoiceTrigger.hintChars;
+            const lines=hintBand(),chars=state.autoVoiceTrigger?.appliedHintChars||cfg().autoVoiceTrigger.hintChars;
             if(stage){stage.style.setProperty('--hint-font',cfg().hintFontPx+'px');stage.style.setProperty('--hint-lines',lines);}
             const fitted=fitAtomicHint(hint,cue,lines,chars,cfg().autoVoiceTrigger.language);
             hintPages=fitted?[fitted]:[];diagnostic('atomic_hint_fit',{visible:!!fitted,chars:Array.from(fitted).length});
-          }else{hint.hidden=false;hintPages=splitHintPages(hint,cue,cfg().hintPageLines);}
+          }else{hint.hidden=false;hintPages=splitHintPages(hint,cue,hintBand());}
           hintPage=0;
         }else hintPages=[cue];
         diagnostic('lens_hint_render',{pages:hintPages.length,chars:Array.from(cue).length});
@@ -340,7 +351,7 @@
       }else if(cue!==lastCueText&&!cfg().autoVoiceTrigger?.modeEnabled){
         // Same hint identity with a revised body: re-split but keep the page being read.
         lastCueText=cue;const keep=hintPage;
-        hintPages=hint?splitHintPages(hint,cue,cfg().hintPageLines):[cue];hintPage=Math.min(keep,hintPages.length-1);
+        hintPages=hint?splitHintPages(hint,cue,hintBand()):[cue];hintPage=Math.min(keep,hintPages.length-1);
         schedulePages();
       }
       paint();
@@ -466,5 +477,5 @@
     });
     receiver.start();return receiver;
   }
-  return {createReceiver,createLensReceiver,mount,createClientId,createPresentation,splitHintPages,fitCaption,fitAtomicHint,normDisplay,DISPLAY_DEFAULTS};
+  return {createReceiver,createLensReceiver,mount,createClientId,createPresentation,splitHintPages,fitCaption,fitAtomicHint,hintLineBudget,normDisplay,DISPLAY_DEFAULTS};
 });
