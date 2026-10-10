@@ -10,7 +10,39 @@ class NovaFocusCameraWakeTest {
         return new NovaFocusSettings(true,d.wakeWord(),d.utteranceQuietMs(),d.followupIdleMs(),d.wakeListenTimeoutMs(),d.presentation(),false,false,new NovaFocusSettings.Snapshot(snapshotOn,source,cameraAllowed),d.cameraWakeWord());
     }
     static NovaFocusState state(boolean snapshotOn){return new NovaFocusState("server",settings(snapshotOn,"FOLD_REAR",true));}
+    @Test void promptOnlySaveWithAutoOffPreservesCameraCommandAndReadyImage() throws Exception {
+        for(boolean accepted:new boolean[]{false,true}){
+            var s=state(false);s.input(u("a","데빈 질문"),0);s.tick(1200);
+            var command=s.pendingCommand(1200,1);assertNotNull(command);
+            assertEquals(NovaFocusState.CLAIM_GRANTED,s.claimSnapshot(command.requestId(),command.captureId(),1220));
+            if(accepted)assertEquals(NovaFocusState.SNAPSHOT_ACCEPTED,s.acceptSnapshot(command.requestId(),command.captureId(),"QUJD","image/jpeg",1230));
+            var tree=NovaFocusModelSelectionTest.JSON.valueToTree(settings(false,"FOLD_REAR",true));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)tree).put("answerInstruction","두 문장으로 답한다.");
+            s.configure(NovaFocusModelSelectionTest.JSON.treeToValue(tree,NovaFocusSettings.class),1250);
+            if(!accepted){
+                var pending=s.pendingCommand(1250,1);assertNotNull(pending);assertEquals(command.captureId(),pending.captureId());
+                assertEquals(NovaFocusState.SNAPSHOT_ACCEPTED,s.acceptSnapshot(command.requestId(),command.captureId(),"QUJD","image/jpeg",1260));
+            }
+            var request=s.tick(1300);assertNotNull(request);assertEquals("QUJD",request.imageBase64());assertEquals(command.requestId(),request.requestId());
+        }
+    }
     ConversateQuestionPolicy.Utterance u(String id,String text){return new ConversateQuestionPolicy.Utterance(id,id,0,true,text);}
+    @Test void previewRetainsItsWakeWordUntilActivationEnds() throws Exception {
+        for(boolean camera:new boolean[]{false,true}){
+            var s=state(false);String wake=camera?"데빈":"노바";
+            s.input(new ConversateQuestionPolicy.Utterance("a","a",0,false,wake+" 질문"),0);
+            var activation=s.view(0).activationId();
+            var tree=NovaFocusModelSelectionTest.JSON.valueToTree(settings(false,"FOLD_REAR",true));
+            ((com.fasterxml.jackson.databind.node.ObjectNode)tree).put(camera?"cameraWakeWord":"wakeWord","사진봇");
+            s.configure(NovaFocusModelSelectionTest.JSON.treeToValue(tree,NovaFocusSettings.class),100);
+            assertTrue(s.input(new ConversateQuestionPolicy.Utterance("a","a",1,true,wake+" 질문"),200));
+            assertEquals(activation,s.view(200).activationId());assertEquals("LISTENING",s.view(200).phase());
+            if(camera){s.tick(1400);var command=s.pendingCommand(1400,1);assertNotNull(command);s.failSnapshot(command.requestId(),command.captureId(),"permission_denied",1450);}
+            assertEquals("질문",s.tick(camera?1450:1400).question());
+            s.close("fixture_done");assertFalse(s.input(u("old",wake+" 이전 호출"),2000));
+            assertTrue(s.input(u("new","사진봇 새 질문"),2100));
+        }
+    }
 
     // a) 노바 + 자동 OFF → 촬영 0, THINKING (기존 동작 불변)
     @Test void novaWithAutoOffCapturesNothing(){

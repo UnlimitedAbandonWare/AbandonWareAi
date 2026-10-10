@@ -63,7 +63,7 @@
     async function flush(){
       for(const [key,entry] of receipts){
         if(entry.sending||entry.done||entry.attempts>=2||doc?.hidden||!current||entry.detail.activationId!==current.activationId||entry.detail.turnId!==current.turnId)continue;
-        if(entry.name==='presentation_done'&&![...receipts.values()].some(first=>first.name==='first_visible'&&first.done&&first.detail.turnId===entry.detail.turnId&&first.detail.answerVersion===entry.detail.answerVersion))continue;
+        if(entry.name==='presentation_done'&&[...receipts.values()].some(first=>first.name==='first_visible'&&!first.done&&(first.sending||first.attempts<2)&&first.detail.turnId===entry.detail.turnId&&first.detail.answerVersion===entry.detail.answerVersion))continue;
         entry.sending=true;entry.attempts++;
         try{await options.receipt?.(entry.name,entry.detail);entry.done=true;}catch{}finally{entry.sending=false;}
       }

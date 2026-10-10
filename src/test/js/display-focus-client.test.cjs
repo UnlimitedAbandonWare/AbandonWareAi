@@ -2,6 +2,92 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const {createClient}=require('../../../main/resources/static/assets/display/display-conversate.js');
 const {mount}=require('../../../main/resources/static/assets/display/display-focus-controls.js');
 const flush=()=>new Promise(setImmediate);
+function cameraControlsFixture(auto=false){
+ const elements=new Map(),calls=[],captures=[];let stops=0,failSave=false;
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:'',checked:false,disabled:false,hidden:true,type:'number',textContent:'',append(){},replaceChildren(){},removeAttribute(name){delete this[name];}});return elements.get(id);};
+ let settings={enabled:true,wakeWord:'노바',cameraWakeWord:'데빈',utteranceQuietMs:1200,followupIdleMs:20000,wakeListenTimeoutMs:8000,answerLengthChars:400,presentation:{},snapshot:{enabled:auto,source:'FOLD_REAR',cameraAllowed:true}};
+ const host={NovaFocus:{createProjection:()=>({update(){},visibility(){},isActive:()=>false,dispose(){}}),receiptSender:()=>()=>{}},DisplaySnapshot:{createSnapshotter:()=>({captureOnce:()=>new Promise((resolve,reject)=>{resolve.reject=reject;captures.push(resolve);}),stop(){stops++;}})}};
+ const controls=mount({host,document:{getElementById:element,createElement:()=>({append(){}}),addEventListener(){},removeEventListener(){}},client:{focusRequest:async(route,body)=>{calls.push({route,body});if(route==='snapshot/claim')return {claimed:true,granted:true};if(route==='settings'){if(failSave)throw Error('synthetic_settings_failed');settings={...settings,...body.settings};}return {settingsVersion:1,settings};}}});
+ const state={assistId:'camera-fixture',epoch:1,ready:true,connection:'READY',focusProducer:true};
+ const command=(trigger='camera_wake',id='capture-a')=>({...state,focusControl:{kind:'snapshot',trigger,source:'FOLD_REAR',requestId:'request-'+id,captureId:id,expiresInMs:12000,claimed:false}});
+ return {controls,element,calls,captures,command,get stops(){return stops;},set failSave(value){failSave=value;},async ready(){controls.update(state);await flush();},save:()=>element('nova-settings-form').onsubmit({preventDefault(){}})};
+}
+test('camera wake after saving auto OFF captures and uploads exactly once',async()=>{
+ const f=cameraControlsFixture(true);try{await f.ready();f.element('nf-snapshot-enabled').checked=false;await f.save();
+  f.controls.update(f.command());await flush();assert.equal(f.captures.length,1);
+  f.captures[0]({ok:true,base64:'QUJD',mimeType:'image/jpeg'});await flush();
+  assert.equal(f.calls.filter(x=>x.route==='snapshot/claim').length,1);assert.equal(f.calls.filter(x=>x.route==='snapshot/result'&&x.body.imageBase64==='QUJD').length,1);
+ }finally{f.controls.dispose();}
+});
+test('prompt-only save with auto OFF preserves pending camera capture and its IDs',async()=>{
+ const f=cameraControlsFixture();try{await f.ready();f.controls.update(f.command());await flush();assert.equal(f.captures.length,1);
+  const stops=f.stops;f.element('nf-answer-instruction').value='두 문장으로 답한다.';await f.save();assert.equal(f.stops,stops);
+  f.captures[0]({ok:true,base64:'QUJD',mimeType:'image/jpeg'});await flush();
+  const upload=f.calls.find(x=>x.route==='snapshot/result');assert.ok(upload);assert.equal(upload.body.captureId,'capture-a');assert.equal(upload.body.requestId,'request-capture-a');
+ }finally{f.controls.dispose();}
+});
+test('auto ON to OFF and camera permission OFF still cancel pending capture',async()=>{
+ for(const wholeCamera of [false,true]){const f=cameraControlsFixture(true);try{await f.ready();f.controls.update(f.command(wholeCamera?'camera_wake':'auto'));await flush();
+  if(wholeCamera)f.element('nf-camera-allowed').checked=false;else f.element('nf-snapshot-enabled').checked=false;
+  await f.save();f.captures[0]({ok:true,base64:'QUJD',mimeType:'image/jpeg'});await flush();assert.equal(f.calls.filter(x=>x.route==='snapshot/result').length,0);
+ }finally{f.controls.dispose();}}
+});
+test('test-shot late result never restores preview after close, scope loss, camera OFF or dispose',async()=>{
+ for(const action of ['close','scope','off','dispose']){const f=cameraControlsFixture();try{await f.ready();
+  const shot=f.element('nf-snapshot-test').onclick();assert.equal(f.captures.length,1);
+  if(action==='close')await f.controls.close();
+  if(action==='scope')f.controls.update({assistId:'other',epoch:2,ready:true,connection:'READY',focusProducer:false});
+  if(action==='off'){f.element('nf-camera-allowed').checked=false;await f.save();}
+  if(action==='dispose')f.controls.dispose();
+  f.captures[0]({ok:true,base64:'QUJD',mimeType:'image/jpeg',width:640,height:480});await shot;
+  assert.equal(f.element('nf-snapshot-preview').hidden,true);assert.equal(f.element('nf-snapshot-preview').src,undefined);
+  assert.equal(f.calls.filter(x=>x.route==='snapshot/claim'||x.route==='snapshot/result').length,0);
+ }finally{f.controls.dispose();}}
+});
+test('cancelled capture A late resolve or reject cannot stop or clear active capture B',async()=>{
+ for(const reject of [false,true]){const f=cameraControlsFixture();try{await f.ready();f.controls.update(f.command());await flush();
+  await f.controls.close();f.controls.update(f.command('camera_wake','capture-b'));await flush();assert.equal(f.captures.length,2);
+  const stops=f.stops,status=f.element('nova-snapshot-status').textContent;
+  if(reject)f.captures[0].reject(Error('late_failure'));else f.captures[0]({ok:true,base64:'OLD',mimeType:'image/jpeg'});
+  await flush();assert.equal(f.stops,stops);assert.equal(f.element('nova-snapshot-status').textContent,status);
+  f.captures[1]({ok:true,base64:'NEW',mimeType:'image/jpeg'});await flush();
+  assert.deepEqual(f.calls.filter(x=>x.route==='snapshot/result').map(x=>x.body.imageBase64),['NEW']);
+ }finally{f.controls.dispose();}}
+});
+test('source change with auto OFF cancels the owned pending camera immediately',async()=>{
+ const f=cameraControlsFixture();try{await f.ready();f.controls.update(f.command());await flush();const stops=f.stops;
+  f.element('nf-snapshot-source').value='META_GLASSES';await f.save();assert.equal(f.stops,stops+1);
+  f.captures[0]({ok:true,base64:'QUJD',mimeType:'image/jpeg'});await flush();assert.equal(f.calls.filter(x=>x.route==='snapshot/result').length,0);
+ }finally{f.controls.dispose();}
+});
+test('whole camera OFF remains locally blocked when settings save fails',async()=>{
+ const f=cameraControlsFixture();try{await f.ready();f.element('nf-camera-allowed').checked=false;f.failSave=true;await f.save();
+  f.controls.update(f.command());await flush();assert.equal(f.captures.length,0);assert.equal(f.calls.filter(x=>x.route==='snapshot/claim').length,0);
+  await f.element('nf-snapshot-test').onclick();assert.equal(f.captures.length,0);
+ }finally{f.controls.dispose();}
+});
+test('server closure and owned scope replacement fence old callbacks before the next capture',async()=>{
+ for(const boundary of ['server-close','scope'])for(const reject of [false,true]){const f=cameraControlsFixture();try{
+  await f.ready();f.controls.update({...f.command(),focus:{active:true}});await flush();
+  let b=f.command('camera_wake','capture-b');
+  if(boundary==='server-close')f.controls.update({...f.command(),focusControl:null,focus:{active:false}});
+  else b={...b,assistId:'new-owner-scope',epoch:2};
+  f.controls.update({...b,focus:{active:true}});await flush();assert.equal(f.captures.length,2);
+  const stops=f.stops,status=f.element('nova-snapshot-status').textContent;
+  if(reject)f.captures[0].reject(Error('late_failure'));else f.captures[0]({ok:true,base64:'OLD',mimeType:'image/jpeg'});
+  await flush();assert.equal(f.stops,stops);assert.equal(f.element('nova-snapshot-status').textContent,status);
+  f.captures[1]({ok:true,base64:'NEW',mimeType:'image/jpeg'});await flush();assert.deepEqual(f.calls.filter(x=>x.route==='snapshot/result').map(x=>x.body.imageBase64),['NEW']);
+ }finally{f.controls.dispose();}}
+});
+test('camera OFF intent cancels capture before unrelated form validation fails',async()=>{
+ for(const wholeCamera of [false,true]){const f=cameraControlsFixture(true);try{
+  await f.ready();f.controls.update(f.command(wholeCamera?'camera_wake':'auto'));await flush();const stops=f.stops;
+  if(wholeCamera)f.element('nf-camera-allowed').checked=false;else f.element('nf-snapshot-enabled').checked=false;
+  f.element('nf-answer-length').value='invalid';await f.save();assert.ok(f.stops>stops);
+  f.captures[0]({ok:true,base64:'OLD',mimeType:'image/jpeg'});await flush();
+  assert.equal(f.calls.filter(x=>x.route==='settings'||x.route==='snapshot/result').length,0);
+ }finally{f.controls.dispose();}}
+});
 test('Fold projection retains same-scope reconnect but clears old content on assist or epoch replacement',()=>{
  const elements=new Map(),timers=new Map();let id=0;
  const doc={hidden:false,getElementById:name=>name==='nova-fold-answer'?null:element(name),addEventListener(){},removeEventListener(){}};

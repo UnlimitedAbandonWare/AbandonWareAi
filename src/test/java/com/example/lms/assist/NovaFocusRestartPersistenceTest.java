@@ -78,6 +78,41 @@ class NovaFocusRestartPersistenceTest {
             assertEquals(1L,third.history().settings(focusOwner,channel).settingsVersion());
         }
     }
+    @Test void cameraWakeAndCustomInstructionSurviveReopenAndFreshFocusAttach() throws Exception {
+        var mapper=new ObjectMapper();String owner="camera-profile-owner",channel="camera-profile-channel";
+        for(boolean cameraAllowed:List.of(false,true)){
+            String url="jdbc:h2:file:"+temporary.resolve("camera-"+cameraAllowed).toAbsolutePath().toString().replace('\\','/')+";MODE=MariaDB;DATABASE_TO_UPPER=false";
+            NovaFocusSettings chosen;
+            try(var first=open(url)){
+                var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(NovaFocusSettings.defaults());
+                node.put("cameraWakeWord","사진봇");node.put("answerInstruction","지시 A: 짧은 존댓말로 답한다.");node.put("answerPreset","CUSTOM");
+                ((com.fasterxml.jackson.databind.node.ObjectNode)node.path("snapshot")).put("cameraAllowed",cameraAllowed);
+                chosen=mapper.treeToValue(node,NovaFocusSettings.class);
+                var saved=first.history().settings(owner,channel,0,chosen);
+                chosen=saved.settings(); // The persistence boundary resolves optional defaults before storage.
+                assertEquals(1,saved.settingsVersion());assertEquals(chosen,first.history().settings(owner,channel).settings());
+                assertThrows(IllegalArgumentException.class,()->first.history().settings(owner,channel,0,saved.settings()));
+            }
+            try(var reopened=open(url);var service=new NovaFocusService(reopened.history(),mock(org.springframework.beans.factory.ObjectProvider.class),mock(com.example.lms.api.PublicChatAdmissionGuard.class))){
+                service.attach(owner,channel,"fresh-camera-assist",1);
+                var profile=service.settings(owner,"fresh-camera-assist",1);
+                assertEquals(1,profile.settingsVersion());assertEquals(chosen,profile.settings());
+                assertEquals("사진봇",profile.settings().cameraWakeWordOrDefault());
+                assertEquals("지시 A: 짧은 존댓말로 답한다.",profile.settings().effectiveAnswerInstruction());
+                assertEquals(NovaFocusSettings.AnswerPreset.CUSTOM,profile.settings().effectiveAnswerPreset());
+                assertEquals(cameraAllowed,profile.settings().snapshot().cameraAllowed());
+                for(String[] other:List.of(new String[]{"other-camera-owner",channel},new String[]{owner,"other-camera-channel"})){
+                    service.attach(other[0],other[1],other[0]+other[1],1);
+                    var defaults=service.settings(other[0],other[0]+other[1],1);
+                    assertEquals(0,defaults.settingsVersion());
+                    assertEquals(NovaFocusSettings.defaults().cameraWakeWordOrDefault(),defaults.settings().cameraWakeWordOrDefault());
+                    assertEquals("",defaults.settings().effectiveAnswerInstruction());
+                    assertEquals(NovaFocusSettings.AnswerPreset.GENERAL,defaults.settings().effectiveAnswerPreset());
+                    assertEquals(NovaFocusSettings.defaults().snapshot(),defaults.settings().snapshot());
+                }
+            }
+        }
+    }
     @Test void completedHistorySettingsAndRequestIdentitySurviveDatabaseReopen(){
         String url="jdbc:h2:file:"+temporary.resolve("nova").toAbsolutePath().toString().replace('\\','/')+";MODE=MariaDB;DATABASE_TO_UPPER=false";
         String owner="synthetic-owner";Long room;String turn;

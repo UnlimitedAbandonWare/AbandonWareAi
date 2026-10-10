@@ -111,4 +111,19 @@ class Ready(unittest.TestCase):
         self.assertEqual(s.parse_since('30m', NOW), NOW - dt.timedelta(minutes=30))
         self.assertEqual(s._kst_from_iso('2026-10-09T09:41:06.0514421Z').strftime('%H:%M:%S'), '18:41:06')  # .NET 7-digit fraction
 
+    def test_recent_conflict_loop_warns_without_blocking_ready(self):
+        ts = dt.datetime(2026, 10, 9, 20, 25, 0, tzinfo=KST).astimezone(dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.000Z')
+        cl = json.dumps({'ts': ts, 'fingerprint': 'display_conflict_loop',
+                         'data': {'event': 'display_conflict_loop', 'path': '/api/assist/display/ack',
+                                  'reason': 'invalid_caption_ack', 'count': 12}})
+        out, code = self.gate([ev(20, 26), cl])
+        self.assertEqual((out['verdict'], code), ('READY', 0)); self.assertNotIn('DISPLAY_CONFLICT_LOOP', out['reasons'])
+        self.assertIn('DISPLAY_CONFLICT_LOOP', out['warnings']); self.assertEqual(out['conflictLoops']['recent'], 1)
+        self.assertEqual(out['conflictLoops']['last']['path'], '/api/assist/display/ack')
+        stale = cl.replace('2026-10-09T11:25:00.000Z', '2026-10-09T11:05:00.000Z')
+        out2, _ = self.gate([ev(20, 26), stale])
+        self.assertEqual(out2['conflictLoops']['recent'], 0); self.assertNotIn('DISPLAY_CONFLICT_LOOP', out2.get('warnings') or [])
+        bad = ['display_conflict_loop {bad', '{"ts":null,"message":"display_conflict_loop x"}', 'unrelated line']
+        self.assertEqual(s.conflict_loop_proof(self.root, NOW - dt.timedelta(minutes=10), lines=bad), {'present': True, 'recent': 0})
+
 if __name__ == '__main__': unittest.main()

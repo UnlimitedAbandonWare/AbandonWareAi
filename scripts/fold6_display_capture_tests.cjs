@@ -31,6 +31,51 @@ function captureFixture(overrides={}){
   const c=createCapture({client,env,continuous:true,now:()=>time,setTimer(fn,ms){timers.set(++next,{fn,ms});return next;},clearTimer(id){timers.delete(id);}});
   return{c,client,timers,track,chunks,media,contexts,get starts(){return starts;},get stops(){return stops;},get trackStops(){return trackStops;},frame(value=0){const pcm=new Int16Array(3840);pcm.fill(value);node.port.onmessage({data:{pcm:pcm.buffer}});},advance(ms){time+=ms;},async run(ms){const entry=[...timers].find(([,t])=>t.ms===ms);assert.ok(entry,'timer '+ms);timers.delete(entry[0]);await entry[1].fn();await flush();}};
 }
+for(const reason of ['assist_not_found','stale_epoch','network unavailable'])for(const successor of [false,true])test('cancelled initial capture ignores late '+reason+' failure'+(successor?' after a new start':''),async()=>{
+  const f=captureFixture();let rejectBegin,attempts=0,reconnects=0;
+  f.client.beginVoice=()=>++attempts===1?new Promise((_,reject)=>{rejectBegin=reject;}):Promise.resolve();
+  f.client.reconnect=async()=>{reconnects++;};
+  const starting=f.c.start();await flush();assert.equal(attempts,1);
+  await f.c.stop();assert.equal(f.c.state.phase,'OFF');assert.equal(f.c.isActive(),false);assert.equal(f.trackStops,1);
+  if(successor)assert.equal(await f.c.start(),true);
+  const before=structuredClone(f.c.state);
+  rejectBegin(Object.assign(Error(reason),{status:reason==='assist_not_found'?404:reason==='stale_epoch'?409:0}));
+  assert.equal(await starting,false);
+  assert.equal(reconnects,0,'a cancelled attempt must not reclaim the server session');
+  assert.deepEqual(f.c.state,before,'a late failure must not overwrite OFF or the successor');
+  assert.equal(f.c.isActive(),successor);assert.equal(f.stops,1);
+  if(successor)await f.c.stop();
+});
+
+test('cancelled initial capture ignores a late rebind failure',async()=>{
+  const f=captureFixture();let rejectRebind;
+  f.client.beginVoice=async()=>{throw Error('assist_not_found');};
+  f.client.reconnect=()=>new Promise((_,reject)=>{rejectRebind=reject;});
+  const starting=f.c.start();await flush();assert.equal(typeof rejectRebind,'function');
+  await f.c.stop();const before=structuredClone(f.c.state);
+  rejectRebind(Error('event_owner_required'));assert.equal(await starting,false);
+  assert.deepEqual(f.c.state,before);assert.equal(f.c.isActive(),false);assert.equal(f.stops,1);
+});
+
+for(const successor of [false,true])test('cancelled initial capture ignores late success'+(successor?' after a new start':''),async()=>{
+  const f=captureFixture();let resolveBegin,attempts=0;
+  f.client.beginVoice=()=>++attempts===1?new Promise(resolve=>{resolveBegin=resolve;}):Promise.resolve();
+  const starting=f.c.start();await flush();await f.c.stop();
+  if(successor)assert.equal(await f.c.start(),true);
+  const before=structuredClone(f.c.state);resolveBegin();assert.equal(await starting,false);
+  assert.deepEqual(f.c.state,before);assert.equal(f.c.isActive(),successor);assert.equal(f.stops,1);
+  if(successor)await f.c.stop();
+});
+
+test('current initial capture still exposes producer denial without reconnecting',async()=>{
+  const f=captureFixture();let reconnects=0;
+  f.client.beginVoice=async()=>{throw Object.assign(Error('event_owner_required'),{status:403});};
+  f.client.reconnect=async()=>{reconnects++;};
+  assert.equal(await f.c.start(),false);assert.equal(f.c.state.phase,'ERROR');
+  assert.equal(f.c.state.errorCode,'event_owner_required');assert.equal(f.c.isActive(),false);
+  assert.equal(reconnects,0);assert.equal(f.trackStops,1);
+});
+
 test('continuous capture uses only paired phone; silence is distinct from missing frames',async()=>{
   const f=captureFixture();f.client.state.role='DISPLAY';assert.equal(await f.c.start(),false);assert.equal(f.starts,0);
   f.client.state.role='PHONE';assert.equal(await f.c.start(),true);f.frame();await flush();assert.equal(f.c.state.level,0);assert.equal(f.c.state.frames,1);assert.equal(f.c.state.bytes,7680);

@@ -121,3 +121,41 @@ test('explicit replay keeps final answer metadata compatible with subsequent pol
  f.flow.replay();assert.equal(f.flow.accept(s),true);f.run(1000);
  assert.equal(f.flow.state().lines.join(''),'다시 보기');assert.equal(f.flow.state().done,true);
 });
+test('fold keeps a completed answer through its hold and fade window when the snapshot answer clears',()=>{
+ const f=fixture();f.flow.accept(snapshot('유지되는 답변'));f.run(2000);
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+ f.flow.accept(snapshot('',{stateVersion:2,phase:'LISTENING'}));f.run(1000);
+ assert.equal(f.flow.state().lines.join(''),'유지되는 답변');
+ assert.equal(f.events.filter(e=>e.name==='presentation_done').length,1);
+ f.run(6000);assert.equal(f.paints.at(-1).opacity,0);
+ f.flow.accept(snapshot('',{stateVersion:3,phase:'LISTENING'}));
+ assert.equal(f.flow.state().lines.join(''),'');
+});
+test('fold honors the saved 3000ms tailHold window before a vacated snapshot may clear',()=>{
+ const f=fixture();f.flow.accept(snapshot('삼초 유지',{presentation:{tailHoldMs:3000}}));f.run(2000);
+ f.flow.accept(snapshot('',{stateVersion:2,phase:'LISTENING'}));f.run(1500);
+ assert.equal(f.flow.state().lines.join(''),'삼초 유지');
+ f.run(2500);assert.equal(f.paints.at(-1).opacity,0);
+ f.flow.accept(snapshot('',{stateVersion:3,phase:'LISTENING'}));
+ assert.equal(f.flow.state().lines.join(''),'');
+});
+test('fold without auto fade keeps the completed answer until the next answer',()=>{
+ const f=fixture();f.flow.accept(snapshot('유지 답변',{presentation:{autoFadeEnabled:false}}));f.run(2000);
+ assert.equal(f.flow.state().done,true);assert.equal(f.paints.at(-1).opacity,1);
+ f.flow.accept(snapshot('',{stateVersion:2,phase:'LISTENING'}));f.step(400);
+ assert.equal(f.flow.state().lines.join(''),'유지 답변');
+ f.flow.accept(snapshot('다음 답변',{turnId:'next',answerVersion:2,stateVersion:3}));f.run(1000);
+ assert.equal(f.flow.state().lines.join(''),'다음 답변');
+});
+test('fold explicit close inside the hold window still clears immediately',()=>{
+ const f=fixture();f.flow.accept(snapshot('즉시 종료'));f.run(2000);
+ f.flow.accept(snapshot('',{stateVersion:2,phase:'LISTENING'}));f.step(200);
+ assert.equal(f.flow.state().lines.join(''),'즉시 종료');
+ f.flow.accept(null);assert.equal(f.flow.state().lines.join(''),'');
+});
+test('a vacated snapshot mid-presentation still resets immediately',()=>{
+ const f=fixture();f.flow.accept(snapshot('가'.repeat(80)));f.run(500);
+ assert.equal(f.flow.state().done,false);assert.ok(f.flow.state().index>0);
+ f.flow.accept(snapshot('',{stateVersion:2,phase:'LISTENING'}));
+ assert.equal(f.flow.state().lines.join(''),'');
+});

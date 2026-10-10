@@ -32,8 +32,8 @@ if not "%AWX_STOP_EXIT%"=="0" (
   if exist "%~dp0scripts\bat_run_hook.cmd" call "%~dp0scripts\bat_run_hook.cmd" end "%~nx0" %AWX_STOP_EXIT%
   exit /b %AWX_STOP_EXIT%
 )
-echo [INFO] Waiting for ports to release...
-timeout /t 3 /nobreak >nul
+echo [INFO] Checking port 18180 release (fast check, exits early when free)...
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$d=(Get-Date).AddSeconds(5); do { $l=@(Get-NetTCPConnection -State Listen -LocalPort 18180 -ErrorAction SilentlyContinue); if ($l.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 200 } while ((Get-Date) -lt $d); Write-Host ('PORT_IN_USE port=18180 byPid=' + [int]$l[0].OwningProcess); exit 0"
 echo [INFO] Starting RAG stack clean (backend + DevWatch + ForceRestart, no browser)...
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_rag_stack.ps1" -MetaDisplay -ForceRestart -DevWatch %AWX_ARGS%
 set "AWX_START_EXIT=%ERRORLEVEL%"

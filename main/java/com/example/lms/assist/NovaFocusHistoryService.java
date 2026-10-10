@@ -176,6 +176,10 @@ public class NovaFocusHistoryService {
                     value.answerPreset()==null?stored.answerPreset():value.answerPreset(),
                     value.cameraWakeWord()==null?stored.cameraWakeWord():value.cameraWakeWord());
             }
+            // Validate new saves with the actual matcher after legacy-field merge;
+            // decoding existing profiles retains its compatibility contract.
+            var sameWake=NovaWakeMatcher.find(merged.wakeWord(),merged.cameraWakeWordOrDefault());
+            if(sameWake.isPresent()&&sameWake.get().start()==0&&sameWake.get().end()==merged.wakeWord().length())throw new IllegalArgumentException("invalid_nova_settings");
             try{p.setSettingsJson(mapper.writeValueAsString(merged));}catch(Exception e){throw new IllegalArgumentException("invalid_nova_settings");}
             p.setSettingsVersion(expected+1);return new Settings(p.getSettingsVersion(),merged);});
     }

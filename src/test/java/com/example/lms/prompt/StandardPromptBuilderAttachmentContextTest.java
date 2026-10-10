@@ -14,6 +14,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StandardPromptBuilderAttachmentContextTest {
+    @Test void focusImageAndOcrStayDataOnlyWithoutChangingOrdinaryChat(){
+        var focus=PromptContext.builder().focusAnswerLengthChars(400).focusAnswerInstruction("두 문장으로 답한다.").build();
+        String instructions=new StandardPromptBuilder().buildInstructions(focus);
+        assertTrue(instructions.contains("DATA_ONLY"));
+        assertTrue(instructions.contains("OCR"));
+        assertTrue(instructions.contains("두 문장으로 답한다."));
+        assertFalse(new StandardPromptBuilder().buildInstructions(PromptContext.builder().build()).contains("사진·OCR"));
+    }
     @Test void rendersFilenameRoleRevisionAndOriginalLocatorBesideLocalBody() {
         var doc=Document.from("Alpha original body",new Metadata(Map.of(
             "source","attachment","sourceId","attachment:33333333-3333-3333-3333-333333333333","sourceRevision",2L,

@@ -72,10 +72,69 @@ function Stop-VerifiedProcessForce {
     try { Stop-Process -Id $ProcessId -Force -ErrorAction Stop; return $true } catch { return $false }
 }
 
+function Stop-StopOrphanTargets {
+    # Reaps processes that fell out of the launcher tree: java/javaw carrying
+    # this run's runId or a RagRoot-scoped command line matching the current
+    # meta-display scope, plus live listeners on the target ports. The opposite
+    # wear/dev role, foreign-named non-owners, self and system pids stay safe.
+    param(
+        [int[]]$Ports,
+        [string]$RunId,
+        [switch]$PortOwnersOnly
+    )
+    $stopped = 0; $skipped = 0
+    $candidates = @{}
+    $allowed = @('java.exe', 'java', 'javaw.exe', 'javaw')
+    if (-not $PortOwnersOnly) {
+        $prefix = $script:RagRoot.TrimEnd('\').Replace('/', '\') + '\'
+        foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+            if ($allowed -notcontains ([string]$process.Name).ToLowerInvariant()) { continue }
+            $procId = [int]$process.ProcessId
+            if ($procId -le 4 -or $procId -eq $PID) { continue }
+            $command = [string]$process.CommandLine
+            if ([string]::IsNullOrWhiteSpace($command)) { continue }
+            if (-not [string]::IsNullOrWhiteSpace($RunId) -and
+                $command.IndexOf($RunId, [StringComparison]::Ordinal) -ge 0) {
+                $candidates[$procId] = 'runid'
+                continue
+            }
+            $normalized = $command.Replace('/', '\')
+            if ($normalized.IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+            # Runtime markers only: a tooling JVM (IDE language server, etc.)
+            # that merely references the workspace path must not be reaped.
+            if ($normalized -notmatch '(?i)(com\.example\.lms|org\.gradle|gradleworker|server\.port|spring\.profiles)') { continue }
+            $isMeta = $normalized.IndexOf('meta-display', [StringComparison]::OrdinalIgnoreCase) -ge 0
+            if ($isMeta -ne [bool]$script:StopMetaDisplay) { continue }
+            $candidates[$procId] = 'ragroot-scope'
+        }
+    }
+    $positivePorts = @($Ports | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+    if ($positivePorts.Count -gt 0) {
+        foreach ($conn in @(Get-NetTCPConnection -State Listen -LocalPort $positivePorts -ErrorAction SilentlyContinue)) {
+            $ownerPid = [int]$conn.OwningProcess
+            if ($ownerPid -le 4 -or $ownerPid -eq $PID -or $candidates.ContainsKey($ownerPid)) { continue }
+            $candidates[$ownerPid] = 'port-owner'
+        }
+    }
+    foreach ($procId in @($candidates.Keys)) {
+        $identity = Get-AwxProcessIdentity -ProcessId $procId
+        if ($null -eq $identity) { continue }
+        $role = Get-RagProcessRole -ProcessId $procId
+        if (($role -eq 'wear') -ne [bool]$script:StopWear) { $skipped++; continue }
+        Write-RagStage 'SPRING' 'STOP' "pid=$procId via=$($candidates[$procId]) orphan-reap"
+        try { Stop-Process -Id $procId -Force -ErrorAction Stop } catch { $skipped++; continue }
+        Start-Sleep -Milliseconds 150
+        if (Test-StopProcessAlive -ProcessId $procId -CreationDate ([string]$identity.creationDate)) { $skipped++ } else { $stopped++ }
+    }
+    return [pscustomobject]@{ stopped = $stopped; skipped = $skipped }
+}
+
 function Stop-OwnedTreeFallback {
     # Bounded force-stop for survivors after a partial graceful exit, when the
-    # full manifest re-validation can no longer pass. Kills only manifest pids
-    # and java/javaw descendants carrying this run's runId token.
+    # full manifest re-validation can no longer pass. Kills manifest pids and
+    # java/javaw descendants carrying this run's runId token, tree-kills the
+    # verified manifest roots, then sweeps detached orphans (runId-bearing or
+    # RagRoot-scoped JVMs, plus live target-port owners).
     param(
         [object]$Manifest,
         [int]$LauncherPid,
@@ -104,6 +163,19 @@ function Stop-OwnedTreeFallback {
         if (-not $killable) { $skipped++; continue }
         if (Stop-VerifiedProcessForce -ProcessId $procId -CreationDate ([string]$row.creationDate)) { $stopped++ }
     }
+    # Verified manifest roots get a kernel-side tree kill so children that
+    # detached mid-stop are reaped with their parent.
+    foreach ($manifestPid in @($manifestIds.Keys)) {
+        if ($null -ne (Get-Process -Id ([int]$manifestPid) -ErrorAction SilentlyContinue)) {
+            & cmd.exe /c "taskkill /F /T /PID $([int]$manifestPid) >nul 2>&1"
+            if ($LASTEXITCODE -eq 0) { $stopped++ }
+        }
+    }
+    # Orphan sweep: detached demo-1 JVMs and live target-port owners that the
+    # launcher-tree walk can no longer reach.
+    $sweep = Stop-StopOrphanTargets -Ports $Ports -RunId $runId
+    $stopped += [int]$sweep.stopped
+    $skipped += [int]$sweep.skipped
     $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
     do {
         $remaining = @($rows | Where-Object { Test-StopProcessAlive -ProcessId ([int]$_.processId) -CreationDate ([string]$_.creationDate) }).Count
@@ -111,6 +183,12 @@ function Stop-OwnedTreeFallback {
         Start-Sleep -Milliseconds 150
     } while ((Get-Date) -lt $deadline)
     $portsFree = Wait-AwxPortsReleased -Ports $Ports -TimeoutSeconds ([Math]::Min(10, $TimeoutSeconds))
+    if (-not $portsFree) {
+        # Residual port owners get one bounded hard-stop (<=5s), then exit.
+        $residual = Stop-StopOrphanTargets -Ports $Ports -RunId $runId -PortOwnersOnly
+        $stopped += [int]$residual.stopped
+        $portsFree = Wait-AwxPortsReleased -Ports $Ports -TimeoutSeconds 5
+    }
     return [pscustomobject]@{ stopped = $stopped; skipped = $skipped; remaining = $remaining; portsFree = $portsFree }
 }
 

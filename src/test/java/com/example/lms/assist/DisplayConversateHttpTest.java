@@ -413,6 +413,40 @@ class DisplayConversateHttpTest {
             assertEquals(403,c.post("audio/stop",old).statusCode());assertEquals("READY",JSON.readTree(c.post("poll",resume).body()).path("audioState").asText());assertEquals(200,c.post("audio/stop",resume).statusCode());
         }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
     }
+    @Test void repeatedSameOwnerConflictsEmitOneBoundedConflictLoopDiagnostic() throws Exception {
+        var c=new Client("test-cc00112233445566");var s=c.bootstrap();var b=c.connection(s.path("assistId").asText(),s.path("epoch").asLong());
+        var chunk=new HashMap<>(b);chunk.put("sequence",0);chunk.put("pcm",Base64.getEncoder().encodeToString(new byte[640]));
+        for(int i=0;i<10;i++)assertEquals(409,c.post("audio/chunk",chunk).statusCode());
+        var events=context.getBean(com.example.lms.debug.DebugEventStore.class);
+        String loopFp=com.example.lms.trace.SafeRedactor.hashValue("display_conflict_loop");
+        java.util.function.Predicate<com.example.lms.debug.DebugEvent> mine=e->loopFp.equals(e.fingerprint());
+        assertEquals(0,events.list(200).stream().filter(mine).count(),"10 conflicts stay under the threshold");
+        var last=c.post("audio/chunk",chunk);assertEquals(409,last.statusCode());
+        var loops=events.list(200).stream().filter(mine).toList();
+        assertEquals(1,loops.size(),"eleventh conflict emits exactly one loop diagnostic");
+        var event=loops.get(0);assertTrue(event.message().startsWith("display_conflict_loop"));
+        var data=event.data();assertEquals("capture_not_active",data.get("reason"));
+        assertEquals(com.example.lms.trace.SafeRedactor.hash12("/api/assist/display/audio/chunk"),((Map)data.get("path")).get("hash12"));
+        assertTrue(((Number)data.get("count")).intValue()>10);
+        for(int i=0;i<5;i++)assertEquals(409,c.post("audio/chunk",chunk).statusCode());
+        assertEquals(1,events.list(200).stream().filter(mine).count(),"further conflicts inside the minute never re-emit");
+    }
+    @Test void staleProducerAckIsFencedButDoesNotDisturbNewProducer() throws Exception {
+        var controller=context.getBean(DisplayConversateController.class);org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
+        try{
+            var c=new Client("test-dd22334455667788");var hello=c.connection(null,0);hello.put("activate",true);var first=JSON.readTree(c.post("phone-test",hello).body());
+            var old=c.connection(first.path("assistId").asText(),first.path("epoch").asLong());
+            var staleAck=new HashMap<>(old);staleAck.put("version",1);staleAck.put("phase","caption_rendered");
+            String fresh=UUID.randomUUID().toString().replace("-","");hello.put("clientId",fresh);var second=JSON.readTree(c.post("phone-test",hello).body());
+            assertEquals(first.path("assistId"),second.path("assistId"));assertTrue(second.path("epoch").asLong()>first.path("epoch").asLong());
+            assertEquals(409,c.post("ack",staleAck).statusCode());
+            var resume=c.connection(second.path("assistId").asText(),second.path("epoch").asLong());resume.put("clientId",fresh);resume.put("continuation",true);
+            var started=c.post("audio/start",resume);assertEquals(200,started.statusCode(),started.body());
+            resume.remove("continuation");resume.put("epoch",JSON.readTree(started.body()).path("epoch").asLong());
+            assertEquals(409,c.post("ack",staleAck).statusCode());
+            assertEquals("READY",JSON.readTree(c.post("poll",resume).body()).path("audioState").asText());assertEquals(200,c.post("audio/stop",resume).statusCode());
+        }finally{org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",false);}
+    }
     @Test void lensDisplaySettingsRoundTripEchoesAppliedValuesAndRejectsOutOfRange() throws Exception {
         var controller=context.getBean(DisplayConversateController.class);org.springframework.test.util.ReflectionTestUtils.setField(controller,"phoneTestEnabled",true);
         try{
@@ -543,6 +577,7 @@ class DisplayConversateHttpTest {
                 public java.util.concurrent.CompletableFuture<Void> finish(){events.accept(json.createObjectNode().put("type","transcript").put("utteranceId","synthetic-finish").put("revision",1).put("final",true).put("text","마지막 말"));return java.util.concurrent.CompletableFuture.completedFuture(null);}
                 public java.util.concurrent.CompletableFuture<Void> close(){closed=true;return java.util.concurrent.CompletableFuture.completedFuture(null);}public boolean alive(){return !closed;}};});}
         @Bean ClientOwnerKeyResolver owners(jakarta.servlet.http.HttpServletRequest request){return new ClientOwnerKeyResolver(request);}
+        @Bean com.example.lms.debug.DebugEventStore debugEventStore(){return new com.example.lms.debug.DebugEventStore();}
         @Bean ChatService sharedRag(){var chat=mock(ChatService.class);when(chat.continueChat(any(),any())).thenAnswer(call->{ChatRequestDto request=call.getArgument(0);assertFalse(request.getUseRag());assertNull(request.getSessionId());assertEquals("ephemeral",request.getMemoryMode());calls.incrementAndGet();return ChatResult.of("짧은 공개 답변","local",false);});return chat;}
         @Bean @Order(2) SecurityFilterChain authenticated(HttpSecurity http)throws Exception{return http.authorizeHttpRequests(a->a.anyRequest().authenticated()).exceptionHandling(e->e.authenticationEntryPoint((q,r,x)->r.setStatus(401))).build();}
     }

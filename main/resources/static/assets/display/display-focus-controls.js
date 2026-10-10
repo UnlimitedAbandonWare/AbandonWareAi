@@ -23,7 +23,7 @@
     let loaded='',loading=false,stored=null,settingsBusy=false,settingsEdits=0,cursor=null,historyBusy=false,pendingInput=null;
     let cacheScope='',scopeEpoch=0,reconcileBusy=false,disposed=false,settingsAttempts=0,wasActive=false,memoryDraft=null,memoryBusy=false,projectionScope='';
     // OFF 의도는 서버 저장 성공과 무관하게 이 기기의 촬영을 즉시 차단한다. ON은 저장 성공 뒤에만 해제된다.
-    let snapshotLocalBlocked=false,catalogLoaded=false,catalogBusy=false,catalogRows=[],catalogGeneration=0,catalogAbort=null;
+    let snapshotLocalBlocked=false,cameraLocalBlocked=false,snapshotEpoch=0,catalogLoaded=false,catalogBusy=false,catalogRows=[],catalogGeneration=0,catalogAbort=null;
     let fallbackPreference=false; // Stored general-mode preference; strict mode shows effective OFF.
     const modelInputs=['nf-answer-model','nf-answer-backup-1','nf-answer-backup-2','nf-answer-backup-3'];
     const captureJobs=new Map();
@@ -242,6 +242,7 @@
     function clearContent(){cache.clear?.();pendingInput=null;$('nova-question').value='';$('nova-history-list').replaceChildren();$('nova-history').hidden=true;}
     /** 진행 중 촬영 작업을 취소하고 소유 트랙·전송을 즉시 중단한다. 마이크/음성 경로는 건드리지 않는다. */
     function cancelCaptureJobs(){
+      snapshotEpoch++;
       for(const job of captureJobs.values()){job.cancelled=true;try{job.abort?.abort();}catch{}}
       captureJobs.clear();snapshotter?.stop?.();
       const preview=$('nf-snapshot-preview');if(preview){preview.hidden=true;preview.removeAttribute('src');}
@@ -284,7 +285,7 @@
       const epoch=scopeEpoch,status=$('nova-snapshot-status'),deadline=Date.now()+Math.max(0,command.expiresInMs||0);
       const say=t=>{if(status)status.textContent=t;};
       // 취소·OFF·생산자 교체·폐기는 남은 단계를 모두 무효화한다.
-      const stale=()=>job.cancelled||snapshotLocalBlocked||epoch!==scopeEpoch||disposed;
+      const stale=()=>job.cancelled||cameraLocalBlocked||(snapshotLocalBlocked&&command.trigger!=='camera_wake')||epoch!==scopeEpoch||disposed;
       const post=(route,body)=>client.focusRequest(route,body,{signal:job.abort.signal,timeoutMs:Math.max(0,Math.min(deadline-Date.now(),15000))});
       try{
         if(command.source==='META_GLASSES'){ // 동반 앱 어댑터 부재: 폴드 카메라 대체 없이 연결 필요 보고
@@ -311,7 +312,7 @@
           &&!(error?.status>=400&&error.status<500)&&error?.message!=='invalid_focus_action';
         if(retryable){try{await post('snapshot/result',{requestId:job.requestId,captureId:job.captureId,imageBase64:job.image,imageMediaType:job.mediaType});}catch{}}
       }finally{
-        captureJobs.delete(command.captureId);if(job.capturing)snapshotter?.stop?.();say('');
+        if(captureJobs.get(command.captureId)===job){captureJobs.delete(command.captureId);if(job.capturing)snapshotter?.stop?.();say('');}
       }
     }
     $('nova-settings-form').oninput=$('nova-settings-form').onchange=()=>{settingsEdits++;};
@@ -321,7 +322,11 @@
       const snapEnabled=$('nf-snapshot-enabled'),snapSource=$('nf-snapshot-source');
       const prev=stored.settings.snapshot||{enabled:false,source:'FOLD_REAR'};
       const wantEnabled=!!(snapEnabled&&snapEnabled.checked);
+      const turningAutoOff=!!(snapEnabled&&prev.enabled&&!wantEnabled);
       try{
+        // OFF 의도는 다른 입력의 검증·서버 저장보다 먼저 적용한다.
+        if(turningAutoOff){snapshotLocalBlocked=true;cancelCaptureJobs();}
+        if($('nf-camera-allowed')&&!$('nf-camera-allowed').checked){cameraLocalBlocked=true;cancelCaptureJobs();}
         const settings={presentation:{}};
         const rawLength=String($('nf-answer-length')?.value??'').trim();
         if(!/^[0-9]+$/.test(rawLength)||!Number.isSafeInteger(Number(rawLength))||Number(rawLength)<80||Number(rawLength)>800)throw Error('invalid_nova_settings');
@@ -332,7 +337,7 @@
       for(const [key,id] of Object.entries(presentation)){const e=$(id);settings.presentation[key]=e.type==='checkbox'?e.checked:Number(e.value)*(key==='tailHoldMs'?1000:1);}
         // cameraAllowed=false는 사진 호출어·자동 촬영·시험 촬영 모두를 막는다. 구 페이지는 필드를 보내지 않아 서버 저장값을 유지한다.
         if(snapEnabled)settings.snapshot={enabled:wantEnabled,source:(snapSource&&snapSource.value)||'FOLD_REAR',cameraAllowed:$('nf-camera-allowed')?$('nf-camera-allowed').checked:null};
-        if($('nf-camera-allowed')&&!$('nf-camera-allowed').checked)cancelCaptureJobs();
+        if(snapEnabled&&settings.snapshot.source!==prev.source)cancelCaptureJobs();
         if($('nf-answer-model')){
           const model=$('nf-answer-model').value;
           const exclusive=$('nf-answer-target').value==='GEMINI_WEBSEARCH_ONLY';
@@ -345,28 +350,29 @@
         }
         if($('nf-recent-enabled'))settings.recentContext={enabled:$('nf-recent-enabled').checked,maxAgeSeconds:Number($('nf-recent-age').value),maxUtterances:Number($('nf-recent-count').value),tokenBudget:Number($('nf-recent-budget').value)};
         if($('nf-memory-mode'))settings.memory={mode:$('nf-memory-mode').value||null,graphMode:$('nf-graph-mode').value||'OFF',maxEvidence:Number($('nf-max-evidence').value),embeddingPrefer:$('nf-embed-prefer').value||'LOCAL_THEN_CLOUD',webOnUnknown:$('nf-web-unknown').value===''?null:$('nf-web-unknown').value==='true'};
-        // OFF 의도는 서버 저장을 기다리지 않는다: 이 기기의 촬영·업로드를 먼저 중단한다.
-        if(snapEnabled&&!wantEnabled){snapshotLocalBlocked=true;cancelCaptureJobs();}
         const value=await client.focusRequest('settings',{settingsVersion:stored.settingsVersion,settings});if(disposed||scopeEpoch!==saveEpoch)return;
         if(saveEdits===settingsEdits){paintSettings(value);syncLengthPreset();}else{stored=value;}
         $('nf-status').textContent=saveEdits===settingsEdits?'설정을 저장했습니다.':'설정을 저장했습니다. 새로 편집한 값은 다음 저장에 적용합니다.';
-        // ON은 서버 저장 성공 뒤에만 해제한다. 저장된 장치 변경은 진행 중 촬영을 무효화하고 자동 재촬영은 없다.
-        if(snapEnabled&&wantEnabled){snapshotLocalBlocked=false;if(settings.snapshot.source!==prev.source)cancelCaptureJobs();}
+        // ON은 서버 저장 성공 뒤에만 해제한다. 장치 변경은 자동 재촬영하지 않는다.
+        if(snapEnabled&&wantEnabled)snapshotLocalBlocked=false;
+        if(settings.snapshot?.cameraAllowed===true)cameraLocalBlocked=false;
       }catch(error){
         if(disposed||scopeEpoch!==saveEpoch)return;
         notice(error);
         // 서버 저장 실패 시에도 로컬 OFF는 유지한다 — 사용자의 OFF 의도가 우선이다.
-        if(snapEnabled&&!wantEnabled){snapshotLocalBlocked=true;$('nf-status').textContent='이 기기의 촬영은 중지했습니다. 서버 설정 저장은 실패했습니다.';}
+        if(turningAutoOff){snapshotLocalBlocked=true;$('nf-status').textContent='이 기기의 촬영은 중지했습니다. 서버 설정 저장은 실패했습니다.';}
       }finally{settingsBusy=false;$('nf-save').disabled=disposed||!stored;}
     };
     // 시험 촬영은 이 기기에서만 확인한다 — 서버 업로드·AI 호출 없이 한 장 찍고 즉시 해제한다.
     const testShot=$('nf-snapshot-test');
     if(testShot)testShot.onclick=async()=>{
       if(!snapshotter){notice({message:'snapshot_unsupported'});return;}
-      if($('nf-camera-allowed')&&!$('nf-camera-allowed').checked){if($('nf-snapshot-test-status'))$('nf-snapshot-test-status').textContent='카메라 사용 허용이 꺼져 있습니다.';return;}
+      if(cameraLocalBlocked||($('nf-camera-allowed')&&!$('nf-camera-allowed').checked)){if($('nf-snapshot-test-status'))$('nf-snapshot-test-status').textContent='카메라 사용 허용이 꺼져 있습니다.';return;}
+      const shotEpoch=snapshotEpoch;
       const st=$('nf-snapshot-test-status'),img=$('nf-snapshot-preview');
       if(st)st.textContent='카메라를 준비합니다.';
       const r=await snapshotter.captureOnce({facingMode:'environment'});
+      if(disposed||shotEpoch!==snapshotEpoch)return;
       if(r.ok){
         if(img){img.src='data:'+r.mimeType+';base64,'+r.base64;img.hidden=false;}
         if(st)st.textContent='사진 '+r.width+'×'+r.height+' · 이 기기에서만 확인했습니다. AI에는 보내지 않았습니다.';
@@ -446,12 +452,13 @@
       const key=state.assistId+':'+state.epoch;
       if(state.assistId&&Number.isSafeInteger(state.epoch)&&state.epoch>0&&projectionScope!==key){projection.reset?.();projectionScope=key;}
       if((owned&&loaded!==key)||(!owned&&loaded)){
+        snapshotLocalBlocked=false;cameraLocalBlocked=false;cancelCaptureJobs();
         clearContent();clearMemoryDraft();wasActive=false;
         scopeEpoch++;cacheScope='';pendingInput=null;$('nova-question').value='';$('nova-question').disabled=true;$('nova-history-list').replaceChildren();$('nova-history').hidden=true;
         catalogGeneration++;catalogAbort?.abort();catalogBusy=false;catalogLoaded=false;catalogRows=[];
         loaded=owned?key:'';stored=null;settingsAttempts=0;$('nf-save').disabled=true;
       }
-      if(!owned){snapshotLocalBlocked=false;cancelCaptureJobs();}
+      if(!owned){snapshotLocalBlocked=false;cameraLocalBlocked=false;cancelCaptureJobs();}
       if(owned&&!stored&&!loading)void loadSettings();
       // 확정 질문의 단발 촬영 명령은 생산자 폴링 응답으로만 도착한다. 이미 claim된 명령은
       // 이전 구현체의 작업일 수 있으므로 자동 재생 없이 0회로 둔다. 로컬 OFF 의도가 있으면 시작하지 않는다.
@@ -459,9 +466,9 @@
       const command=state.focusControl,cameraWake=command&&command.trigger==='camera_wake';
       if(command&&command.kind==='snapshot'&&command.captureId&&command.requestId&&owned&&command.expiresInMs>0
         &&(cameraWake||(!snapshotLocalBlocked&&(stored==null||stored.settings?.snapshot?.enabled!==false)))
-        &&(stored?.settings?.snapshot?.cameraAllowed!==false)
+        &&!cameraLocalBlocked&&(stored?.settings?.snapshot?.cameraAllowed!==false)
         &&!captureJobs.has(command.captureId)&&!command.claimed)void startSnapshotJob(command);
-      if(wasActive&&!state.focus?.active){scopeEpoch++;clearContent();}
+      if(wasActive&&!state.focus?.active){scopeEpoch++;clearContent();cancelCaptureJobs();}
       wasActive=!!state.focus?.active;
       projection.update(state.focus,state.ready&&state.connection==='READY',state.connection);
       if(state.focus?.reason&&messages[state.focus.reason])notice({message:state.focus.reason});

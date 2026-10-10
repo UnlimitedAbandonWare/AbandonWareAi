@@ -122,3 +122,46 @@ test('fallback banner is Fold-only, clears on normal success, and ignores a reti
  f.projection.update(failed);assert.equal(notice.hidden,true);
  const lensNotice={hidden:true,textContent:''},lens=fixture('lens',{fallbackStatus:lensNotice});lens.projection.update({...failed,renderTarget:'lens'});assert.equal(lensNotice.hidden,true);
 });
+function receiptFixture(send){
+ const frames=new Map(),timers=new Map(),calls=[],attempts={first_visible:0,presentation_done:0},panel={},status={},draft={},doc={hidden:false};let id=0,time=0;
+ const receipt=async(name,detail)=>{attempts[name]++;if(send(name,detail,attempts[name])===false)throw Error('synthetic_receipt');calls.push(name);};
+ const projection=createProjection({host:{setTimeout(fn,ms){timers.set(++id,{fn,at:time+ms});return id;},clearTimeout:id=>timers.delete(id)},document:doc,target:'fold',panel,status,draft,requestFrame:fn=>{frames.set(++id,fn);return id;},cancelFrame:id=>frames.delete(id),fitsLine:()=>true,receipt});
+ return {projection,calls,attempts,panel,status,draft,doc,advance(ms){for(let t=0;t<ms;t+=20){time+=20;for(const [key,timer] of timers)if(timer.at<=time){timers.delete(key);timer.fn();}const f=[...frames.values()];frames.clear();f.forEach(fn=>fn(time));}}};
+}
+test('an exhausted first_visible no longer blocks presentation_done on Fold',async()=>{
+ const f=receiptFixture(name=>name!=='first_visible');
+ f.projection.update({...base,renderTarget:'fold',answerText:'유지'});f.advance(400);
+ await new Promise(setImmediate);await new Promise(setImmediate);
+ assert.equal(f.attempts.first_visible,1);assert.equal(f.attempts.presentation_done,0);
+ f.projection.update({...base,renderTarget:'fold',answerText:'유지',stateVersion:2});
+ await new Promise(setImmediate);await new Promise(setImmediate);
+ assert.equal(f.attempts.first_visible,2);assert.equal(f.attempts.presentation_done,1);
+ assert.deepEqual(f.calls,['presentation_done']);
+});
+test('a retryable first_visible still precedes presentation_done without overtaking',async()=>{
+ const f=receiptFixture((name,detail,attempt)=>name!=='first_visible'||attempt>1);
+ f.projection.update({...base,renderTarget:'fold',answerText:'유지'});f.advance(400);
+ await new Promise(setImmediate);await new Promise(setImmediate);
+ assert.deepEqual(f.calls,[]);
+ f.projection.update({...base,renderTarget:'fold',answerText:'유지',stateVersion:2});
+ await new Promise(setImmediate);await new Promise(setImmediate);
+ assert.equal(f.attempts.first_visible,2);
+ assert.deepEqual(f.calls,['first_visible','presentation_done']);
+});
+function fakeDoc(){
+ const make=tag=>({tagName:tag.toUpperCase(),style:{},children:[],textContent:'',get lastElementChild(){return this.children.at(-1)||null;},appendChild(node){node.parent=this;this.children.push(node);},remove(){if(this.parent)this.parent.children=this.parent.children.filter(node=>node!==this);}});
+ return {hidden:false,createElement:make};
+}
+test('a vacated snapshot inside the hold keeps the Fold answer while drafts paint separately',async()=>{
+ const doc=fakeDoc(),answer=doc.createElement('div');answer.ownerDocument=doc;
+ const frames=new Map(),timers=new Map(),calls=[],panel={},status={},draft={};let id=0,time=0;
+ const projection=createProjection({host:{setTimeout(fn,ms){timers.set(++id,{fn,at:time+ms});return id;},clearTimeout:id=>timers.delete(id)},document:doc,target:'fold',panel,status,draft,answer,requestFrame:fn=>{frames.set(++id,fn);return id;},cancelFrame:id=>frames.delete(id),fitsLine:()=>true,receipt:async(name)=>calls.push(name)});
+ const advance=ms=>{for(let t=0;t<ms;t+=20){time+=20;for(const [key,timer] of timers)if(timer.at<=time){timers.delete(key);timer.fn();}const f=[...frames.values()];frames.clear();f.forEach(fn=>fn(time));}};
+ const text=()=>answer.children.map(node=>node.textContent).join('');
+ projection.update({...base,renderTarget:'fold',answerText:'유지 답변'});advance(3000);await new Promise(setImmediate);
+ assert.deepEqual(calls,['first_visible','presentation_done']);assert.equal(text(),'유지 답변');
+ projection.update({...base,renderTarget:'fold',phase:'LISTENING',answerText:'',draftText:'후속 초안',stateVersion:2});advance(500);await new Promise(setImmediate);
+ assert.equal(text(),'유지 답변');assert.equal(draft.textContent,'후속 초안');
+ advance(6000);projection.update({...base,renderTarget:'fold',phase:'LISTENING',answerText:'',stateVersion:3});
+ assert.equal(text(),'');
+});

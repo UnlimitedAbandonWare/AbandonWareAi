@@ -447,6 +447,28 @@ class NovaFocusServiceTest {
         }
         public void close(){service.close();}
     }
+    @Test void acceptedInstructionAIsFrozenWhileNextTurnUsesSavedInstructionB() throws Exception {
+        try(var f=new EpochFixture()){
+            var tree=(com.fasterxml.jackson.databind.node.ObjectNode)NovaFocusModelSelectionTest.JSON.valueToTree(NovaFocusSettings.defaults());
+            tree.put("answerInstruction","지침 A");tree.put("answerPreset","CUSTOM");
+            var a=NovaFocusModelSelectionTest.JSON.treeToValue(tree,NovaFocusSettings.class);
+            when(f.history.settings(f.owner,"live",0,a)).thenReturn(new NovaFocusHistoryService.Settings(1,a));
+            f.service.configure(f.owner,"assist",1,0,a);
+            var contexts=new java.util.concurrent.CopyOnWriteArrayList<NovaFocusHistoryService.Context>();
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{contexts.add(call.getArgument(4));entered.countDown();assertTrue(release.await(3,TimeUnit.SECONDS));return new NovaFocusAnswer.Result("합성 답변",null);})
+                .when(f.answer).answerResult(any(),any(),any(),any(),any(),any(),any(),any());
+            try{
+                f.ask(1,"first");assertTrue(entered.await(3,TimeUnit.SECONDS));
+                tree.put("answerInstruction","지침 B");var b=NovaFocusModelSelectionTest.JSON.treeToValue(tree,NovaFocusSettings.class);
+                when(f.history.settings(f.owner,"live",1,b)).thenReturn(new NovaFocusHistoryService.Settings(2,b));
+                f.service.configure(f.owner,"assist",1,1,b);release.countDown();f.awaitAnswer(1);
+                assertEquals("지침 A",contexts.get(0).answerInstruction());assertEquals(1,contexts.get(0).settingsVersion());
+                f.presented(1);f.ask(1,"second");f.awaitAnswer(1);
+                assertEquals(2,contexts.size());assertEquals("지침 B",contexts.get(1).answerInstruction());assertEquals(2,contexts.get(1).settingsVersion());
+            }finally{release.countDown();}
+        }
+    }
     @Test void memorySearchRequiresOwnerEpochAndNeverCallsChat(){
         var history=mock(NovaFocusHistoryService.class);var memory=mock(FocusMemoryService.class);
         @SuppressWarnings("unchecked") ObjectProvider<NovaFocusAnswer> provider=mock(ObjectProvider.class);

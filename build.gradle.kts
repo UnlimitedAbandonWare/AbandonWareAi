@@ -959,6 +959,14 @@ configurations.named(glmAgentMcpTest.runtimeOnlyConfigurationName) {
 dependencies {
     add(glmAgentMcp.implementationConfigurationName, "io.modelcontextprotocol.sdk:mcp-core:2.0.0")
     add(glmAgentMcp.implementationConfigurationName, "io.modelcontextprotocol.sdk:mcp-json-jackson2:2.0.0")
+    compileOnly("org.projectlombok:lombok:1.18.30")
+    annotationProcessor("org.projectlombok:lombok:1.18.30")
+    testCompileOnly("org.projectlombok:lombok:1.18.30")
+    testAnnotationProcessor("org.projectlombok:lombok:1.18.30")
+
+
+
+
 }
 
 val glmAgentMcpJar by tasks.registering(Jar::class) {
@@ -995,3 +1003,8 @@ tasks.register<Test>("glmAgentMcpTest") {
 tasks.named("check") {
     dependsOn(tasks.named<Test>("glmAgentMcpTest"))
 }
+
+tasks.withType(JavaCompile::class.java) {
+    options.encoding = "UTF-8"
+}
+

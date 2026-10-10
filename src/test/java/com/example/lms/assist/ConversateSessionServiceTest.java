@@ -75,6 +75,19 @@ class ConversateSessionServiceTest {
             service.control("d".repeat(64),id,epoch,"pause");assertThrows(ResponseStatusException.class,()->service.acknowledge("d".repeat(64),id,epoch,version));output.dispose();
         }
     }
+    @Test void staleCaptionReceiptIsAnIdempotentNoOpAndNeverLoops() {
+        var clock=new TestClock();try(var service=new ConversateSessionService(clock)){
+            var s=service.start("owner");service.pollOutput("owner",s.assistId(),s.epoch(),"a".repeat(32));
+            var first=service.displayTest("owner",s.assistId(),s.epoch(),"첫 캡션");
+            var second=service.displayTest("owner",s.assistId(),s.epoch(),"갱신된 캡션");assertTrue(second.version()>first.version());
+            for(int i=0;i<20;i++)assertEquals(second.version(),service.acknowledge("owner",s.assistId(),s.epoch(),first.version(),"caption_rendered").version(),"stale receipt must never mutate state");
+            assertEquals(second.version(),service.acknowledge("owner",s.assistId(),s.epoch(),second.version(),"caption_rendered").version());
+            assertEquals(second.version(),service.acknowledge("owner",s.assistId(),s.epoch(),first.version(),"caption_rendered").version());
+            assertThrows(ResponseStatusException.class,()->service.acknowledge("owner",s.assistId(),s.epoch(),0,"caption_rendered"));
+            assertThrows(ResponseStatusException.class,()->service.acknowledge("owner",s.assistId(),s.epoch(),second.version()+99,"caption_rendered"));
+            assertThrows(ResponseStatusException.class,()->service.acknowledge("other",s.assistId(),s.epoch(),second.version(),"caption_rendered"));
+        }
+    }
     @Test void contextIsFinalOnlyBoundedExpiresAndClearsOnPause() throws Exception {
         var contexts=new java.util.concurrent.CopyOnWriteArrayList<java.util.List<String>>();
         var pipeline=new ConversateAnswerPipeline(){@Override public Outcome answerWithContext(String q,java.util.List<String> context,java.util.List<PreparedMaterialReader.Material> docs,long now){contexts.add(context);return super.answer(q,docs,now);}};

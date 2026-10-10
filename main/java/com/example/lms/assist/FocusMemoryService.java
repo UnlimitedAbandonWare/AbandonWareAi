@@ -62,7 +62,10 @@ public class FocusMemoryService {
             return new FocusMemoryScope(id,p==null?0:p.getSettingsVersion(),p==null?0:p.getMemoryRevision(),1,s.effectiveRecallEnabled(),s.memoryOrDefault());});
     }
     private boolean matches(FocusMemoryScope scope,NovaFocusProfile p){
-        return p!=null&&p.getSettingsVersion()==scope.consentRevision()&&p.getMemoryRevision()==scope.indexRevision()
+        // A cosmetic settings save only increments settingsVersion; consent still
+        // invalidates on recall toggle or a version regression, memory data on
+        // memoryRevision.
+        return p!=null&&p.getSettingsVersion()>=scope.consentRevision()&&p.getMemoryRevision()==scope.indexRevision()
             &&settings(p).effectiveRecallEnabled()==scope.recallEnabled();
     }
     public boolean current(FocusMemoryScope scope){

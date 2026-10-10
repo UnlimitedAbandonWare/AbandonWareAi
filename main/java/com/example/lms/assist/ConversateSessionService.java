@@ -150,7 +150,9 @@ public class ConversateSessionService implements AutoCloseable {
         if(phase.equals("caption_rendered")){
             var s=owned(owner,id);synchronized(s){checkEpoch(s,epoch);
                 if(!s.state.equals("RUNNING")||outputCount(s)==0||s.caption==null||s.caption.expiresAt()<=clock.millis()
-                        ||version<s.captionVersion||version>s.version)throw error(HttpStatus.CONFLICT,"invalid_caption_ack");
+                        ||version<1||version>s.version)throw error(HttpStatus.CONFLICT,"invalid_caption_ack");
+                // A receipt for a superseded caption revision is idempotent: it never marks the current caption rendered.
+                if(version<s.captionVersion)return snapshot(s);
                 if(s.captionRenderedVersion!=s.captionVersion){s.captionRenderedVersion=s.captionVersion;s.captionRenderedAt=clock.millis();diagnostic(s,"CAPTION_RENDERED",Map.of("version",s.captionVersion));}
                 return snapshot(s);
             }

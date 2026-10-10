@@ -105,7 +105,7 @@
       cfg=settings(focus.presentation||cfg);
       // Lens retention ends at the session boundary, not at animation completion.
       if(options.retainAfterPresentation)cfg.autoFadeEnabled=false;
-      if(!focus.answerText&&options.retainAfterPresentation&&doneAt!==null)return true;
+      if(!focus.answerText&&doneAt!==null&&(options.retainAfterPresentation||elapsed<doneAt+cfg.tailHoldMs+cfg.fadeMs)){schedule();return true;}
       if(!focus.answerText){if(key){retire();reset();key='';paint();}return true;}
       if(typeof focus.answerText!=='string'||Array.from(focus.answerText).length>8000||!Number.isSafeInteger(focus.answerVersion)||typeof focus.turnId!=='string')return false;
       if(focus.answerComplete!==undefined&&typeof focus.answerComplete!=='boolean')return false;

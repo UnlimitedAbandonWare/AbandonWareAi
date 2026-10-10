@@ -74,6 +74,7 @@ final class NovaFocusState {
     private final Set<String> committed=new LinkedHashSet<>();
     private String phase="OFF",activation="",turn="",question="",answer="",receipt="",candidate="",target="lens",reason="";
     private String wakeKind="NOVA",snapshotTrigger="none",snapshotOutcome="none";
+    private String activationWakeWord="";
     private boolean cameraShotPending;
     private String foldPartial="";
     private boolean partialVersionReserved;
@@ -111,7 +112,7 @@ final class NovaFocusState {
             var current=settings.snapshotOrDefault();
             // OFF 또는 장치 변경: 진행 중 촬영과 미전송 이미지를 함께 무효화하고 같은 질문을 사진 없이 한 번 진행한다.
             // 자동 재촬영은 없다 — 다음 질문이 새 captureId를 만든다.
-            if(!current.enabled()||!current.cameraAllowedOrDefault()||!Objects.equals(prevSource,current.source())){
+            if((before.snapshotOrDefault().enabled()&&!current.enabled())||!current.cameraAllowedOrDefault()||!Objects.equals(prevSource,current.source())){
                 clearCapture();snapshotImageBase64=null;snapshotImageMediaType=null;
                 if(!snapshotReady){snapshotReady=true;textFallbacks++;}
             }
@@ -129,12 +130,12 @@ final class NovaFocusState {
         foldPartial="";partialVersionReserved=false;answer=question=turn=receipt=candidate=reason="";answerTruncated=false;idleUntil=0;listenUntil=now+settings.wakeListenTimeoutMs();wakeDeadline=now+WAKE_PREVIEW_LIMIT_MS;version++;
         grounding=null;modelOutcome=null;answerHoldUntil=0;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;acceptedSnapshots.clear();
-        wakeKind="NOVA";cameraShotPending=false;snapshotTrigger="none";snapshotOutcome="none";
+        wakeKind="NOVA";activationWakeWord=settings.wakeWord();cameraShotPending=false;snapshotTrigger="none";snapshotOutcome="none";
     }
     void close(String cause){
         log.info("[AWX][nova-focus] close reason={} phase={} version={}",cause!=null&&cause.matches("[a-z][a-z0-9_]{0,63}")?cause:"unknown",phase,version+1);
         phase=settings.enabled()?"ARMED":"OFF";draft.clear();draftKeys.clear();foldPartial="";partialVersionReserved=false;answer=question=receipt="";inFlight=false;inFlightRequest="";idleUntil=0;reason=cause;
-        grounding=null;modelOutcome=null;answerHoldUntil=0;wakeKind="NOVA";cameraShotPending=false;
+        grounding=null;modelOutcome=null;answerHoldUntil=0;wakeKind="NOVA";activationWakeWord="";cameraShotPending=false;
         pendingRequest=null;clearCapture();snapshotReady=false;snapshotImageBase64=null;snapshotImageMediaType=null;version++;}
     private String key(ConversateQuestionPolicy.Utterance u){
         String source=u.questionId()+":"+u.utteranceId();
@@ -155,7 +156,7 @@ final class NovaFocusState {
             if(wake.isEmpty()&&cameraMatch.isEmpty())return false;
             boolean camera=cameraMatch.isPresent()&&(wake.isEmpty()||cameraMatch.get().start()<wake.get().start());
             if(camera)wake=cameraMatch;
-            open(now,wakeTarget);wakeKind=camera?"CAMERA":"NOVA";cameraShotPending=camera;
+            open(now,wakeTarget);wakeKind=camera?"CAMERA":"NOVA";activationWakeWord=camera?cameraWake:settings.wakeWord();cameraShotPending=camera;
             candidate=source;phase=u.isFinal()?"LISTENING":"WAKE_PREVIEW";
             draft.update(source,wake.get().question(),u.isFinal(),now);version++;return true;
         }
@@ -248,7 +249,7 @@ final class NovaFocusState {
     }
     private boolean snapshotEnabled(){return settings.snapshotOrDefault().enabled();}
     private boolean cameraAllowed(){return settings.snapshotOrDefault().cameraAllowedOrDefault();}
-    private String activeWakeWord(){return "CAMERA".equals(wakeKind)?settings.cameraWakeWordOrDefault():settings.wakeWord();}
+    private String activeWakeWord(){return activationWakeWord;}
     private String newCaptureId(){return UUID.randomUUID().toString();}
     private void clearCapture(){pendingCaptureId=null;pendingCaptureSource=null;claimedCaptureId=null;}
     /** 촬영 실패는 확정된 질문을 버리지 않는다. 같은 pendingRequest를 사진 없이 한 번 발행한다. */

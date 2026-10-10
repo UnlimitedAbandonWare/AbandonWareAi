@@ -50,6 +50,18 @@ class NovaFocusHistoryTest {
     }
     @BeforeAll static void start(){context=new AnnotationConfigApplicationContext(Database.class);store=context.getBean(NovaFocusHistoryService.class);}
     @AfterAll static void stop(){if(context!=null)context.close();}
+    @Test void newSavesRejectEquivalentWakeWordsWhileLegacyDecodeAndExplicitOffRemainCompatible() throws Exception {
+        var mapper=new ObjectMapper();var d=NovaFocusSettings.defaults();
+        for(String[] pair:new String[][]{{"NOVA","nova"},{"노바",java.text.Normalizer.normalize("노바",java.text.Normalizer.Form.NFD)},{"데빈",null}}){
+            var legacy=new NovaFocusSettings(true,pair[0],1200,20000,8000,d.presentation(),false,false,null,pair[1]);
+            assertDoesNotThrow(()->mapper.readValue(mapper.writeValueAsString(legacy),NovaFocusSettings.class));
+            String owner=UUID.randomUUID().toString();
+            assertThrows(IllegalArgumentException.class,()->store.settings(owner,"wake-equality",0,legacy));
+            assertEquals(0,store.settings(owner,"wake-equality").settingsVersion());
+        }
+        var off=new NovaFocusSettings(true,"데빈",1200,20000,8000,d.presentation(),false,false,null,"");
+        assertEquals("",store.settings(UUID.randomUUID().toString(),"wake-off",0,off).settings().cameraWakeWordOrDefault());
+    }
     @Test void answerInstructionAndPresetRoundTripAndSurviveLegacyPayloads(){
         String owner=UUID.randomUUID().toString();var mapper=new ObjectMapper();
         var node=(com.fasterxml.jackson.databind.node.ObjectNode)mapper.valueToTree(store.settings(owner,"instruction").settings());

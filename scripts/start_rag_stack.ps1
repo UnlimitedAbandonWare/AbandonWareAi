@@ -167,8 +167,30 @@ function Get-RagProcessRole {
     return 'dev'
 }
 
+function Clear-RagPortConflict {
+    # Bounded cleanup of a stale demo-1-owned listener squatting a needed port:
+    # only java/powershell processes whose command line lives under RagRoot are
+    # reaped, the opposite wear/dev role and foreign processes stay untouched.
+    # Returns $true when the port is free afterwards (BudgetSeconds caps the wait).
+    param([int]$Port, [object]$Owner, [switch]$Wear, [int]$BudgetSeconds = 15)
+    $ownerPid = [int](Get-AwxObjectProperty -Object $Owner -Name 'processId')
+    if ($ownerPid -le 4 -or $ownerPid -eq $PID) { return $false }
+    $name = ([string](Get-AwxObjectProperty -Object $Owner -Name 'processName')).ToLowerInvariant()
+    if (@('java.exe', 'java', 'javaw.exe', 'javaw', 'powershell.exe', 'pwsh.exe') -notcontains $name) { return $false }
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$ownerPid" -ErrorAction SilentlyContinue
+    $command = if ($null -ne $proc) { [string]$proc.CommandLine } else { '' }
+    $prefix = $script:RagRoot.TrimEnd('\').Replace('/', '\') + '\'
+    if ([string]::IsNullOrWhiteSpace($command) -or
+        $command.Replace('/', '\').IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -lt 0) { return $false }
+    $ownerRole = Get-RagProcessRole -ProcessId $ownerPid -CommandLine $command
+    if (($ownerRole -eq 'wear') -ne [bool]$Wear) { return $false }
+    Write-RagStage 'PREFLIGHT' 'REAP' "port=$Port stale demo-1 owner pid=$ownerPid process=$name role=$ownerRole; stopping (budget=${BudgetSeconds}s)"
+    & cmd.exe /c "taskkill /F /T /PID $ownerPid >nul 2>&1"
+    return (Wait-AwxPortsReleased -Ports @($Port) -TimeoutSeconds $BudgetSeconds)
+}
+
 function Resolve-RagSpring {
-    param([int]$RequestedPort, [switch]$MetaDisplay, [switch]$Wear)
+    param([int]$RequestedPort, [switch]$MetaDisplay, [switch]$Wear, [switch]$NoReap)
     if ($MetaDisplay -and $RequestedPort -notin @(0,18180)) { throw 'meta-display-fixed-port-required' }
     $candidates = @(Get-RagSpringCandidates)
     if ($MetaDisplay) {
@@ -184,9 +206,13 @@ function Resolve-RagSpring {
         foreach ($fixedPort in @(18180,18181,18182)) {
             $owner = Get-RagPortOwner -Port $fixedPort
             if ($null -ne $owner -and ($selfPid -eq 0 -or $owner.processId -ne $selfPid)) {
-                Write-RagStage 'PREFLIGHT' 'CONFLICT' "port=$fixedPort pid=$($owner.processId) process=$($owner.processName)"
+                Write-RagStage 'PREFLIGHT' 'CONFLICT' "PORT_IN_USE port=$fixedPort pid=$($owner.processId) process=$($owner.processName)"
                 $ownerIsWear = @($wearCands | Where-Object { [int]$_.processId -eq [int]$owner.processId }).Count -gt 0
                 if ($ownerIsWear -and -not $Wear) { throw 'meta-display-wear-runtime-protected' }
+                if (-not $NoReap -and (Clear-RagPortConflict -Port $fixedPort -Owner $owner -Wear:$Wear)) {
+                    Write-RagStage 'PREFLIGHT' 'REAPED' "port=$fixedPort released by stale-owner reap"
+                    continue
+                }
                 throw 'meta-display-port-conflict'
             }
         }
@@ -209,7 +235,11 @@ function Resolve-RagSpring {
         throw 'existing-spring-not-ready'
     }
     $selected = if ($RequestedPort -gt 0) { $RequestedPort } else { 8080 }
-    if ($null -ne (Get-RagPortOwner -Port $selected)) { throw 'spring-port-conflict' }
+    $owner = Get-RagPortOwner -Port $selected
+    if ($null -ne $owner) {
+        Write-RagStage 'PREFLIGHT' 'CONFLICT' "PORT_IN_USE port=$selected pid=$($owner.processId) process=$($owner.processName)"
+        if ($NoReap -or -not (Clear-RagPortConflict -Port $selected -Owner $owner -Wear:$Wear)) { throw 'spring-port-conflict' }
+    }
     return @{port=$selected;processId=0;reuse=$false}
 }
 
@@ -381,7 +411,7 @@ function Invoke-RagServices {
         Write-RagStage 'SPRING' 'RESTART' 'ForceRestart requested: stopping existing Spring before relaunch.'
         Stop-RagSpringForRestart -MetaDisplay:$MetaDisplay -Wear:$Wear
     }
-    $spring = Resolve-RagSpring -RequestedPort $RequestedPort -MetaDisplay:$MetaDisplay -Wear:$Wear
+    $spring = Resolve-RagSpring -RequestedPort $RequestedPort -MetaDisplay:$MetaDisplay -Wear:$Wear -NoReap:$CheckOnly
     if ($spring.port -eq $OllamaPort -or ($MetaDisplay -and $OllamaPort -in @(18181,18182))) { throw 'service-ports-overlap' }
     Write-RagStage 'OLLAMA' 'CHECK' "http://127.0.0.1:$OllamaPort"
     if (Test-RagOllama -Port $OllamaPort) {

@@ -30,6 +30,8 @@ public class DisplayConversateController {
     private final DisplayRelay relay;
     @Autowired(required=false) private DisplayRuntimeDiagnostics runtimeDiagnostics;
     @Autowired(required=false) private PublicRequestBudgetGuard budgets;
+    @Autowired(required=false) private com.example.lms.debug.DebugEventStore debugEvents;
+    private final Map<String,ConflictWindow> conflictWindows=new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<String,Binding> bindings=new HashMap<>();
     // Existing cookie owners, transient codes and explicit receiver approval only.
     private final Map<String,String> phoneLinks=new HashMap<>();
@@ -735,12 +737,39 @@ public class DisplayConversateController {
         return DigestUtils.sha256Hex("public-display:"+owners.ownerKey()+(testChannel.equals("live")?"":":"+testChannel));
     }
     @ExceptionHandler(ResponseStatusException.class)
-    ResponseEntity<?> failure(ResponseStatusException error,HttpServletRequest request){return ResponseEntity.status(error.getStatusCode()).headers(error.getHeaders()).cacheControl(CacheControl.noStore()).body(request.getRequestURI().startsWith("/api/assist/display/lens")?Map.of("retryable",error.getStatusCode().is5xxServerError()):Map.of("reason",Objects.toString(error.getReason(),"display_failed")));}
+    ResponseEntity<?> failure(ResponseStatusException error,HttpServletRequest request){
+        String path=request.getRequestURI();String reason=Objects.toString(error.getReason(),"display_failed");
+        if(error.getStatusCode().value()==409)noteDisplayConflict(path,reason,request);
+        return ResponseEntity.status(error.getStatusCode()).headers(error.getHeaders()).cacheControl(CacheControl.noStore()).body(path.startsWith("/api/assist/display/lens")?Map.of("retryable",error.getStatusCode().is5xxServerError()):Map.of("reason",reason));
+    }
+    /** Bounded loop detector: >10 same-owner+path+reason conflicts inside 60s emit one display_conflict_loop per minute. */
+    private void noteDisplayConflict(String path,String reason,HttpServletRequest http){
+        if(debugEvents==null||path==null||!path.startsWith("/api/assist/display/")||path.startsWith("/api/assist/display/lens"))return;
+        String caller;try{caller=owner(http).substring(0,16);}catch(RuntimeException unidentified){caller="unidentified";}
+        long now=clock.millis();
+        synchronized(conflictWindows){
+            conflictWindows.entrySet().removeIf(e->now-e.getValue().lastAt>600_000);
+            if(conflictWindows.size()>4096)conflictWindows.clear();
+            ConflictWindow w=conflictWindows.computeIfAbsent(caller+"|"+path+"|"+reason,key->{var created=new ConflictWindow();created.windowStart=now;created.firstAt=now;return created;});
+            if(now-w.windowStart>=60_000){w.windowStart=now;w.firstAt=now;w.count=0;}
+            w.count++;w.lastAt=now;
+            if(w.count>10&&now-w.lastEmitAt>=60_000){
+                w.lastEmitAt=now;
+                var data=new LinkedHashMap<String,Object>();
+                data.put("event","display_conflict_loop");data.put("path",path);data.put("reason",reason);
+                data.put("count",w.count);data.put("windowSeconds",60);
+                data.put("firstAt",java.time.Instant.ofEpochMilli(w.firstAt).toString());data.put("lastAt",java.time.Instant.ofEpochMilli(w.lastAt).toString());
+                try{debugEvents.emit(com.example.lms.debug.DebugProbeType.ORCHESTRATION,com.example.lms.debug.DebugEventLevel.WARN,
+                        "display_conflict_loop","display_conflict_loop "+reason,"display.http.conflict",data,null);}catch(RuntimeException ignored){}
+            }
+        }
+    }
     @ExceptionHandler({org.springframework.http.converter.HttpMessageNotReadableException.class,org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class})
     ResponseEntity<?> malformed(){return ResponseEntity.badRequest().cacheControl(CacheControl.noStore()).body(Map.of("reason","invalid_display_request"));}
     @ExceptionHandler(Exception.class)
     ResponseEntity<?> unexpected(Exception failure){LOG.warn("display.request_failed type={}",failure.getClass().getSimpleName());return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).cacheControl(CacheControl.noStore()).body(Map.of("retryable",false));}
     private static final class Window {long started;final int[] counts=new int[8];void reset(long now){if(now-started>=60_000){started=now;Arrays.fill(counts,0);}}}
+    private static final class ConflictWindow{long windowStart,firstAt,lastAt,lastEmitAt;int count;}
     private static String publicReason(String reason){
         return switch(reason){
             case "API_CUE","RAG_ANSWER","MATCH","MATCH_REFINED" -> "CONTENT_READY";

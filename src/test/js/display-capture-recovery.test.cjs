@@ -23,7 +23,7 @@ function capture(start=async()=>{},options={}){
     createMediaStreamSource(media){const source={media,disconnects:0,connect:node=>node,disconnect(){this.disconnects++;}};sources.push(source);return source;}createGain(){return{gain:{value:1},connect(){}};}
   }
   class Worklet{constructor(){this.port={postMessage(){}};nodes.push(this);}connect(node){return node;}disconnect(){}}
-  const client={state:{audioAvailable:true,role:'STANDALONE',audioFinished:true,audioRenewAfterMs:60000,connection:'READY'},
+  const client=options.client||{state:{audioAvailable:true,role:'STANDALONE',audioFinished:true,audioRenewAfterMs:60000,connection:'READY'},
     async beginVoice(){starts++;return start(starts);},async endVoice(){stops++;},
     async voiceChunk(sequence,pcm){sent.push({sequence,marker:Buffer.from(pcm,'base64').readInt16LE(0)});}};
   const env={isSecureContext:true,AudioContext:Context,AudioWorkletNode:Worklet,btoa,
@@ -38,20 +38,20 @@ function capture(start=async()=>{},options={}){
 }
 
 // Execute the real app across two documents, retaining only tab sessionStorage.
-function reloadApp({store=new Map(),permission='granted',initial={},time=1000,permissionGate}={}){
+function reloadApp({store=new Map(),permission='granted',initial={},time=1000,permissionGate,clientFactory}={}){
   const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
   const nodes=new Map(),handlers=new Map();let f,clientOptions;
   const storage={getItem:key=>store.get(key)||null,setItem:(key,value)=>store.set(key,value),removeItem:key=>store.delete(key)};
   const document={body:{hasAttribute:()=>true},visibilityState:'visible',hidden:false,addEventListener(){},
     getElementById(key){if(!nodes.has(key))nodes.set(key,{value:'',hidden:true,checked:false,style:{setProperty(){}},classList:{toggle(){}},setAttribute(){},removeAttribute(){},addEventListener(){},focus(){},add(){},replaceChildren(){}});return nodes.get(key);}};
-  const client={state:{assistId:id,epoch:2,version:2,connection:'READY',ready:true,role:'STANDALONE',audioAvailable:true,audioFinished:true,testStatus:{relay:{eventOwner:'THIS DEVICE',segmentSeconds:0}},...initial},
+  let client={state:{assistId:id,epoch:2,version:2,connection:'READY',ready:true,role:'STANDALONE',audioAvailable:true,audioFinished:true,testStatus:{relay:{eventOwner:'THIS DEVICE',segmentSeconds:0}},...initial},
     start(){clientOptions.onChange(this.state);},pause(){},dispose(){},storedLensLink:()=>null,async acknowledge(){},async relaySettings(){}};
   const navigator={permissions:permission===null?undefined:{query:()=>permissionGate?.promise||Promise.resolve({state:permission})}};
   vm.runInNewContext(fs.readFileSync(path.resolve(__dirname,'../../../main/resources/static/assets/display/app.js'),'utf8'),{
     document,navigator,location:{search:''},URLSearchParams,Date:{now:()=>time},crypto:{randomUUID:()=>id},sessionStorage:storage,localStorage:{getItem:()=>null},
     window:{location:{search:''},DisplayCore:require('../../../main/resources/static/assets/display/display-core.js'),
-      DisplayConversate:{createClient(options){clientOptions=options;return client;}},
-      DisplayVoice:{createCapture(options){f=capture(undefined,{onChange:options.onChange});Object.assign(f.client.state,client.state);return f.voice;}},addEventListener:(name,fn)=>handlers.set(name,fn)},
+      DisplayConversate:{createClient(options){clientOptions=options;if(clientFactory)client=clientFactory(options);return client;}},
+      DisplayVoice:{createCapture(options){f=capture(undefined,{onChange:options.onChange,...(clientFactory?{client}:{})});Object.assign(f.client.state,client.state);return f.voice;}},addEventListener:(name,fn)=>handlers.set(name,fn)},
     requestAnimationFrame(){},setTimeout:()=>1,clearTimeout(){}});
   return{f,store,nodes,handlers,client,update(patch){Object.assign(client.state,patch);clientOptions.onChange(client.state);}};
 }
@@ -128,6 +128,34 @@ test('session preparation has its own deadline instead of the ordinary four-seco
   const starting=f.client.beginVoice();
   try{await flush();assert.ok([...f.timers.values()].some(t=>t.ms>=10000),'preparation must survive the ordinary 4s limit');}
   finally{gate.resolve(view());await starting.catch(()=>{});await f.client.endVoice();f.client.dispose();}
+});
+test('actual audio-start timeout recovers through the client capture and app controls without reopening the microphone',async()=>{
+  const first=deferred();let network,starts=0;
+  const ready=()=>view({epoch:2,role:'STANDALONE',audioFinished:true,captionTtlMs:20000,cardTtlMs:20000,testStatus:{relay:{eventOwner:'THIS DEVICE',segmentSeconds:0}}});
+  const app=reloadApp({clientFactory:options=>{
+    network=transport((route,body)=>{
+      if(route==='audio/start'&&++starts===1)return first.promise;
+      if(route==='audio/chunk-batch')return{view:ready(),acceptedCount:body.frames.length,acceptedThrough:body.frames.at(-1).sequence};
+      return ready();
+    },options);return network.client;
+  }});
+  try{
+    await flush();await flush();assert.equal(app.nodes.get('microphone').disabled,false);
+    app.nodes.get('microphone').onclick();await flush();await flush();
+    assert.equal(starts,1);assert.equal(app.f.acquisitions,1);
+    const deadline=[...network.timers.values()].find(t=>t.ms===35000);assert.ok(deadline,'expire the actual audio/start deadline');
+    await app.f.advance(35000);deadline.fn();await flush();await flush();
+    assert.equal(app.f.voice.state.phase,'WAITING');assert.equal(app.f.voice.isActive(),true);
+    assert.equal(app.nodes.get('microphone').disabled,false,'Stop remains usable while recovery waits');
+    await app.f.advance(1251);await flush();await flush();
+    assert.equal(starts,2);assert.equal(app.client.state.connection,'READY');assert.equal(app.f.voice.state.phase,'LISTENING');
+    assert.equal(app.f.acquisitions,1);assert.equal(app.nodes.get('microphone').disabled,false);assert.equal(app.nodes.get('finish').hidden,false);
+    first.resolve({...ready(),epoch:99});await flush();assert.equal(app.client.state.epoch,2,'the timed-out response cannot replace the recovered epoch');
+    app.f.pcm(1234);await app.f.advance(20);await flush();await flush();
+    assert.equal(network.calls.filter(c=>c.route==='audio/chunk-batch').length,1,'recovery delivers each new frame once');
+    await app.nodes.get('stop').onclick();await flush();await flush();
+    assert.equal(app.f.voice.isActive(),false);await app.f.advance(120000);assert.equal(starts,2,'Stop fences every later recovery timer');
+  }finally{first.resolve(ready());await app.f.voice.stop();app.client.dispose();}
 });
 test('a failed audio-start rolls back its own voice latch so the next start can succeed',async()=>{
   let calls=0;const f=transport(route=>{if(route==='audio/start'&&++calls===1)throw Error('synthetic_network');return view();});

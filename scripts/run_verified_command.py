@@ -7,7 +7,7 @@ Actions:
   run (default)   execute and record runId/cwd/argv/times/exit/log/source identity
   status          inspect a run directory: distinguishes still_running /
                   orphaned_unconfirmed (recorder died, child may be gone) from
-                  finalized results — never treats an unconfirmed run as passed
+                  finalized results -- never treats an unconfirmed run as passed
   stop            terminate only the recorded run's own process tree
 """
 import argparse
@@ -23,6 +23,17 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 def stamp():
