@@ -167,6 +167,7 @@ R10. `[PREFLIGHT] FAILED reason=launcher-already-running`을 보면
   `LAUNCHER_BUSY`면 기다리라고, `RUNTIME_UP` 계열이면 이미 켜져 있다고, role이 dev인지 wear인지도 말한다
   (Start-Meta-Display 창의 "wear runtime stays up"은 실패 때도 고정 출력되는 문구다).
 - `--ready`의 `leftoverLauncherWindows`(pause에 멈춘 Start-*.bat 창)는 서버와 무관하니 닫아도 된다고 안내만 한다(직접 종료하지 않음).
+- `reason=live-test-window-active`도 같은 거부 계열이다 — 사용자 라이브 테스트 마커(`var/live-test/active.json`)가 active인 동안 런처·DevWatch가 보류한다. 재기동 우회 금지, `--ready`로 판정만. SSOT `$demo1-live-test-window`.
 
 R11. 일반 채팅 OK ≠ 노바 OK
 - 노바(Focus)는 저장 프로필 → admission → 모델 선택 경로가 따로 있다. `/chat` 성공, `/api/chat/models` 200,

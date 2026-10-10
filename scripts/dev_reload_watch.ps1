@@ -41,7 +41,7 @@ $script:FailStreak = 0
 $script:LastEventUtc = [datetime]::MinValue
 # Launcher refusal reasons that mean another runtime owns the lifecycle. These
 # defer the restart instead of burning the fail streak on a doomed retry loop.
-$script:DeferredRestartReasons = @('meta-display-wear-runtime-protected', 'launcher-already-running')
+$script:DeferredRestartReasons = @('meta-display-wear-runtime-protected', 'launcher-already-running', 'live-test-window-active')
 
 function Test-IgnoredPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
@@ -174,6 +174,11 @@ function Invoke-DevReloadCycle([string[]]$Paths) {
     Write-DevReload "source changed → rebuild → Spring restart :: $sample"
     Save-DevReloadState @{ lastTier = 'SPRING'; status = 'running'; sample = $sample }
     try {
+        if (Test-RagLiveTestWindow) {
+            Write-DevReload 'live test window active → rebuild+restart deferred (live-test-window-active)'
+            Save-DevReloadState @{ lastTier = 'SPRING'; status = 'deferred'; reason = 'live-test-window-active'; sample = $sample }
+            return
+        }
         if (Test-DevWearRuntime) {
             Write-DevReload 'wear runtime holds 18180 → Spring restart skipped (runtime role protection)'
             Save-DevReloadState @{ lastTier = 'SPRING'; status = 'wear-protected-skip'; sample = $sample }

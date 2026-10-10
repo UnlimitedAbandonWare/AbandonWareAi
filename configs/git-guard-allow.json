@@ -349,6 +349,48 @@
             "rule": "sensitive-assignment",
             "oid": "e2ba609482cb974e764d20e087806d2ab3c1a82c",
             "reason": "src/test 하위 합성 테스트 헤더 (2026-10-09 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/browser-v2/general.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "5cbfaee4ba4a9ba7423794a9d03e4a1629b99fea",
+            "reason": "PNG magic verified, 6.5KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/browser-v2/greeting.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "3ee0e469e6c18f68e78d699d313c13c27ec5080c",
+            "reason": "PNG magic verified, 4.7KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/browser/general.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "8ced258407558f8f457ce9037c0271a2b85ef111",
+            "reason": "PNG magic verified, 6.3KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/browser/greeting.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "3ee0e469e6c18f68e78d699d313c13c27ec5080c",
+            "reason": "PNG magic verified, 4.7KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/focus-browser-fixture/fallback-banner.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "ac2f0d22ec8dcd85da356f7f3cd3d1457521229b",
+            "reason": "PNG magic verified, 16KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/focus-final-browser/fixed-oauth-luna.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "37c691035ee179077471f43e8c9124fbf14016f1",
+            "reason": "PNG magic verified, 7.7KB evidence screenshot (2026-10-10 확인)"
+        },
+        {
+            "path": "docs/reports/agent-reviews/current-question-20261009/hold-settings-browser-v5/hold-five-seconds.png",
+            "rule": "binary-scan-unavailable",
+            "oid": "a2f9fa34f013bd35b5951848e2e30987956d865d",
+            "reason": "PNG magic verified, 304B evidence screenshot (2026-10-10 확인)"
         }
     ]
 }

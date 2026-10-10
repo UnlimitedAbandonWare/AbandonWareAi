@@ -142,4 +142,52 @@ function Invoke-DevCompile { throw 'compile-failed exit=1' }
 Invoke-DevReloadCycle @('main\java\X.java')
 Assert-WatchTest ($script:FailStreak -eq 1) 'compile failure still counts toward fail streak'
 
+# --- live-test window marker (var\live-test\active.json, live_test_window.py) ---
+# Active marker defers the whole cycle before compile; expiry/absence restores.
+$fixture = Join-Path ([IO.Path]::GetTempPath()) ('devwatch-livetest-' + [guid]::NewGuid().ToString('N'))
+$markerDir = Join-Path $fixture 'var\live-test'
+New-Item -ItemType Directory -Path $markerDir -Force | Out-Null
+$markerPath = Join-Path $markerDir 'active.json'
+$priorRoot = $script:RagRoot
+$script:RagRoot = $fixture
+try {
+    $script:wearPresent = $false
+    $script:compileCalls = 0
+    $script:restartCalled = $false
+    $script:FailStreak = 0
+    function Invoke-DevCompile { $script:compileCalls++ }
+
+    # active marker → compile and restart are both skipped as a named deferral
+    @{ untilKst = (Get-Date).AddHours(1).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerPath -Encoding UTF8
+    Invoke-DevReloadCycle @('main\java\X.java')
+    Assert-WatchTest ($script:compileCalls -eq 0) 'live test window skips compile entirely'
+    Assert-WatchTest (-not $script:restartCalled) 'live test window skips restart entirely'
+    Assert-WatchTest ($script:FailStreak -eq 0) 'live test window defer does not burn fail streak'
+    Assert-WatchTest ($script:lastState.status -eq 'deferred' -and $script:lastState.reason -eq 'live-test-window-active') 'live test deferral recorded in state file'
+    Assert-WatchTest (($script:logged -join "`n") -match 'live-test-window-active') 'live test deferral names its reason'
+
+    # expired marker → the normal restart path runs again
+    @{ untilKst = (Get-Date).AddMinutes(-1).ToUniversalTime().ToString('o') } | ConvertTo-Json -Compress | Set-Content -LiteralPath $markerPath -Encoding UTF8
+    $script:restartError = 'spring-restart-failed exit=1 reason=launcher-already-running stage=PREFLIGHT'
+    Invoke-DevReloadCycle @('main\java\X.java')
+    Assert-WatchTest ($script:restartCalled) 'expired marker restores the normal restart path'
+    Assert-WatchTest ($script:FailStreak -eq 0) 'launcher-already-running still defers after expiry'
+
+    # launcher refusal carrying the live-test reason also defers without fail streak
+    $script:restartCalled = $false
+    $script:restartError = 'spring-restart-failed exit=1 reason=live-test-window-active stage=PREFLIGHT'
+    Invoke-DevReloadCycle @('main\java\X.java')
+    Assert-WatchTest ($script:FailStreak -eq 0) 'live-test-window-active refusal defers without fail streak'
+    Assert-WatchTest ($script:lastState.status -eq 'deferred' -and $script:lastState.reason -eq 'live-test-window-active') 'live-test refusal stays a deferral, not a failure'
+
+    # no marker → the normal failure classification resumes
+    Remove-Item -LiteralPath $markerPath -Force
+    $script:restartError = 'spring-restart-failed exit=1 reason=meta-display-port-conflict stage=PREFLIGHT'
+    Invoke-DevReloadCycle @('main\java\X.java')
+    Assert-WatchTest ($script:FailStreak -eq 1) 'absent marker keeps the normal failure path'
+} finally {
+    $script:RagRoot = $priorRoot
+    Remove-Item -LiteralPath $fixture -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host ("PASS: {0} dev reload watcher contract checks" -f $script:passed)

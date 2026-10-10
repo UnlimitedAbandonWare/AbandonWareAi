@@ -10,7 +10,8 @@ param(
     [switch]$OpenBrowser,
     [switch]$ForceRestart,
     [switch]$DevWatch,
-    [switch]$Preload
+    [switch]$Preload,
+    [switch]$UserRequestedRestart
 )
 
 $ErrorActionPreference = 'Stop'
@@ -756,6 +757,26 @@ function Get-RagEvidencePaths {
     return @($paths)
 }
 
+function Test-RagLiveTestWindow {
+    # Live user-test marker written atomically by scripts/live_test_window.py.
+    # While active, launchers refuse and dev_reload_watch defers compile+restart
+    # so no agent can recycle 18180 mid-test. Rule SSOT:
+    # .agents/skills/demo1-live-test-window/SKILL.md
+    $marker = Join-Path $script:RagRoot 'var\live-test\active.json'
+    if (-not (Test-Path -LiteralPath $marker -PathType Leaf)) { return $false }
+    try {
+        $data = Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json
+        $untilText = [string](Get-AwxObjectProperty $data 'untilKst')
+        if ([string]::IsNullOrWhiteSpace($untilText)) { throw 'no-until' }
+        $until = [datetimeoffset]::Parse($untilText)
+        return ([datetimeoffset]::Now -lt $until)
+    } catch {
+        # Exists but cannot be fully evaluated: protect a possibly-live test,
+        # bounded by file freshness so stale corruption cannot block forever.
+        try { return ((Get-Item -LiteralPath $marker).LastWriteTime -gt (Get-Date).AddHours(-24)) } catch { return $false }
+    }
+}
+
 function Invoke-RagLauncher {
     $runDirectory = Join-Path $script:RagRoot ('var\rag-launcher\' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8))
     New-Item -ItemType Directory -Path $runDirectory -Force | Out-Null
@@ -776,6 +797,7 @@ function Invoke-RagLauncher {
         try { $acquired = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired = $true }
         if (-not $acquired) { throw 'launcher-already-running' }
         Write-RagStage 'PREFLIGHT' 'START' "Logs: $runDirectory"
+        if (-not $CheckOnly -and -not $UserRequestedRestart -and (Test-RagLiveTestWindow)) { throw 'live-test-window-active' }
         $java = Get-Command java.exe -ErrorAction SilentlyContinue
         if ($null -eq $java) { throw 'java-executable-missing' }
         # Java writes a successful version query to stderr. Windows PowerShell 5.1

@@ -167,6 +167,7 @@ $summaryAssignment = $launcherAst.FindAll({
 }, $true) | Select-Object -First 1
 Assert-RagTest ($null -ne $summaryAssignment) 'ready summary expression found'
 function Get-RagEvidencePaths { param($RunDirectory) return @() }
+$caller = 'test'
 $runDirectory = 'C:\synthetic\run'
 $spring = @{processId=1;reuse=$false;port=18180}
  $base = 'http://127.0.0.1:18180'
@@ -179,5 +180,26 @@ foreach ($case in @(@{wear=$false;meta=$true;role='dev';management=18181},
     . ([scriptblock]::Create($summaryAssignment.Extent.Text))
     Assert-RagTest ($summary.role -eq $case.role) "ready summary role $($case.role)"
     Assert-RagTest ($summary.ports.management -eq $case.management) "ready summary ports $($case.role)"
+}
+# Live-test marker gate: active marker holds launchers, expired/absent restores.
+$ltwFixture = Join-Path ([IO.Path]::GetTempPath()) ('rag-ltw-test-' + [guid]::NewGuid().ToString('N'))
+$ltwMarkerDir = Join-Path $ltwFixture 'var\live-test'
+New-Item -ItemType Directory -Path $ltwMarkerDir -Force | Out-Null
+$ltwMarker = Join-Path $ltwMarkerDir 'active.json'
+$priorLtwRoot = $script:RagRoot
+$script:RagRoot = $ltwFixture
+try {
+    Assert-RagTest (-not (Test-RagLiveTestWindow)) 'no live-test marker lets the launcher run'
+    @{untilKst=(Get-Date).AddHours(1).ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath $ltwMarker -Encoding UTF8
+    Assert-RagTest (Test-RagLiveTestWindow) 'active live-test marker holds the launcher'
+    @{untilKst=(Get-Date).AddMinutes(-1).ToUniversalTime().ToString('o')} | ConvertTo-Json -Compress | Set-Content -LiteralPath $ltwMarker -Encoding UTF8
+    Assert-RagTest (-not (Test-RagLiveTestWindow)) 'expired marker restores the launcher'
+    '{not json' | Set-Content -LiteralPath $ltwMarker -Encoding UTF8
+    Assert-RagTest (Test-RagLiveTestWindow) 'fresh corrupt marker errs on protecting a live test'
+    (Get-Item -LiteralPath $ltwMarker).LastWriteTime = (Get-Date).AddHours(-25)
+    Assert-RagTest (-not (Test-RagLiveTestWindow)) 'stale corrupt marker cannot block forever'
+} finally {
+    $script:RagRoot = $priorLtwRoot
+    Remove-Item -LiteralPath $ltwFixture -Recurse -Force -ErrorAction SilentlyContinue
 }
 Write-Output "PASS: $script:passed launcher behavior checks"

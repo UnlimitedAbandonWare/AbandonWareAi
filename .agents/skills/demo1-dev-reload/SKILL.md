@@ -59,3 +59,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start_rag_stack.ps
 - Before saying "서버 준비/테스트해도 됩니다": `python -B scripts\model_default_probe.py --ready` must print `NOVA_READY=READY`; otherwise relay its `한 줄:`.
 - User asked for restart notice → announce BEFORE saving into a watched root, then report `--restarts-since <HH:MM>` ("재시작 감지 HH:MM") and the `--ready` result.
 - `launcher-already-running` = run refused, JVM untouched → do not relaunch; run `--ready` and tell the user to close the new window. Details: `$demo1-reachability-first-debug` R7-R10.
+- `live-test-window-active` = user live-test marker (`var/live-test/active.json`) is active → launcher refuses without `-UserRequestedRestart`, DevWatch defers before compile; do not work around it. SSOT: `$demo1-live-test-window`.
