@@ -1,5 +1,6 @@
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8080";
 const DEFAULT_NON_STREAM_TIMEOUT_MS = 15000;
+const DEFAULT_CHAT_RESPONSE_HEADERS_TIMEOUT_MS = 600000;
 const EXPOSED_HEADERS = [
   "x-session-id",
   "x-request-id",
@@ -72,22 +73,31 @@ export async function relayToBackend(request, backendPath, options = {}) {
   const forwardHeaders = buildForwardHeaders(request);
   const fetchImpl = options.fetchImpl || fetch;
   const stream = wantsEventStream(request, backendPath);
-  const timeoutMs = resolveTimeoutMs(options.timeoutMs, stream);
-  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeoutMs = resolveTimeoutMs(options.timeoutMs, backendPath);
+  const controller = new AbortController();
+  let abortCode = "transport_timeout";
+  const userAbort = () => {
+    if (controller.signal.aborted) return;
+    abortCode = "user_abort";
+    controller.abort();
+  };
+  if (request.signal.aborted) {
+    return backendTimeoutResponse(backendPath, forwardHeaders, stream, "user_abort");
+  }
+  request.signal.addEventListener("abort", userAbort, { once: true });
   const init = {
     method,
     headers: forwardHeaders,
     cache: "no-store",
     redirect: "manual"
   };
-  if (controller) init.signal = controller.signal;
+  init.signal = controller.signal;
 
-  if (method !== "GET" && method !== "HEAD") {
-    init.body = await request.text();
-  }
-
-  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  // fetch resolves at headers: this timer protects a connection, not the run or SSE body.
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    if (method !== "GET" && method !== "HEAD") init.body = await request.text();
+    if (controller.signal.aborted) throw new DOMException("Aborted", "AbortError");
     const upstream = await fetchImpl(backendUrl(backendPath, search), init);
     if (isRedirect(upstream.status)) {
       return upstreamRedirectResponse(backendPath, upstream, forwardHeaders, stream);
@@ -99,19 +109,22 @@ export async function relayToBackend(request, backendPath, options = {}) {
     });
   } catch (error) {
     if (isAbortError(error)) {
-      return backendTimeoutResponse(backendPath, forwardHeaders, stream);
+      return backendTimeoutResponse(backendPath, forwardHeaders, stream, abortCode);
     }
     return backendUnavailableResponse(backendPath, forwardHeaders, stream);
   } finally {
     if (timeoutId) clearTimeout(timeoutId);
+    request.signal.removeEventListener("abort", userAbort);
   }
 }
 
-function resolveTimeoutMs(value, stream) {
-  if (value != null) return Math.max(0, Number(value) || 0);
-  if (stream) return 0;
+function resolveTimeoutMs(value, backendPath) {
+  if (value != null && Number.isFinite(Number(value)) && Number(value) > 0) return Number(value);
   const envValue = Number(process.env.RAG_BACKEND_TIMEOUT_MS);
-  return Number.isFinite(envValue) && envValue > 0 ? envValue : DEFAULT_NON_STREAM_TIMEOUT_MS;
+  if (Number.isFinite(envValue) && envValue > 0) return envValue;
+  const acceptedPath = /^\/api\/chat(?:\/sync|\/stream)?$/.test(backendPath)
+    || /^\/v1\/tasks\/ask(?:\/async)?$/.test(backendPath);
+  return acceptedPath ? DEFAULT_CHAT_RESPONSE_HEADERS_TIMEOUT_MS : DEFAULT_NON_STREAM_TIMEOUT_MS;
 }
 
 function isAbortError(error) {
@@ -185,11 +198,11 @@ function backendUnavailableResponse(backendPath, requestHeaders, stream) {
   });
 }
 
-function backendTimeoutResponse(backendPath, requestHeaders, stream) {
+function backendTimeoutResponse(backendPath, requestHeaders, stream, reasonCode) {
   const body = {
-    error: "backend_timeout",
+    error: reasonCode,
     backendPath,
-    retryable: true
+    retryable: reasonCode !== "user_abort"
   };
   const headers = new Headers({
     "cache-control": "no-store",
@@ -199,14 +212,14 @@ function backendTimeoutResponse(backendPath, requestHeaders, stream) {
   if (stream) {
     headers.set("content-type", "text/event-stream");
     return new Response(`event:error\ndata:${JSON.stringify({ type: "error", data: body.error })}\n\n`, {
-      status: 504,
+      status: reasonCode === "user_abort" ? 499 : 504,
       headers
     });
   }
 
   headers.set("content-type", "application/json");
   return Response.json(body, {
-    status: 504,
+    status: reasonCode === "user_abort" ? 499 : 504,
     headers
   });
 }

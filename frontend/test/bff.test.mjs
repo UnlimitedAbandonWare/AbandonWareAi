@@ -169,10 +169,55 @@ test("relayToBackend returns redacted timeout JSON for slow non-stream backends"
   assert.equal(response.status, 504);
   assert.equal(response.headers.get("x-request-id"), "req-timeout");
   assert.deepEqual(body, {
-    error: "backend_timeout",
+    error: "transport_timeout",
     backendPath: "/api/rag/query",
     retryable: true
   });
+});
+
+test("user abort before admission never starts an upstream call", async () => {
+  const stop = new AbortController(); stop.abort();
+  const request = new Request("http://127.0.0.1:3000/api/chat/sync", {signal: stop.signal});
+  let calls = 0;
+  const response = await relayToBackend(request, "/api/chat/sync", {
+    fetchImpl: async () => { calls++; return Response.json({fixture: true}); }
+  });
+  assert.equal(response.status, 499);
+  assert.equal((await response.json()).error, "user_abort");
+  assert.equal(calls, 0);
+});
+
+test("user abort while awaiting headers differs from the internal connection timer", async () => {
+  const stop = new AbortController();
+  const request = new Request("http://127.0.0.1:3000/api/chat/sync", {signal: stop.signal});
+  const pending = relayToBackend(request, "/api/chat/sync", {
+    timeoutMs: 1000,
+    fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener("abort", () => reject(new DOMException("fixture", "AbortError")), {once: true});
+      stop.abort();
+    })
+  });
+  const response = await pending;
+  assert.equal(response.status, 499);
+  assert.deepEqual(await response.json(), {error: "user_abort", backendPath: "/api/chat/sync", retryable: false});
+});
+
+test("header deadline does not terminate a progressing SSE body", async () => {
+  const request = new Request("http://127.0.0.1:3000/api/chat/stream", {headers: {accept: "text/event-stream"}});
+  let signal;
+  const response = await relayToBackend(request, "/api/chat/stream", {
+    timeoutMs: 5,
+    fetchImpl: async (_url, init) => {
+      signal = init.signal;
+      return new Response(new ReadableStream({async start(out) {
+        out.enqueue(new TextEncoder().encode(": heartbeat\n\n"));
+        await new Promise(resolve => setTimeout(resolve, 30));
+        out.enqueue(new TextEncoder().encode("event:final\ndata:fixture\n\n")); out.close();
+      }}), {headers: {"content-type": "text/event-stream"}});
+    }
+  });
+  assert.match(await response.text(), /event:final/);
+  assert.equal(signal.aborted, false);
 });
 
 test("relayToBackend returns an SSE error frame for unavailable stream backend", async () => {

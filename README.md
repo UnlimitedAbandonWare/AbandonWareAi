@@ -1,5 +1,7 @@
 # Dynamic RAG Orchestration Platform
 
+**Review the source** · [Engineering portfolio](portfolio/README.md) · [Pinned recovery guide](portfolio/RECOVERY.md)
+
 This checkout is the Desktop canonical root for the Dynamic RAG Orchestration Platform.
 The older pack notes below are retained as historical design context.
 
