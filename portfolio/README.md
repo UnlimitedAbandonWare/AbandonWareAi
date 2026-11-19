@@ -25,6 +25,17 @@ node --test frontend/test/bff.test.mjs
 
 Spring 백엔드에서 [채팅 워크플로](../main/java/com/example/lms/service/ChatWorkflow.java)의 검색 호출과 프롬프트 호출을 따라갑니다. [하이브리드 검색기](../main/java/com/example/lms/service/rag/HybridRetriever.java)와 [검색 보조 로직 테스트](../src/test/java/com/example/lms/service/rag/HybridRetrieverSupportTest.java)를 함께 읽으면 검색 결과를 처리하는 경계를 볼 수 있습니다. [프롬프트 인터페이스](../main/java/com/example/lms/prompt/PromptBuilder.java)에서 컨텍스트가 모델 입력으로 넘어가는 지점을 확인할 수 있습니다.
 
+## 3. 공개 홈페이지에서 기능 확인하기
+
+[공개 홈페이지](https://abandonwareai.kro.kr/)에서 다음 순서로 화면을 확인할 수 있습니다.
+
+1. 홈페이지를 열면 `/chat`의 일반 챗봇 화면으로 이동합니다.
+2. **개념을 쉽게** 예시를 누르면 질문이 입력창에 채워지고 전송 버튼이 활성화됩니다. 이때 대화 내용은 비어 있습니다.
+3. **새 대화**를 누르면 빈 입력창과 비활성화된 전송 버튼을 확인할 수 있습니다.
+4. 상단 **설정**으로 이동해 **AI 사용 방식**을 펼치면 선택 항목이 나타납니다.
+
+2026-11-19 공개 사이트에서 브라우저 조작으로 확인한 범위입니다. 이 절의 확인 범위는 화면 이동과 입력·설정 컨트롤입니다.
+
 ## 변경 이력과 복구
 
 [공개 파일 및 복구 기준](RECOVERY.md) · [에이전트 검수와 커밋 운영서](https://github.com/UnlimitedAbandonWare/AbandonWareAi/blob/0dd0b184dc8f277db984978fbf32cb9a19369ac1/docs/kb/2026-11-16-agent-git-checkpoint-roles.md)
